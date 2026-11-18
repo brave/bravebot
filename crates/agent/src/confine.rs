@@ -158,6 +158,11 @@ pub struct Confinement {
     /// Directories no stage of this confinement is given a row for, which a delegate in a checkout
     /// holds: the working directory and every other checkout (CHECKOUT-7, SANDBOX-28).
     withheld_writes: Vec<PathBuf>,
+    /// The settings file the person named on the command line, as typed made absolute and where it
+    /// lands after links. The next launch reads allow rules and sandbox settings from it wherever
+    /// it sits, so no stage may write, replace or link it (SANDBOX-14). Held on macOS, where a row
+    /// for the directory holding it would otherwise grant it.
+    named_settings: Vec<PathBuf>,
     /// The hosts the person let programs reach for this session beyond `allowedHosts`
     /// (SANDBOX-24), added to the allowed set of every stage that is held to a proxy.
     host_grants: Vec<String>,
@@ -380,6 +385,7 @@ impl Confinement {
             path_reach: Vec::new(),
             unasked_writes: false,
             withheld_writes: Vec::new(),
+            named_settings: Vec::new(),
             host_grants: Vec::new(),
             requested: Vec::new(),
             requests_offered: false,
@@ -629,6 +635,18 @@ impl Confinement {
         self
     }
 
+    /// This confinement holding the settings file the person named on the command line, under each
+    /// of `paths` (the workspace's list, which the file tools read too). On macOS no stage writes
+    /// the file wherever a row would otherwise grant it, whether the session was opened on the
+    /// directory holding it or `--add-dir` named it, and none renames it, replaces it, links to it
+    /// or replaces a directory above it, in every mode and for a `git` stage. A file that is not
+    /// there yet is held at the same names.
+    #[must_use]
+    pub fn with_named_settings(mut self, paths: &[PathBuf]) -> Self {
+        self.named_settings = paths.to_vec();
+        self
+    }
+
     /// Whether the stages this starts hold every path a request for writing would be granted.
     ///
     /// Only under `workspace-write`, since a person who chose `strict` asked for less reach than the
@@ -667,6 +685,22 @@ impl Confinement {
     /// stage pushes, and it writes `~/.ssh/known_hosts` (SANDBOX-22).
     fn lends(&self, scope: Scope) -> bool {
         !(self.mode == SandboxMode::ReadOnly && scope == Scope::Remote)
+    }
+
+    /// Whether a stage carrying or asked for `scope` is lent the agent socket the stage starts
+    /// with: the remote scope where it is lent, and the signing scope for a person whose git signs
+    /// with ssh (SANDBOX-16, SANDBOX-18). The profile's rows and the sentence the planner reads
+    /// both ask this, so they cannot disagree.
+    fn lends_the_agent(&self, scope: Scope) -> bool {
+        self.lends(scope)
+            && match scope {
+                Scope::Remote => true,
+                Scope::Signing => self
+                    .home
+                    .as_deref()
+                    .is_some_and(|home| signing::read(home, self.state(), &self.place).enabled),
+                _ => false,
+            }
     }
 
     /// Why a stage keeps the network under a closed setting, in words fixed here so the line a
@@ -1459,6 +1493,130 @@ impl Confinement {
         }
     }
 
+    /// `policy` with a read row for each of `reaches`.
+    fn allow_reaches(
+        mut policy: SandboxPolicy,
+        reaches: impl IntoIterator<Item = Reach>,
+    ) -> SandboxPolicy {
+        for reach in reaches {
+            policy = policy.allow_read(reach.path);
+        }
+        policy
+    }
+
+    /// What a requested `scope` adds to a stage: its grant, the places it reads where the stage
+    /// does not read the machine, and the agent where the argv that signs would lend it.
+    fn lend_requested_scope(
+        &self,
+        policy: SandboxPolicy,
+        scope: Scope,
+        home: &Path,
+        place: &signing::Place,
+        socket: &Option<PathBuf>,
+        environment: &[(String, String)],
+    ) -> SandboxPolicy {
+        let mut policy = scope.grant(policy, home, self.state(), place);
+        if !self.reads_the_machine() {
+            policy = Self::allow_reaches(
+                policy,
+                requested_reach(scope, home, self.state(), environment),
+            );
+        }
+        // A request lends the agent where the argv that signs would: only to a
+        // person whose git signs with ssh.
+        match socket.clone() {
+            Some(socket) if self.lends_the_agent(scope) => policy.allow_write(socket),
+            _ => policy,
+        }
+    }
+
+    /// What the requests the plan carries for `step` add to a stage.
+    fn grant_requested(
+        &self,
+        step: &Step,
+        mut policy: SandboxPolicy,
+        home: &Path,
+        place: &signing::Place,
+        socket: &Option<PathBuf>,
+        environment: &[(String, String)],
+    ) -> SandboxPolicy {
+        // The places a variable names are those of every program the scope has, since a script
+        // wrapping `gh` is not `gh` and there is no program to key them on.
+        for request in self.requested_for(step) {
+            policy = match *request {
+                Requested::Scope(scope) if !self.lends(scope) => policy,
+                Requested::Loopback => policy.allow_loopback(),
+                // Lends nothing: it only has the prompt number the keys again.
+                Requested::SshKey => policy,
+                Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
+                Requested::Scope(scope) => {
+                    self.lend_requested_scope(policy, scope, home, place, socket, environment)
+                }
+            };
+        }
+        policy
+    }
+
+    /// What the reaches a person remembered for `step` add to a stage.
+    fn grant_remembered(
+        &self,
+        step: &Step,
+        mut policy: SandboxPolicy,
+        home: &Path,
+        place: &signing::Place,
+    ) -> SandboxPolicy {
+        for grant in self.granted(step) {
+            policy = match &grant.reached {
+                Reached::Scope(scope) if !self.lends(*scope) => policy,
+                Reached::Scope(scope) => scope.grant(policy, home, self.state(), place),
+                Reached::Directory(_) => match grant.directory(home, self.state()) {
+                    Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
+                    Some(path) => policy.allow_read(path),
+                    None => policy,
+                },
+            };
+        }
+        policy
+    }
+
+    /// `policy` with a write refusal for each read refusal inside one of its writable rows, where
+    /// a row was given without a request (`unasked_is_empty` is false) or on macOS, and for each
+    /// place under the home directory that runs code later, on macOS and Linux.
+    fn deny_writes_beneath_read_refusals(
+        &self,
+        mut policy: SandboxPolicy,
+        unasked_is_empty: bool,
+    ) -> SandboxPolicy {
+        // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
+        // row is a write refusal too: a row given without a request, or on macOS any row, a
+        // session directory at or above the home among them (SANDBOX-12, SANDBOX-18). The places
+        // a write would run code later, or loosen this profile, are refused beside them, on Linux
+        // as on macOS: a session on the home directory or above it holds a row over them, and a
+        // launcher the person starts later reads what a stage wrote there (SANDBOX-30).
+        let reads_refused_for_writes = !unasked_is_empty || self.prelude == Prelude::MacOs;
+        let refuses_persistence = matches!(self.prelude, Prelude::MacOs | Prelude::Linux);
+        if reads_refused_for_writes || refuses_persistence {
+            let mut refused = if reads_refused_for_writes {
+                policy.unreadable.clone()
+            } else {
+                Vec::new()
+            };
+            if let (true, Some(home)) = (refuses_persistence, self.home.as_deref()) {
+                refused.extend(persistence_locations(home));
+            }
+            for refused in refused {
+                let inside = policy
+                    .writable
+                    .iter()
+                    .any(|row| refused.starts_with(&row.path) && row.path != refused);
+                if inside && !policy.unwritable.contains(&refused) {
+                    policy = policy.deny_write(refused);
+                }
+            }
+        }
+        policy
+    }
+
     /// The policy one step runs under, started in `directory`.
     ///
     /// `environment` is the step's own, after the session's variables and the step's assignments
@@ -1555,62 +1713,22 @@ impl Confinement {
             if let Some(scope) = scope {
                 policy = scope.grant(policy, home, self.state(), &place);
                 if !self.reads_the_machine() {
-                    for reach in reaches(resolved, scope, home, self.state(), environment) {
-                        policy = policy.allow_read(reach.path);
-                    }
+                    policy = Self::allow_reaches(
+                        policy,
+                        reaches(resolved, scope, home, self.state(), environment),
+                    );
                 }
                 if let Some(key) = self.identified(step).as_ref().and_then(Identified::key) {
                     policy = policy.allow_read(key);
                 }
-                if matches!(scope, Scope::Remote | Scope::Signing)
+                if self.lends_the_agent(scope)
                     && let Some(socket) = socket.clone()
                 {
                     policy = policy.allow_write(socket);
                 }
             }
-            // The places a variable names are those of every program the scope has, since a script
-            // wrapping `gh` is not `gh` and there is no program to key them on.
-            for request in self.requested_for(step) {
-                policy = match *request {
-                    Requested::Scope(scope) if !self.lends(scope) => policy,
-                    Requested::Loopback => policy.allow_loopback(),
-                    // Lends nothing: it only has the prompt number the keys again.
-                    Requested::SshKey => policy,
-                    Requested::Toolchain(toolchain) => self.toolchain_rows(toolchain, policy, home),
-                    Requested::Scope(scope) => {
-                        let mut policy = scope.grant(policy, home, self.state(), &place);
-                        if !self.reads_the_machine() {
-                            for reach in requested_reach(scope, home, self.state(), environment) {
-                                policy = policy.allow_read(reach.path);
-                            }
-                        }
-                        // A request lends the agent where the argv that signs would: only to a
-                        // person whose git signs with ssh.
-                        let lends_the_agent = match scope {
-                            Scope::Remote => true,
-                            Scope::Signing => {
-                                signing::read(home, self.state(), &self.place).enabled
-                            }
-                            _ => false,
-                        };
-                        match socket.clone() {
-                            Some(socket) if lends_the_agent => policy.allow_write(socket),
-                            _ => policy,
-                        }
-                    }
-                };
-            }
-            for grant in self.granted(step) {
-                policy = match &grant.reached {
-                    Reached::Scope(scope) if !self.lends(*scope) => policy,
-                    Reached::Scope(scope) => scope.grant(policy, home, self.state(), &place),
-                    Reached::Directory(_) => match grant.directory(home, self.state()) {
-                        Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
-                        Some(path) => policy.allow_read(path),
-                        None => policy,
-                    },
-                };
-            }
+            policy = self.grant_requested(step, policy, home, &place, &socket, environment);
+            policy = self.grant_remembered(step, policy, home, &place);
         }
 
         if !self.reads_the_machine() {
@@ -1672,23 +1790,15 @@ impl Confinement {
         {
             policy = policy.deny_write(self.temporary.clone());
         }
-        // Seatbelt's refusal of a read does not stop a write, so a read refusal inside a writable
-        // row is a write refusal too: a row given without a request, or on macOS any row, a
-        // session directory at or above the home among them (SANDBOX-12, SANDBOX-18). The places
-        // a write would run code later, or loosen this profile, are refused beside them.
-        if !unasked.is_empty() || self.prelude == Prelude::MacOs {
-            let mut refused = policy.unreadable.clone();
-            if let (Prelude::MacOs, Some(home)) = (self.prelude, self.home.as_deref()) {
-                refused.extend(persistence_locations(home));
-            }
-            for refused in refused {
-                let inside = policy
-                    .writable
-                    .iter()
-                    .any(|row| refused.starts_with(&row.path) && row.path != refused);
-                if inside && !policy.unwritable.contains(&refused) {
-                    policy = policy.deny_write(refused);
+        policy = self.deny_writes_beneath_read_refusals(policy, unasked.is_empty());
+        // Not skipped for a stage that lifts the `.git` hold-back: these are refusals of their own
+        // and not protected names (SANDBOX-14).
+        if self.prelude == Prelude::MacOs {
+            for named in &self.named_settings {
+                if !policy.unwritable.contains(named) {
+                    policy = policy.deny_write(named.clone());
                 }
+                policy = policy.keep_in_place(named.clone());
             }
         }
         let machine: Vec<PathBuf> = unasked
@@ -2076,29 +2186,17 @@ impl Confinement {
     /// Whether the agent socket was lent to a step of `steps` that signs, and so what a signature
     /// that fails for want of a private key has to mean.
     ///
-    /// Decided where [`Confinement::policy`] decides the rows: a step lends the socket the stage
-    /// starts with where it carries or was asked for the remote scope, or the signing scope for a
-    /// person whose git signs with ssh. Read from that and the person's own configuration, and
-    /// never from what a program printed.
+    /// Decided by [`Confinement::lends_the_agent`], which [`Confinement::policy`] decides the rows
+    /// with: a step lends the socket the stage starts with where it carries or was asked for the
+    /// remote scope, or the signing scope for a person whose git signs with ssh. Read from that and
+    /// the person's own configuration, and never from what a program printed.
     fn signing_agent_sentence(&self, steps: &[&Step], environment: &[(String, String)]) -> String {
-        let enabled = self
-            .home
-            .as_deref()
-            .is_some_and(|home| signing::read(home, self.state(), &self.place).enabled);
-        let lends = |scope: Scope| {
-            self.lends(scope)
-                && match scope {
-                    Scope::Remote => true,
-                    Scope::Signing => enabled,
-                    _ => false,
-                }
-        };
         let reaches_the_socket = steps.iter().any(|step| {
-            self.scope_of(step).is_some_and(lends)
-                || self
-                    .requested_for(step)
-                    .iter()
-                    .any(|request| matches!(request, Requested::Scope(scope) if lends(*scope)))
+            self.scope_of(step)
+                .is_some_and(|scope| self.lends_the_agent(scope))
+                || self.requested_for(step).iter().any(|request| {
+                    matches!(request, Requested::Scope(scope) if self.lends_the_agent(*scope))
+                })
         });
         match (
             reaches_the_socket,
@@ -2340,9 +2438,38 @@ impl Confinement {
             .then_some(temporary)
     }
 
+    /// The named settings file, where it is a file that another name on this machine leads to as
+    /// well. A refusal of writes is by path and a second link to the file is written through, so
+    /// on macOS a stage cannot be kept from the file while one exists.
+    #[cfg(unix)]
+    fn named_settings_with_another_link(&self) -> Option<&Path> {
+        use std::os::unix::fs::MetadataExt;
+        if self.prelude != Prelude::MacOs {
+            return None;
+        }
+        self.named_settings
+            .iter()
+            .map(PathBuf::as_path)
+            .find(|named| {
+                std::fs::metadata(named).is_ok_and(|found| found.is_file() && found.nlink() > 1)
+            })
+    }
+
+    #[cfg(not(unix))]
+    fn named_settings_with_another_link(&self) -> Option<&Path> {
+        None
+    }
+
     /// Why a stage cannot be started because of a session, scratch or temporary directory, if it
     /// cannot (SANDBOX-18).
     fn directory_refusal(&self) -> Option<String> {
+        if let Some(path) = self.named_settings_with_another_link() {
+            return Some(format!(
+                "the settings file `{}` named on the command line has another hard link, which a \
+                 stage is not kept from writing through; remove the link, or name another file",
+                path.display()
+            ));
+        }
         if let Some((root, location)) = self.root_reaching_credentials() {
             return Some(match self.prelude {
                 Prelude::Windows => format!(
@@ -2555,18 +2682,18 @@ pub(crate) struct Contained {
     _sandbox: Box<dyn bravebot_sandbox::Sandbox>,
 }
 
-/// `command`, started as the leader of a process group of its own on Unix.
+/// `command`, started as the leader of a session of its own on Unix, which is a process group of
+/// its own with no controlling terminal.
 ///
 /// The group is what ending a stage addresses, so that the programs the stage started are ended
 /// with it ([`crate::exec`], RUN-11). A stage that stayed in the session's group could not be
-/// signalled without signalling the session.
-fn leading_a_group(command: Command) -> Command {
+/// signalled without signalling the session. The missing terminal is what keeps a program that
+/// opens or configures the terminal from being stopped by it (RUN-11).
+fn leading_a_session(command: Command) -> Command {
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
-
         let mut command = command;
-        command.process_group(0);
+        bravebot_sandbox::process::leading_a_session(&mut command);
         command
     }
     #[cfg(not(unix))]
@@ -2581,22 +2708,16 @@ pub(crate) fn begin(
     directory: &Path,
 ) -> Result<Launch, ExecError> {
     let Some(confinement) = confinement else {
-        return Ok(Launch::Command(leading_a_group(command)));
+        return Ok(Launch::Command(leading_a_session(command)));
     };
     #[cfg(unix)]
     {
+        // A confined stage is a session leader once the backend has called `setsid`, and a session
+        // leader leads a group of its own. Starting it as a leader here as well would make that
+        // call fail, since it refuses a process that already leads a group.
         confinement
             .wrap(command, step, directory)
-            // A Linux stage is a session leader once the backend has called `setsid`, and a
-            // session leader leads a group of its own. Asking for the group as well would make
-            // that call fail, since it refuses a process that already leads a group.
-            .map(|wrapped| {
-                if cfg!(target_os = "linux") {
-                    Launch::Command(wrapped)
-                } else {
-                    Launch::Command(leading_a_group(wrapped))
-                }
-            })
+            .map(Launch::Command)
     }
     #[cfg(windows)]
     {
@@ -2669,6 +2790,60 @@ impl Container {
     }
 }
 
+/// The facts the statements about a turn's programs are built from, passed by name so that the two
+/// adjacent `bool`s cannot be swapped.
+///
+/// `confine_runs` says the turn asks for its programs to be confined; a turn that does not is
+/// never told of a boundary.
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
+/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
+/// `loopback`, and says which routes the person has instead (SANDBOX-19).
+///
+/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, no sentence
+/// names the tool and each says what the person can do instead, or nothing (TOOL-6). `askable` says
+/// whether anybody can be asked in this run (CLI-1), and where nobody can, no sentence names a
+/// route only a person takes (SANDBOX-19).
+///
+/// The default is a turn whose list holds `request_path` and where somebody can be asked, with
+/// neither confinement nor requests; a caller sets `confine_runs` and `requests_offered`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunStatement {
+    pub confine_runs: bool,
+    pub requests_offered: bool,
+    pub request_path_listed: bool,
+    pub askable: Askable,
+}
+
+impl Default for RunStatement {
+    fn default() -> Self {
+        Self {
+            confine_runs: false,
+            requests_offered: false,
+            request_path_listed: true,
+            askable: Askable::Somebody,
+        }
+    }
+}
+
+/// [`stated_to_the_planner_for`] for a turn whose list holds `request_path` and where somebody can
+/// be asked.
+#[cfg(test)]
+pub fn stated_to_the_planner(
+    confine_runs: bool,
+    mode: SandboxMode,
+    requests_offered: bool,
+) -> Option<String> {
+    stated_to_the_planner_for(
+        mode,
+        RunStatement {
+            confine_runs,
+            requests_offered,
+            ..RunStatement::default()
+        },
+    )
+}
+
 /// What the planner is told about the programs `run` starts, for a turn that asks for them to be
 /// confined, or `None` for one that does not.
 ///
@@ -2676,44 +2851,15 @@ impl Container {
 /// programs do not have. Where the platform has no base to confine on, it is told the opposite.
 ///
 /// The `off` mode returns `None` as well, for the same reason: the programs have no boundary to
-/// state. [`stated_in_the_description`] adds the one sentence those two cases do carry.
+/// state. [`stated_in_the_description_for`] adds the one sentence those two cases do carry.
 ///
-/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
-/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
-/// `loopback`, and says which routes the person has instead (SANDBOX-19).
-pub fn stated_to_the_planner(
-    confine_runs: bool,
-    mode: SandboxMode,
-    requests_offered: bool,
-) -> Option<String> {
-    stated_to_the_planner_for(
-        confine_runs,
-        mode,
-        requests_offered,
-        true,
-        Askable::Somebody,
-    )
-}
-
-/// [`stated_to_the_planner`] for a turn whose list holds `request_path` (`request_path_listed`) or
-/// does not. Where it does not, no sentence names the tool and each says what the person can do
-/// instead, or nothing (TOOL-6). `askable` says whether anybody can be asked in this run (CLI-1),
-/// and where nobody can, no sentence names a route only a person takes (SANDBOX-19).
-pub fn stated_to_the_planner_for(
-    confine_runs: bool,
-    mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
-) -> Option<String> {
+/// What `facts` says is described on [`RunStatement`].
+pub fn stated_to_the_planner_for(mode: SandboxMode, facts: RunStatement) -> Option<String> {
     let said = stated_listing(
-        confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
         mode,
-        requests_offered,
-        request_path_listed,
-        askable,
+        facts,
     )?;
     Some(with_temporary_held_back_said(
         said,
@@ -2722,9 +2868,9 @@ pub fn stated_to_the_planner_for(
     ))
 }
 
-/// What the `run` description says of its programs: [`stated_to_the_planner`], or for a turn that
-/// does not confine its runs and for the mode `off` the one sentence that `request_path` is refused
-/// and nobody is asked (SANDBOX-19).
+/// What the `run` description says of its programs: [`stated_to_the_planner_for`], or for a turn
+/// that does not confine its runs and for the mode `off` the one sentence that `request_path` is
+/// refused and nobody is asked (SANDBOX-19).
 ///
 /// The sentence is the same in both cases, in every permission mode and whether or not the
 /// workspace is trusted, because the tool is refused in all of them. It says nothing of a boundary,
@@ -2732,44 +2878,18 @@ pub fn stated_to_the_planner_for(
 /// start with no profile, and the last two are accepted and ignored there (SANDBOX-26). It is built
 /// from the two arguments and nothing a program printed or a file held.
 ///
-/// A turn whose list lacks `request_path` (`request_path_listed`) is told nothing of it, since a
-/// tool it cannot call needs no refusal: it gets no sentence, and a mode that confines gets the
-/// text without the sentences that name the tool.
-#[cfg(test)]
-pub fn stated_in_the_description(
-    confine_runs: bool,
-    mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-) -> Option<String> {
-    stated_in_the_description_for(
-        confine_runs,
-        mode,
-        requests_offered,
-        request_path_listed,
-        Askable::Somebody,
-    )
-}
-
-/// [`stated_in_the_description`] for a run where nobody can be asked (`Askable::Nobody`, CLI-1) or
-/// somebody can. Where nobody can, the description names neither trusting the workspace nor
-/// `/add-dir`, the same fact the sentence after a failed step reads (SANDBOX-19).
-pub fn stated_in_the_description_for(
-    confine_runs: bool,
-    mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
-) -> Option<String> {
-    match !confine_runs || mode == SandboxMode::Off {
-        true => request_path_listed.then(|| REQUEST_PATH_REFUSED_SENTENCE.to_string()),
-        false => stated_to_the_planner_for(
-            confine_runs,
-            mode,
-            requests_offered,
-            request_path_listed,
-            askable,
-        ),
+/// A turn whose list lacks `request_path` (`facts.request_path_listed`) is told nothing of it,
+/// since a tool it cannot call needs no refusal: it gets no sentence, and a mode that confines gets
+/// the text without the sentences that name the tool.
+///
+/// Where nobody can be asked (`Askable::Nobody`, CLI-1), the description names neither trusting the
+/// workspace nor `/add-dir`, the same fact the sentence after a failed step reads (SANDBOX-19).
+pub fn stated_in_the_description_for(mode: SandboxMode, facts: RunStatement) -> Option<String> {
+    match !facts.confine_runs || mode == SandboxMode::Off {
+        true => facts
+            .request_path_listed
+            .then(|| REQUEST_PATH_REFUSED_SENTENCE.to_string()),
+        false => stated_to_the_planner_for(mode, facts),
     }
 }
 
@@ -2789,66 +2909,39 @@ const REQUEST_PATH_REFUSED_SENTENCE: &str =
 /// named, is now refused. A turn that confines none of its runs was never told of a boundary, so it
 /// is told nothing.
 ///
-/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, the notice
-/// for `off` does not say the tool is now refused, and a confining mode is stated without it.
+/// `facts.request_path_listed` says the turn's list holds `request_path`. Where it does not, the
+/// notice for `off` does not say the tool is now refused, and a confining mode is stated without
+/// it. A run where nobody can be asked (`Askable::Nobody`, CLI-1) is stated as
+/// [`stated_in_the_description_for`] states it.
 ///
 /// Built from the two modes and the platform alone, so it carries nothing a program printed or a
 /// file held.
-#[cfg(test)]
-pub fn change_notice(
-    confine_runs: bool,
-    from: SandboxMode,
-    to: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-) -> Option<String> {
-    change_notice_for(
-        confine_runs,
-        from,
-        to,
-        requests_offered,
-        request_path_listed,
-        Askable::Somebody,
-    )
-}
-
-/// [`change_notice`] for a run where nobody can be asked (`Askable::Nobody`, CLI-1) or somebody
-/// can, stated as [`stated_in_the_description_for`] states it.
 pub fn change_notice_for(
-    confine_runs: bool,
     from: SandboxMode,
     to: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
+    facts: RunStatement,
 ) -> Option<String> {
-    if !confine_runs || from == to {
+    if !facts.confine_runs || from == to {
         return None;
     }
     let said = match to {
         SandboxMode::Off => format!(
             " Programs `run` starts from now on start with no sandbox profile, so the limits its \
              description states do not apply to them.{}",
-            if request_path_listed {
+            if facts.request_path_listed {
                 " The `request_path` tool is now refused and nobody is asked."
             } else {
                 ""
             },
         ),
-        mode => stated_to_the_planner_for(
-            confine_runs,
-            mode,
-            requests_offered,
-            request_path_listed,
-            askable,
-        )
-        .map(|stated| {
-            format!(
-                " It applies to the programs `run` starts from now on, in place of anything \
+        mode => stated_to_the_planner_for(mode, facts)
+            .map(|stated| {
+                format!(
+                    " It applies to the programs `run` starts from now on, in place of anything \
                      the `run` description says of them. {stated}"
-            )
-        })
-        .unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default(),
     };
     Some(format!(
         "The user changed the sandbox mode to `{}` while this turn was running.{said} A program \
@@ -3400,13 +3493,14 @@ fn stated(
     requests_offered: bool,
 ) -> Option<String> {
     stated_listing(
-        confine_runs,
         prelude,
         network,
         mode,
-        requests_offered,
-        true,
-        Askable::Somebody,
+        RunStatement {
+            confine_runs,
+            requests_offered,
+            ..RunStatement::default()
+        },
     )
 }
 
@@ -3437,17 +3531,20 @@ fn widens(clause: &'static str, askable: Askable) -> &'static str {
 }
 
 /// The statement of a turn's programs for a turn whose list holds `request_path`
-/// (`request_path_listed`) or does not, in a run where nobody can be asked (`Askable::Nobody`) or
-/// somebody can.
+/// (`facts.request_path_listed`) or does not, in a run where nobody can be asked
+/// (`Askable::Nobody`) or somebody can.
 fn stated_listing(
-    confine_runs: bool,
     prelude: Option<Prelude>,
     network: Network,
     mode: SandboxMode,
-    requests_offered: bool,
-    request_path_listed: bool,
-    askable: Askable,
+    facts: RunStatement,
 ) -> Option<String> {
+    let RunStatement {
+        confine_runs,
+        requests_offered,
+        request_path_listed,
+        askable,
+    } = facts;
     if !confine_runs || mode == SandboxMode::Off {
         return None;
     }
@@ -4251,6 +4348,56 @@ mod tests {
     // Not under /home: macOS mounts autofs there, so each lookup beneath it asks the automounter.
     const HOME: &str = "/people/person";
 
+    /// Each place under the home directory a stage is refused writing wherever a row would reach
+    /// it, written out by name and not read from the rules: a name the rules lost would otherwise
+    /// leave this list and the code agreeing about nothing (SANDBOX-18).
+    const PERSISTENCE_NAMES: &[&str] = &[
+        ".zshenv",
+        ".zprofile",
+        ".zshrc",
+        ".zlogin",
+        ".zlogout",
+        ".bash_profile",
+        ".bash_login",
+        ".bashrc",
+        ".bash_aliases",
+        ".bash_logout",
+        ".profile",
+        ".config/fish",
+        ".xprofile",
+        ".xsessionrc",
+        "Library/LaunchAgents",
+        ".config/systemd/user",
+        ".config/autostart",
+        ".config/environment.d",
+        ".gitconfig",
+        ".config/git/config",
+        ".config/mimeapps.list",
+        ".local/share/applications",
+        ".config/gnome-mimeapps.list",
+        ".config/gnome-classic-mimeapps.list",
+        ".config/gnome-flashback-mimeapps.list",
+        ".config/ubuntu-mimeapps.list",
+        ".config/kde-mimeapps.list",
+        ".config/xfce-mimeapps.list",
+        ".config/cinnamon-mimeapps.list",
+        ".config/x-cinnamon-mimeapps.list",
+        ".config/mate-mimeapps.list",
+        ".config/unity-mimeapps.list",
+        ".config/pantheon-mimeapps.list",
+        ".config/budgie-mimeapps.list",
+        ".config/lxqt-mimeapps.list",
+        ".config/lxde-mimeapps.list",
+        ".config/deepin-mimeapps.list",
+        ".config/dde-mimeapps.list",
+        ".config/cosmic-mimeapps.list",
+        ".config/enlightenment-mimeapps.list",
+        ".config/ukui-mimeapps.list",
+        ".config/sway-mimeapps.list",
+        ".config/hyprland-mimeapps.list",
+        ".config/i3-mimeapps.list",
+    ];
+
     /// SANDBOX-22: the planner is told of a sandbox mode chosen while its turn runs, in the words
     /// of the mode it moved to, and of nothing that did not change. A move to `off` is told as the
     /// end of a boundary, since the description states none under `off`; a move to a confining
@@ -4263,17 +4410,45 @@ mod tests {
         use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
 
         assert_eq!(
-            change_notice(true, Strict, Strict, true, true),
+            change_notice_for(
+                Strict,
+                Strict,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                }
+            ),
             None,
             "no change"
         );
         assert_eq!(
-            change_notice(false, Strict, Off, true, true),
+            change_notice_for(
+                Strict,
+                Off,
+                RunStatement {
+                    confine_runs: false,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                }
+            ),
             None,
             "a turn that confines none of its runs"
         );
 
-        let off = change_notice(true, WorkspaceWrite, Off, true, true).expect("told of off");
+        let off = change_notice_for(
+            WorkspaceWrite,
+            Off,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told of off");
         assert!(
             off.contains("to `off`") && off.contains("no sandbox profile"),
             "{off}"
@@ -4282,15 +4457,45 @@ mod tests {
         assert!(!off.contains(&stated), "{off}");
 
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true, true).expect("told");
+            let notice = change_notice_for(
+                Off,
+                to,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told");
             let stated = stated_to_the_planner(true, to, true).expect("stated");
             assert!(
                 notice.contains(&format!("to `{}`", to.name())) && notice.contains(&stated),
                 "{notice}"
             );
         }
-        let strict = change_notice(true, Off, Strict, true, true).expect("told");
-        let workspace_write = change_notice(true, Off, WorkspaceWrite, true, true).expect("told");
+        let strict = change_notice_for(
+            Off,
+            Strict,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told");
+        let workspace_write = change_notice_for(
+            Off,
+            WorkspaceWrite,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told");
         assert!(!strict.contains("may read this machine"), "{strict}");
         assert!(
             workspace_write.contains("may read this machine"),
@@ -4309,21 +4514,53 @@ mod tests {
         use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
 
         for from in [Strict, ReadOnly, WorkspaceWrite] {
-            let off = change_notice(true, from, Off, true, true).expect("told of off");
+            let off = change_notice_for(
+                from,
+                Off,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told of off");
             assert!(
                 off.contains("The `request_path` tool is now refused and nobody is asked."),
                 "{from:?}: {off}"
             );
         }
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true, true).expect("told");
+            let notice = change_notice_for(
+                Off,
+                to,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told");
             assert!(!notice.contains("is now refused"), "{to:?}: {notice}");
             assert!(
                 notice.contains("asked for with the `request_path` tool"),
                 "{to:?}: {notice}"
             );
         }
-        assert_eq!(change_notice(false, WorkspaceWrite, Off, true, true), None);
+        assert_eq!(
+            change_notice_for(
+                WorkspaceWrite,
+                Off,
+                RunStatement {
+                    confine_runs: false,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                }
+            ),
+            None
+        );
     }
 
     fn step(resolved: &str, args: &[&str]) -> Step {
@@ -4357,8 +4594,7 @@ mod tests {
     /// much a place to plant an `aws` as the project.
     #[test]
     fn a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs() {
-        let granted = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-programs-granted");
+        let granted = crate::testutil::scratch_dir("confine-programs-granted");
         let _ = std::fs::remove_dir_all(&granted);
         std::fs::create_dir_all(&granted).expect("granted directory");
         let granted = granted.canonicalize().expect("canonical");
@@ -4854,23 +5090,27 @@ mod tests {
                 for offered in [false, true] {
                     let at = format!("{prelude:?} {mode:?} offered={offered}");
                     let asked = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        true,
-                        Askable::Somebody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            askable: Askable::Somebody,
+                        },
                     )
                     .expect("says something");
                     let unattended = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        true,
-                        Askable::Nobody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            askable: Askable::Nobody,
+                        },
                     )
                     .expect("says something");
                     assert!(asked.contains("`/add-dir`"), "{at}: {asked}");
@@ -5200,8 +5440,7 @@ mod tests {
     /// interpreter, is. Run in a directory of its own so a file the session wrote is a real one.
     #[test]
     fn an_interpreter_handed_a_file_the_plan_could_write_is_not_held() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-script");
+        let root = crate::testutil::scratch_dir("confine-held-script");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5298,8 +5537,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_file_name_holding_a_separator_is_looked_up_as_one_name() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-separator-names");
+        let root = crate::testutil::scratch_dir("confine-held-separator-names");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5373,8 +5611,7 @@ mod tests {
     /// `=`, which never names `key=value run.sh`.
     #[test]
     fn a_quoted_name_in_a_command_string_names_the_file_it_runs() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-quoted-names");
+        let root = crate::testutil::scratch_dir("confine-held-quoted-names");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5469,9 +5706,15 @@ mod tests {
             let directory = std::env::temp_dir()
                 .canonicalize()
                 .expect("a temporary directory");
+            Self::at_in(&directory, name)
+        }
+
+        /// The socket at `directory`, which may be longer than a socket path can be bound at:
+        /// it is bound through a short link, so it still stands at the full path.
+        fn at_in(directory: &Path, name: &str) -> Self {
             let path = directory.join(format!("bb{}-{name}.sock", std::process::id()));
             let _ = std::fs::remove_file(&path);
-            drop(std::os::unix::net::UnixListener::bind(&path).expect("a socket"));
+            drop(crate::testutil::socket_standing_at(&path));
             Self { path }
         }
 
@@ -5490,6 +5733,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+
+    /// A test that needs an agent socket must get one whatever the length of the temporary
+    /// directory, and the socket has to stand at the path `SSH_AUTH_SOCK` names, since a row is
+    /// granted for that path. The regression it rejects is binding the socket at its full path,
+    /// which fails with `path must be shorter than SUN_LEN` once the directory is long.
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_socket_stands_at_its_path_where_the_directory_is_longer_than_a_socket_can_be_bound()
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let top = crate::testutil::scratch_dir("agent-socket-long-directory");
+        let mut long = top.clone();
+        while long.as_os_str().len() <= 120 {
+            long.push("a-directory-name-of-forty-characters-xxxx");
+        }
+        std::fs::create_dir_all(&long).unwrap();
+
+        let agent = AgentSocket::at_in(&long, "long-directory");
+
+        assert!(agent.path.starts_with(&long) && agent.name().len() > 120);
+        let kind = std::fs::symlink_metadata(&agent.path)
+            .expect("something at the path")
+            .file_type();
+        assert!(kind.is_socket(), "the path holds a socket");
+        assert_eq!(
+            agent.environment(),
+            vec![("SSH_AUTH_SOCK".to_string(), agent.name().to_string())]
+        );
+        drop(agent);
+        std::fs::remove_dir_all(&top).unwrap();
     }
 
     fn prepared_in(confinement: &Confinement) -> Result<(), ExecError> {
@@ -6401,31 +6675,10 @@ mod tests {
         for root in [HOME, "/"] {
             let confined = reading_confinement(Prelude::MacOs, &[root]);
             let policy = confined.policy(&step("/bin/cat", &["f"]), Path::new(root), &[]);
-            for name in [
-                ".ssh",
-                ".aws",
-                ".bravebot",
-                ".zshenv",
-                ".zprofile",
-                ".zshrc",
-                ".zlogin",
-                ".bash_profile",
-                ".bash_login",
-                ".bashrc",
-                ".profile",
-                ".zlogout",
-                ".bash_aliases",
-                ".bash_logout",
-                ".config/fish",
-                ".xprofile",
-                ".xsessionrc",
-                "Library/LaunchAgents",
-                ".config/systemd/user",
-                ".config/autostart",
-                ".config/environment.d",
-                ".gitconfig",
-                ".config/git/config",
-            ] {
+            for name in [".ssh", ".aws", ".bravebot"]
+                .into_iter()
+                .chain(PERSISTENCE_NAMES.iter().copied())
+            {
                 let path = Path::new(HOME).join(name);
                 assert!(
                     policy.unwritable.contains(&path),
@@ -6439,6 +6692,49 @@ mod tests {
             );
         }
         let beside = reading_confinement(Prelude::MacOs, &["/people/person/project"]);
+        let policy = beside.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+        assert!(policy.unwritable.is_empty(), "{:?}", policy.unwritable);
+    }
+
+    /// SANDBOX-18, SANDBOX-30: a Linux session on the home directory or above it writes beneath the
+    /// home except the persistence locations, `~/.config/mimeapps.list`, the desktop-named lists
+    /// and `~/.local/share/applications` among them, which a launcher the person starts later
+    /// reads (SANDBOX-30). The regression it rejects: the persistence refusal made only where
+    /// the prelude is macOS, so a normal-mode Linux stage could write a link handler that the
+    /// opener then runs outside the sandbox. A write to a file beside them stays granted.
+    #[test]
+    fn a_linux_session_at_or_above_home_cannot_write_where_a_write_runs_later() {
+        for root in [HOME, "/"] {
+            let confined = reading_confinement(Prelude::Linux, &[root]);
+            let policy = confined.policy(&step("/bin/cat", &["f"]), Path::new(root), &[]);
+            for name in PERSISTENCE_NAMES {
+                let path = Path::new(HOME).join(name);
+                assert!(
+                    policy.unwritable.contains(&path),
+                    "{root}: {name} is writable: {:?}",
+                    policy.unwritable
+                );
+            }
+            assert!(
+                policy
+                    .writable
+                    .iter()
+                    .any(|row| Path::new(HOME).starts_with(&row.path)),
+                "{root}: the session has no row over the home directory"
+            );
+            assert!(
+                !policy
+                    .unwritable
+                    .contains(&Path::new(HOME).join(".config/other.conf")),
+                "{root}: a file beside a persistence location is refused: {:?}",
+                policy.unwritable
+            );
+        }
+        let beside = reading_confinement(Prelude::Linux, &["/people/person/project"]);
         let policy = beside.policy(
             &step("/bin/cat", &["f"]),
             Path::new("/people/person/project"),
@@ -6878,6 +7174,7 @@ mod tests {
                         ".gradle/wrapper",
                         ".gradle/native",
                         ".cache/gh",
+                        ".config/jk/keychain.lock",
                     ]
                     .iter()
                     .any(|cache| path.ends_with(cache)),
@@ -8609,7 +8906,15 @@ mod tests {
         for offered in [true, false] {
             described.push((
                 "off",
-                stated_in_the_description(true, SandboxMode::Off, offered, true),
+                stated_in_the_description_for(
+                    SandboxMode::Off,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: true,
+                        ..RunStatement::default()
+                    },
+                ),
             ));
             for mode in [
                 SandboxMode::Strict,
@@ -8619,7 +8924,15 @@ mod tests {
             ] {
                 described.push((
                     "not confined",
-                    stated_in_the_description(false, mode, offered, true),
+                    stated_in_the_description_for(
+                        mode,
+                        RunStatement {
+                            confine_runs: false,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            ..RunStatement::default()
+                        },
+                    ),
                 ));
             }
         }
@@ -8659,8 +8972,16 @@ mod tests {
             SandboxMode::WorkspaceWrite,
         ] {
             for offered in [true, false] {
-                let said =
-                    stated_in_the_description(true, mode, offered, true).expect("says something");
+                let said = stated_in_the_description_for(
+                    mode,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: true,
+                        ..RunStatement::default()
+                    },
+                )
+                .expect("says something");
                 let at = format!("{mode:?} offered={offered}");
                 assert!(
                     !said.contains(REQUEST_PATH_REFUSED_SENTENCE),
@@ -8676,8 +8997,16 @@ mod tests {
                     "{at}: a confining mode's description is the one it had"
                 );
             }
-            let accepted =
-                stated_in_the_description(true, mode, true, true).expect("says something");
+            let accepted = stated_in_the_description_for(
+                mode,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: true,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("says something");
             assert!(
                 accepted.contains("asked for with the `request_path` tool"),
                 "{mode:?}: {accepted}"
@@ -8799,17 +9128,54 @@ mod tests {
         // tool and not said, in place of nothing, for one that does not.
         for offered in [true, false] {
             assert_eq!(
-                stated_in_the_description(true, Off, offered, true).as_deref(),
+                stated_in_the_description_for(
+                    Off,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: true,
+                        ..RunStatement::default()
+                    }
+                )
+                .as_deref(),
                 Some(REQUEST_PATH_REFUSED_SENTENCE),
             );
-            assert_eq!(stated_in_the_description(true, Off, offered, false), None);
+            assert_eq!(
+                stated_in_the_description_for(
+                    Off,
+                    RunStatement {
+                        confine_runs: true,
+                        requests_offered: offered,
+                        request_path_listed: false,
+                        ..RunStatement::default()
+                    }
+                ),
+                None
+            );
             for mode in [Strict, ReadOnly, WorkspaceWrite, Off] {
                 assert_eq!(
-                    stated_in_the_description(false, mode, offered, true).as_deref(),
+                    stated_in_the_description_for(
+                        mode,
+                        RunStatement {
+                            confine_runs: false,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            ..RunStatement::default()
+                        }
+                    )
+                    .as_deref(),
                     Some(REQUEST_PATH_REFUSED_SENTENCE),
                 );
                 assert_eq!(
-                    stated_in_the_description(false, mode, offered, false),
+                    stated_in_the_description_for(
+                        mode,
+                        RunStatement {
+                            confine_runs: false,
+                            requests_offered: offered,
+                            request_path_listed: false,
+                            ..RunStatement::default()
+                        }
+                    ),
                     None,
                     "{mode:?}"
                 );
@@ -8822,23 +9188,27 @@ mod tests {
                 for offered in [true, false] {
                     let at = format!("{prelude:?} {mode:?} offered={offered}");
                     let listed = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        true,
-                        Askable::Somebody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: true,
+                            askable: Askable::Somebody,
+                        },
                     )
                     .expect("says something");
                     let unlisted = stated_listing(
-                        true,
                         Some(prelude),
                         Network::Open,
                         mode,
-                        offered,
-                        false,
-                        Askable::Somebody,
+                        RunStatement {
+                            confine_runs: true,
+                            requests_offered: offered,
+                            request_path_listed: false,
+                            askable: Askable::Somebody,
+                        },
                     )
                     .expect("says something");
                     assert!(listed.contains("`request_path`"), "{at}: {listed}");
@@ -8880,13 +9250,43 @@ mod tests {
         }
 
         // The notice for a move to `off` and to a confining mode.
-        let off = change_notice(true, WorkspaceWrite, Off, true, false).expect("told of off");
+        let off = change_notice_for(
+            WorkspaceWrite,
+            Off,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: false,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told of off");
         assert!(off.contains("no sandbox profile"), "{off}");
         assert!(!off.contains("request_path"), "{off}");
-        let off_listed = change_notice(true, WorkspaceWrite, Off, true, true).expect("told of off");
+        let off_listed = change_notice_for(
+            WorkspaceWrite,
+            Off,
+            RunStatement {
+                confine_runs: true,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("told of off");
         assert!(off_listed.contains("The `request_path` tool is now refused"));
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true, false).expect("told");
+            let notice = change_notice_for(
+                Off,
+                to,
+                RunStatement {
+                    confine_runs: true,
+                    requests_offered: true,
+                    request_path_listed: false,
+                    ..RunStatement::default()
+                },
+            )
+            .expect("told");
             assert!(!notice.contains("request_path"), "{to:?}: {notice}");
             assert!(notice.contains("`scopes`"), "{to:?}: {notice}");
         }
@@ -9079,8 +9479,7 @@ mod tests {
     fn a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries() {
         // A home that exists with its links followed, as a real one is: the list resolves a path
         // through the links of its deepest part on disk, and `/home` is a link on macOS.
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-unit-refusal-home");
+        let home = crate::testutil::scratch_dir("confine-unit-refusal-home");
         std::fs::create_dir_all(&home).expect("home directory");
         let home = home.canonicalize().expect("canonical home");
         let known_hosts = format!("{}/.ssh/known_hosts", home.display());
@@ -9113,8 +9512,7 @@ mod tests {
     /// that the default reaches each.
     #[test]
     fn what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists() {
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-unit-default-reach-home");
+        let home = crate::testutil::scratch_dir("confine-unit-default-reach-home");
         std::fs::create_dir_all(&home).expect("home directory");
         let home = home.canonicalize().expect("canonical home");
         let at = |rest: &str| {
@@ -9688,12 +10086,10 @@ mod tests {
         std::fs::write(home.join("keys/work.pub"), "a key").unwrap();
         std::fs::write(outside.join("plain-file"), "not a socket").unwrap();
         std::fs::write(home.join(".gitconfig"), SIGNS_WITH_A_KEY).unwrap();
-        // A socket is made at a short path and moved, since a path under a home can be longer
-        // than a socket can be bound at.
+        // A path under a home can be longer than a socket can be bound at, so the socket is
+        // bound through a short link and still stands at the path.
         let socket_at = |path: PathBuf| {
-            let made = outside.join("made.sock");
-            drop(std::os::unix::net::UnixListener::bind(&made).unwrap());
-            std::fs::rename(made, &path).unwrap();
+            drop(crate::testutil::socket_standing_at(&path));
             path
         };
         let in_ssh = socket_at(home.join(".ssh/agent.sock"));
@@ -10901,8 +11297,16 @@ mod tests {
     /// not a claim about what the programs can reach.
     #[test]
     fn a_turn_that_does_not_confine_states_no_boundary_in_the_description() {
-        let described = stated_in_the_description(false, SandboxMode::WorkspaceWrite, true, true)
-            .expect("says the one sentence");
+        let described = stated_in_the_description_for(
+            SandboxMode::WorkspaceWrite,
+            RunStatement {
+                confine_runs: false,
+                requests_offered: true,
+                request_path_listed: true,
+                ..RunStatement::default()
+            },
+        )
+        .expect("says the one sentence");
         assert_eq!(described, REQUEST_PATH_REFUSED_SENTENCE);
         for boundary in [
             "confined",
@@ -11832,9 +12236,7 @@ mod tests {
     /// A session directory under the build directory, which no row of the base reaches, and a
     /// confinement of this machine's own over it.
     fn a_session(name: &str) -> (PathBuf, Confinement) {
-        let session = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-unit-{name}"));
+        let session = crate::testutil::scratch_dir(&format!("confine-unit-{name}"));
         let _ = std::fs::remove_dir_all(&session);
         std::fs::create_dir_all(&session).expect("session directory");
         let session = session.canonicalize().expect("canonical session");
@@ -12001,7 +12403,14 @@ mod tests {
         let plan = plan_of("true | echo hi", &session);
         let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
 
-        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+        let refused = crate::exec::start_steps_within(
+            steps,
+            &session,
+            None,
+            Some(&confinement),
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        );
 
         assert!(
             matches!(
@@ -12025,7 +12434,14 @@ mod tests {
         let plan = plan_of(A_SLOW_WRITER_INTO_A_PIPE, &session);
         let steps = plan.steps.unrouted_pipeline().expect("one pipeline");
 
-        let refused = crate::exec::start_steps(steps, &session, None, Some(&confinement));
+        let refused = crate::exec::start_steps_within(
+            steps,
+            &session,
+            None,
+            Some(&confinement),
+            &bravebot_core::cancel::Cancel::new(),
+            crate::exec::LIMIT,
+        );
 
         assert!(
             matches!(&refused, Err(ExecError::NotConfined { program, .. }) if program == "cat"),
@@ -12347,9 +12763,7 @@ mod tests {
         gitconfig: &str,
         files: &[&str],
     ) -> (PathBuf, Confinement) {
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-signing-{name}"));
+        let home = crate::testutil::scratch_dir(&format!("confine-signing-{name}"));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("a home");
         for file in files {
@@ -12412,7 +12826,7 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket path short enough to bind under any checkout. The path is the one the temporary directory resolves to, since the stage's row is the path its name leads to.
+    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket the driver can connect to under any temporary directory. The path is the one its directory resolves to, since the stage's row is the path its name leads to.
     #[cfg(unix)]
     fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
@@ -12422,13 +12836,20 @@ mod tests {
             format!("ssh-ed25519 {HELD} comment\n"),
         )
         .unwrap();
-        // A socket path must fit in sun_path, which a home under a deep checkout does not.
         let name = home.file_name().unwrap().to_str().unwrap();
+        let file = format!("bb{}-{name}.sock", std::process::id());
+        // The driver connects to this socket by its path to ask which keys it holds, so the path
+        // has to fit in sun_path. A temporary directory that is too long for that gives way to
+        // `/tmp`.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let directory = std::env::temp_dir().canonicalize().unwrap();
-        let socket = directory.join(format!("bb{}-{name}.sock", std::process::id()));
+        let socket = if directory.join(&file).as_os_str().len() < 100 {
+            directory.join(&file)
+        } else {
+            Path::new("/tmp").canonicalize().unwrap().join(&file)
+        };
         let _ = std::fs::remove_file(&socket);
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let listener = crate::testutil::socket_standing_at(&socket);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -12751,6 +13172,64 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
+    /// SANDBOX-16 and SANDBOX-18: the sentence the planner reads says the agent socket was lent
+    /// exactly where the profile grants the socket as a write row, for every scope a `run` may ask
+    /// for and every scope an argv carries, under every mode, for a person whose git signs with
+    /// ssh and for one whose git does not.
+    #[test]
+    #[cfg(unix)]
+    fn the_sentence_says_the_agent_was_lent_exactly_where_the_rows_grant_it() {
+        use bravebot_sandbox::scope::Requested;
+        let agent = AgentSocket::at("rows-and-sentence");
+        let environment = agent.environment();
+        let script = step("/bin/sh", &["-c", "git rebase main"]);
+        let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+        let scopes = [
+            Scope::Remote,
+            Scope::Aws,
+            Scope::Kubernetes,
+            Scope::Docker,
+            Scope::Signing,
+        ];
+        let (mut lent, mut withheld) = (0, 0);
+        for (name, gitconfig) in [
+            ("rows-signs", SIGNS_WITH_A_KEY),
+            ("rows-not-signing", "[user]\nsigningkey = ~/keys/work.pub\n"),
+        ] {
+            let (home, confined) =
+                a_confinement_over_a_home_that(name, gitconfig, &["keys/work.pub"]);
+            for mode in SandboxMode::ALL {
+                let moded = confined.clone().with_mode(mode);
+                let mut cases: Vec<(String, Confinement, &Step)> = scopes
+                    .iter()
+                    .map(|scope| {
+                        (
+                            format!("requested {scope:?}"),
+                            moded.clone().with_requested(&[Requested::Scope(*scope)]),
+                            &script,
+                        )
+                    })
+                    .collect();
+                cases.push(("commit".to_string(), moded.clone(), &commit));
+                cases.push(("push".to_string(), moded.clone(), &push));
+                for (way, confined, step) in &cases {
+                    let policy = confined.policy(step, Path::new("/work/project"), &environment);
+                    let granted = writes(&policy, agent.name());
+                    let line = confined.signing_agent_sentence(&[*step], &environment);
+                    let said = line == SIGNING_AGENT_LENT_SENTENCE;
+                    assert_eq!(granted, said, "{name} {mode:?} {way}: {line}");
+                    match granted {
+                        true => lent += 1,
+                        false => withheld += 1,
+                    }
+                }
+            }
+            std::fs::remove_dir_all(&home).unwrap();
+        }
+        assert!(lent > 0 && withheld > 0, "lent {lent}, withheld {withheld}");
+    }
+
     /// SANDBOX-16: a stage that carries the signing scope is always told where the key comes from
     /// and that a repository's own `user.signingkey` is not read, so a signature that fails with
     /// "Couldn't load public key" can be traced to the setting. The text is fixed: it is the same
@@ -12900,9 +13379,7 @@ mod tests {
     /// source tree, and without one that repository would be the checkout above the session and
     /// would hold the home and the directory beside.
     fn unasked_places(name: &str) -> (PathBuf, PathBuf) {
-        let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-unit-unasked-{name}"));
+        let top = crate::testutil::scratch_dir(&format!("confine-unit-unasked-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("home/.ssh")).expect("home directory");
         std::fs::create_dir_all(top.join("beside/project/.git")).expect("a directory beside");
@@ -13427,9 +13904,7 @@ mod tests {
     #[cfg(unix)]
     impl IdentityPlaces {
         fn new(name: &str) -> Self {
-            let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/test-scratch")
-                .join(format!("confine-identities-{name}"));
+            let top = crate::testutil::scratch_dir(&format!("confine-identities-{name}"));
             let _ = std::fs::remove_dir_all(&top);
             for file in [
                 "home/.ssh/work",

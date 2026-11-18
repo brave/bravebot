@@ -4144,6 +4144,7 @@ mod preserved_history {
                 ToMain::PromptRecorded(at) => session.prompt_recorded(at),
                 ToMain::Spent(spent) => session.progressed(spent),
                 ToMain::Todos(todos) => session.set_todos(todos),
+                ToMain::References(found) => session.add_references(&found),
                 ToMain::Narration(text) => session.narrate(text),
                 ToMain::Started(activity) => session.start_activity(activity),
                 ToMain::Finished(activity) => session.finish_activity(activity),
@@ -4676,21 +4677,38 @@ mod preserved_history {
                 &mut conversation,
                 root,
                 &config_for(&endpoint),
-                &bravebot_agent::Task::new("next request"),
+                &bravebot_agent::Task::new("follow-up request"),
                 &Cancel::new(),
             );
-            let request = requests
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap();
-            for text in ["initial request", "accepted correction", "next request"] {
-                assert_eq!(request.matches(text).count(), 1);
+            let request: serde_json::Value = serde_json::from_str(
+                &requests
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap();
+            // Only the conversation counts: a tool description may quote any of these words.
+            let messages = serde_json::to_string(&request["messages"]).unwrap();
+            for text in [
+                "initial request",
+                "accepted correction",
+                "follow-up request",
+            ] {
+                assert_eq!(
+                    messages.matches(text).count(),
+                    1,
+                    "{text:?} should appear once in the request messages: {messages}"
+                );
             }
             let record = save(root, &session, &conversation);
             let reopened = reopen(root, &record);
             assert_eq!(reopened.turns, 2);
             assert_eq!(
                 user_lines(&reopened),
-                ["initial request", "accepted correction", "next request"]
+                [
+                    "initial request",
+                    "accepted correction",
+                    "follow-up request"
+                ]
             );
             assert_eq!(
                 serde_json::to_value(&reopened.turn_history()[0]).unwrap(),
@@ -4702,7 +4720,7 @@ mod preserved_history {
             );
             assert_eq!(
                 reopened.turn_history()[1].prompt.as_deref(),
-                Some("next request")
+                Some("follow-up request")
             );
             assert!(matches!(
                 reopened.turn_history()[1].outcome,
@@ -4962,6 +4980,44 @@ mod preserved_history {
         assert!(request.contains("next prompt"));
         assert!(!request.contains("SAFE_DISPLAY_DIAGNOSTIC"));
         assert!(!request.contains("DISPLAY_ONLY_PROMPT"));
+    }
+
+    /// PANEL-16: the worker hands the terminal what the planner's own call named as the call is made,
+    /// through the channel the real reporter writes to, so a turn that then fails has already
+    /// given the session the item. The command is refused (this fixture approves no run) and the
+    /// item still counts, since the planner wrote it.
+    ///
+    /// The faults it rejects: a reporter that keeps the references for the turn's outcome (a failed
+    /// turn gives none), and a terminal that leaves the message unread.
+    #[test]
+    fn a_turn_that_fails_after_naming_an_item_has_already_given_the_session_the_item() {
+        let scratch = Scratch::new("failed-turn-references");
+        let (refusing, _) = super::completed_usage::endpoint_refusing_after(vec![tool_reply(
+            "run",
+            r#"{"command":"gh pr view 123 --repo brave/bravebot"}"#,
+            10,
+        )]);
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&refusing),
+            &bravebot_agent::Task::new("look at it").keeping_links(true),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(session.finished.unwrap().failed());
+        let met: Vec<String> = session
+            .references()
+            .iter()
+            .map(|reference| reference.shorthand())
+            .collect();
+        assert_eq!(met, ["brave/bravebot#123"]);
+        assert_eq!(
+            session.references()[0].kind(),
+            bravebot_agent::links::LinkKind::PullRequest
+        );
     }
 
     /// A turn that fails after a tool call leaves the planner a note that it failed (TURN-13). The

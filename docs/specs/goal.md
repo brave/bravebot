@@ -271,7 +271,7 @@ just judged is still standing there.
 `verified-by: bravebot_tui::app::a_stop_key_takes_the_goal_off_and_stops_the_check`
 `verified-by: bravebot_tui::app::a_stopped_goal_check_is_not_reported_as_a_failure`
 `verified-by: bravebot_agent::turn::a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_back`
-`verified-by: bravebot_tui::app::the_view_answers_the_stop_keys_before_the_goal_check_does`
+`verified-by: bravebot_tui::app::tests::watching::the_view_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::the_search_answers_the_stop_keys_before_the_goal_check_does`
 `verified-by: bravebot_tui::app::stopping_a_turn_leaves_the_goal_set`
 `verified-by: bravebot_tui::app::a_turn_that_failed_leaves_the_goal_where_it_was`

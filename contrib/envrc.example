@@ -77,9 +77,8 @@ esac
 # Point the free endpoint at a locally running backend instead, e.g.
 # export BRAVE_AI_CHAT_ENDPOINT="http://127.0.0.1:8000"
 #
-# Brave's premium service needs no entry here. Its host is compiled in (the dev
-# one for both environments for now, as DEV_PREMIUM_ENDPOINT and
-# PROD_PREMIUM_ENDPOINT in crates/config/src/lib.rs), and its key is not
+# Brave's premium service needs no entry here. Its host is compiled in (as
+# DEV_PREMIUM_ENDPOINT and PROD_PREMIUM_ENDPOINT in crates/config/src/lib.rs), and its key is not
 # configuration: each person stores their own with `bravebot auth login brave`.
 # Without a key every request goes to the free endpoint, signed with the services
 # key. BRAVE_AI_CHAT_PREMIUM_ENDPOINT, exported here, replaces the compiled-in

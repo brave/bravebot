@@ -37,7 +37,7 @@ macro_rules! page {
 }
 
 /// Every page, in path order. A test holds this to the files under `docs/website/docs`.
-const PAGES: [Page; 63] = [
+const PAGES: [Page; 65] = [
     page!("customize/agents"),
     page!("customize/configuration"),
     page!("customize/effort"),
@@ -53,6 +53,7 @@ const PAGES: [Page; 63] = [
     page!("customize/mcp/gmail"),
     page!("customize/memory"),
     page!("customize/model"),
+    page!("customize/plugins"),
     page!("customize/premium"),
     page!("customize/providers/anthropic"),
     page!("customize/providers/bedrock"),
@@ -85,6 +86,7 @@ const PAGES: [Page; 63] = [
     page!("security/sandbox"),
     page!("security/security"),
     page!("security/trust"),
+    page!("security/usage-ping"),
     page!("security/vetting"),
     page!("troubleshooting"),
     page!("using/context"),
@@ -1287,6 +1289,37 @@ intro
             "bravebot-help/using/session::headings",
         ] {
             assert!(load(wrong).is_none(), "{wrong}");
+        }
+    }
+
+    /// The regression it rejects: the `/mcp` section of the commands page the model reads leaving
+    /// out `remove <alias>` or the `*` pattern, so that an answer from it says the command may not
+    /// exist (SERVERS-19).
+    #[test]
+    fn the_mcp_section_of_the_commands_page_names_every_form_of_the_command() {
+        let (_, found) = sections(page_text("reference/commands"));
+        let mcp = found
+            .iter()
+            .find(|section| section.heading.starts_with("`/mcp "))
+            .expect("a /mcp section");
+        let heading = mcp.heading;
+        for form in [
+            "list",
+            "reconnect [alias]",
+            "disable <alias>",
+            "remove <alias>",
+        ] {
+            assert!(heading.contains(form), "{form} is not in {heading}");
+        }
+        for sentence in [
+            "permanent form",
+            "bravebot mcp disable weather",
+            "bravebot mcp\nremove weather",
+            "A pattern that names no server changes nothing",
+            "`*`",
+            "customize/mcp-servers.md#starting-or-stopping-one-during-a-session",
+        ] {
+            assert!(mcp.text.contains(sentence), "{sentence}");
         }
     }
 

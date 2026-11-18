@@ -27,7 +27,7 @@ export interface AgentSettings {
     key: string
   }[]
   selected: string | null; layers: string[]; overrides: { name: string; path: string }[]
-  /** Keys a project file named that the agent reads from the home directory only. */
+  /** Keys a project file named that the agent did not obey: ones it reads from the person's own files only, and ones a project file may only narrow. */
   ignored?: { name: string; path: string }[]
   /** Absent when an older agent built the report. */
   limits?: Limits

@@ -23,7 +23,8 @@ use super::directories::{
 };
 use super::opening::{Answers, Beginning, clear_session, opening_trust, switch_session};
 use super::records::{
-    carry_out_hunks, list_rewind_points, rewind, rewind_point, save_compacted, with_standing,
+    carry_out_hunks, list_rewind_points, open_the_record, rewind, rewind_point, save_compacted,
+    with_standing,
 };
 use super::side_requests::{
     compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
@@ -419,6 +420,36 @@ impl Held<'_> {
         );
     }
 
+    pub(super) fn plugin(&mut self, terminal: &mut Tty, argument: &str) {
+        let home = bravebot_agent::home::directory();
+        // What a session finds today, so the prompt marks a name a higher-ranked source takes.
+        let catalogue = bravebot_agent::skills::resolved(
+            self.workspace,
+            home.as_deref(),
+            self.recorded_trust(),
+            self.answers.rules.permissions.clone(),
+            &mut Trail::new(),
+        );
+        let definitions = bravebot_agent::agents::resolved(
+            self.workspace,
+            home.as_deref(),
+            self.recorded_trust(),
+            self.answers.rules.permissions.clone(),
+            &mut Trail::new(),
+        );
+        crate::plugin_command::run(
+            self.session,
+            home.as_deref(),
+            self.workspace.root(),
+            argument,
+            &mut crate::plugin_command::TerminalAsker {
+                terminal,
+                catalogue: &catalogue,
+                definitions: &definitions,
+            },
+        );
+    }
+
     pub(super) fn list_checkouts(&mut self) {
         let mut branches = std::collections::BTreeMap::new();
         self.session
@@ -519,8 +550,8 @@ impl Held<'_> {
             .with_permissions(self.answers.rules.permissions.clone())
             .with_permission_mode(permission_mode.clone())
             .with_auto_vetting(self.session.auto_vetting())
-            .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
-                self.settings.run_deadlines(),
+            .with_deadlines(bravebot_agent::exec::Deadlines::from_settings(
+                self.settings,
             ));
         let mut trail = Trail::new();
         let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
@@ -903,6 +934,18 @@ impl Held<'_> {
             self.session.rewind.open(point, prompt.clone());
             self.session.rewind.bind_coverage(self.workspace);
 
+            // After the rewind point took `was_wrote`, so rewinding past this turn still removes
+            // the record.
+            open_the_record(
+                self.session,
+                self.conversation,
+                self.stored,
+                &self.answers.trust,
+                &self.answers.programs,
+                self.workspace,
+                &prompt,
+            );
+
             // Everything the session holds is lent for the turn and taken back: a turn that
             // writes untrusted data into a trusted path records that, and the next turn must
             // honour it; a turn that has been had is a turn the next one can be asked about;
@@ -933,6 +976,7 @@ impl Held<'_> {
                 exposed,
                 &self.answers.rules.permissions,
                 self.run_settings,
+                self.settings,
                 self.stored,
             )?;
             let events = self.take_back(continued);

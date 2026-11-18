@@ -29,6 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::marker::PhantomData;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// Proof that a read of labelled content has been authorised and recorded.
 ///
 /// Lives here, and not beside [`Labelled`], because of who is allowed to make one.
@@ -37,11 +40,13 @@ use std::marker::PhantomData;
 /// crate downstream of it. [`Labelled::declassify`] therefore cannot be reached without
 /// passing a gate that recorded why.
 #[derive(Debug)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct Declassification {
     reason: &'static str,
 }
 
 impl Declassification {
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     pub(in crate::policy) fn authorise(reason: &'static str) -> Self {
         Self { reason }
     }
@@ -231,6 +236,24 @@ impl fmt::Display for Denial {
 }
 
 impl std::error::Error for Denial {}
+
+// The sink's trait, for the gates' signatures to name. Its methods are left to the code.
+#[cfg(verus_keep_ghost)]
+verus! {
+#[verifier::external_trait_specification]
+pub trait ExSink {
+    type ExternalTraitSpecificationFor: Sink;
+}
+}
+
+// A refusal's message is a `String` built by `format!`, which Verus does not read, so a contract
+// says only whether a gate refused. Opaque to Verus, and unchanged in a build.
+#[cfg(verus_keep_ghost)]
+verus! {
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExDenial(Denial);
+}
 
 /// Why a session refused a `run` call's request for reach past its profile (SANDBOX-26,
 /// SANDBOX-29).
@@ -498,19 +521,6 @@ pub enum McpStanding {
     PlanApproved,
 }
 
-/// What a turn did about a call the planner made for the third time running.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AfterRepeatedCall {
-    /// The person let this one call through.
-    LetThrough,
-    /// The person chose that the call is not run.
-    Refused,
-    /// The person chose to stop the turn.
-    Stopped,
-    /// Nobody could be asked, so the call was not run.
-    Unanswered,
-}
-
 /// Where the words of an output style came from (INSTR-12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleOrigin {
@@ -547,6 +557,12 @@ pub enum Containment {
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is a separate answer about the run or its host, and each is read on its own"
+)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::external_body,
+    verifier::reject_recursive_types(S)
 )]
 pub struct Policy<'sink, S: Sink> {
     routing: Routing,
@@ -665,6 +681,9 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether the run is offered `read_file`, which the refusal to edit an unvouched file names
     /// as the read that puts the vouch question.
     reading_files_offered: bool,
+    /// Whether nobody can be asked in this run, a one-shot command or a pipeline (CLI-1), so a
+    /// refusal for a path outside the workspace names no directory to open and no file to drop.
+    nobody_to_ask: bool,
     /// The names this run's definition, and every one above it, allowed it to start, where any
     /// named some (DELEGATE-30). The set a turn resolves is narrowed to these wherever it is
     /// installed, and a delegate it starts carries them on, so a child cannot start what the file
@@ -851,6 +870,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             running_offered: true,
             reading_offered: true,
             reading_files_offered: true,
+            nobody_to_ask: false,
             spawns: None,
             write_limits: Vec::new(),
             spawned: 0,
@@ -873,6 +893,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &self.routing
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     fn deny(&mut self, gate: &'static str, principle: Principle, message: String) -> Denial {
         self.refusals.push(format!("{gate}: {message}"));
         self.sink.emit(Event::GateBlocked {
@@ -884,6 +905,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Denial { principle, message }
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     fn allow(&mut self, gate: &'static str, detail: String) {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
@@ -1767,6 +1789,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             running_offered: self.running_offered,
             reading_offered: self.reading_offered,
             reading_files_offered: self.reading_files_offered,
+            nobody_to_ask: self.nobody_to_ask,
             spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
             spawned: self.spawned,
@@ -2503,6 +2526,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// is.
     pub fn without_reading_files(&mut self) {
         self.reading_files_offered = false;
+    }
+
+    /// Say that nobody can be asked in this run (CLI-1), so a refusal worded from here on does not
+    /// send the planner to a directory to open or a file to drop. Told by the turn when its list is
+    /// settled, as [`Policy::without_vetting`] is.
+    pub fn without_anybody_to_ask(&mut self) {
+        self.nobody_to_ask = true;
+    }
+
+    /// Whether nobody can be asked in this run, which a refusal may say instead of naming a route
+    /// only a person can take.
+    pub fn nobody_to_ask(&self) -> bool {
+        self.nobody_to_ask
     }
 
     /// Whether a reference the run holds can be given to a processor: the run is offered
@@ -3381,6 +3417,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// A refusal is not a condition to work around: it means a caller tried to do the one thing
     /// the design forbids, and the fix is to use a reference instead.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> label.integrity == Integrity::Trusted,
+    ))]
     fn refuse_untrusted(&mut self, gate: &'static str, what: &str, label: Label) -> Gated<()> {
         if label.is_trusted() {
             return Ok(());
@@ -3406,6 +3446,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// being bypassed by a caller that would rather have the bytes. Confidentiality is
     /// deliberately not checked: staying inside the process releases nothing, and workspace
     /// content is private as a matter of course.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::value::spec_label_of(value).integrity == Integrity::Trusted,
+    ))]
     pub fn read_trusted_content<T: Clone>(&mut self, tool: &str, value: &Labelled<T>) -> Gated<T> {
         self.refuse_untrusted("trusted-read", tool, value.label())?;
         let label = value.label();
@@ -3803,20 +3847,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// Record a call held for being the same as the ones before it, and what came of it (TURN-9).
+    /// Record a call held for being the same as the ones before it (TURN-9). It was not run.
     ///
     /// The round and the count only. The call's name and arguments are the planner's own and stay
     /// out of the line, so it carries no content (TRACE-2).
-    pub fn record_repeated_call(&mut self, round: usize, count: usize, then: AfterRepeatedCall) {
-        let then = match then {
-            AfterRepeatedCall::LetThrough => "the person let it through once",
-            AfterRepeatedCall::Refused => "the person chose that it is not run",
-            AfterRepeatedCall::Stopped => "the person chose to stop and the turn ended",
-            AfterRepeatedCall::Unanswered => "nobody could be asked, so it was not run",
-        };
+    pub fn record_repeated_call(&mut self, round: usize, count: usize) {
         self.allow(
             "repeated_call",
-            format!("round {round}: the same call made {count} times in a row; {then}"),
+            format!(
+                "round {round}: the same call made {count} times in a row; it was not run and the \
+                 planner was told"
+            ),
         );
     }
 
@@ -4286,6 +4327,42 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &mut crate::slot::SlotStore,
     ) -> Gated<crate::reference::Presentation> {
         self.present_inner(tool, slot, origin, content, slots, None)
+    }
+
+    /// [`Policy::present`], for what a program printed, with the complete colour codes taken out of
+    /// what the planner is shown and a sentence saying how many (RUN-21).
+    ///
+    /// The decision is [`Policy::present`]'s and is made from the label alone. Only content the
+    /// planner may read is reshaped, so the removal and the count are of text the planner is about
+    /// to be given and never of quarantined bytes. Content it may not read goes to its slot whole
+    /// and the sentence is empty: a count taken from bytes nobody vouched for would be a fact about
+    /// them in the planner's context. The slot keeps whatever the caller kept in it, so a later
+    /// release of it holds the codes.
+    ///
+    /// The sentence is the empty string where no code was taken out, so the caller joins it onto the
+    /// text and decides nothing from it.
+    pub fn present_output(
+        &mut self,
+        tool: &str,
+        slot: SlotId,
+        origin: &str,
+        content: &Labelled<String>,
+        slots: &mut crate::slot::SlotStore,
+    ) -> Gated<(crate::reference::Presentation, String)> {
+        let label = content.label();
+        if !label.is_trusted() {
+            return self
+                .present(tool, slot, origin, content, slots)
+                .map(|presented| (presented, String::new()));
+        }
+        self.allow(
+            "render",
+            format!("{tool}: colour codes taken out of {origin} before the planner reads it, still {label}"),
+        );
+        let proof = Declassification::authorise("colour codes taken out of trusted output");
+        let (text, dropped) = crate::colour_codes::without(&content.clone().declassify(&proof));
+        self.present(tool, slot, origin, &Labelled::new(text, label), slots)
+            .map(|presented| (presented, crate::colour_codes::planner_note(dropped)))
     }
 
     /// [`Policy::present`], for content that is quarantined however it is labelled.
@@ -11300,10 +11377,11 @@ five
         let refusal = policy
             .write_belongs_here("summary.txt", &scratch, &unnamed, &slots)
             .expect_err("an answer over a file and a page, naming neither, is for no document");
-        assert!(
-            refusal.message.contains("never told which document"),
-            "unexpected refusal: {}",
-            refusal.message
+        assert_eq!(
+            refusal.message,
+            "ref:3 came from a processor that was never told which document its answer \
+             is for, so it may be written nowhere. Ask about the one document you mean, \
+             and one answer will have one destination."
         );
         for answer in [&named, &alone] {
             policy
@@ -21182,6 +21260,204 @@ five
 
         assert!(presented.is_visible());
         assert_eq!(presented.for_context(), "fn main() {}");
+    }
+
+    /// What a program printed that the planner may read is shown with its complete colour codes
+    /// taken out, and the count is returned for the caller to say after it (RUN-21). The label is
+    /// the one the content had, and the trail records the reshape.
+    #[test]
+    fn trusted_output_is_presented_without_its_colour_codes_and_counted() {
+        let mut sink = RecordingSink::new();
+        let mut slots = SlotStore::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "build"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let printed = Labelled::new(
+            "\u{1b}[0m\u{1b}[36mok\u{1b}[0m done\n".to_string(),
+            Label::trusted_private(),
+        );
+        let (presented, note) = policy
+            .present_output(
+                "tool_result",
+                SlotId::new("ref:0"),
+                "what `make` printed",
+                &printed,
+                &mut slots,
+            )
+            .expect("presents");
+
+        assert!(presented.is_visible());
+        assert_eq!(presented.for_context(), "ok done\n");
+        assert_eq!(note, "\n\n3 colour codes were taken out of this output.");
+        assert!(
+            sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "render", detail }
+                    if detail.contains("colour codes taken out")
+            )),
+            "the trail does not record the reshape: {:?}",
+            sink.events()
+        );
+    }
+
+    /// Output with no colour code in it is presented as it is, and nothing is said about colour
+    /// codes (R5).
+    #[test]
+    fn trusted_output_with_no_colour_code_says_nothing_about_them() {
+        let mut sink = RecordingSink::new();
+        let mut slots = SlotStore::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "build"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let printed = Labelled::new("plain [m] text\n".to_string(), Label::trusted_private());
+        let (presented, note) = policy
+            .present_output(
+                "tool_result",
+                SlotId::new("ref:0"),
+                "what `make` printed",
+                &printed,
+                &mut slots,
+            )
+            .expect("presents");
+
+        assert_eq!(presented.for_context(), "plain [m] text\n");
+        assert_eq!(note, "");
+    }
+
+    /// An escape that is not a complete colour code is left whole, so a cursor movement or an erase
+    /// is not hidden from the planner, and it is not counted.
+    #[test]
+    fn trusted_output_keeps_an_escape_that_is_not_a_colour_code() {
+        let mut sink = RecordingSink::new();
+        let mut slots = SlotStore::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "build"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let printed = Labelled::new(
+            "a\u{1b}[2Jb\u{1b}[>4;2mc\u{1b}[31".to_string(),
+            Label::trusted_private(),
+        );
+        let (presented, note) = policy
+            .present_output(
+                "tool_result",
+                SlotId::new("ref:0"),
+                "what `make` printed",
+                &printed,
+                &mut slots,
+            )
+            .expect("presents");
+
+        assert_eq!(presented.for_context(), "a\u{1b}[2Jb\u{1b}[>4;2mc\u{1b}[31");
+        assert_eq!(note, "");
+    }
+
+    /// Output nobody vouched for goes to its slot whole and nothing about it, a count included,
+    /// reaches the planner. The removal is never made on bytes the planner may not read (R12).
+    #[test]
+    fn untrusted_output_is_not_reshaped_and_is_not_counted() {
+        let mut sink = RecordingSink::new();
+        let mut slots = SlotStore::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "build"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        let printed = Labelled::new(
+            "\u{1b}[31mSENTINEL-UNVOUCHED\u{1b}[0m\n".to_string(),
+            Label::untrusted_private(),
+        );
+        let (presented, note) = policy
+            .present_output(
+                "tool_result",
+                SlotId::new("ref:0"),
+                "what `make` printed",
+                &printed,
+                &mut slots,
+            )
+            .expect("presents");
+
+        assert!(!presented.is_visible());
+        assert!(
+            !presented.for_context().contains("SENTINEL-UNVOUCHED"),
+            "unvouched bytes reached the planner's context: {}",
+            presented.for_context()
+        );
+        assert_eq!(note, "", "a count of unvouched bytes reached the planner");
+        assert!(
+            !sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "render", detail }
+                    if detail.contains("colour codes taken out")
+            )),
+            "the removal ran on quarantined content"
+        );
+    }
+
+    /// The figures the issue measured on one recorded result: 16,089 characters holding 729
+    /// complete colour codes, 366 of them resets and 3,721 characters in all. The text the planner
+    /// is given is that many characters shorter and the sentence names the number of codes.
+    ///
+    /// The issue's first paragraph reads "729 colour introducers and 366 resets", and the result
+    /// holds 729 codes in all: each reset is one of the 729 introducers, so the count is 729 and
+    /// not 729 plus 366. The same figures for the three results of the recording are 759 codes and
+    /// 3,875 characters.
+    #[test]
+    fn a_result_of_the_size_the_issue_measured_is_shorter_by_its_codes_and_counted() {
+        let mut sink = RecordingSink::new();
+        let mut slots = SlotStore::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "build"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+
+        // 366 resets of 4 characters, 142 codes of 5 and 221 of 7: 729 codes and 3,721 characters.
+        let codes = std::iter::repeat_n("\u{1b}[0m", 366)
+            .chain(std::iter::repeat_n("\u{1b}[31m", 142))
+            .chain(std::iter::repeat_n("\u{1b}[1;31m", 221));
+        let mut printed = String::new();
+        for code in codes {
+            printed.push_str(code);
+            printed.push_str("ok ");
+        }
+        printed.push_str(&"x".repeat(16_089 - printed.chars().count()));
+        assert_eq!(printed.chars().count(), 16_089);
+
+        let printed = Labelled::new(printed, Label::trusted_private());
+        let (presented, note) = policy
+            .present_output(
+                "tool_result",
+                SlotId::new("ref:0"),
+                "what `make` printed",
+                &printed,
+                &mut slots,
+            )
+            .expect("presents");
+
+        let shown = presented.for_context();
+        assert_eq!(shown.chars().count(), 16_089 - 3_721);
+        assert!(!shown.contains('\u{1b}'));
+        assert_eq!(note, "\n\n729 colour codes were taken out of this output.");
     }
 
     /// A cap on what may enter the conversation is not a reason to destroy the rest. The planner

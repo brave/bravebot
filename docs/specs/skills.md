@@ -90,6 +90,11 @@ directory the person's settings name ([INSTR-17](instructions.md#INSTR-17)); an 
 read, so a file put there is no grant. The workspace exception below applies to each directory read
 this way, and the notice names the directory it counts.
 
+The skills part of an installed, enabled plugin, `~/.bravebot/plugins/<name>/skills`, is read from
+provenance in the same way and is the least specific file source: a skill of the same name from any
+other source replaces it ([PLUGIN-12](plugins.md#PLUGIN-12)). The workspace exception below applies to
+it too, and a `plugins` directory in a workspace is not a source ([PLUGIN-5](plugins.md#PLUGIN-5)).
+
 A skill file there whose path goes through the workspace is not read from provenance at all,
 because a turn can write it. The workspace here is every directory the file tools may write to:
 the working directory, a directory opened beside it ([TRUST-9](trust-map.md#TRUST-9)), and the

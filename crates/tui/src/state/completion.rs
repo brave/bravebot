@@ -531,7 +531,14 @@ impl Session {
             return None;
         }
         let pick = self.pick.take()?;
-        let mut commanded = self.take_command();
+        let mut commanded = self.take_command_remembered_as(|line| {
+            let task = bravebot_mentions::without_marker(line, &pick.marker);
+            format!(
+                "{} {} {task}",
+                crate::command_table::AGENT_COMMAND,
+                pick.name
+            )
+        });
         let task = bravebot_mentions::without_marker(&commanded.line, &pick.marker);
         commanded.line = format!("{} {task}", pick.name);
         Some(commanded)

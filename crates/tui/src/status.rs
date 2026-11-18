@@ -185,6 +185,9 @@ pub struct Facts<'a> {
     /// cache, which every backend but Bedrock currently does, and that is not the same answer as a
     /// turn whose cache missed.
     pub cached: Option<bravebot_aichat::protocol::Cached>,
+    /// Whether the model in force is recorded as refusing the cache breakpoints, so that its
+    /// requests carry none and a prefix is paid for in full on each of them (BACKEND-27).
+    pub breakpoints_given_up: bool,
     pub trust: &'a TrustStore,
     pub programs: &'a TrustedPrograms,
     /// Whether the turn in flight holds the two above, which it answers into as it runs. Then
@@ -1021,7 +1024,9 @@ fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
     // above it. Adding the two together would report the one number that says nothing: a read is
     // charged at a fraction of a fresh token and a write above it, so a turn that saved almost the
     // whole prompt and a turn that paid a premium on it come to the same sum.
-    if let Some(cached) = facts.cached.filter(bravebot_aichat::protocol::Cached::any) {
+    if facts.breakpoints_given_up {
+        lines.push(Line::new(t!(status_cache), t!(status_cache_given_up)));
+    } else if let Some(cached) = facts.cached.filter(bravebot_aichat::protocol::Cached::any) {
         lines.push(Line::new(t!(status_cache), ""));
         for (count, note) in [
             (cached.read_tokens, t!(status_cache_read)),
@@ -1273,15 +1278,20 @@ fn model_lines(config: &Config, model: &str, note: String) -> Vec<Line> {
 
 /// Which deployment an endpoint names, without naming the host.
 ///
-/// Matched on the host rather than parsed, because the answer wanted is one of three words and a
-/// URL parser would still leave the mapping to be written. An unrecognised host is reported as
-/// custom rather than guessed at.
+/// The host is read with [`bravebot_core::url::host_of`], which ends it at the first `/`, `?` or
+/// `#` and leaves userinfo and port out, so a suffix or exact match against it cannot be fooled by
+/// a fragment or a path that merely holds one of these strings: `https://attacker.example#.brave.com`
+/// reads as `custom`, not `prod`, because its host is `attacker.example`. An endpoint with no host
+/// at all is reported as custom rather than guessed at.
 fn environment(endpoint: &str) -> &'static str {
-    if endpoint.contains("127.0.0.1") || endpoint.contains("localhost") {
+    let Some(host) = bravebot_core::url::host_of(endpoint) else {
+        return t!(environment_custom);
+    };
+    if host == "127.0.0.1" || host == "localhost" {
         t!(environment_local)
-    } else if endpoint.contains(".brave.software") {
+    } else if host.ends_with(".brave.software") {
         t!(environment_dev)
-    } else if endpoint.contains(".brave.com") {
+    } else if host.ends_with(".brave.com") {
         t!(environment_prod)
     } else {
         t!(environment_custom)
@@ -1516,6 +1526,7 @@ mod tests {
             agent_by_setting: false,
             effort: None,
             model_reads_effort: true,
+            breakpoints_given_up: false,
             account_effort: None,
             // Nothing observed, which is what a session looks like before its first turn. Tests
             // about the tier and the served model set these themselves.
@@ -2886,6 +2897,9 @@ mod tests {
         assert_eq!(environment("https://ai-chat.bsg.brave.com"), "prod");
         assert_eq!(environment("http://127.0.0.1:8080"), "local");
         assert_eq!(environment("https://example.invalid"), "custom");
+        assert_eq!(environment("https://attacker.example#.brave.com"), "custom");
+        assert_eq!(environment("https://attacker.example?.brave.com"), "custom");
+        assert_eq!(environment("https://localhost.attacker.example"), "custom");
     }
 
     /// Whether this directory is trusted is the first thing a person wants from a status panel, and
@@ -4147,6 +4161,30 @@ mod tests {
         );
         // The counts above this line are the session's, so the heading has to say this one is not.
         assert!(shown.contains("last turn"), "{shown}");
+    }
+
+    /// A model that has refused the cache breakpoints draws no cache figure, since its prompt is not
+    /// cached, so the report has to say the caching is off. Otherwise a session that reads its whole
+    /// prefix at the full rate on every turn looks the same as one that has not yet reported
+    /// (BACKEND-27).
+    #[test]
+    fn the_panel_says_when_the_breakpoints_were_given_up() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut given_up = facts(&config, &trust);
+        given_up.breakpoints_given_up = true;
+        let shown = rendered(&report(&given_up));
+        assert!(
+            shown.contains(&t!(status_cache_given_up).to_string()),
+            "{shown}"
+        );
+
+        let kept = facts(&config, &trust);
+        let shown = rendered(&report(&kept));
+        assert!(
+            !shown.contains(&t!(status_cache_given_up).to_string()),
+            "{shown}"
+        );
     }
 
     /// A read of zero after a pause means one thing under a five-minute lifetime and another under an

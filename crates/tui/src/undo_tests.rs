@@ -770,7 +770,14 @@ fn bridge_handoff(ending: &str) {
         ],
         None,
     );
-    let settings = root.join("test-settings.json");
+    // Beside the session's directory and not in it, so the file is the person's own on every host
+    // (PERM-14): a platform that cannot hold one file back reads a file inside it as a checkout's.
+    let settings = root.with_file_name(format!(
+        "{}-test-settings.json",
+        root.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project")
+    ));
     std::fs::write(
         &settings,
         json!({"model":"undo-test/test", "provider": {"undo-test": {

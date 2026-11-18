@@ -57,6 +57,7 @@ Present whether or not an agent ever runs.
 | Containers | `~/.docker/config.json`, `~/.config/containers/auth.json`; `~/.kube/config`, `~/.kube/cache/`; `/var/run/secrets/kubernetes.io/serviceaccount/token`; `~/.config/helm/repositories.yaml` |
 | Registries | `~/.npmrc`, `~/.yarnrc.yml`; `~/.pypirc`, `~/.config/pip/pip.conf`; `~/.m2/settings.xml`, `~/.gradle/gradle.properties`; `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`; `~/.cache/huggingface/token`, `GOPRIVATE` + netrc |
 | IaC & secrets | `~/.terraformrc`, `~/.terraform.d/credentials.tfrc.json`; `~/.pulumi/credentials.json`; `~/.vault-token`; `~/.config/sops/age/keys.txt`, `*.agekey`, vault password files; `~/.gitlab-runner/config.toml`; the 1Password CLI's `~/.config/op/` |
+| CI | the Jenkins CLI's `~/Library/Application Support/jk/config.yaml` on macOS and `~/.config/jk/config.yaml` on Linux, which name the controller and the user; its token in the login keychain on macOS, the secret service or wallet on Linux, or an encrypted file in the directory `KEYRING_FILE_DIR` names; `JK_TOKEN` in the environment |
 | Databases | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf`; DBeaver `credentials-config.json` under `~/.local/share/DBeaverData/` or `~/Library/DBeaverData/`, JetBrains password safe, TablePlus, pgAdmin `~/.pgadmin/pgadmin4.db` |
 | IDE & agent | `claude_desktop_config.json` in `~/Library/Application Support/Claude/`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from, `~/.claude.json`, `~/.codex/`, `~/.gemini/` and `~/.local/share/opencode/auth.json`; `settings.json`, Settings Sync, extension storage: `~/.config/Code/`, `~/Library/Application Support/Code/`; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history, and this agent's own `~/.bravebot/sessions/`; `~/.config/github-copilot/hosts.json` |
 | Browser | `Login Data`, `Cookies`, `Web Data`, `Local State`; `logins.json`, `key4.db`, `cookies.sqlite`; `userDataDir`, `storageState.json` outside the tree |
@@ -357,6 +358,7 @@ bound to enforce, so placing them on the scale would put unbounded authority at 
 one thing available before confinement is that nobody grants it thinking they granted less.
 
 `verified-by: bravebot_core::ambient::a_line_that_reaches_a_container_daemon_names_it`
+`verified-by: bravebot_core::ambient::a_line_that_starts_the_jenkins_cli_names_it`
 `verified-by: bravebot_core::ambient::a_tool_that_spends_on_one_command_is_named_for_that_command_alone`
 `verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_named_as_it_is_without_one`
 `verified-by: bravebot_core::ambient::a_program_under_a_wrapper_is_judged_by_its_own_arguments`

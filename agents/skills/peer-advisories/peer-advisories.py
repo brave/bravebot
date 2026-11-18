@@ -77,7 +77,10 @@ FINAL = ("affected", "known", "holds", "absent")
 VERIFY_VERDICTS = ("confirmed", "known", "holds", "absent")
 KINDS = ("bug", "spec-bug", "spec-mismatch", "enhancement")
 SEVERITIES = ("high", "medium", "low")
-AREAS = ("trust", "tools", "turns", "interface", "cli", "delegation", "backends", "skus", "i18n")
+AREAS = (
+    "trust", "sandbox", "tools", "mcp", "browser", "connectors", "turns", "background", "delegation",
+    "plugins", "backends", "skus", "interface", "desktop", "acp", "remote", "cli", "release", "i18n",
+)
 ISSUE_TEXT = ("title", "what_happens", "code_path", "reproduce", "fix")
 TITLE_LIMIT = 120
 EM_DASH = "\u2014"

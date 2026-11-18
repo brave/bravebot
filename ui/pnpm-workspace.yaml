@@ -10,12 +10,15 @@ allowBuilds:
 overrides:
   storybook: "^8.6.19"
 
-# Known high advisories the dependency tree still carries; braces has no patched release.
+# Known high advisories the dependency tree still carries; braces and picomatch (GHSA-fc5q-39xc-vjpf,
+# a ReDoS in extglob matching, reached through build-time tooling) have no patched release.
+# Remove the picomatch entry once a release above 4.0.7 is published and the lockfile uses it.
 # Any other high or critical advisory fails `pnpm audit --audit-level=high` in CI.
 auditConfig:
   ignoreGhsas:
     - GHSA-ch52-4w7c-c8xp
     - GHSA-vfj7-8cjw-p6xm
+    - GHSA-fc5q-39xc-vjpf
 
 # @electron/packager walks dependencies from node_modules/<name> without following symlinks, so
 # pnpm's default layout fails it on packages whose own dependencies sit beside them in .pnpm.

@@ -481,6 +481,54 @@ class Scope(unittest.TestCase):
         self.assertIn("A candidate is not a finding until a reviewer reads it.", out)
 
 
+def lane_candidates(files):
+    """The candidates of every lane but clippy, which compiles, by lane."""
+    lanes = tuple(lane for lane in m.LANES if lane != "clippy")
+    with tree(files) as root:
+        return {lane: done["candidates"] for lane, done in m.scan(root, lanes).items()}
+
+
+class VendoredCode(unittest.TestCase):
+    """third_party/ holds published crates kept close to their release, outside the workspace lints.
+    A candidate there is one a reviewer can only call keep, because changing it adds to the
+    differences third_party/README.md lists."""
+
+    def vendored(self, directory):
+        lines = "".join(f"const C{i}: u32 = {i};\n" for i in range(m.FILE_LINES + 1))
+        return {
+            f"{directory}/small/src/lib.rs": (
+                "pub fn never_named_anywhere() {}\n"
+                "#[allow(dead_code)]\nfn silenced() {}\n"
+                "// TODO: handle the other case\n"
+                "fn first() {\n" + block("same") + "}\n"
+            ),
+            f"{directory}/big/src/lib.rs": lines + "fn second() {\n" + block("same") + "}\n",
+        }
+
+    def test_the_fixture_gives_code_outside_third_party_a_candidate_in_five_lanes(self):
+        """The control: without it the next test passes on a fixture no lane would list."""
+        done = lane_candidates(self.vendored("crates"))
+        for lane in ("unreferenced", "allowances", "stale", "size", "duplicates"):
+            with self.subTest(lane=lane):
+                self.assertNotEqual(done[lane], [])
+
+    def test_code_under_third_party_is_a_candidate_in_no_lane(self):
+        for lane, candidates in lane_candidates(self.vendored("third_party")).items():
+            with self.subTest(lane=lane):
+                self.assertEqual(candidates, [])
+
+    def test_a_directory_named_third_party_below_the_root_is_still_read(self):
+        done = lane_candidates({"crates/a/third_party/src/lib.rs": "pub fn never_named_anywhere() {}\n"})
+        self.assertNotEqual(done["unreferenced"], [])
+
+    def test_a_name_only_vendored_code_uses_is_not_a_use(self):
+        files = {
+            "crates/a/src/lib.rs": "pub fn named_by_the_vendored_crate() {}\n",
+            "third_party/x/src/lib.rs": "fn f() { named_by_the_vendored_crate(); }\n",
+        }
+        self.assertEqual(symbols(files, "unreferenced"), ["named_by_the_vendored_crate"])
+
+
 def unused(count):
     return "".join(f"pub fn unused_number_{i}() {{}}\n" for i in range(count))
 
@@ -843,6 +891,21 @@ class Stale(unittest.TestCase):
             "crates/d/src/lib.rs": "// FIXME see issues/77\nfn f() {}\n",
         }
         self.assertEqual([c["path"] for c in found(files, "stale")], ["crates/a/src/lib.rs"])
+
+    def test_a_clause_id_or_a_code_span_is_not_a_todo_and_a_marker_after_a_span_is(self):
+        """A clause ID and a quoted word are not work left undone, and a later real marker is."""
+        files = {
+            "crates/a/src/lib.rs": "/// run `grep TODO src` here\nfn f() {}\n",
+            "crates/b/src/lib.rs": "/// reads as outstanding (TODO-2)\nfn f() {}\n",
+            "crates/c/src/lib.rs": "/// `x` TODO: later\nfn f() {}\n",
+            "crates/d/src/lib.rs": "/// run `grep TODO` then TODO: later\nfn f() {}\n",
+            "crates/e/src/lib.rs": "/// TODO-list of things\nfn f() {}\n",
+            "crates/f/src/lib.rs": 'const TICK: &str = "`"; // TODO: escape it\n',
+        }
+        self.assertEqual(
+            [c["path"] for c in found(files, "stale")],
+            ["crates/c/src/lib.rs", "crates/d/src/lib.rs", "crates/e/src/lib.rs", "crates/f/src/lib.rs"],
+        )
 
 
 def string_errors(count):

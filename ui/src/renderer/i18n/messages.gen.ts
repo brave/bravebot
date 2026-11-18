@@ -3,6 +3,7 @@
 
 const plural = {
   en: new Intl.PluralRules('en'),
+  fr: new Intl.PluralRules('fr'),
 }
 
 const catalogEnUs = {
@@ -51,6 +52,54 @@ const catalogEnUs = {
     if (category === 'one') return String(count) + ' earlier message kept out of the request, recalled when relevant'
     return String(count) + ' earlier messages kept out of the request, recalled when relevant'
   },
+  uiFoldersAbout: (): string => 'Folders open beside the project in this chat. The agent can read and change files in them until you close them.',
+  uiFoldersAdd: (): string => 'Add folder…',
+  uiFoldersAdded: (): string => 'Folder added',
+  uiFoldersClose: ({ name }: { name: string | number }): string => 'Close ' + String(name),
+  uiFoldersCloseExplained: ({ name }: { name: string | number }): string => 'Close ' + String(name) + ' · The agent can no longer reach it',
+  uiFoldersClosed: (): string => 'Folder closed',
+  uiFoldersEmpty: (): string => 'Only the project is open.',
+  uiFoldersHeading: (): string => 'Folders',
+  uiFoldersNotAdded: (): string => 'The folder could not be added.',
+  uiFoldersNotClosed: (): string => 'The folder could not be closed.',
+  uiFoldersWait: (): string => 'Wait for the turn to finish',
+  uiProjectFolderDecline: (): string => 'Don\'t open',
+  uiProjectFolderDeclineAbout: (): string => 'Don\'t open it, and the agent cannot reach it from this chat.',
+  uiProjectFolderNamed: (): string => 'This project\'s settings name it as',
+  uiProjectFolderNotOpened: ({ path, problem }: { path: string | number; problem: string | number }): string => String(path) + ' was not opened: ' + String(problem),
+  uiProjectFolderOpen: (): string => 'Open folder',
+  uiProjectFolderOpenAbout: (): string => 'Open it, and the agent can read and change files in it in this chat, as with Add folder. It is listed under Folders, where you can close it.',
+  uiProjectFolderRemaining: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return String(count) + ' more folder to ask about after this one.'
+    return String(count) + ' more folders to ask about after this one.'
+  },
+  uiProjectFolderSubtitle: (): string => 'Open this folder beside the project?',
+  uiProjectFolderTitle: (): string => 'Open a folder',
+  uiProjectQuestionsStale: (): string => 'That question had been answered already, so the answer was not used. What is waiting now is shown.',
+  uiProjectQuestionsWaitingFolder: (): string => 'Answer the question about a folder this project names before sending.',
+  uiProjectQuestionsWaitingRules: (): string => 'Answer the question about this project\'s rules before sending.',
+  uiProjectQuestionsWaitingTrust: (): string => 'Answer the trust question before sending.',
+  uiProjectRulesAbout: (): string => 'This project\'s settings files propose these allow rules. A granted rule answers its question for you, so the agent does what the rule covers without asking.',
+  uiProjectRulesDecline: (): string => 'Keep asking me',
+  uiProjectRulesDeclineAbout: (): string => 'Keep asking me, and each action these rules cover asks you first, as it would without them.',
+  uiProjectRulesFrom: ({ file }: { file: string | number }): string => 'from ' + String(file),
+  uiProjectRulesGrant: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return 'Grant ' + String(count) + ' rule'
+    return 'Grant ' + String(count) + ' rules'
+  },
+  uiProjectRulesGrantedBefore: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return String(count) + ' rule from these files was granted before and stays granted:'
+    return String(count) + ' rules from these files were granted before and stay granted:'
+  },
+  uiProjectRulesKeeping: ({ path }: { path: string | number }): string => 'A grant is kept in ' + String(path) + ', so later chats here are not asked about these rules again. A rule edited since is asked about again.',
+  uiProjectRulesList: (): string => 'Proposed rules',
+  uiProjectRulesNotKept: ({ path }: { path: string | number }): string => 'Granted for this chat only: the grant could not be written to ' + String(path) + ', so the next chat here will ask again.',
+  uiProjectRulesSubtitle: (): string => 'Grant the allow rules this project proposes?',
+  uiProjectRulesThisChat: (): string => 'A grant lasts for this chat only and is not written down.',
+  uiProjectRulesTitle: (): string => 'Project rules',
   uiRecallFixKey: (): string => 'Check the embeddings key in Settings. Until then, this bot summarises long conversations as before.',
   uiRecallHeading: (): string => 'Recall',
   uiRecallIndexing: ({ indexed, eligible }: { indexed: string | number; eligible: string | number }): string => 'Indexing ' + String(indexed) + ' of ' + String(eligible) + ' earlier messages',
@@ -91,6 +140,18 @@ const catalogEnUs = {
   uiRecalledTool: (): string => 'Tool',
   uiRecalledUnread: (): string => 'Couldn\'t read what was sent.',
   uiRecalledYou: (): string => 'You',
+  uiRulesNoteDirectories: (): string => 'A settings file named these directories, and they are not open:',
+  uiRulesNoteGranted: (): string => 'These allow rules this project\'s settings propose are granted, so they are in force:',
+  uiRulesNoteGrantedBefore: (): string => 'granted before',
+  uiRulesNoteGrantedRecord: ({ path }: { path: string | number }): string => 'The grant is kept in ' + String(path) + ', so later chats here are not asked about them. A rule the project edits is asked about again.',
+  uiRulesNoteGrantedSummary: ({ count }: { count: number }): string => {
+    const category = plural.en.select(count)
+    if (category === 'one') return String(count) + ' project rule granted.'
+    return String(count) + ' project rules granted.'
+  },
+  uiRulesNoteGrantedThisChat: (): string => 'They are granted for this chat only.',
+  uiRulesNoteProposed: (): string => 'These allow rules this project\'s settings propose were not granted. An allow rule answers a question for you, so only one you grant, or one in your own settings file, is in force. You will still be asked:',
+  uiRulesNoteRefused: (): string => 'These directories a settings file named cannot be opened:',
   uiSettings: (): string => 'Settings',
   uiSettingsAppearance: (): string => 'Appearance',
   uiSettingsDisplayLanguage: (): string => 'Display language',
@@ -103,16 +164,31 @@ const catalogEnUs = {
   uiSettingsLanguageOverridden: (): string => 'BRAVEBOT_LOCALE is set, so it decides the language whatever is chosen here.',
   uiSettingsLanguageUnread: (): string => 'Couldn\'t read the language setting.',
   uiSettingsLanguageUnsaved: (): string => 'Couldn\'t save the language.',
+  uiSettingsPrivacy: (): string => 'Privacy',
   uiSettingsRestart: (): string => 'Restart',
   uiSettingsRestartRunning: (): string => 'A turn is still running. Restart once it has finished or been stopped.',
   uiSettingsTheme: (): string => 'Theme',
   uiSettingsThemeExplained: (): string => 'System follows the OS. Light and Dark stay put regardless of it.',
+  uiSettingsUsagePing: (): string => 'Send a daily usage ping to Brave',
+  uiSettingsUsagePingExplained: (): string => 'Once a day, a count that identifies no one. Nothing is sent while this is off.',
+  uiSettingsUsagePingLockedAdmin: (): string => 'Turned off by your administrator.',
+  uiSettingsUsagePingLockedEnvironment: ({ variable }: { variable: string | number }): string => 'Turned off by ' + String(variable) + ' in the environment.',
+  uiSettingsUsagePingLockedIncognito: (): string => 'Off in an incognito session, which records nothing.',
+  uiSettingsUsagePingLockedSetting: (): string => 'Turned off by usagePing in ~/.bravebot/settings.json.',
+  uiSettingsUsagePingUnread: (): string => 'Couldn\'t read the usage ping setting.',
+  uiSettingsUsagePingUnsaved: (): string => 'Couldn\'t save the usage ping setting. Try again.',
   uiUnconfiguredBody: (): string => 'Sign in to an account, or set up a gateway or AWS Bedrock, in Agent settings.',
   uiUnconfiguredContinue: (): string => 'Continue browsing',
   uiUnconfiguredDetails: (): string => 'Technical details',
   uiUnconfiguredOpenSettings: (): string => 'Open Agent settings',
   uiUnconfiguredSubtitle: (): string => 'The agent has no model service it can use yet. You can keep browsing conversations and writing drafts.',
   uiUnconfiguredTitle: (): string => 'Connect a model service',
+  uiUsagePingNotice: (): string => 'Once a day, BraveBot sends Brave an anonymous usage ping with the version, your operating system, how it was installed, which interface and kind of backend you use, whether you have premium, and whether this is your first use today, this week and this month. It never holds your prompts, files or keys. You can turn it off in Settings, under General.',
+  uiUsagePingNoticeDismiss: (): string => 'Dismiss usage ping notice',
+  uiUsagePingNoticeLess: (): string => 'Less',
+  uiUsagePingNoticeMore: (): string => 'More…',
+  uiUsagePingNoticeSettings: (): string => 'Open settings',
+  uiUsagePingNoticeShort: (): string => 'Once a day, BraveBot sends Brave an anonymous usage ping. It never holds your prompts, files or keys.',
 }
 
 /** Every message the window says, by the name it has in the catalog. */
@@ -160,6 +236,54 @@ const catalogFr: Messages = {
   uiAppearanceLight: (): string => 'Clair',
   uiAppearanceSystem: (): string => 'Système',
   uiContextOutOfRequest: catalogEnUs.uiContextOutOfRequest,
+  uiFoldersAbout: (): string => 'Dossiers ouverts à côté du projet dans cette conversation. L\'agent peut lire et modifier leurs fichiers jusqu\'à ce que vous les fermiez.',
+  uiFoldersAdd: (): string => 'Ajouter un dossier…',
+  uiFoldersAdded: (): string => 'Dossier ajouté',
+  uiFoldersClose: ({ name }: { name: string | number }): string => 'Fermer ' + String(name),
+  uiFoldersCloseExplained: ({ name }: { name: string | number }): string => 'Fermer ' + String(name) + ' · L\'agent ne peut plus y accéder',
+  uiFoldersClosed: (): string => 'Dossier fermé',
+  uiFoldersEmpty: (): string => 'Seul le projet est ouvert.',
+  uiFoldersHeading: (): string => 'Dossiers',
+  uiFoldersNotAdded: (): string => 'Le dossier n\'a pas pu être ajouté.',
+  uiFoldersNotClosed: (): string => 'Le dossier n\'a pas pu être fermé.',
+  uiFoldersWait: (): string => 'Attendez la fin du tour',
+  uiProjectFolderDecline: (): string => 'Ne pas ouvrir',
+  uiProjectFolderDeclineAbout: (): string => 'Ne l\'ouvrez pas, et l\'agent ne peut pas l\'atteindre depuis cette conversation.',
+  uiProjectFolderNamed: (): string => 'Les réglages de ce projet le nomment',
+  uiProjectFolderNotOpened: ({ path, problem }: { path: string | number; problem: string | number }): string => String(path) + ' n\'a pas été ouvert : ' + String(problem),
+  uiProjectFolderOpen: (): string => 'Ouvrir le dossier',
+  uiProjectFolderOpenAbout: (): string => 'Ouvrez-le, et l\'agent peut lire et modifier ses fichiers dans cette conversation, comme avec Ajouter un dossier. Il figure sous Dossiers, où vous pouvez le fermer.',
+  uiProjectFolderRemaining: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return 'Encore ' + String(count) + ' dossier à demander après celui-ci.'
+    return 'Encore ' + String(count) + ' dossiers à demander après celui-ci.'
+  },
+  uiProjectFolderSubtitle: (): string => 'Ouvrir ce dossier à côté du projet ?',
+  uiProjectFolderTitle: (): string => 'Ouvrir un dossier',
+  uiProjectQuestionsStale: (): string => 'Cette question avait déjà reçu une réponse, la vôtre n\'a donc pas été utilisée. Ce qui attend maintenant est affiché.',
+  uiProjectQuestionsWaitingFolder: (): string => 'Répondez à la question sur un dossier que nomme ce projet avant d\'envoyer.',
+  uiProjectQuestionsWaitingRules: (): string => 'Répondez à la question sur les règles de ce projet avant d\'envoyer.',
+  uiProjectQuestionsWaitingTrust: (): string => 'Répondez à la question de confiance avant d\'envoyer.',
+  uiProjectRulesAbout: (): string => 'Les fichiers de réglages de ce projet proposent ces règles d\'autorisation. Une règle accordée répond à sa question à votre place : l\'agent fait ce qu\'elle couvre sans demander.',
+  uiProjectRulesDecline: (): string => 'Continuer à demander',
+  uiProjectRulesDeclineAbout: (): string => 'Continuer à demander : chaque action que couvrent ces règles vous est d\'abord demandée, comme sans elles.',
+  uiProjectRulesFrom: ({ file }: { file: string | number }): string => 'de ' + String(file),
+  uiProjectRulesGrant: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return 'Accorder ' + String(count) + ' règle'
+    return 'Accorder ' + String(count) + ' règles'
+  },
+  uiProjectRulesGrantedBefore: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return String(count) + ' règle de ces fichiers a déjà été accordée et le reste :'
+    return String(count) + ' règles de ces fichiers ont déjà été accordées et le restent :'
+  },
+  uiProjectRulesKeeping: ({ path }: { path: string | number }): string => 'L\'accord est conservé dans ' + String(path) + ' : les prochaines conversations ici ne redemandent pas ces règles. Une règle modifiée depuis est redemandée.',
+  uiProjectRulesList: (): string => 'Règles proposées',
+  uiProjectRulesNotKept: ({ path }: { path: string | number }): string => 'Accordé pour cette conversation seulement : l\'accord n\'a pas pu être écrit dans ' + String(path) + ', la prochaine conversation ici redemandera.',
+  uiProjectRulesSubtitle: (): string => 'Accorder les règles d\'autorisation que ce projet propose ?',
+  uiProjectRulesThisChat: (): string => 'L\'accord ne vaut que pour cette conversation et n\'est pas écrit.',
+  uiProjectRulesTitle: (): string => 'Règles du projet',
   uiRecallFixKey: catalogEnUs.uiRecallFixKey,
   uiRecallHeading: catalogEnUs.uiRecallHeading,
   uiRecallIndexing: catalogEnUs.uiRecallIndexing,
@@ -192,6 +316,18 @@ const catalogFr: Messages = {
   uiRecalledTool: catalogEnUs.uiRecalledTool,
   uiRecalledUnread: catalogEnUs.uiRecalledUnread,
   uiRecalledYou: catalogEnUs.uiRecalledYou,
+  uiRulesNoteDirectories: (): string => 'Un fichier de réglages nomme ces dossiers, et ils ne sont pas ouverts :',
+  uiRulesNoteGranted: (): string => 'Ces règles d\'autorisation que proposent les réglages du projet sont accordées, et donc en vigueur :',
+  uiRulesNoteGrantedBefore: (): string => 'accordée auparavant',
+  uiRulesNoteGrantedRecord: ({ path }: { path: string | number }): string => 'L\'accord est conservé dans ' + String(path) + ' : les prochaines conversations ici ne les redemandent pas. Une règle que le projet modifie est redemandée.',
+  uiRulesNoteGrantedSummary: ({ count }: { count: number }): string => {
+    const category = plural.fr.select(count)
+    if (category === 'one') return String(count) + ' règle du projet accordée.'
+    return String(count) + ' règles du projet accordées.'
+  },
+  uiRulesNoteGrantedThisChat: (): string => 'Elles ne sont accordées que pour cette conversation.',
+  uiRulesNoteProposed: (): string => 'Ces règles d\'autorisation que proposent les réglages du projet n\'ont pas été accordées. Une règle d\'autorisation répond à une question à votre place : seule une règle que vous accordez, ou une de votre propre fichier de réglages, est en vigueur. On vous demandera encore :',
+  uiRulesNoteRefused: (): string => 'Ces dossiers qu\'un fichier de réglages nomme ne peuvent pas être ouverts :',
   uiSettings: (): string => 'Réglages',
   uiSettingsAppearance: (): string => 'Apparence',
   uiSettingsDisplayLanguage: (): string => 'Langue d\'affichage',
@@ -204,16 +340,31 @@ const catalogFr: Messages = {
   uiSettingsLanguageOverridden: (): string => 'BRAVEBOT_LOCALE est définie : c\'est elle qui décide de la langue, quel que soit le choix fait ici.',
   uiSettingsLanguageUnread: (): string => 'Impossible de lire le réglage de langue.',
   uiSettingsLanguageUnsaved: (): string => 'Impossible d\'enregistrer la langue.',
+  uiSettingsPrivacy: catalogEnUs.uiSettingsPrivacy,
   uiSettingsRestart: (): string => 'Redémarrer',
   uiSettingsRestartRunning: (): string => 'Un tour est encore en cours. Redémarrez une fois qu\'il est terminé ou arrêté.',
   uiSettingsTheme: (): string => 'Thème',
   uiSettingsThemeExplained: (): string => 'Système suit le système d\'exploitation. Clair et Sombre restent tels quels, quoi qu\'il indique.',
+  uiSettingsUsagePing: catalogEnUs.uiSettingsUsagePing,
+  uiSettingsUsagePingExplained: catalogEnUs.uiSettingsUsagePingExplained,
+  uiSettingsUsagePingLockedAdmin: catalogEnUs.uiSettingsUsagePingLockedAdmin,
+  uiSettingsUsagePingLockedEnvironment: catalogEnUs.uiSettingsUsagePingLockedEnvironment,
+  uiSettingsUsagePingLockedIncognito: catalogEnUs.uiSettingsUsagePingLockedIncognito,
+  uiSettingsUsagePingLockedSetting: catalogEnUs.uiSettingsUsagePingLockedSetting,
+  uiSettingsUsagePingUnread: catalogEnUs.uiSettingsUsagePingUnread,
+  uiSettingsUsagePingUnsaved: catalogEnUs.uiSettingsUsagePingUnsaved,
   uiUnconfiguredBody: (): string => 'Connectez-vous à un compte, ou configurez une passerelle ou AWS Bedrock, dans les réglages de l\'agent.',
   uiUnconfiguredContinue: (): string => 'Continuer la navigation',
   uiUnconfiguredDetails: (): string => 'Détails techniques',
   uiUnconfiguredOpenSettings: (): string => 'Ouvrir les réglages de l\'agent',
   uiUnconfiguredSubtitle: (): string => 'L\'agent n\'a encore aucun service de modèles utilisable. Vous pouvez continuer à parcourir les conversations et à rédiger des brouillons.',
   uiUnconfiguredTitle: (): string => 'Connecter un service de modèles',
+  uiUsagePingNotice: (): string => 'Une fois par jour, BraveBot envoie à Brave un signal d\'utilisation anonyme avec la version, votre système d\'exploitation, la façon dont il a été installé, l\'interface et le type de service que vous utilisez, si vous avez premium, et s\'il s\'agit de votre première utilisation du jour, de la semaine et du mois. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général.',
+  uiUsagePingNoticeDismiss: (): string => 'Fermer l\'avis sur le signal d\'utilisation',
+  uiUsagePingNoticeLess: (): string => 'Moins',
+  uiUsagePingNoticeMore: (): string => 'Plus…',
+  uiUsagePingNoticeSettings: (): string => 'Ouvrir les réglages',
+  uiUsagePingNoticeShort: (): string => 'Une fois par jour, BraveBot envoie à Brave un signal d\'utilisation anonyme. Il ne contient jamais vos invites, vos fichiers ni vos clés.',
 }
 
 /** Every catalog that shipped, reference first. */

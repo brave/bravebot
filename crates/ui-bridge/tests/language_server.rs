@@ -77,6 +77,10 @@ exit 1
 /// The project is its own checkout (it holds a `.git`), so the checkout a session leaves out of the
 /// search for programs (SANDBOX-30) is the project and not the repository this test is built in.
 /// The server is beside the project, outside it.
+///
+/// The front end is given a temporary directory of its own here, beside the server. The search for
+/// programs always leaves out the system temporary directory (SANDBOX-30), and a checkout under it,
+/// as a clone into `$TMPDIR` is, would otherwise put the server there and it would not be found.
 struct Scratch {
     path: PathBuf,
 }
@@ -95,6 +99,7 @@ impl Scratch {
         std::fs::create_dir_all(path.join("project/.git")).expect("a checkout");
         std::fs::create_dir_all(path.join("home/.bravebot")).expect("a home directory");
         std::fs::create_dir_all(path.join("bin")).expect("a directory for the server");
+        std::fs::create_dir_all(path.join("tmp")).expect("a temporary directory");
         let path = path.canonicalize().expect("a real scratch directory");
 
         std::fs::write(path.join("project/src/a.rs"), "pub struct Held;\n").expect("a source file");
@@ -248,6 +253,7 @@ impl FrontEnd {
         let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
             .env_clear()
             .env("HOME", scratch.home())
+            .env("TMPDIR", scratch.path.join("tmp"))
             .env(
                 "PATH",
                 format!("{}:/usr/bin:/bin", scratch.path.join("bin").display()),

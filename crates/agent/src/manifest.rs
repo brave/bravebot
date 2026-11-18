@@ -1079,33 +1079,7 @@ fn plan<S: Sink, R: Reporter>(
         chosen,
         task.effort,
         "shape",
-        &format!(
-            "{SHAPE_PROMPT}{}{}{}",
-            if connectors.any() {
-                format!("\n{CONNECTOR_SHAPE}\n\n{}", connectors.in_plain_words())
-            } else {
-                String::new()
-            },
-            if servers.any() {
-                format!(
-                    "{SERVER_SHAPE}\n{}{}{}",
-                    servers.listing(),
-                    if servers.any_read_only() {
-                        SERVER_READ_SHAPE
-                    } else {
-                        ""
-                    },
-                    if servers.any_applicable() {
-                        SERVER_APPLY_SHAPE
-                    } else {
-                        ""
-                    }
-                )
-            } else {
-                String::new()
-            },
-            connectors.refused()
-        ),
+        &shape_system_prompt(connectors, servers),
         &history,
         &mut model,
         accounting,
@@ -1212,6 +1186,56 @@ fn plan<S: Sink, R: Reporter>(
         }
     };
 
+    refuse_planned_writes(task, &plan, &mut policy)?;
+
+    Ok(Planned {
+        plan,
+        covered,
+        label,
+        model,
+        clean: policy.finish(),
+    })
+}
+
+/// The system prompt of call one. It reads the compile-time prompts and the connector and server
+/// definitions the person installed, and no labelled content.
+fn shape_system_prompt(connectors: &crate::connectors::Connectors, servers: &Servers) -> String {
+    format!(
+        "{SHAPE_PROMPT}{}{}{}",
+        if connectors.any() {
+            format!("\n{CONNECTOR_SHAPE}\n\n{}", connectors.in_plain_words())
+        } else {
+            String::new()
+        },
+        if servers.any() {
+            format!(
+                "{SERVER_SHAPE}\n{}{}{}",
+                servers.listing(),
+                if servers.any_read_only() {
+                    SERVER_READ_SHAPE
+                } else {
+                    ""
+                },
+                if servers.any_applicable() {
+                    SERVER_APPLY_SHAPE
+                } else {
+                    ""
+                }
+            )
+        } else {
+            String::new()
+        },
+        connectors.refused()
+    )
+}
+
+/// The refusal of a plan that writes, from the plan's tool names, the permission mode and the
+/// sandbox mode. Plan mode is checked first and the read-only sandbox second.
+fn refuse_planned_writes<S: Sink>(
+    task: &Task,
+    plan: &Manifest,
+    policy: &mut Policy<'_, S>,
+) -> Result<(), TurnError> {
     // Plan mode refuses a write for as long as it is in force, and refuses it where no prompt
     // would have been raised at all ([permission-modes.md](../../../docs/specs/permission-modes.md)
     // MODE-3). A step's write prompt is raised only where the policy wants one, so a plan writing a
@@ -1262,14 +1286,7 @@ fn plan<S: Sink, R: Reporter>(
             index + 1
         )));
     }
-
-    Ok(Planned {
-        plan,
-        covered,
-        label,
-        model,
-        clean: policy.finish(),
-    })
+    Ok(())
 }
 
 /// One planning call.

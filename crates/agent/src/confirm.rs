@@ -1253,6 +1253,25 @@ pub fn printable_with_tab_pictured(text: &str) -> String {
     pictured(text, false)
 }
 
+/// [`printable`], then each character [`bravebot_core::invisible::draws_as_nothing`] holds (a
+/// bidirectional control, a zero-width character, a variation selector, a tag character) written
+/// out as `‹U+XXXX›` by [`bravebot_core::invisible::spelled`] (LAYER-3).
+///
+/// None of those is a control character, so [`printable`] leaves them, and a bidirectional control
+/// in a name would reorder the text around it. A tab is kept. For the command line and the desktop
+/// bridge. An emoji's joiner and variation selector are written out too.
+///
+/// A map from characters to characters: no branch is taken on the text.
+pub fn printable_spelled(text: &str) -> String {
+    bravebot_core::invisible::spelled(printable(text)).text
+}
+
+/// [`printable_spelled`] with a tab pictured (`␉`), as [`printable_with_tab_pictured`] does. For
+/// the terminal interface.
+pub fn printable_spelled_with_tab_pictured(text: &str) -> String {
+    bravebot_core::invisible::spelled(printable_with_tab_pictured(text)).text
+}
+
 fn pictured(text: &str, keep_tab: bool) -> String {
     if !text.chars().any(char::is_control) {
         return text.to_string();
@@ -2238,6 +2257,19 @@ pub trait Confirmer {
     /// it was handed through [`Confirmer::alert_when_asking`] for that question itself.
     fn asks_a_person(&self) -> bool {
         true
+    }
+
+    /// What this confirmer answers without a person, as a view that does not need the confirmer
+    /// itself, or `None` where it answers nothing in advance.
+    ///
+    /// Taken once by whoever lends the confirmer to several runs at once, so that a question the
+    /// mode answers is decided at once and only a question that reaches a person waits for the
+    /// one confirmer (DELEGATE-16). Not a question, and the other way to fail closed: `None` means
+    /// every question is put to the confirmer, which is what a confirmer that returns it did
+    /// before this existed. A confirmer that returns a view must answer the same questions the
+    /// same way itself, so the view and the confirmer cannot disagree.
+    fn answering_unasked(&self) -> Option<crate::permission_mode::Unasked> {
+        None
     }
 
     /// Ask about a write. Implementations must default to refusal when they cannot ask.
@@ -3372,6 +3404,10 @@ impl<'a, C: Confirmer + ?Sized> Timed<'a, C> {
 }
 
 impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
+    fn answering_unasked(&self) -> Option<crate::permission_mode::Unasked> {
+        self.inner.answering_unasked()
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.timing(|inner| inner.confirm_write(request))
     }

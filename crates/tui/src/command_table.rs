@@ -68,6 +68,25 @@ pub(crate) const REACH_COMMAND: &str = "/reach";
 /// session (SERVERS-19).
 pub(crate) const MCP_COMMAND: &str = "/mcp";
 
+/// The line that installs a plugin from a local path, lists the installed plugins, and removes,
+/// enables or disables one (PLUGIN-1). The words are written here and read from no file.
+pub(crate) const PLUGIN_COMMAND: &str = "/plugin";
+
+/// The word after `/plugin` that installs the plugin at the path named after it.
+pub(crate) const PLUGIN_ADD: &str = "add";
+
+/// The word after `/plugin` that lists the installed plugins.
+pub(crate) const PLUGIN_LIST: &str = "list";
+
+/// The word after `/plugin` that removes the installed plugin named after it.
+pub(crate) const PLUGIN_REMOVE: &str = "remove";
+
+/// The word after `/plugin` that turns the installed plugin named after it back on.
+pub(crate) const PLUGIN_ENABLE: &str = "enable";
+
+/// The word after `/plugin` that turns the installed plugin named after it off and keeps it.
+pub(crate) const PLUGIN_DISABLE: &str = "disable";
+
 /// The line that says which language servers the session has started (CMD-29).
 pub(crate) const LSP_COMMAND: &str = "/lsp";
 
@@ -143,6 +162,13 @@ pub(crate) const NOTE_COMMAND: &str = "/note";
 pub(crate) const ISSUE_COMMAND: &str = "/issue";
 pub(crate) const PR_COMMAND: &str = "/pr";
 
+/// The lines that list the issues and the pull requests the session has named, taking no argument.
+///
+/// Carried out by the driver from the list the session holds and start no turn (CMD-31). Longer
+/// words than `/issue` and `/pr`, which are not the same commands with an argument.
+pub(crate) const ISSUES_COMMAND: &str = "/issues";
+pub(crate) const PRS_COMMAND: &str = "/prs";
+
 /// The line that asks a question beside the work, taking the question as its argument.
 pub(crate) const BTW_COMMAND: &str = "/btw";
 
@@ -185,6 +211,9 @@ pub(crate) const SESSIONS_COMMAND: &str = "/sessions";
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
+/// The line that opens the checklist of the info panel's sections (PANEL-17).
+pub(crate) const SIDEBAR_COMMAND: &str = "/sidebar";
+
 /// The line that puts the info panel in its files state, or ends it.
 pub(crate) const DIFF_COMMAND: &str = "/diff";
 
@@ -195,6 +224,12 @@ pub(crate) const TODOS_COMMAND: &str = "/todos";
 
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
+
+/// The line that gives the terminal's modes back, asks for them again and draws the whole screen.
+///
+/// For a terminal that was reset or cleared from outside, such as by a shortcut of the emulator,
+/// which leaves the screen blank wherever nothing changed and reports nothing to repair it from.
+pub(crate) const REDRAW_COMMAND: &str = "/redraw";
 
 /// The line that shows or hides the model's thinking as it arrives.
 ///
@@ -341,6 +376,10 @@ impl Command {
                 use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
                 format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
             }
+            MCP_COMMAND => format!("[{MCP_LIST} | {MCP_RECONNECT} | {MCP_DISABLE} | {MCP_REMOVE}]"),
+            PLUGIN_COMMAND => format!(
+                "[{PLUGIN_ADD} <path> | {PLUGIN_LIST} | {PLUGIN_REMOVE} <name> | {PLUGIN_ENABLE} <name> | {PLUGIN_DISABLE} <name>]"
+            ),
             COMMIT_MESSAGE_COMMAND => {
                 use crate::commit_message_command::{RANGE, STAGED};
                 format!("[{STAGED} | {RANGE} <a>..<b>] [format]")
@@ -388,7 +427,9 @@ pub enum MidTurn {
     /// turn runs, so the turn's own questions are still drawn over it.
     Runs,
     /// Carried out as it is typed where it reads or ends what is standing, and waiting where it
-    /// would start something: a loop or a goal armed mid-turn needs a look of its own.
+    /// would start something: a loop or a goal armed mid-turn needs a look of its own. `/mcp` is
+    /// carried out where it only lists, and waits where it would start a server, turn one off or
+    /// remove one, which take the terminal or change the tools the turn offers.
     RunsUnlessItStarts,
     /// Carried out as it is typed when no line waiting ahead of it could change what it acts on. It
     /// changes only what the session keeps for itself or keeps for a later session, which the turn
@@ -643,6 +684,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: SIDEBAR_COMMAND,
+            argument: "",
+            description: t!(command_sidebar),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: DIFF_COMMAND,
             argument: "",
             description: t!(command_diff),
@@ -658,6 +705,12 @@ pub fn commands() -> Vec<Command> {
             name: CAFFEINATE_COMMAND,
             argument: "",
             description: t!(command_caffeinate),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: REDRAW_COMMAND,
+            argument: "",
+            description: t!(command_redraw),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -677,6 +730,18 @@ pub fn commands() -> Vec<Command> {
             argument: "[<url> | clear]",
             description: t!(command_issue),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: PRS_COMMAND,
+            argument: "",
+            description: t!(command_prs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: ISSUES_COMMAND,
+            argument: "",
+            description: t!(command_issues),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: CHECKOUTS_COMMAND,
@@ -782,8 +847,14 @@ pub fn commands() -> Vec<Command> {
         },
         Command {
             name: MCP_COMMAND,
-            argument: "[reconnect | disable | remove]",
+            argument: "[action]",
             description: t!(command_mcp),
+            mid_turn: MidTurn::RunsUnlessItStarts,
+        },
+        Command {
+            name: PLUGIN_COMMAND,
+            argument: "[action]",
+            description: t!(command_plugin),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -930,11 +1001,26 @@ fn row_typed(line: &str) -> Option<Command> {
         })
 }
 
+/// Whether the line is a command that takes no argument, followed by words.
+///
+/// Such a line is a prompt (CMD-2): the table gives the command no argument, so what follows it is
+/// the person's own words and not something to carry out. Read off the table's argument column, the
+/// way [`command_typed`] reads it, so a command added there is covered without anybody having to
+/// remember to. The bare command is the command and a longer word is another word, so neither is
+/// this. Only the first word decides, and it decides only which note is drawn while the turn runs.
+pub(crate) fn is_a_command_given_words(line: &str) -> bool {
+    commands().into_iter().any(|command| {
+        command.argument.is_empty()
+            && argument_to(line, command.name).is_some_and(|words| !words.is_empty())
+    })
+}
+
 /// Whether the command a line is gets carried out as it is typed while a turn runs (CMD-8).
 ///
-/// Read off the table's column, and for the two words that both read and start, off the form the
+/// Read off the table's column, and for the words that both read and start, off the form the
 /// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
-/// a loop while the turn in flight is still the session's work.
+/// a loop while the turn in flight is still the session's work. `/mcp` and `/mcp list` read the
+/// servers, and every other word after `/mcp` waits. Only the words the person typed are read.
 pub(crate) fn runs_while_working(line: &str) -> bool {
     let Some(command) = row_typed(line) else {
         return false;
@@ -952,6 +1038,7 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
                     !matches!(crate::goals::parse(argument), crate::goals::Asked::Set(_))
                 }
                 SCHEDULE_COMMAND => bravebot_schedule::words::reads_only(argument),
+                MCP_COMMAND => crate::mcp_command::only_lists(argument),
                 _ => false,
             }
         }
@@ -1280,12 +1367,28 @@ pub(crate) fn named(goes: Bound, line: &str) -> String {
     }
 }
 
+/// The words a mark names a waiting command by: the command word, and for `/mcp` also the first
+/// word typed after it. `/mcp` both lists, which runs, and starts or changes servers, which waits,
+/// so the mark says which form waits (`/mcp reconnect`). Only words the person typed are read.
+fn form_typed(word: &str, line: &str) -> String {
+    if word != MCP_COMMAND {
+        return word.to_string();
+    }
+    let first = argument_to(line, word)
+        .and_then(|argument| argument.split_whitespace().next())
+        .map(|form| crate::render::printable(&crate::render::head_of(form, 24)));
+    match first {
+        Some(form) => format!("{word} {form}"),
+        None => word.to_string(),
+    }
+}
+
 /// What is said under the turn when a command typed while it runs is queued, so the line does not
 /// wait without a reason (CMD-8). Read before the line is taken off the box, and from the same
 /// facts [`runs_while_working`] and [`held_back_by`] decided it with.
 pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     let command = row_typed(line)?;
-    let word = command.name;
+    let word = &form_typed(command.name, line);
     // A command the person typed is running and no turn is, so the line waits for that.
     if session.status == Status::Running {
         return Some(t!(command_waits_for_the_command, command = word).to_string());
@@ -1338,6 +1441,35 @@ mod tests {
                     "{command} completes {word}"
                 );
             }
+        }
+    }
+
+    /// The hint drawn for `/mcp` after its word names every subcommand the command takes, in the
+    /// order the usage message lists them, while the table keeps a short argument so the
+    /// description column stays narrow (CMD-22). The regressions it rejects are a subcommand left
+    /// out of the hint, which leaves `list` undiscoverable, a hint that drifts from the usage
+    /// message, and the long form put back in the table, which widens the column until the
+    /// descriptions of other commands no longer fit at 120 columns.
+    #[test]
+    fn the_mcp_hint_names_every_subcommand_the_usage_message_names() {
+        let command = commands()
+            .iter()
+            .find(|candidate| candidate.name == MCP_COMMAND)
+            .copied()
+            .expect("/mcp is in the table");
+        assert_eq!(command.argument, "[action]");
+        assert_eq!(
+            command.typed_hint(),
+            "[list | reconnect | disable | remove]"
+        );
+        let usage = t!(mcp_command_usage);
+        let mut after = 0;
+        for word in ["list", "reconnect", "disable", "remove"] {
+            assert!(command.typed_hint().contains(word), "the hint names {word}");
+            let at = usage[after..]
+                .find(word)
+                .unwrap_or_else(|| panic!("the usage message names {word} after byte {after}"));
+            after += at + word.len();
         }
     }
 
@@ -1430,6 +1562,7 @@ mod tests {
             (HUNKS_COMMAND, false, false, true, false, true),
             (EXIT_COMMAND, true, true, true, true, true),
             (MCP_COMMAND, false, false, false, false, true),
+            (PLUGIN_COMMAND, false, true, true, true, true),
             (LOOP_COMMAND, false, true, true, true, true),
             (AFTER_COMMAND, false, false, true, false, false),
             (GOAL_COMMAND, false, true, true, true, true),

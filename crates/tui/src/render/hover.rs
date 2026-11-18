@@ -41,8 +41,9 @@ pub(super) fn mark_the_hovered(frame: &mut Frame, session: &Session, laid: &Laid
     let top = laid.window.map_or(0, |window| window.top);
     let areas: Vec<Rect> = match hovered.hit {
         // The track of the scrollbar is a column of blanks round the thumb, which is no text to
-        // underline.
-        Hit::Scrollbar => Vec::new(),
+        // underline. The face is a picture drawn in cells, and an underline across one reads as a
+        // fault in the picture; the line on the row of hints is what says a click does something.
+        Hit::Scrollbar | Hit::Face => Vec::new(),
         // An address or a path that was wrapped is one link over several rows.
         Hit::Link(index) => laid
             .targets
@@ -153,18 +154,17 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         Hit::Panel(Target::Files) => said(t!(hover_panel_files)),
         Hit::Panel(Target::File(_)) => said(t!(hover_panel_file)),
         Hit::Panel(Target::CloseFiles) => said(t!(hover_panel_close_files)),
+        Hit::Panel(Target::ClosePeek) => said(t!(hover_panel_close_peek)),
         Hit::Panel(Target::PreviousEdit) => said(t!(hover_panel_edit_previous)),
         Hit::Panel(Target::NextEdit) => said(t!(hover_panel_edit_next)),
         Hit::Panel(Target::Name) => said(t!(hover_panel_name)),
         Hit::Panel(Target::Task(_)) => said(t!(hover_panel_task)),
         Hit::Panel(Target::Detail(_)) => said(t!(hover_panel_detail)),
-        // The address that opens, which is the one that was set and not the shorthand the row draws
-        // for it.
-        Hit::Panel(link @ (Target::PullRequest | Target::Issue)) => Some(Says {
+        // The address that opens, which is the one that was set, or the one the reference builds,
+        // and not the shorthand the row draws for it.
+        Hit::Panel(link @ (Target::PullRequest(_) | Target::Issue(_))) => Some(Says {
             what: t!(hover_panel_link).to_string(),
-            detail: session
-                .panel_link(link)
-                .map(|address| (address.to_string(), false)),
+            detail: session.panel_link(link).map(|address| (address, false)),
         }),
         Hit::Footer(Footer::Mode) => said(t!(hover_footer_mode)),
         Hit::Footer(Footer::Trail) => said(t!(hover_footer_trail)),
@@ -178,6 +178,9 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         Hit::Footer(Footer::Paste) => said(t!(hover_footer_paste)),
         Hit::Item(_) => said(t!(hover_item)),
         Hit::Scrollbar => said(t!(hover_scrollbar)),
+        Hit::Pinned(_) => said(t!(hover_pinned)),
+        Hit::ToTail => said(t!(hover_to_tail)),
+        Hit::Face => said(t!(hover_face)),
         // The text of the box and of a reply, the panels that hold the input and the panes the
         // wheel scrolls have no click of their own to say.
         Hit::Text { .. }

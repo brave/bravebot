@@ -6,7 +6,7 @@
 //! part of the wordmark.
 
 use std::sync::OnceLock;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
@@ -684,7 +684,8 @@ pub fn look_at(seed: &str, seconds: f64) -> Look {
     }
 }
 
-/// How the face of this process is held now. Still where `NO_MOTION` is set.
+/// How the face of this process is held now: as its own schedule holds it, or as a click on it
+/// holds it for a moment. Still where `NO_MOTION` is set.
 pub fn look_now() -> Look {
     #[cfg(test)]
     if let Some(look) = pinned::get() {
@@ -692,8 +693,132 @@ pub fn look_now() -> Look {
     }
     static STARTED: OnceLock<Instant> = OnceLock::new();
     let seconds = STARTED.get_or_init(Instant::now).elapsed().as_secs_f64();
-    held(startup_seed(), seconds, crate::indicator::stilled())
+    let own = held(startup_seed(), seconds, crate::indicator::stilled());
+    match poke::last() {
+        Some((motion, at)) => poked(own, motion, at.elapsed()),
+        None => own,
+    }
 }
+
+/// What a click on the face makes it do, the two things it does on its own schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Motion {
+    Blink,
+    Glance,
+}
+
+/// How long the lids stay shut after a click, a little longer than a blink of the schedule so that
+/// the frame that draws it is not missed.
+const POKED_BLINK: Duration = Duration::from_millis(200);
+
+/// How long the pupils stay on the other side after a click.
+const POKED_GLANCE: Duration = Duration::from_millis(1400);
+
+/// Make the face blink, and on the next click glance, as if its own schedule had come to one.
+/// Nothing where no motion was asked for, so a click on a face that never moves leaves it as it
+/// is.
+pub fn poke() {
+    poke_as(crate::indicator::stilled());
+}
+
+/// [`poke`], given whether the face stands still, so the rule can be checked without putting a
+/// process-wide switch in force under every other test.
+fn poke_as(still: bool) {
+    if still {
+        return;
+    }
+    poke::start();
+}
+
+/// `own`, the face as its schedule holds it `since` after a click made it do `motion`. The click's
+/// motion lasts for its own time and the face goes back to its schedule after it.
+fn poked(own: Look, motion: Motion, since: Duration) -> Look {
+    match motion {
+        Motion::Blink if since < POKED_BLINK => Look { blink: true, ..own },
+        Motion::Glance if since < POKED_GLANCE => Look { away: true, ..own },
+        _ => own,
+    }
+}
+
+/// The last click on the face, and how many there have been, which say what the next one does.
+///
+/// A test reads and writes its own thread's, as [`pinned`] does, so that a click in one test is not
+/// a blink in another that draws the opening screen beside it.
+mod poke {
+    use super::Motion;
+    use std::time::Instant;
+
+    #[cfg(test)]
+    use std::cell::Cell;
+    #[cfg(not(test))]
+    use std::sync::Mutex;
+
+    /// The motion of the last click, when it was made, and how many clicks there have been.
+    type Clicks = (Option<(Motion, Instant)>, usize);
+
+    #[cfg(not(test))]
+    static CLICKS: Mutex<Clicks> = Mutex::new((None, 0));
+
+    #[cfg(test)]
+    thread_local! {
+        static CLICKS: Cell<Clicks> = const { Cell::new((None, 0)) };
+    }
+
+    #[cfg(not(test))]
+    fn update(change: impl FnOnce(Clicks) -> Clicks) {
+        let mut held = CLICKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *held = change(*held);
+    }
+
+    #[cfg(test)]
+    fn update(change: impl FnOnce(Clicks) -> Clicks) {
+        CLICKS.with(|held| held.set(change(held.get())));
+    }
+
+    /// The motion of the last click and when it was made.
+    pub(super) fn last() -> Option<(Motion, Instant)> {
+        #[cfg(not(test))]
+        {
+            CLICKS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0
+        }
+        #[cfg(test)]
+        {
+            CLICKS.with(|held| held.get().0)
+        }
+    }
+
+    /// Record a click now. They alternate, a blink first.
+    pub(super) fn start() {
+        update(|(_, clicks)| {
+            let motion = if clicks % 2 == 0 {
+                Motion::Blink
+            } else {
+                Motion::Glance
+            };
+            (Some((motion, Instant::now())), clicks + 1)
+        });
+    }
+
+    /// The motion the last click on this thread made, for a test of what a click does.
+    #[cfg(test)]
+    pub(crate) fn motion() -> Option<Motion> {
+        last().map(|(motion, _)| motion)
+    }
+
+    /// Forget every click on this thread, so a test starts from a face nobody has clicked.
+    #[cfg(test)]
+    pub(crate) fn reset() {
+        update(|_| (None, 0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) use poke::{motion as last_poke, reset as reset_pokes};
 
 /// A look held fixed for the calling thread, so a test that draws the opening screen more than
 /// once does not see a blink or glance land between two draws.
@@ -1146,6 +1271,76 @@ mod tests {
         assert!(differing(&at_rest, &turned) > 0);
         assert!(differing(&at_rest, &shut) <= 2);
         assert!(differing(&at_rest, &turned) <= 4);
+    }
+
+    /// MOUSE-56. Rejects: a click that changes nothing, a second click that does what the first
+    /// did, a motion that outlasts its time, and a motion that replaces the schedule's own look
+    /// where the click's does not apply.
+    #[test]
+    fn a_click_makes_the_face_blink_and_the_next_one_glance_for_a_moment() {
+        reset_pokes();
+        assert_eq!(last_poke(), None);
+        poke_as(false);
+        assert_eq!(last_poke(), Some(Motion::Blink));
+        poke_as(false);
+        assert_eq!(last_poke(), Some(Motion::Glance));
+        poke_as(false);
+        assert_eq!(last_poke(), Some(Motion::Blink));
+
+        let rest = Look::default();
+        let short = Duration::from_millis(10);
+        assert_eq!(
+            poked(rest, Motion::Blink, short),
+            Look {
+                blink: true,
+                away: false
+            }
+        );
+        assert_eq!(
+            poked(rest, Motion::Glance, short),
+            Look {
+                blink: false,
+                away: true
+            }
+        );
+        // A blink is over before a glance is, and both are over after their own time.
+        let between = POKED_BLINK + Duration::from_millis(1);
+        assert_eq!(poked(rest, Motion::Blink, between), rest);
+        assert!(poked(rest, Motion::Glance, between).away);
+        assert_eq!(
+            poked(
+                rest,
+                Motion::Glance,
+                POKED_GLANCE + Duration::from_millis(1)
+            ),
+            rest
+        );
+        // What the schedule already does stays while the click adds its own.
+        let own = Look {
+            blink: false,
+            away: true,
+        };
+        assert!(poked(own, Motion::Blink, short).away);
+        assert!(poked(own, Motion::Blink, short).blink);
+    }
+
+    /// MOUSE-56 and VIEW-21. Rejects: a click moving a face the person asked to keep still.
+    #[test]
+    fn a_click_does_nothing_where_no_motion_is_asked_for() {
+        reset_pokes();
+        poke_as(true);
+        assert_eq!(last_poke(), None);
+    }
+
+    /// MOUSE-56. Rejects: the click being recorded and not shown, so that the face stays as it was
+    /// until the schedule's next blink.
+    #[test]
+    fn look_now_shows_a_click_at_once() {
+        reset_pokes();
+        poke_as(false);
+        assert!(look_now().blink);
+        poke_as(false);
+        assert!(look_now().away);
     }
 
     #[test]

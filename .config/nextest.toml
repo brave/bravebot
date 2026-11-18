@@ -2,3 +2,15 @@
 # own default is to wait for it as long as the job allows, which on CI is six hours.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# The usability suite runs the everyday programs under the sandbox default. Its binary took
+# about 200 seconds on a Linux runner when it ran by itself, so it gets fifteen minutes where it
+# shares the machine with the rest of the run.
+#
+# Its passing output is printed at the end of the run, which is where the names of the workflows
+# skipped for want of a tool and the count of those passed and skipped reach the CI log. Without
+# this, nextest hides the output of a test that passes.
+[[profile.default.overrides]]
+filter = 'binary(usability)'
+slow-timeout = { period = "60s", terminate-after = 15 }
+success-output = "final"

@@ -48,15 +48,13 @@ fn spawned(command: &mut Command) -> std::process::Child {
     bravebot_sandbox::process::starting_a_program(|| command.spawn()).expect("the program starts")
 }
 
-/// An empty directory under the workspace `target/test-scratch/`, spelled the ordinary way and
-/// without `..`, which is how a session's directory reaches the backend.
+#[path = "../test-support/scratch_root.rs"]
+mod scratch_root;
+
+/// An empty directory under the shared scratch root (`test-support/scratch_root.rs`), spelled the
+/// ordinary way and without `..`, which is how a session's directory reaches the backend.
 fn scratch(name: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path.push("target");
-    path.push("test-scratch");
-    path.push(format!("windows-{name}"));
+    let path = scratch_root::scratch_dir(&format!("windows-{name}"));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("the scratch directory is creatable");
     path

@@ -100,6 +100,7 @@ impl Session {
             || self.status == Status::Running
             || self.watching().is_some()
             || self.files_open()
+            || self.peeking()
         {
             return false;
         }

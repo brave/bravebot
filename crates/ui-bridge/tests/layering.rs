@@ -277,11 +277,7 @@ fn every_program_the_bridge_process_starts_goes_through_the_spawn_gate() {
 
     for krate in linked_crates(&workspace) {
         visit(&workspace.join(&krate).join("src"), &mut |path, text| {
-            // A file that is a test module of its own is declared elsewhere with `mod x_tests;`.
-            if path
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
-            {
+            if is_a_test_module_file(path) {
                 return;
             }
             // The Windows backend creates its process with `CreateProcessW` rather than a `Command`,
@@ -300,6 +296,39 @@ fn every_program_the_bridge_process_starts_goes_through_the_spawn_gate() {
         "a program is started outside the spawn gate:\n{}",
         offences.join("\n")
     );
+}
+
+/// Whether `path` is a file that is a test module of its own: declared elsewhere with
+/// `mod x_tests;`, or one of the files in a `tests` directory under `src` that a
+/// `#[cfg(test)] mod tests` declares.
+fn is_a_test_module_file(path: &Path) -> bool {
+    let named_as_tests = path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"));
+    let in_a_tests_directory = path
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .skip_while(|part| part.as_os_str() != "src")
+        .any(|part| part.as_os_str() == "tests");
+    named_as_tests || in_a_tests_directory
+}
+
+#[test]
+fn a_file_in_a_tests_directory_under_src_is_a_test_module() {
+    assert!(is_a_test_module_file(Path::new(
+        "../agent/src/tools/tests/editing.rs"
+    )));
+    assert!(is_a_test_module_file(Path::new(
+        "../ui-bridge/src/opening_tests.rs"
+    )));
+    assert!(!is_a_test_module_file(Path::new(
+        "../agent/src/tools/editing.rs"
+    )));
+    // A `tests` directory above `src` holds integration tests, which no crate's `src` walk reaches.
+    assert!(!is_a_test_module_file(Path::new(
+        "/work/tests/agent/src/tools.rs"
+    )));
 }
 
 /// The line numbers in `text`, outside its test modules, that start a program other than inside
@@ -535,6 +564,65 @@ fn marks_itself_first(text: &str) -> bool {
         .map(|line| line.split("//").next().unwrap_or("").trim())
         .find(|code| !code.is_empty())
         .is_some_and(|code| code.contains("refuse_same_user_inspection("))
+}
+
+/// A descriptor the process that started a binary left open would reach every hook and tool the
+/// binary starts, so each marks those descriptors close-on-exec before it does anything but the two
+/// protections above (RPCVIEW-8). `bravebot-rpc`'s is shown by a test that starts it holding one.
+#[test]
+fn every_binary_here_withholds_inherited_descriptors_at_startup() {
+    let binaries = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin");
+    let mut seen = 0;
+    let mut late = Vec::new();
+    visit(&binaries, &mut |path, text| {
+        seen += 1;
+        if !withholds_early(text) {
+            late.push(path.display().to_string());
+        }
+    });
+    assert!(seen > 0, "no binaries found under {binaries:?}");
+    assert!(
+        late.is_empty(),
+        "these binaries do not withhold inherited descriptors at the start of main:\n{}",
+        late.join("\n")
+    );
+}
+
+/// Whether, in `main`, the call to `withhold_inherited_descriptors` comes before any code other
+/// than the non-dumpable mark, the core-dump switch and what they say on failure.
+fn withholds_early(text: &str) -> bool {
+    let mut lines = text.lines();
+    if !lines.any(|line| line.trim_start().starts_with("fn main()")) {
+        return false;
+    }
+    lines
+        .map(|line| line.split("//").next().unwrap_or("").trim())
+        .filter(|code| !code.is_empty())
+        .find(|code| {
+            let protection = ["refuse_same_user_inspection(", "disable_core_dumps("]
+                .iter()
+                .any(|call| code.contains(call));
+            let said = code.starts_with("eprintln!(\"bravebot-") && code.ends_with("\");");
+            !(protection || said || *code == "}")
+        })
+        .is_some_and(|code| code.contains("withhold_inherited_descriptors("))
+}
+
+#[test]
+fn withholding_after_other_work_is_too_late() {
+    let early = "fn main() {\n    let outcome = refuse_same_user_inspection();\n    let _ = disable_core_dumps();\n    if let Err(e) = withhold_inherited_descriptors() {\n        eprintln!(\"{e}\");\n    }\n    serve();\n}\n";
+    assert!(withholds_early(early));
+    let late = "fn main() {\n    let _ = disable_core_dumps();\n    serve();\n    let _ = withhold_inherited_descriptors();\n}\n";
+    assert!(!withholds_early(late));
+    for before in [
+        "let _ = std::thread::spawn(|| {});",
+        "eprintln!(\"{}\", start_logging());",
+    ] {
+        let hidden = format!(
+            "fn main() {{\n    let _ = disable_core_dumps();\n    {before}\n    let _ = withhold_inherited_descriptors();\n}}\n"
+        );
+        assert!(!withholds_early(&hidden), "{before}");
+    }
 }
 
 #[test]

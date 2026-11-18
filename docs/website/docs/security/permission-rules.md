@@ -8,8 +8,10 @@ description: Configure deny, ask and allow permission rules, understand matching
 
 The `permissions` block of `~/.bravebot/settings.json` holds three lists (`deny`, `ask` and `allow`)
 saying which actions to refuse outright and which to stop and ask you about. They are the same three
-lists Claude Code keeps, with the same spellings, so a block copied out of `~/.claude/settings.json`
-governs bravebot unedited. See
+lists Claude Code keeps, with the same spellings, so those three lists in a block copied out of
+`~/.claude/settings.json` govern bravebot unedited. A key of that block that bravebot does not read,
+such as `disableBypassPermissionsMode`, restricts nothing, and `bravebot doctor` names it. The key
+that makes the bypass mode unreachable here is `bypassUnreachable`. See
 [Configuration](../customize/configuration.md#permissions) for how a rule is written.
 
 **A rule decides whether you are asked, and whether an action happens at all. Nothing else.**
@@ -40,7 +42,9 @@ in force, an entry with more than one name is left out. The trust map is asked u
 link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
 `real/secret.txt`. A `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the
 project also covers the file under the relative name the file tools ask by, so in a session opened in
-your home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`. On Linux and macOS a `deny` or `ask`
+your home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`. A rule on a directory above the
+project covers the project's files the same way, so in a session opened in `~/proj`, `Read(~/**)`
+refuses `secrets/canary.txt`. On Linux and macOS a `deny` or `ask`
 rule also covers the name a file has under a second path to an open directory, such as a macOS
 firmlink or a Linux bind mount once you have opened it with `/add-dir`; the file is matched by its
 device and inode. An `allow` rule is matched as written, so a grant reaches no further than the
@@ -70,15 +74,30 @@ spelling you approved.
   covers a space inside a word, and a `*` covers any text in every list.
   A `deny` or `ask` rule also covers the program under a leading `timeout`, `time`, `nice`, `nohup`,
   `stdbuf`, `command`, `builtin`, `noglob` or `env`, so `Bash(git push *)` refuses `timeout 30 git push`.
+  For `env` that includes its `-i` and `-u NAME` options, an optional `--` that ends the options, and
+  every word containing `=` before the program, whatever its name (`A-B=1` and `1A=x` count), so
+  `Bash(git push *)` also refuses `env -- FOO=bar git push` and `env A-B=1 git push`. An `env` with an
+  option bravebot does not read, or with nothing left to run, is matched as written.
   An `allow` rule does not look through them, and `npx`, `devbox run` and `docker exec` are not looked
   through by any list.
-  On every host a program word is also read without a trailing dot or space, a `::$DATA` suffix and one
-  `.exe`, `.com`, `.cmd` or `.bat`, so `Bash(git *)` covers `git.exe.` and `git.cmd`. While a `deny` or
+  On every host a program word, and the name of a wrapper, is also read without regard to case and
+  without a trailing dot or space, a `::$DATA` suffix and one `.exe`, `.com`, `.cmd` or `.bat`, so
+  `Bash(git *)` covers `GIT x`, `git.exe.` and `git.cmd`, and `Bash(git push *)` refuses
+  `TIMEOUT 30 git push`. Two letters count as the same when a Windows volume would open them as
+  one file name, so `Bash(git push *)` also covers `g` followed by a dotless `ı` and `t`, and
+  `Bash(ssh *)` covers a long `ſsh`. A spelling that is covered although your volume would not open it
+  as that program costs you a question or a refusal and lets nothing through. Arguments keep their case, an `allow` rule is matched as written and grants
+  none of these spellings, and a program given by a path such as `/usr/bin/git` is not covered by
+  `Bash(git *)`. While a `deny` or
   `ask` command rule is in force, a program written as an 8.3 short name such as `POWERS~1` is
   refused, since the rule cannot be matched against it.
 - **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
   write. It holds when the redirection reaches the file through `..`, as `config/sub/../app.env`
-  does, whether or not a link is on the path.
+  does, whether or not a link is on the path. The rules are asked again just before the line opens
+  the file, under the file the name lands on then and each other name it has, so a link or hard link
+  an earlier part of the line left at an approved name is refused like the file named directly. That
+  holds for a `<` source, for a file opened inside a `$(...)` assignment value and for a delegate's
+  `writes:` limit. The check compares names and settings and never reads the file.
 - **Files read on your behalf.** A denied `AGENTS.md`, a file it points at, a skill or an agent
   definition is left out of the turn, and you are told. A checkout cannot put a denied file into the
   system prompt by committing a link to it.
@@ -109,7 +128,8 @@ extend reach: it cannot open a path the workspace and the directories you opened
 `.bravebot/settings.json` and `.bravebot/settings.local.json` that arrive with a repository, because
 both of those only ever take something away. `allow` is the one list that hands something back, so it
 is read from `~/.bravebot/settings.json`, and from a file you passed to `--settings` that sits outside
-the project you are working in and the one you started in. An `allow` entry in a checkout's file takes effect on nothing by
+the project you are working in, every directory the session has been in, and the checkout holding each
+of them. An `allow` entry in a checkout's file takes effect on nothing by
 itself: whoever last edited the repository would otherwise be answering an approval prompt on your
 behalf, which is a program run with your privileges, a file written without the question, or a
 redirect to a host you were never shown.

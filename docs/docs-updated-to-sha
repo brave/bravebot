@@ -8,8 +8,8 @@
 # (agents/skills/update-docs) to fold it in. The skill rewrites the sha below; nothing
 # else should.
 #
-# Add capability groups to the Brave extension, each off until a person grants its browser permissions (#3620)
-# 2026-11-01
-# https://github.com/brave/bravebot/commit/ea82976a155a98b642e89e362eed0b484bbf95a3
+# Bots/slice 1 rows module (#4134)
+# 2026-11-14
+# https://github.com/brave/bravebot/commit/27372e2071b479260b18c50b849d072b0f242e07
 
-ea82976a155a98b642e89e362eed0b484bbf95a3
+27372e2071b479260b18c50b849d072b0f242e07

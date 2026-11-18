@@ -95,17 +95,14 @@ impl Session {
         if loops.failed_command
             && let Some(last) = self.outputs().iter().rev().find(|row| row.job.is_none())
         {
-            said.push(
-                t!(
-                    unfinished_failed,
-                    command = &last.command,
-                    outcome = last.outcome.summary()
-                )
-                .to_string(),
-            );
+            said.push(t!(
+                unfinished_failed,
+                command = &last.command,
+                outcome = last.outcome.summary()
+            ));
         }
         if loops.open_todos > 0 {
-            said.push(t!(unfinished_todos, count = loops.open_todos).to_string());
+            said.push(t!(unfinished_todos, count = loops.open_todos));
             let open: Vec<String> = self
                 .plan()
                 .iter()
@@ -115,18 +112,15 @@ impl Session {
             said.extend(open);
         }
         for checkout in kept_checkouts(workspace) {
-            said.push(
-                t!(
-                    unfinished_checkout,
-                    id = &checkout.id,
-                    path = checkout.path.display().to_string()
-                )
-                .to_string(),
-            );
+            said.push(t!(
+                unfinished_checkout,
+                id = &checkout.id,
+                path = checkout.path.display().to_string()
+            ));
         }
         let uncommitted = bravebot_agent::open_loops::uncommitted(workspace.root(), &written);
         if !uncommitted.is_empty() {
-            said.push(t!(unfinished_uncommitted, count = uncommitted.len()).to_string());
+            said.push(t!(unfinished_uncommitted, count = uncommitted.len()));
             said.extend(
                 uncommitted
                     .iter()
@@ -148,7 +142,6 @@ impl Session {
                     name = &job.name,
                     seconds = job.since.elapsed().as_secs()
                 )
-                .to_string()
             })
             .collect();
         said.extend(running);
@@ -214,11 +207,11 @@ fn open_line(loops: &Loops) -> String {
                 match kind {
                     Kind::UnbuiltChanges => t!(open_loops_unbuilt).to_string(),
                     Kind::FailedCommand => t!(open_loops_failed).to_string(),
-                    Kind::OpenTodos => t!(open_loops_todos, count = count).to_string(),
-                    Kind::KeptCheckouts => t!(open_loops_checkouts, count = count).to_string(),
-                    Kind::UncommittedFiles => t!(open_loops_uncommitted, count = count).to_string(),
+                    Kind::OpenTodos => t!(open_loops_todos, count = count),
+                    Kind::KeptCheckouts => t!(open_loops_checkouts, count = count),
+                    Kind::UncommittedFiles => t!(open_loops_uncommitted, count = count),
                     Kind::StoppedGoal => t!(open_loops_goal).to_string(),
-                    Kind::RunningJobs => t!(open_loops_jobs, count = count).to_string(),
+                    Kind::RunningJobs => t!(open_loops_jobs, count = count),
                 }
             })
             .collect::<Vec<_>>()
@@ -227,17 +220,17 @@ fn open_line(loops: &Loops) -> String {
     let mut groups = Vec::new();
     let planner = loops.of(Owner::Planner);
     if !planner.is_empty() {
-        groups.push(t!(open_loops_planner, items = named(planner)).to_string());
+        groups.push(t!(open_loops_planner, items = named(planner)));
     }
     let person = loops.of(Owner::Person);
     if !person.is_empty() {
-        groups.push(t!(open_loops_person, items = named(person)).to_string());
+        groups.push(t!(open_loops_person, items = named(person)));
     }
     let waiting = loops.of(Owner::Wait);
     if !waiting.is_empty() {
         groups.push(named(waiting));
     }
-    t!(open_loops_line, groups = groups.join("; ")).to_string()
+    t!(open_loops_line, groups = groups.join("; "))
 }
 
 #[cfg(test)]

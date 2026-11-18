@@ -54,6 +54,15 @@ pub enum Hit {
     /// The track of the scrollbar beside the transcript: a press on it puts the view there or takes
     /// hold of the thumb, which [`Laid::bar`] says where it is (MOUSE-49).
     Scrollbar,
+    /// The prompt drawn above the view, which begins at this row of the transcript: a click puts that
+    /// row at the top of the view (VIEW-44, MOUSE-54).
+    Pinned(u16),
+    /// The button drawn at the bottom of the transcript while the view is held off its tail: a click
+    /// returns the view to the tail (VIEW-45, MOUSE-55).
+    ToTail,
+    /// The pixel face on the opening screen: a click makes it blink or look to the other side, the
+    /// two things it does on its own (MOUSE-56).
+    Face,
     /// The row of the list of what could be typed under the box that holds this item of what is
     /// offered: a click puts the cursor on it, and a second takes it as Tab does (MOUSE-15).
     Item(usize),
@@ -104,6 +113,8 @@ pub enum Scrolled {
     List,
     /// The file's name, the bar, the edits and the row of keys: the wheel scrolls the edits.
     Edits,
+    /// The text of a paste in the peek state: the wheel scrolls it.
+    Text,
 }
 
 impl Hit {
@@ -144,26 +155,32 @@ impl Hit {
             // not there to take a press, which then reaches what is beneath.
             Hit::Popup(panel) | Hit::PopupRows(panel) => session.has_open(panel),
             Hit::Match(_) => session.history_search.is_some(),
-            Hit::Back => beneath && session.watching_a_delegate() && !session.files_open(),
+            Hit::Back => beneath && session.watching_a_delegate() && !session.panel_state_open(),
             // The entries a view of a delegate draws are the delegate's own, so an index is a place
             // in them and not in the session's transcript.
             Hit::Reply(_) | Hit::Block(..) | Hit::Words(_) => {
-                beneath && session.watching().is_none() && !session.files_open()
+                beneath && session.watching().is_none() && !session.panel_state_open()
             }
+            // Drawn over the session's own transcript only, at rest and in the scroller.
+            Hit::Pinned(_) => {
+                beneath && session.watching().is_none() && !session.panel_state_open()
+            }
+            // Drawn with the opening screen, which the plain frame holds and no other frame does.
+            Hit::Face => beneath && session.in_the_plain_frame() && !session.panel_state_open(),
             Hit::Queued(_) | Hit::Discard(_) => {
-                beneath && !session.files_open() && session.in_the_plain_frame()
+                beneath && !session.panel_state_open() && session.in_the_plain_frame()
             }
             // A view of a delegate, of what a command printed or of an aside is drawn from other
             // entries than the session's, and the list of them has no call or block of the
             // session's to click.
             Hit::Call(_) | Hit::Delegate(_) => {
-                beneath && session.watching().is_none() && !session.files_open()
+                beneath && session.watching().is_none() && !session.panel_state_open()
             }
             // The files state draws a line of its own in place of the hints.
             Hit::Footer(footer) => {
                 beneath
                     && session.in_the_plain_frame()
-                    && !session.files_open()
+                    && !session.panel_state_open()
                     && session.footer_stands(footer)
             }
             // The panel is drawn beside the transcript at the plain prompt and while work runs,
@@ -172,10 +189,13 @@ impl Hit {
             Hit::Panel(target) => {
                 beneath
                     && session.in_the_plain_frame()
-                    && session.files_open() == target.is_in_the_files_state()
+                    && session.panel_state_open() == target.is_in_the_files_state()
             }
-            Hit::Wheel(_) => beneath && session.in_the_plain_frame() && session.files_open(),
+            Hit::Wheel(_) => beneath && session.in_the_plain_frame() && session.panel_state_open(),
             Hit::Scrollbar => beneath && session.in_the_plain_frame(),
+            // Drawn at rest over the session's own transcript, as the scrollbar is, and by no view
+            // that replaces the frame.
+            Hit::ToTail => beneath && session.in_the_plain_frame(),
             // The Sessions screen is the whole frame while it is open, and no other target is recorded then.
             Hit::SessionsScreen(_) => session.showing_sessions(),
             Hit::Item(_) => beneath && session.in_the_plain_frame() && session.is_completing(),
@@ -184,7 +204,7 @@ impl Hit {
             Hit::Text { .. } => {
                 beneath
                     && session.in_the_plain_frame()
-                    && !session.files_open()
+                    && !session.panel_state_open()
                     && session.editing() == crate::vim::Editing::Ordinary
             }
             // An address opens wherever it is drawn, since opening it changes nothing the work holds.

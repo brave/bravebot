@@ -95,8 +95,9 @@ the script adds.
 - `severity`, only where `security` is true: `high` where the rule does not hold on this path,
   `medium` where a precondition the attacker does not control is needed, `low` where nothing fails
   today.
-- `area`: one of `trust`, `tools`, `turns`, `interface`, `cli`, `delegation`, `backends`, `skus`,
-  `i18n`, `infrastructure`, or empty where it is not clear.
+- `area`: one of `trust`, `sandbox`, `tools`, `mcp`, `browser`, `connectors`, `turns`,
+  `background`, `delegation`, `plugins`, `backends`, `skus`, `interface`, `desktop`, `acp`,
+  `remote`, `cli`, `release`, `i18n`, `infrastructure`, or empty where it is not clear.
 - `what_happens`: what an attacker does and what it costs a person using bravebot, in two to four
   sentences.
 - `code_path`: the files and symbols on this commit with the lines you read, and the clause it

@@ -46,9 +46,9 @@ fn path_at(session: &Session, row: u16, column: u16) -> Option<&PathRef> {
     }
 }
 
-/// The address a click on a cell of the info panel opens, if the row there is the pull request or
-/// the issue.
-fn panel_link_at(session: &Session, row: u16, column: u16) -> Option<&str> {
+/// The address a click on a cell of the info panel opens, if the row there is one of the Pull
+/// requests or Issues section.
+fn panel_link_at(session: &Session, row: u16, column: u16) -> Option<String> {
     match session.target_at(row, column)?.hit {
         Hit::Panel(target) => session.panel_link(target),
         _ => None,
@@ -636,16 +636,16 @@ fn with_a_panel(issue: Option<&str>, pull_request: Option<&str>) -> (Session, Bu
     (session, buffer)
 }
 
-/// A click on the pull request row or the issue row opens what the person gave with `/pr` and
-/// `/issue`, on the word or on the link, with or without ctrl, and leaves nothing selected.
+/// A click on a row of the Pull requests or Issues section opens what the person gave with `/pr`
+/// and `/issue`, on any cell of the link, with or without ctrl, and leaves nothing selected.
 #[test]
 fn a_click_on_the_panels_pull_request_or_issue_row_opens_what_the_person_gave() {
     let (mut session, buffer) = with_a_panel(Some(ISSUE), Some(PULL_REQUEST));
     for modifiers in [KeyModifiers::NONE, KeyModifiers::CONTROL] {
         for (needle, offset, address) in [
-            ("Pull request", 2, PULL_REQUEST),
+            ("brave/bravebot#3200", 0, PULL_REQUEST),
             ("brave/bravebot#3200", 5, PULL_REQUEST),
-            ("Issue", 1, ISSUE),
+            ("brave/bravebot#2685", 0, ISSUE),
             ("brave/bravebot#2685", 12, ISSUE),
         ] {
             let (row, column) = find(&buffer, needle);
@@ -656,7 +656,10 @@ fn a_click_on_the_panels_pull_request_or_issue_row_opens_what_the_person_gave() 
                 "{needle} with {modifiers:?}"
             );
             assert!(session.selection.is_none(), "{needle}");
-            assert_eq!(panel_link_at(&session, row, column + offset), Some(address));
+            assert_eq!(
+                panel_link_at(&session, row, column + offset).as_deref(),
+                Some(address)
+            );
         }
     }
 }
@@ -667,7 +670,7 @@ fn a_click_on_the_panels_pull_request_or_issue_row_opens_what_the_person_gave() 
 fn a_link_row_opens_the_address_as_it_was_set_and_not_the_text_drawn_for_it() {
     let long = "https://example.test/a/very/long/path/to/a/ticket/that/is/longer/than/the/row?id=7";
     let (mut session, buffer) = with_a_panel(Some(long), None);
-    let (row, column) = find(&buffer, "Issue");
+    let (row, column) = find(&buffer, "row?id=7");
     assert_eq!(
         click_with(&mut session, row, column + 1, KeyModifiers::NONE),
         opens(long)
@@ -683,8 +686,8 @@ fn a_link_row_opens_the_address_as_it_was_set_and_not_the_text_drawn_for_it() {
 #[test]
 fn a_click_off_the_link_rows_a_drag_or_a_double_click_opens_nothing() {
     let (mut session, buffer) = with_a_panel(Some(ISSUE), Some(PULL_REQUEST));
-    let (row, column) = find(&buffer, "Pull request");
-    for needle in ["Links", "a session", "Context", "context"] {
+    let (row, column) = find(&buffer, "brave/bravebot#3200");
+    for needle in ["Pull requests", "Issues", "a session", "Context", "context"] {
         let (other, at) = find(&buffer, needle);
         session.last_click = None;
         let acted = click_with(&mut session, other, at, KeyModifiers::NONE);
@@ -750,7 +753,7 @@ fn a_click_off_the_link_rows_a_drag_or_a_double_click_opens_nothing() {
 fn a_link_the_opener_would_refuse_is_drawn_and_not_a_target() {
     let named = "https://github.com@example.test/brave/bravebot/pull/1";
     let (mut session, buffer) = with_a_panel(None, Some(named));
-    let (row, column) = find(&buffer, "Pull request");
+    let (row, column) = find(&buffer, "bravebot/pull/1");
     assert_eq!(
         click_with(&mut session, row, column + 1, KeyModifiers::NONE),
         Action::Copy
@@ -762,17 +765,20 @@ fn a_link_the_opener_would_refuse_is_drawn_and_not_a_target() {
 #[test]
 fn a_cleared_link_is_no_target_and_a_new_one_is() {
     let (mut session, buffer) = with_a_panel(Some(ISSUE), None);
-    let (row, column) = find(&buffer, "Issue");
+    let (row, column) = find(&buffer, "brave/bravebot#2685");
     session.link(None, None);
     let after = draw(&mut session, 120, 24);
     assert!(panel_link_at(&session, row, column + 1).is_none());
     let drawn: String = (0..120)
         .map(|c| hyperlink::shown(after[(c, row)].symbol()).to_string())
         .collect();
-    assert!(!drawn.contains("Issue"), "the row is still drawn: {drawn}");
+    assert!(
+        !drawn.contains("brave/bravebot#2685"),
+        "the row is still drawn: {drawn}"
+    );
     session.link(None, Some(PULL_REQUEST));
     let again = draw(&mut session, 120, 24);
-    let (row, column) = find(&again, "Pull request");
+    let (row, column) = find(&again, "brave/bravebot#3200");
     assert_eq!(
         click_with(&mut session, row, column + 1, KeyModifiers::NONE),
         opens(PULL_REQUEST)
@@ -786,7 +792,7 @@ fn a_link_row_under_a_picker_opens_nothing() {
     use bravebot_tui::picking::Picking;
 
     let (mut session, buffer) = with_a_panel(Some(ISSUE), Some(PULL_REQUEST));
-    let (row, column) = find(&buffer, "Pull request");
+    let (row, column) = find(&buffer, "brave/bravebot#3200");
     session.open_picking(Picking::Effort(Picker::new(None)));
     assert_eq!(panel_link_at(&session, row, column + 1), None);
     assert_ne!(
@@ -804,8 +810,8 @@ fn a_click_on_the_panel_and_a_click_on_the_transcript_each_open_their_own_addres
     for row in 0..buffer.area.height {
         for column in 0..buffer.area.width {
             let expected = url_at(&session, row, column)
-                .or_else(|| panel_link_at(&session, row, column))
-                .map(str::to_string);
+                .map(str::to_string)
+                .or_else(|| panel_link_at(&session, row, column));
             session.last_click = None;
             let acted = click_with(&mut session, row, column, KeyModifiers::CONTROL);
             match expected {
@@ -2640,7 +2646,10 @@ fn a_typed_address_opens_while_a_turn_runs_and_a_typed_name_is_refused() {
 #[test]
 fn the_address_a_panel_row_opens_is_opened_by_typing_it_after_the_open_command() {
     let (mut session, buffer) = with_a_panel(Some(ISSUE), Some(PULL_REQUEST));
-    for (needle, address) in [("Pull request", PULL_REQUEST), ("Issue", ISSUE)] {
+    for (needle, address) in [
+        ("brave/bravebot#3200", PULL_REQUEST),
+        ("brave/bravebot#2685", ISSUE),
+    ] {
         let (row, column) = find(&buffer, needle);
         session.last_click = None;
         let by_click = click_with(&mut session, row, column + 1, KeyModifiers::NONE);

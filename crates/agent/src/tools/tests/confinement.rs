@@ -1,0 +1,2327 @@
+use super::arguments::{Scratch, told, with_tools};
+use super::*;
+use bravebot_core::capability::{Capability, CapabilitySet};
+use bravebot_core::event::{Event, RecordingSink};
+use bravebot_core::policy::{ReleasePlan, Routing};
+
+/// A rule in the settings file is anchored at the home directory, so it never matches the
+/// spelling `~/secret.txt`. Until the home is opened there is no landing to ask about
+/// either, and the refusal would offer `/add-dir` for a file the rule refuses once it is.
+#[test]
+fn a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory() {
+    let scratch = Scratch::new("deny-home-file");
+    let home = scratch.path.join("home");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(home.join("secret.txt"), "hunter2\n").unwrap();
+    let home = home.canonicalize().unwrap();
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(~/secret.txt)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors {
+            home: home.to_str().map(str::to_string),
+            ..bravebot_core::permissions::Anchors::none()
+        },
+    );
+    assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "read a file");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(permissions);
+
+    let refusal = refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
+        .expect_err("the rule covers the file");
+    assert_eq!(refusal, denied_by_rule("~/secret.txt", None));
+}
+
+/// PERM-7: a `~/` rule in the person's settings refuses the file tools' call for the same
+/// file by its workspace-relative name when the session is opened in the home directory.
+#[test]
+fn a_home_rule_refuses_the_relative_name_in_a_session_opened_in_the_home_directory() {
+    let scratch = Scratch::new("deny-home-relative-name");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("secrets")).unwrap();
+    std::fs::write(home.join("secrets").join("canary.txt"), "CANARY\n").unwrap();
+    let home = home.canonicalize().unwrap();
+    let workspace = Workspace::new(&home)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+    let settings =
+        bravebot_config::Settings::parse("{\"permissions\": {\"deny\": [\"Read(~/secrets/**)\"]}}");
+    let (permissions, rejected) = crate::permissions::from_settings(&settings, Some(&home), &home);
+    assert!(rejected.is_empty(), "{rejected:?}");
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "read a file");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(permissions);
+
+    let refusal = refuse_denied_path(&mut policy, &workspace, Purpose::Read, "secrets/canary.txt")
+        .expect_err("the rule covers the file");
+    assert_eq!(refusal, denied_by_rule("secrets/canary.txt", None));
+}
+
+/// PERM-7: a rule on an ancestor of the workspace refuses the file tools' call by the
+/// workspace-relative name, for a read and for a write. Each row of the table has the same
+/// answer for the relative name and the absolute name of the same file, so the wider rule is
+/// not weaker than `~/proj/**`.
+#[test]
+fn a_rule_on_an_ancestor_of_the_workspace_refuses_the_relative_name_of_a_file_in_it() {
+    let scratch = Scratch::new("deny-ancestor-relative-name");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("proj").join("secrets")).unwrap();
+    std::fs::write(
+        home.join("proj").join("secrets").join("canary.txt"),
+        "CANARY\n",
+    )
+    .unwrap();
+    let home = home.canonicalize().unwrap();
+    let project = home.join("proj");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+    let absolute = project.join("secrets").join("canary.txt");
+    let absolute = absolute.to_str().unwrap();
+
+    for (family, purpose) in [("Read", Purpose::Read), ("Edit", Purpose::Effect)] {
+        for tree in ["~/**", "~/", "~/proj/**", "~/proj/"] {
+            let settings = bravebot_config::Settings::parse(&format!(
+                "{{\"permissions\": {{\"deny\": [\"{family}({tree})\"]}}}}"
+            ));
+            let (permissions, rejected) =
+                crate::permissions::from_settings(&settings, Some(&home), &project);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "touch a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            for name in ["secrets/canary.txt", absolute] {
+                let refusal = refuse_denied_path(&mut policy, &workspace, purpose, name)
+                    .expect_err(&format!("{family}({tree}) did not refuse {name}"));
+                assert_eq!(refusal, denied_by_rule(name, None));
+            }
+        }
+    }
+}
+
+/// PERM-7: a hard link has no name a rule spells, so where the walk for the file's other
+/// names cannot finish, a call is refused while any rule about a path is in force. The
+/// rule here is an `Edit` rule, which the refusal of a write has to honour as well as a
+/// `Read` one, and a file with no hard link is not caught by the same fallback.
+#[cfg(unix)]
+#[test]
+fn a_hard_link_is_refused_when_the_walk_for_its_other_names_gives_up_under_a_write_rule() {
+    let scratch = Scratch::new("deny-hard-link-cap");
+    std::fs::write(scratch.path.join(".env"), "hunter2\n").unwrap();
+    std::fs::write(scratch.path.join("plain.txt"), "plain\n").unwrap();
+    std::fs::hard_link(scratch.path.join(".env"), scratch.path.join("alias.txt")).unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(1), None);
+    let ask = |rules: &[&str], named: &str| {
+        let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+            &rules
+                .iter()
+                .map(|rule| rule.to_string())
+                .collect::<Vec<_>>(),
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors::none(),
+        );
+        assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write a file");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_permissions(permissions);
+        refuse_denied_path(&mut policy, &workspace, Purpose::Effect, named)
+    };
+
+    assert!(ask(&["Edit(.env)"], "alias.txt").is_err());
+    assert!(ask(&[], "alias.txt").is_ok());
+    assert!(ask(&["Edit(.env)"], "plain.txt").is_ok());
+}
+
+/// PERM-7, PERM-9, MODE-2: where the walk for a file's other names gives up, a write to a
+/// file with several links asks and is protected, since a name the walk did not reach may be
+/// one a rule or the protected list is about. A file with one link has no other name to
+/// miss and is as it was, and so is a file that is not there. Rejects a walk that stopped
+/// early being read as a file with no other names.
+#[cfg(unix)]
+#[test]
+fn a_write_to_a_file_with_links_asks_and_is_protected_when_the_walk_for_its_names_gives_up() {
+    let scratch = Scratch::new("write-hard-link-cap");
+    std::fs::write(scratch.path.join("shared.txt"), "one\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join("shared.txt"),
+        scratch.path.join("alias.txt"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("plain.txt"), "plain\n").unwrap();
+    let asked = |workspace: &Workspace, named: &str| {
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write a file");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileWrite]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        write_needs_approval(
+            &mut policy,
+            workspace,
+            named,
+            Label::trusted_public(),
+            Destination::Named,
+        )
+    };
+
+    let complete = Workspace::new(&scratch.path).expect("workspace");
+    let capped = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(1), None);
+
+    // The control: with the walk finished, nothing about these names asks or protects.
+    assert!(!asked(&complete, "shared.txt"));
+    assert!(!write_is_protected(&complete, "shared.txt"));
+
+    // The walk gave up: the file with two links asks and is protected.
+    assert!(asked(&capped, "shared.txt"));
+    assert!(write_is_protected(&capped, "shared.txt"));
+    assert!(asked(&capped, "alias.txt"));
+    assert!(write_is_protected(&capped, "alias.txt"));
+
+    // One link, or no file yet: nothing to miss, so nothing is added.
+    assert!(!asked(&capped, "plain.txt"));
+    assert!(!write_is_protected(&capped, "plain.txt"));
+    assert!(!asked(&capped, "not-yet.txt"));
+    assert!(!write_is_protected(&capped, "not-yet.txt"));
+}
+
+/// PERM-1, PERM-7: the reason the person wrote beside a deny rule is in the refusal the
+/// planner is given for a read. The reason named is the deciding rule's, so a second rule
+/// over the same file in the `ask` list carries a different sentence and that sentence does
+/// not appear. The regressions this rejects are a refusal assembled without the reason,
+/// which leaves the planner retrying a file it will never get, and a reason read off a rule
+/// that did not decide.
+#[test]
+fn a_read_refused_by_a_rule_with_a_reason_says_the_reason() {
+    let scratch = Scratch::new("deny-read-with-a-reason");
+    let home = scratch.path.join("home");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(home.join("secret.txt"), "hunter2\n").unwrap();
+    let home = home.canonicalize().unwrap();
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+
+    let (mut permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(~/secret.txt)".to_string()],
+        &["Read(~/secret.txt)".to_string()],
+        &[],
+        &bravebot_core::permissions::Anchors {
+            home: home.to_str().map(str::to_string),
+            ..bravebot_core::permissions::Anchors::none()
+        },
+    );
+    assert!(rejected.is_empty(), "the rules did not parse: {rejected:?}");
+    // What a reason in the person's own settings file does, without a settings file: the
+    // closure answers by list and written text exactly as `bravebot_config` does.
+    permissions
+        .explain(|list, written| Some(format!("the {list} list wrote this about {written}")));
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "read a file");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(permissions);
+
+    let refusal = refuse_denied_path(&mut policy, &workspace, Purpose::Read, "~/secret.txt")
+        .expect_err("the rule covers the file");
+    assert_eq!(
+        refusal,
+        denied_by_rule(
+            "~/secret.txt",
+            Some("the deny list wrote this about Read(~/secret.txt)")
+        )
+    );
+    assert!(
+        !refusal.contains("the ask list wrote this"),
+        "the refusal carries a reason from a rule that did not decide: {refusal}"
+    );
+}
+
+/// PERM-1, PERM-7: the same for a write, which consults `Edit` and then `Read`. Both lists
+/// hold a rule covering the file and each carries its own reason, so the refusal says the
+/// `Edit` rule's: that is the rule the gate refused on. The regressions this rejects are a
+/// write refusal assembled without the reason and one that reports the `Read` rule's
+/// sentence for a write an `Edit` rule stopped.
+#[test]
+fn a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason() {
+    let scratch = Scratch::new("deny-write-with-a-reason");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=hunter2\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (mut permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Edit(.env)".to_string(), "Read(.env)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rules did not parse: {rejected:?}");
+    permissions.explain(|_, written| Some(format!("{written} is the person's to keep closed")));
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "write a file");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileWrite]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(permissions);
+
+    let refusal = refuse_denied_path(&mut policy, &workspace, Purpose::Effect, ".env")
+        .expect_err("the rule covers the file");
+    assert_eq!(
+        refusal,
+        denied_by_rule(".env", Some("Edit(.env) is the person's to keep closed"))
+    );
+    assert!(
+        !refusal.contains("Read(.env) is"),
+        "the write refusal names the Read rule, which is not what refused it: {refusal}"
+    );
+}
+
+/// PERM-1, PERM-7: a `reason` is read from the person's own settings file only, so a
+/// sentence a checkout wrote beside a deny rule is not in the refusal the planner is given,
+/// while the rule still refuses. The person's own layer carries a reason over the same
+/// gate, so a refusal stripped of every reason fails this too. The regression this rejects
+/// is a reason taken from whichever layer wrote it, which would let a checkout put its own
+/// text into a refusal the planner reads as the person's words.
+///
+/// The settings are written to files rather than parsed from one block, because which file
+/// wrote the entry is the whole of what this turns on and
+/// [`bravebot_config::Settings::parse`] has no layers.
+#[test]
+fn a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is() {
+    let scratch = Scratch::new("reason-layers-refusal");
+    let home = scratch.path.join("home");
+    let cwd = scratch.path.join("cwd");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(cwd.join(".bravebot")).unwrap();
+    std::fs::write(cwd.join(".env"), "SECRET_TOKEN=hunter2\n").unwrap();
+    std::fs::write(cwd.join("mine.env"), "SECRET_TOKEN=hunter2\n").unwrap();
+    std::fs::write(
+        home.join("settings.json"),
+        r#"{"permissions": {"deny": [
+                     {"rule": "Read(mine.env)", "reason": "my own keys live there"}
+                   ]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        cwd.join(".bravebot").join("settings.json"),
+        r#"{"permissions": {"deny": [
+                     {"rule": "Read(.env)", "reason": "pineapple quarantine beacon"}
+                   ]}}"#,
+    )
+    .unwrap();
+
+    let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+    let workspace = Workspace::new(&cwd).expect("workspace");
+    let (permissions, rejected) =
+        crate::permissions::from_settings(&settings, None, workspace.root());
+    assert!(
+        rejected.is_empty(),
+        "a rule here did not parse: {rejected:?}"
+    );
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "read a file");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(permissions);
+
+    let theirs = refuse_denied_path(&mut policy, &workspace, Purpose::Read, ".env")
+        .expect_err("the checkout's rule covers the file");
+    assert_eq!(
+        theirs,
+        denied_by_rule(".env", None),
+        "a reason a checkout wrote reached the planner"
+    );
+    for fragment in ["pineapple", "quarantine", "beacon"] {
+        assert!(
+            !theirs.contains(fragment),
+            "a word of a checkout's reason reached the planner: {theirs}"
+        );
+    }
+
+    let mine = refuse_denied_path(&mut policy, &workspace, Purpose::Read, "mine.env")
+        .expect_err("the person's own rule covers the file");
+    assert_eq!(
+        mine,
+        denied_by_rule("mine.env", Some("my own keys live there")),
+        "the reason the person wrote is not in the refusal, so the test above proves \
+                 nothing about layers"
+    );
+}
+
+/// What the planner was told, the trail's confinement refusals, and whether the turn
+/// would end as clean, for one call to `run`.
+fn run_once(name: &str, arguments: &Value) -> (String, Vec<String>, bool) {
+    run_once_in(name, |_| arguments.clone())
+}
+
+/// [`run_once`] with the arguments built from the workspace's root, for a call that names
+/// a place by the path the root is at.
+fn run_once_in(
+    name: &str,
+    arguments: impl FnOnce(&std::path::Path) -> Value,
+) -> (String, Vec<String>, bool) {
+    run_once_under(name, crate::LiveMode::default(), arguments)
+}
+
+/// [`run_once_in`] under this permission mode, which says whether anybody can be asked.
+fn run_once_under(
+    name: &str,
+    mode: crate::LiveMode,
+    arguments: impl FnOnce(&std::path::Path) -> Value,
+) -> (String, Vec<String>, bool) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let arguments = arguments(workspace.root());
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "run a command");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::ShellExec]),
+        &mut sink,
+    )
+    .expect("policy");
+    // The turn tells the policy what the mode says, as it does in `turn.rs`.
+    if mode.nobody_to_ask() {
+        policy.without_anybody_to_ask();
+    }
+
+    let produced = with_tools(&workspace, |tools| {
+        tools.permission_mode = mode;
+        run(
+            &mut policy,
+            tools,
+            &mut crate::confirm::Unattended,
+            &mut crate::report::IgnoreReports,
+            &arguments,
+        )
+    });
+    assert!(!produced.ran_a_program, "a refused call ran a program");
+    let said = told(&mut policy, &produced.text);
+    let clean = policy.finish();
+
+    let refused = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "confine",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    (said, refused, clean)
+}
+
+#[test]
+fn a_directory_outside_the_workspace_is_recorded_as_a_refusal() {
+    let (told, refused, clean) = run_once(
+        "run-directory-escape",
+        &json!({"command": "echo hi", "directory": ".."}),
+    );
+
+    assert!(
+        told.starts_with("refused:") && told.contains("outside the workspace"),
+        "the call was not refused for leaving the workspace: {told}"
+    );
+    assert_eq!(
+        refused,
+        [
+            "run.directory: '..' resolves outside the workspace; remedy offered: open the \
+                     directory itself, which holds the working directory and so ends checkouts"
+        ],
+        "the refused directory was not recorded as the planner named it"
+    );
+    assert!(!clean, "a turn whose run was refused would end as clean");
+}
+
+#[test]
+fn a_directory_inside_the_workspace_is_refused_as_inside_it() {
+    let (told, refused, clean) = run_once_in("run-directory-inside", |root| {
+        std::fs::create_dir(root.join("sub")).expect("a directory to name");
+        json!({"command": "echo hi", "directory": root.join("sub").display().to_string()})
+    });
+
+    assert!(
+        told.starts_with("refused:")
+            && told.contains("is inside the workspace")
+            && told.contains("relative to the workspace root")
+            && !told.contains("outside the workspace"),
+        "the call was not refused as a path inside the workspace: {told}"
+    );
+    let [recorded] = refused.as_slice() else {
+        panic!("expected one refusal in the trail: {refused:?}");
+    };
+    assert!(
+        recorded.starts_with("run.directory: '")
+            && recorded.ends_with(
+                "' is inside the workspace but not named relative to its root; remedy \
+                         offered: name it relative to the workspace root"
+            ),
+        "the refused directory was not recorded as the planner was told: {recorded}"
+    );
+    assert!(!clean, "a turn whose run was refused would end as clean");
+}
+
+#[test]
+fn a_redirection_outside_the_workspace_is_recorded_as_a_refusal() {
+    let (told, refused, clean) = run_once(
+        "run-redirect-escape",
+        &json!({"command": "echo hi > ../escaped.txt"}),
+    );
+
+    assert!(
+        told.starts_with("refused:") && told.contains("outside the workspace"),
+        "the call was not refused for leaving the workspace: {told}"
+    );
+    assert_eq!(
+        refused.len(),
+        1,
+        "the refused redirection was not recorded exactly once: {refused:?}"
+    );
+    assert!(
+        refused[0].starts_with("run.command: '")
+            && refused[0].contains("escaped.txt' resolves outside the workspace"),
+        "the refusal does not name the call and the file it would open: {}",
+        refused[0]
+    );
+    // TRUST-10, CMDLINE-5: the redirection is given the remedy a file tool's write to the
+    // same path is given, and the trail records the remedy it was told.
+    assert!(
+        told.contains("/add-dir"),
+        "the refused redirection names no directory to open: {told}"
+    );
+    assert!(
+        refused[0].contains("remedy offered: open its directory"),
+        "the trail does not record the remedy the planner was told: {}",
+        refused[0]
+    );
+    assert!(
+        !told.contains("request_path"),
+        "a redirection is sent to request_path, whose grant it does not pass: {told}"
+    );
+    assert!(!clean, "a turn whose run was refused would end as clean");
+}
+
+/// CLI-1, CMDLINE-5: where nobody can be asked, a refused redirection names no `/add-dir`
+/// and tells the planner to say in its reply which path it needs.
+///
+/// The regression it rejects: the remedy naming `/add-dir` to a run with nobody at the
+/// terminal, and the planner told nothing it can do.
+#[test]
+fn a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path() {
+    let (told, refused, _) = run_once_under(
+        "run-redirect-escape-unattended",
+        crate::LiveMode::unattended(crate::PermissionMode::Ask),
+        |_| json!({"command": "echo hi > ../escaped.txt"}),
+    );
+
+    assert!(
+        told.starts_with("refused:") && told.contains("outside the workspace"),
+        "the call was not refused for leaving the workspace: {told}"
+    );
+    assert!(
+        !told.contains("/add-dir") && !told.contains("request_path"),
+        "a run nobody can be asked in is sent to a route nobody can take: {told}"
+    );
+    assert!(
+        told.contains("say in the reply which path"),
+        "the planner is not told to name the path in its reply: {told}"
+    );
+    assert_eq!(refused.len(), 1, "not recorded once: {refused:?}");
+    assert!(
+        refused[0].contains("remedy offered: none"),
+        "the trail records a remedy the planner was not told: {}",
+        refused[0]
+    );
+}
+
+/// What the planner was told for one call of `tool` (`read_file` or `list_files`) naming `path`,
+/// and the confinement refusals the trail recorded, with `nobody_to_ask` as the turn would set it.
+#[cfg(unix)]
+fn file_tool_refusal(
+    workspace: &Workspace,
+    nobody_to_ask: bool,
+    tool: &str,
+    path: &std::path::Path,
+) -> (String, Vec<String>) {
+    let mut sink = RecordingSink::new();
+    let said = {
+        let mut policy = run_and_read_policy(&mut sink);
+        if nobody_to_ask {
+            policy.without_anybody_to_ask();
+        }
+        let produced = match tool {
+            "read_file" => with_tools(workspace, |tools| {
+                read_file(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({ "path": path.display().to_string() }),
+                )
+            }),
+            _ => list_files(
+                &mut policy,
+                workspace,
+                &json!({ "directory": path.display().to_string() }),
+            ),
+        };
+        let said = told(&mut policy, &produced.text);
+        let _ = policy.finish();
+        said
+    };
+    let refused = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "confine",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    (said, refused)
+}
+
+/// TRUST-10, CLI-1, TRACE-1: where nobody can be asked, a file tool's refusal for a path outside
+/// the workspace names no `/add-dir`, `--add-dir` or drop, says nobody can be asked and to say in
+/// the reply which path the work needs, and the trail records `remedy offered: none`. Covers a
+/// read and a list, a file and a directory outside, a file in the directory holding the
+/// workspace (the checkout warning is not said), and a credential location, which keeps its
+/// meaning. The control with somebody to ask keeps `/add-dir` and the drop. The regression it
+/// rejects: the wording chosen from the remedy alone, so a run with nobody at the terminal is told
+/// to ask for a directory to be opened.
+#[cfg(unix)]
+#[test]
+fn file_tools_with_nobody_to_ask_name_no_route_and_record_none() {
+    let place = outside_fixture("file-tools-unattended");
+    let holding = place
+        .workspace
+        .root()
+        .parent()
+        .expect("the directory holding the workspace")
+        .join("sibling.txt");
+    let cases = [
+        ("read_file", place.beside.join("notes.txt")),
+        ("read_file", place.beside.clone()),
+        ("read_file", holding.clone()),
+        ("list_files", place.beside.clone()),
+        (
+            "list_files",
+            place.workspace.root().parent().unwrap().to_path_buf(),
+        ),
+    ];
+    for (tool, path) in cases {
+        let (said, trail) = file_tool_refusal(&place.workspace, true, tool, &path);
+        for route in ["/add-dir", "--add-dir", "drop the file", "ends checkouts"] {
+            assert!(
+                !said.contains(route),
+                "{tool} {path:?}: a run nobody can be asked in was told of {route}: {said}"
+            );
+        }
+        assert!(
+            said.contains("Nobody can be asked in this run")
+                && said.contains("say in the reply which path the work needs and what for"),
+            "{tool} {path:?}: not told to name the path in the reply: {said}"
+        );
+        let [recorded] = trail.as_slice() else {
+            panic!("{tool} {path:?}: expected one refusal in the trail: {trail:?}");
+        };
+        assert!(
+            recorded.ends_with("remedy offered: none"),
+            "{tool} {path:?}: the trail records a remedy the planner was not told: {recorded}"
+        );
+
+        let (control, _) = file_tool_refusal(&place.workspace, false, tool, &path);
+        assert!(
+            control.contains("/add-dir") && !control.contains("Nobody can be asked"),
+            "{tool} {path:?}: the control with somebody to ask lost its route: {control}"
+        );
+    }
+
+    let credential = place.home.join(".ssh/config");
+    let (said, trail) = file_tool_refusal(&place.workspace, true, "read_file", &credential);
+    assert!(
+        said.contains(CREDENTIAL_CLAUSE) && !said.contains("drop") && !said.contains("/add-dir"),
+        "a credential location lost its meaning or kept its drop: {said}"
+    );
+    assert!(
+        trail.iter().all(|reason| !reason.contains("drop")),
+        "the trail records a drop nobody can make: {trail:?}"
+    );
+}
+
+/// A session directory, a home holding `.ssh`, and an ordinary directory beside them,
+/// each canonical, with the workspace told of the home so a credential location is known.
+#[cfg(unix)]
+struct Outside {
+    _scratch: Scratch,
+    workspace: Workspace,
+    home: std::path::PathBuf,
+    beside: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+fn outside_fixture(name: &str) -> Outside {
+    let scratch = Scratch::new(name);
+    let home = scratch.path.join("home");
+    let project = scratch.path.join("project");
+    let beside = scratch.path.join("beside");
+    for made in [home.join(".ssh"), project.clone(), beside.clone()] {
+        std::fs::create_dir_all(made).expect("directory");
+    }
+    let home = home.canonicalize().expect("home");
+    let beside = beside.canonicalize().expect("beside");
+    std::fs::write(home.join(".ssh/config"), "Host *\n").expect("a credential file");
+    std::fs::write(beside.join("notes.txt"), "notes\n").expect("an outside file");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+    Outside {
+        _scratch: scratch,
+        workspace,
+        home,
+        beside,
+    }
+}
+
+/// A policy in a trusted workspace that lets both `run` and `read_file` be reached.
+#[cfg(unix)]
+fn run_and_read_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "run a command and read a file");
+    Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::ShellExec, Capability::FileRead]),
+        sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+}
+
+/// What the planner was told for one `run` of `command` under the ask mode with every run
+/// approved, and whether a program ran.
+#[cfg(unix)]
+fn run_approved(workspace: &Workspace, command: &str) -> (String, bool) {
+    let mut sink = RecordingSink::new();
+    let mut policy = run_and_read_policy(&mut sink);
+    let produced = with_tools(workspace, |tools| {
+        run(
+            &mut policy,
+            tools,
+            &mut crate::confirm::ApproveRuns,
+            &mut crate::report::IgnoreReports,
+            &json!({ "command": command }),
+        )
+    });
+    (told(&mut policy, &produced.text), produced.ran_a_program)
+}
+
+/// What the planner was told for one `read_file` of the absolute `path`.
+#[cfg(unix)]
+fn read_outside(workspace: &Workspace, path: &std::path::Path) -> String {
+    let mut sink = RecordingSink::new();
+    let mut policy = run_and_read_policy(&mut sink);
+    let produced = with_tools(workspace, |tools| {
+        read_file(
+            &mut policy,
+            tools,
+            &mut crate::confirm::ApproveWrites,
+            &mut crate::report::IgnoreReports,
+            &json!({ "path": path.display().to_string() }),
+        )
+    });
+    told(&mut policy, &produced.text)
+}
+
+/// The sentence a refusal of `path` with `remedy` reads as.
+#[cfg(unix)]
+fn remedy_sentence(path: &std::path::Path, remedy: crate::workspace::Remedy) -> String {
+    crate::workspace::WorkspaceError::Escapes {
+        path: path.display().to_string(),
+        remedy,
+    }
+    .describe(&path.display().to_string())
+}
+
+/// The clause of the open remedy that names `/add-dir`, said to a read and a write alike.
+#[cfg(unix)]
+const OPEN_CLAUSE: &str = "The person can open the directory it is in, with /add-dir in \
+             the terminal or --add-dir when starting bravebot, after which this path reaches it";
+
+/// The clause of the credential remedy, said to a read and a write alike.
+#[cfg(unix)]
+const CREDENTIAL_CLAUSE: &str = "in a place that holds credentials, which cannot be \
+             opened to the file tools; refusing to touch it";
+
+/// CMDLINE-5, TRUST-10: through `run`, a redirection to a file in an ordinary directory
+/// outside the workspace is given the open remedy, naming `/add-dir`, and one into the
+/// home's `.ssh` is given the credential remedy, naming none; neither is given the bare
+/// refusal the nothing remedy reads as. The regression it rejects: the remedy for a
+/// redirection chosen as nothing for every outside path, which tells a planner with a
+/// person to ask that no route exists, or as open for a credential location, which names
+/// a directory that cannot be added.
+#[cfg(unix)]
+#[test]
+fn a_redirection_outside_is_given_the_open_remedy_and_one_into_credentials_the_credential_remedy() {
+    use crate::workspace::Remedy;
+    let place = outside_fixture("run-redirect-remedies");
+    let ordinary = place.beside.join("out.txt");
+    let credential = place.home.join(".ssh/config");
+
+    let (open, ran) = run_approved(
+        &place.workspace,
+        &format!("echo hi > {}", ordinary.display()),
+    );
+    assert!(!ran, "a refused redirection ran a program: {open}");
+    assert!(
+        open.contains(&remedy_sentence(&ordinary, Remedy::Open)),
+        "an ordinary outside directory was not given the open remedy: {open}"
+    );
+    assert_eq!(
+        open.matches(&remedy_sentence(&ordinary, Remedy::Nothing))
+            .count(),
+        open.matches(&remedy_sentence(&ordinary, Remedy::Open))
+            .count(),
+        "the bare refusal of the nothing remedy was said for an ordinary directory: {open}"
+    );
+
+    let (closed, ran) = run_approved(
+        &place.workspace,
+        &format!("echo hi >> {}", credential.display()),
+    );
+    assert!(!ran, "a refused redirection ran a program: {closed}");
+    assert!(
+        closed.contains(&remedy_sentence(&credential, Remedy::Credential)),
+        "a credential location was not given the credential remedy: {closed}"
+    );
+    assert!(
+        !closed.contains(&remedy_sentence(&credential, Remedy::Nothing))
+            && !closed.contains("/add-dir"),
+        "a credential location was given the nothing or the open remedy: {closed}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&credential).unwrap(),
+        "Host *\n",
+        "the credential file was written"
+    );
+}
+
+/// CMDLINE-5, TRUST-10: the remedy is a route that works. Once the ordinary outside
+/// directory is opened, as `/add-dir` opens it, the same redirected `run` line that was
+/// refused writes the file there. The regression it rejects: a redirection confined to the
+/// workspace root alone, so `/add-dir` is offered and does nothing for a `run` line.
+#[cfg(unix)]
+#[test]
+fn a_refused_redirection_writes_its_file_once_the_directory_it_names_is_added() {
+    let mut place = outside_fixture("run-redirect-then-added");
+    let destination = place.beside.join("out.txt");
+    let line = format!("echo written > {}", destination.display());
+
+    let (before, ran) = run_approved(&place.workspace, &line);
+    assert!(
+        !ran && before.contains(OPEN_CLAUSE),
+        "the line was not refused with the open remedy first: {before}"
+    );
+    assert!(!destination.exists(), "a refused line wrote the file");
+
+    place
+        .workspace
+        .add_directory(place.beside.to_str().expect("a UTF-8 scratch path"))
+        .expect("directory added");
+    let (after, ran) = run_approved(&place.workspace, &line);
+    assert!(
+        ran,
+        "the line did not run once the directory was added: {after}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&destination).ok().as_deref(),
+        Some("written\n"),
+        "the redirection did not write the file in the added directory: {after}"
+    );
+}
+
+/// TRUST-10, CMDLINE-5: a `read_file` of an outside path and a `run` line redirecting to
+/// the same path are offered the same remedy: the open clause naming `/add-dir` for
+/// an ordinary directory, the credential clause for the home's `.ssh`. A read may add a
+/// drop to it, which is the only difference. The regression it rejects: the file tools and
+/// `run` choosing their remedies apart, so a planner refused by one is sent by the other to
+/// a route that does not exist for the same file.
+#[cfg(unix)]
+#[test]
+fn read_file_and_a_redirection_of_the_same_outside_path_are_offered_the_same_remedy() {
+    let place = outside_fixture("read-and-redirect-remedy");
+    for (path, clause) in [
+        (place.beside.join("notes.txt"), OPEN_CLAUSE),
+        (place.home.join(".ssh/config"), CREDENTIAL_CLAUSE),
+    ] {
+        let read = read_outside(&place.workspace, &path);
+        assert!(
+            read.contains(clause),
+            "{}: read_file was not offered {clause:?}: {read}",
+            path.display()
+        );
+        let line = format!("echo hi >> {}", path.display());
+        let (said, ran) = run_approved(&place.workspace, &line);
+        assert!(!ran, "{line}: a refused redirection ran a program: {said}");
+        assert!(
+            said.contains(clause),
+            "{line}: the redirection was not offered what read_file was \
+                     ({clause:?}): {said}\nread_file: {read}"
+        );
+    }
+}
+
+/// The facts of a session that decide whether a `run` call may ask for reach past its profile.
+#[derive(Clone, Copy)]
+struct Session {
+    confined: bool,
+    mode: bravebot_sandbox::SandboxMode,
+    trusted: bool,
+    delegated: bool,
+    profile: bool,
+    asks_about_unconfined: bool,
+    /// Whether a line has already run with the sandbox on and exited non-zero.
+    after_a_failed_line: bool,
+}
+
+/// A confining session in a trusted workspace, with a profile directory, under `mode`.
+fn session_under(mode: bravebot_sandbox::SandboxMode) -> Session {
+    Session {
+        confined: true,
+        mode,
+        trusted: true,
+        delegated: false,
+        profile: true,
+        asks_about_unconfined: false,
+        after_a_failed_line: false,
+    }
+}
+
+/// What the planner was told, every gate the trail refused at as `(gate, reason)`, and
+/// whether the turn would end as clean, for one `run` call made in `session`.
+fn run_in(
+    name: &str,
+    arguments: &Value,
+    session: Session,
+) -> (String, Vec<(&'static str, String)>, bool, String) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    if session.trusted {
+        trust.trust(".");
+    }
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "run a command");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::ShellExec]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let produced = with_tools(&workspace, |tools| {
+        tools.confine_runs = session.confined;
+        tools.sandbox = session.mode;
+        tools.delegated = session.delegated;
+        tools.profile = session.profile.then(|| std::path::Path::new("/profile"));
+        tools.asks_about_unconfined = session.asks_about_unconfined;
+        if session.after_a_failed_line {
+            tools.confined_failures.note();
+        }
+        run(
+            &mut policy,
+            tools,
+            &mut crate::confirm::Unattended,
+            &mut crate::report::IgnoreReports,
+            arguments,
+        )
+    });
+    assert!(!produced.ran_a_program, "a refused call ran a program");
+    let note = produced.note.clone();
+    let said = told(&mut policy, &produced.text);
+    let clean = policy.finish();
+
+    let refused = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked { gate, reason, .. } => Some((*gate, reason.clone())),
+            _ => None,
+        })
+        .collect();
+    (said, refused, clean, note)
+}
+
+/// The `sandbox` refusals among `refused`.
+fn sandbox_refusals<'a>(refused: &'a [(&'static str, String)]) -> Vec<&'a str> {
+    refused
+        .iter()
+        .filter(|(gate, _)| *gate == "sandbox")
+        .map(|(_, reason)| reason.as_str())
+        .collect()
+}
+
+/// CMDLINE-5, SANDBOX-29: a redirection into a credential location is offered no
+/// directory to open, and is still pointed at the `unconfined` line where the session
+/// accepts it and the front end can ask, and only there. A sibling directory is the
+/// control that names `/add-dir`. The regressions it rejects are the unconfined route
+/// dropped for a credential location, the route said where the session or front end
+/// refuses it, and `/add-dir` named for a directory that cannot be opened.
+#[test]
+fn a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted() {
+    use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+    let scratch = Scratch::new("run-redirect-credential");
+    let home = scratch.path.join("home");
+    let project = scratch.path.join("project");
+    let beside = scratch.path.join("beside");
+    for made in [home.join(".ssh"), project.clone(), beside.clone()] {
+        std::fs::create_dir_all(made).expect("directory");
+    }
+    let home = home.canonicalize().expect("home");
+    let beside = beside.canonicalize().expect("beside");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+    for (mode, asks, pointed) in [
+        (WorkspaceWrite, true, true),
+        (WorkspaceWrite, false, false),
+        (Strict, true, false),
+    ] {
+        for (destination, opens) in [
+            (home.join(".ssh/config"), false),
+            (beside.join("notes.txt"), true),
+        ] {
+            let mut trust = bravebot_core::trust::TrustStore::new("/work");
+            trust.trust(".");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "run a command");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+            let arguments = json!({"command": format!("echo hi >> {}", destination.display())});
+            let produced = with_tools(&workspace, |tools| {
+                tools.confine_runs = true;
+                tools.sandbox = mode;
+                tools.profile = Some(std::path::Path::new("/profile"));
+                tools.asks_about_unconfined = asks;
+                run(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::Unattended,
+                    &mut crate::report::IgnoreReports,
+                    &arguments,
+                )
+            });
+            assert!(!produced.ran_a_program, "a refused call ran a program");
+            let said = told(&mut policy, &produced.text);
+            let shape = format!("{} (asks: {asks}) {}", mode.name(), destination.display());
+            assert!(
+                said.starts_with("refused:") && said.contains("outside the workspace"),
+                "{shape}: {said}"
+            );
+            assert_eq!(said.contains("/add-dir"), opens, "{shape}: {said}");
+            assert_eq!(
+                said.contains("'unconfined': true"),
+                pointed,
+                "{shape}: {said}"
+            );
+        }
+    }
+}
+
+/// TRACE-1, SANDBOX-29: a request to run one line with no sandbox that the session refuses
+/// leaves one refusal under `sandbox` that names `unconfined` and every cause that held, and
+/// the sentence the planner reads is the one it always was, naming no setting. The note the
+/// person watching is told names the same cause the trail records (SANDBOX-29). One row for
+/// each cause the session can show here; a managed closed network is settled once for the
+/// process, so its row is in the table of the rule itself. The regressions it rejects are a
+/// refusal that leaves no entry, an entry naming one cause where two held, a sentence
+/// that began to say which setting withheld the request, and a note left blank or stale
+/// against the cause.
+#[test]
+fn a_refused_unconfined_request_is_recorded_with_each_cause_that_held() {
+    use bravebot_sandbox::SandboxMode::{ReadOnly, Strict, WorkspaceWrite};
+    let prefix = "run.unconfined: the request was refused and the line did not run: ";
+    for (session, cause) in [
+        (
+            session_under(Strict),
+            "the strict sandbox mode does not take it",
+        ),
+        (
+            session_under(ReadOnly),
+            "the read-only sandbox mode does not take it",
+        ),
+        (
+            Session {
+                trusted: false,
+                ..session_under(WorkspaceWrite)
+            },
+            "the workspace is not trusted",
+        ),
+        (
+            Session {
+                delegated: true,
+                ..session_under(WorkspaceWrite)
+            },
+            "a delegate may not ask",
+        ),
+        (
+            Session {
+                trusted: false,
+                delegated: true,
+                ..session_under(Strict)
+            },
+            "the strict sandbox mode does not take it; the workspace is not trusted; a \
+                     delegate may not ask",
+        ),
+    ] {
+        let (said, refused, clean, note) = run_in(
+            "run-unconfined-refused",
+            &json!({"command": "echo hi", "unconfined": true}),
+            session,
+        );
+        assert_eq!(said, NOT_ACCEPTING_UNCONFINED, "{cause}");
+        assert!(!said.contains("unconfined"), "{cause}: {said}");
+        assert_eq!(
+            sandbox_refusals(&refused),
+            [format!("{prefix}{cause}")],
+            "{cause}: {refused:?}"
+        );
+        assert_eq!(
+            note,
+            format!("refused, 'unconfined' is not accepted: {cause}"),
+            "the person watching was not told which setting withheld it"
+        );
+        assert!(
+            !clean,
+            "{cause}: a turn whose run was refused ended as clean"
+        );
+    }
+}
+
+/// TRACE-1, SANDBOX-26: a request for a credential scope that the session refuses leaves one
+/// refusal under `sandbox` that names `scopes` and every cause that held, at both places the
+/// request is refused: before the line is read, and after it, for want of a profile
+/// directory to record the request under. The sentence the planner reads is unchanged; the
+/// note the person watching is told names the cause (SANDBOX-26).
+#[test]
+fn a_refused_scope_request_is_recorded_with_each_cause_that_held() {
+    use bravebot_sandbox::SandboxMode::Strict;
+    let prefix = "run.scopes: the request was refused and the line did not run: ";
+    let mut rows = vec![(
+        Session {
+            trusted: false,
+            ..session_under(Strict)
+        },
+        "the workspace is not trusted",
+    )];
+    // The request gets past the first place it is refused, so the second decides it: a
+    // platform with no sandbox refuses it for that, and one with a sandbox for want of a
+    // profile directory to record the request under.
+    rows.push(match bravebot_sandbox::base::Prelude::current() {
+        Some(_) => (
+            Session {
+                profile: false,
+                ..session_under(Strict)
+            },
+            "the session has no profile directory",
+        ),
+        None => (
+            session_under(Strict),
+            "this platform has no sandbox to confine runs with",
+        ),
+    });
+    for (session, cause) in rows {
+        let (said, refused, clean, note) = run_in(
+            "run-scopes-refused",
+            &json!({"command": "echo hi", "scopes": ["remote"]}),
+            session,
+        );
+        assert_eq!(said, NOT_ACCEPTING_REQUESTS, "{cause}");
+        assert_eq!(
+            sandbox_refusals(&refused),
+            [format!("{prefix}{cause}")],
+            "{cause}: {refused:?}"
+        );
+        assert_eq!(
+            note,
+            format!("refused, 'scopes' is not accepted: {cause}"),
+            "the person watching was not told which setting withheld it"
+        );
+        assert!(
+            !clean,
+            "{cause}: a turn whose run was refused ended as clean"
+        );
+    }
+}
+
+/// SANDBOX-26, SANDBOX-29: where a line starts with no profile whatever the planner asks, in
+/// the `off` mode or in a turn that confines none of its runs, a `scopes` or `unconfined`
+/// argument is accepted and dropped. The call reaches the confirmer as an ordinary line does,
+/// the trail holds no refusal, and a malformed argument or the two together are still errors
+/// in those sessions. An untrusted workspace is still refused. The regressions it rejects are the old refusal of a request that has
+/// nothing to add, and a check that skips the shape of the arguments once the session is
+/// known to ignore them.
+#[test]
+fn a_request_where_no_profile_applies_is_accepted_and_dropped() {
+    use bravebot_sandbox::SandboxMode::{Off, Strict};
+    let sessions = [
+        ("off", session_under(Off)),
+        (
+            "no confinement",
+            Session {
+                confined: false,
+                ..session_under(Strict)
+            },
+        ),
+    ];
+    for (why, session) in sessions {
+        for arguments in [
+            json!({"command": "echo hi", "scopes": ["remote"]}),
+            json!({"command": "echo hi", "unconfined": true}),
+            json!({"command": "echo hi", "unconfined": false, "scopes": ["remote", "aws"]}),
+        ] {
+            let (said, refused, _, _) = run_in("run-request-dropped", &arguments, session);
+            assert!(
+                said.starts_with("refused: the user did not approve running this"),
+                "{why}: {arguments}: the call did not reach the confirmer: {said}"
+            );
+            assert_eq!(
+                sandbox_refusals(&refused),
+                Vec::<&str>::new(),
+                "{why}: {arguments}: {refused:?}"
+            );
+        }
+        // An untrusted workspace is refused as it was, with the line not run and the
+        // refusal on the trail, so the early return is not a way round SANDBOX-16.
+        let untrusted = Session {
+            trusted: false,
+            ..session
+        };
+        for arguments in [
+            json!({"command": "echo hi", "scopes": ["remote"]}),
+            json!({"command": "echo hi", "unconfined": true}),
+        ] {
+            let (said, refused, _, _) = run_in("run-request-untrusted", &arguments, untrusted);
+            assert!(
+                said.starts_with("refused: this session does not accept a request"),
+                "{why}: {arguments}: an untrusted workspace was not refused: {said}"
+            );
+            assert_eq!(
+                sandbox_refusals(&refused).len(),
+                1,
+                "{why}: {arguments}: {refused:?}"
+            );
+        }
+        for (arguments, expected) in [
+            (
+                json!({"command": "echo hi", "unconfined": true, "scopes": ["remote"]}),
+                "give 'unconfined' or 'scopes', not both",
+            ),
+            (
+                json!({"command": "echo hi", "unconfined": "yes"}),
+                "must be true or false",
+            ),
+            (
+                json!({"command": "echo hi", "scopes": ["root"]}),
+                "holds a name that is not on this list",
+            ),
+        ] {
+            let (said, _, _, _) = run_in("run-request-malformed", &arguments, session);
+            assert!(
+                said.contains(expected),
+                "{why}: {arguments}: a malformed argument was not an error: {said}"
+            );
+        }
+    }
+}
+
+/// TRACE-1: a request the session accepts leaves no refusal, so the entry is the answer to a
+/// refusal and not a note on every request. Nobody is there to ask, so the confirmer turns
+/// each line away, which is a different gate's record. The regression it rejects is an entry
+/// written before the session's answer is known.
+#[test]
+fn an_accepted_request_for_reach_leaves_no_sandbox_refusal() {
+    use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+    for (session, arguments) in [
+        (
+            Session {
+                after_a_failed_line: true,
+                ..session_under(WorkspaceWrite)
+            },
+            json!({"command": "echo hi", "unconfined": true}),
+        ),
+        (
+            session_under(Strict),
+            json!({"command": "echo hi", "scopes": ["remote"]}),
+        ),
+    ] {
+        let (said, refused, _, _) = run_in("run-request-accepted", &arguments, session);
+        assert!(
+            said.starts_with("refused: the user did not approve running this"),
+            "the request did not get as far as the confirmer, so the session did not accept \
+                     it: {said}"
+        );
+        assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
+    }
+}
+
+/// SANDBOX-29: a request for a line with no sandbox is refused, with a sentence that says
+/// to run the line with the sandbox first, until a line has run with one and failed, or was
+/// refused because its program could not be confined, in the
+/// turn, and the trail records the refusal under `sandbox`. Each failure earns one request:
+/// after the person is asked once, the next request is refused again. The regressions it
+/// rejects are a request accepted before any line failed, a refusal that does not say what
+/// to do, a refusal the trail omits, and a failure that earns requests without end.
+#[test]
+fn a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed() {
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let asks = json!({"command": "echo hi", "unconfined": true});
+
+    let (said, refused, _, note) =
+        run_in("run-unconfined-first", &asks, session_under(WorkspaceWrite));
+    assert_eq!(said, UNCONFINED_BEFORE_A_FAILURE);
+    assert!(
+        said.contains("a line was refused because its program could not be confined"),
+        "the refusal does not say a refused program earns the request: {said}"
+    );
+    assert_eq!(
+        sandbox_refusals(&refused),
+        [
+            "run.unconfined: the request was refused and the line did not run: no line \
+                     has run with a sandbox and failed, or been refused because it could not be \
+                     confined, this turn"
+        ],
+        "{refused:?}"
+    );
+    assert_eq!(
+        note,
+        "refused, 'unconfined' is not accepted: no line has run with a sandbox and \
+                 failed, or been refused because it could not be confined, this turn",
+        "the person watching was not told why"
+    );
+
+    let (said, refused, _, _) = run_in(
+        "run-unconfined-after-failure",
+        &asks,
+        Session {
+            after_a_failed_line: true,
+            ..session_under(WorkspaceWrite)
+        },
+    );
+    assert!(
+        said.starts_with("refused: the user did not approve running this"),
+        "the request after a failed line did not reach the confirmer: {said}"
+    );
+    assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
+}
+
+/// SANDBOX-29: a line whose own redirection leaves the workspace is accepted with no failure
+/// counted, since the sandbox refuses it before anything runs. It reaches the confirmer, and
+/// the count is left where it was, so the exemption earns no request for a later line. The
+/// regressions it rejects are the exemption removed, which refuses the only route to the
+/// file, and one that spends or adds to the count.
+#[test]
+fn a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted() {
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let (said, refused, _, _) = run_in(
+        "run-unconfined-redirect",
+        &json!({"command": "echo hi > /bravebot-outside/hello.txt", "unconfined": true}),
+        session_under(WorkspaceWrite),
+    );
+    assert!(
+        said.starts_with("refused: the user did not approve running this"),
+        "the redirection did not reach the confirmer: {said}"
+    );
+    assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{said}");
+
+    let (said, _, _, _) = run_in(
+        "run-unconfined-after-redirect",
+        &json!({"command": "echo hi", "unconfined": true}),
+        session_under(WorkspaceWrite),
+    );
+    assert_eq!(said, UNCONFINED_BEFORE_A_FAILURE);
+}
+
+/// SANDBOX-29: the request a failed line earned is spent when the person accepts the one
+/// for no sandbox, and a prompt the person did not accept leaves it. The regression it
+/// rejects is a request spent before the person is asked, which makes the planner's next
+/// ask refuse as if no line had failed.
+#[test]
+fn a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one() {
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let scratch = Scratch::new("run-unconfined-declined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "run a command");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::ShellExec]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let produced = with_tools(&workspace, |tools| {
+        tools.confine_runs = true;
+        tools.sandbox = WorkspaceWrite;
+        tools.profile = Some(std::path::Path::new("/profile"));
+        tools.confined_failures.note();
+        let asks = json!({"command": "echo hi", "unconfined": true});
+        let mut said = Vec::new();
+        for _ in 0..2 {
+            let produced = run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::Unattended,
+                &mut crate::report::IgnoreReports,
+                &asks,
+            );
+            said.push(produced.text);
+        }
+        said
+    });
+    let said: Vec<String> = produced
+        .iter()
+        .map(|text| told(&mut policy, text))
+        .collect();
+    for text in &said {
+        assert!(
+            !text.contains("run the line with the sandbox first"),
+            "a declined prompt spent the earned request: {said:?}"
+        );
+    }
+}
+
+/// SANDBOX-29: a line whose program the platform could not confine earns one request for a
+/// line with no sandbox, as a confined line that exited non-zero does, so the
+/// `'unconfined': true` its refusal names is put to the person rather than refused. The
+/// regression it rejects is a refusal for want of confinement that earns nothing, which
+/// points the planner at the argument and then refuses it as asked before any failure.
+#[test]
+fn a_program_that_could_not_be_confined_earns_one_request_for_no_sandbox() {
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let scratch = Scratch::new("run-unconfinable-earns");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "run a command");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::ShellExec]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let _held = crate::tools::scripted_unconfinable::hold("echo");
+    let (text, earned) = with_tools(&workspace, |tools| {
+        tools.confine_runs = true;
+        tools.sandbox = WorkspaceWrite;
+        tools.profile = Some(std::path::Path::new("/profile"));
+        let produced = run(
+            &mut policy,
+            tools,
+            &mut crate::confirm::ApproveRuns,
+            &mut crate::report::IgnoreReports,
+            &json!({"command": "echo hi"}),
+        );
+        (produced.text, tools.confined_failures.has_one())
+    });
+    let said = told(&mut policy, &text);
+    assert!(
+        said.contains("could not be confined"),
+        "the line was not refused for want of confinement: {said}"
+    );
+    assert!(
+        earned,
+        "a program that could not be confined earned no request for no sandbox: {said}"
+    );
+}
+
+/// SANDBOX-17, SANDBOX-29: a line left running in the background whose program could not be
+/// confined is told what the same line in the foreground is told and earns the one
+/// request for no sandbox, and a background program that could not be started at all,
+/// which fails where exec launches it, still says it did not start and earns nothing. The
+/// regressions it rejects are the background arm telling the refusal only as a job that
+/// did not start, with no routes and no request earned, and a launch failure that is not a
+/// refusal of the sandbox earning a request.
+#[cfg(unix)]
+#[test]
+fn a_background_line_that_could_not_be_confined_is_told_as_the_foreground_one_is() {
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("run-unconfinable-background");
+    // Executable, so the line compiles, and its interpreter is missing, so exec's launch
+    // of it fails.
+    let bad = scratch.path.join("bad");
+    std::fs::write(&bad, "#!/bravebot-no-such-interpreter\n").expect("a program");
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "run a command");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::ShellExec]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let _held = crate::tools::scripted_unconfinable::hold("echo");
+    let ran = |policy: &mut Policy<'_, RecordingSink>, arguments: Value, confined| {
+        let (text, earned) = with_tools(&workspace, |tools| {
+            tools.confine_runs = confined;
+            tools.sandbox = WorkspaceWrite;
+            tools.asks_about_unconfined = true;
+            tools.profile = Some(std::path::Path::new("/profile"));
+            let produced = run(
+                policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &arguments,
+            );
+            (produced.text, tools.confined_failures.has_one())
+        });
+        (told(policy, &text), earned)
+    };
+    let (foreground, _) = ran(&mut policy, json!({"command": "echo hi"}), true);
+    let (background, earned) = ran(
+        &mut policy,
+        json!({"command": "echo hi", "background": true}),
+        true,
+    );
+    assert!(
+        background.contains("could not be confined"),
+        "the line was not refused for want of confinement: {background}"
+    );
+    assert_eq!(
+        background, foreground,
+        "the background line was not told what the foreground one is"
+    );
+    assert!(
+        background.contains("Running the same line again is refused the same way until"),
+        "{background}"
+    );
+    assert!(background.contains("'unconfined': true"), "{background}");
+    assert!(
+        earned,
+        "a background program that could not be confined earned no request: {background}"
+    );
+
+    // With no profile, so the start that fails is exec's own launch of the program and not
+    // a wrapper that starts and then fails to run it.
+    let (launched, earned) = ran(
+        &mut policy,
+        json!({"command": "./bad", "background": true}),
+        false,
+    );
+    assert!(
+        launched.contains("bad` did not start")
+            && launched.contains("'./bad' could not be started"),
+        "a background launch failure was not told as a job that did not start: {launched}"
+    );
+    assert!(!launched.contains("could not be confined"), "{launched}");
+    assert!(
+        !earned,
+        "a launch failure that the sandbox did not refuse earned a request: {launched}"
+    );
+}
+
+/// SANDBOX-17, SANDBOX-19, SANDBOX-29: a line refused because its one program could not be
+/// confined, run through `run`, is told that nothing of it started, is not sent to check
+/// what it did, carries no account of a profile it never ran under, and names
+/// `'unconfined': true` and the mode `off` only where the session would accept the request.
+/// The regressions it rejects are the planner asked to check for effects of a line that
+/// never started, which it may be unable to do when the listing is quarantined, and a
+/// route named in a session that refuses it: a front end that cannot ask, or `strict`.
+#[test]
+fn a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it() {
+    use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+    for (mode, asks, offered) in [
+        (WorkspaceWrite, true, true),
+        (WorkspaceWrite, false, false),
+        (Strict, true, false),
+    ] {
+        let scratch = Scratch::new("run-unconfinable-routes");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "run a command");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::ShellExec]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        let _held = crate::tools::scripted_unconfinable::hold("echo");
+        let text = with_tools(&workspace, |tools| {
+            tools.confine_runs = true;
+            tools.sandbox = mode;
+            tools.asks_about_unconfined = asks;
+            tools.profile = Some(std::path::Path::new("/profile"));
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &json!({"command": "echo hi"}),
+            )
+            .text
+        });
+        let said = told(&mut policy, &text);
+        assert!(said.contains("could not be confined"), "{mode}: {said}");
+        assert!(!said.contains("network open"), "{mode}: {said}");
+        assert!(
+            said.contains("Nothing of the line started"),
+            "{mode}: {said}"
+        );
+        assert!(!said.contains("may have run in part"), "{mode}: {said}");
+        assert!(!said.contains("check what"), "{mode}: {said}");
+        assert!(!said.contains("Confinement:"), "{mode}: {said}");
+        assert!(
+            said.contains("Running the same line again is refused the same way until"),
+            "{mode}: {said}"
+        );
+        assert_eq!(
+            said.contains("until the person makes one of the changes that follow"),
+            offered,
+            "{mode}: {said}"
+        );
+        assert_eq!(
+            said.contains("'unconfined': true"),
+            offered,
+            "{mode}, asks {asks}: the unconfined route was not named exactly where it is \
+                     accepted: {said}"
+        );
+        assert_eq!(said.contains("/sandbox off"), offered, "{mode}: {said}");
+    }
+}
+
+/// SANDBOX-17: a program the platform cannot confine, after an earlier part of the line or
+/// an earlier stage of its pipeline started, is told as a program that was not started and
+/// says which of those may have run, as `run` gives it to the planner. The regressions it
+/// rejects are exec dropping the position where the stage is refused, so the planner is
+/// told nothing of the line started when `true` did, and the line told as not run.
+#[test]
+fn a_program_refused_after_part_of_its_line_started_says_which_part_may_have_run() {
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    for (line, expected) in [
+        ("true && echo hi", "No stage of its pipeline started"),
+        (
+            "true | echo hi",
+            "The stages before it in its pipeline had started",
+        ),
+    ] {
+        let scratch = Scratch::new("run-unconfinable-after-a-part");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "run a command");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::ShellExec]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        let _held = crate::tools::scripted_unconfinable::hold("echo");
+        let text = with_tools(&workspace, |tools| {
+            tools.confine_runs = true;
+            tools.sandbox = WorkspaceWrite;
+            tools.profile = Some(std::path::Path::new("/profile"));
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &json!({"command": line}),
+            )
+            .text
+        });
+        let said = told(&mut policy, &text);
+        assert!(said.contains("could not be confined"), "{line}: {said}");
+        assert!(said.contains(expected), "{line}: {said}");
+        assert!(
+            said.contains("stopped at a program that was not started"),
+            "{line}: {said}"
+        );
+        assert!(!said.contains("was not run"), "{line}: {said}");
+        assert!(
+            !said.contains("Nothing of the line started"),
+            "{line}: {said}"
+        );
+    }
+}
+
+/// SANDBOX-29: each failed line earns exactly one request for no sandbox, and spending it
+/// leaves none until another line fails. The regression it rejects is a failure that earns
+/// unlimited requests, which would make the gate that accepts one only after a failure do
+/// nothing.
+#[test]
+fn each_confined_failure_earns_one_request_for_no_sandbox() {
+    let mut failures = ConfinedFailures::default();
+    assert!(!failures.spend());
+    failures.note();
+    failures.note();
+    assert!(failures.spend());
+    assert!(failures.spend());
+    assert!(!failures.spend());
+}
+
+/// TRACE-1: a write refused for leaving the workspace names `unconfined` as the way out only
+/// where the session would accept it, and asking that question is not a refusal of the
+/// request. The one entry is the `confine` refusal of the redirection, whichever way the
+/// session answers. The regression it rejects is the record written where the rule is
+/// evaluated rather than where a request is refused.
+#[test]
+fn pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it() {
+    use bravebot_sandbox::SandboxMode::{Strict, WorkspaceWrite};
+    for (mode, points) in [(WorkspaceWrite, true), (Strict, false)] {
+        let session = Session {
+            asks_about_unconfined: true,
+            ..session_under(mode)
+        };
+        let (said, refused, _, _) = run_in(
+            "run-redirect-points-at-unconfined",
+            &json!({"command": "echo hi > ../escaped.txt"}),
+            session,
+        );
+        assert_eq!(
+            said.contains("'unconfined': true"),
+            points,
+            "{mode}: the way out was not offered exactly where it is accepted: {said}"
+        );
+        assert_eq!(sandbox_refusals(&refused), Vec::<&str>::new(), "{mode}");
+        assert_eq!(
+            refused
+                .iter()
+                .filter(|(gate, _)| *gate == "confine")
+                .count(),
+            1,
+            "{mode}: {refused:?}"
+        );
+    }
+}
+
+/// SANDBOX-28: a delegate that names `request_path` anyway is answered as an unknown name,
+/// the person is not asked, and nothing is held. The first case is the control: the same
+/// call from a turn that is not a delegate is asked and held, so an implementation that
+/// refused every call would not pass.
+#[cfg(unix)]
+#[test]
+fn a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked() {
+    use crate::confirm::{
+        CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+        ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+        RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+        WriteRequest,
+    };
+    use bravebot_core::ask::{Answer, Asking};
+
+    #[derive(Default)]
+    struct CountsPathQuestions {
+        asked: usize,
+    }
+
+    impl Confirmer for CountsPathQuestions {
+        fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+            self.asked += 1;
+            Decision::Approve
+        }
+        fn confirm_host(&mut self, _request: &HostRequest) -> Decision {
+            Decision::Reject
+        }
+
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+        fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+            WriteDecision::reject()
+        }
+        fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+            RunDecision::reject()
+        }
+        fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+            CallDecision::reject()
+        }
+        fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+            Vec::new()
+        }
+        fn interjection(&mut self) -> Option<String> {
+            None
+        }
+    }
+
+    let scratch = Scratch::new("request-path-delegate");
+    let home = scratch.path.join("home");
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&beside).unwrap();
+    let home: &'static std::path::Path = Box::leak(home.canonicalize().unwrap().into_boxed_path());
+    let beside = beside.canonicalize().unwrap();
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let call: ToolCall = serde_json::from_value(json!({
+        "id": "1",
+        "function": {
+            "name": "request_path",
+            "arguments": json!({
+                "path": beside.display().to_string(),
+                "write": true,
+                "why": "the build writes its output there",
+            })
+            .to_string(),
+        }
+    }))
+    .expect("a call");
+
+    for (delegated, asked, held) in [(false, 1, 1), (true, 0, 0)] {
+        let workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "build it");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::ShellExec]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        let mut confirmer = CountsPathQuestions::default();
+
+        let output = with_tools(&workspace, |tools| {
+            tools.confine_runs = true;
+            tools.profile = Some(home);
+            tools.delegated = delegated;
+            dispatch(
+                &mut policy,
+                tools,
+                &mut confirmer,
+                &mut crate::report::IgnoreReports,
+                &call,
+            )
+        });
+        let said = told(&mut policy, &output.text);
+
+        if delegated {
+            assert_eq!(said, "error: no such tool 'request_path'");
+        } else {
+            assert!(said.starts_with("approved:"), "{said}");
+        }
+        assert_eq!(confirmer.asked, asked, "delegated {delegated}: {said}");
+        assert_eq!(
+            workspace.path_reach().len(),
+            held,
+            "delegated {delegated}: {said}"
+        );
+    }
+}
+
+/// SANDBOX-24: hosts a run was refused for want of an entry are put to the person once, as
+/// one question, and the answer is kept for the session. A yes allows them from the next
+/// line; a no is kept so they are not asked again; no more than the cap are asked at once;
+/// each answer reaches the trail. The regressions it rejects: a question asked again for
+/// a host already answered, a no that grants, a yes that is not kept, an unbounded list put
+/// on the screen, and an answer that leaves no record.
+#[test]
+fn hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept() {
+    use crate::confirm::{
+        CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+        ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+        RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+        WriteRequest,
+    };
+    use bravebot_core::ask::{Answer, Asking};
+
+    struct AnswersHosts {
+        answer: Decision,
+        asked: Vec<Vec<String>>,
+    }
+
+    impl Confirmer for AnswersHosts {
+        fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+            self.asked.push(request.hosts.clone());
+            self.answer
+        }
+
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+        fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+            WriteDecision::reject()
+        }
+        fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+            RunDecision::reject()
+        }
+        fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+            CallDecision::reject()
+        }
+        fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+            Vec::new()
+        }
+        fn interjection(&mut self) -> Option<String> {
+            None
+        }
+    }
+
+    let names = |hosts: &[&str]| hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>();
+    let scratch = Scratch::new("ask-about-hosts");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "fetch it");
+    let mut sink = RecordingSink::new();
+    let mut yes = AnswersHosts {
+        answer: Decision::Approve,
+        asked: Vec::new(),
+    };
+    let mut no = AnswersHosts {
+        answer: Decision::Reject,
+        asked: Vec::new(),
+    };
+    let many: Vec<String> = (0..12).map(|at| format!("many{at}.example")).collect();
+    {
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::ShellExec]),
+            &mut sink,
+        )
+        .expect("policy");
+        with_tools(&workspace, |tools| {
+            ask_about_hosts(
+                &mut policy,
+                tools,
+                &mut yes,
+                &names(&["a.example", "b.example"]),
+            );
+            ask_about_hosts(
+                &mut policy,
+                tools,
+                &mut yes,
+                &names(&["b.example", "a.example"]),
+            );
+            ask_about_hosts(
+                &mut policy,
+                tools,
+                &mut no,
+                &names(&["c.example", "a.example"]),
+            );
+            ask_about_hosts(&mut policy, tools, &mut yes, &names(&["c.example"]));
+            ask_about_hosts(&mut policy, tools, &mut yes, &[]);
+            ask_about_hosts(&mut policy, tools, &mut yes, &many);
+            tools.permission_mode.set(crate::PermissionMode::Bypass);
+            ask_about_hosts(&mut policy, tools, &mut yes, &names(&["late.example"]));
+            tools.permission_mode.set(crate::PermissionMode::Ask);
+            ask_about_hosts(&mut policy, tools, &mut yes, &names(&["late.example"]));
+        });
+    }
+
+    assert_eq!(
+        yes.asked[0],
+        names(&["a.example", "b.example"]),
+        "the first question was not the two hosts"
+    );
+    assert_eq!(
+        no.asked,
+        [names(&["c.example"])],
+        "a host already allowed was asked again, or the declined one was not asked"
+    );
+    assert_eq!(
+        yes.asked[1].len(),
+        crate::confine::MOST_HOSTS_ASKED,
+        "{:?}",
+        yes.asked
+    );
+    assert_eq!(
+        yes.asked.len(),
+        3,
+        "a host already declined or nothing was asked: {:?}",
+        yes.asked
+    );
+    assert_eq!(
+        yes.asked[2],
+        names(&["late.example"]),
+        "bypass asked, or remembered the refusal it made for the person: {:?}",
+        yes.asked
+    );
+    let granted = workspace.granted_hosts();
+    assert_eq!(&granted[..2], names(&["a.example", "b.example"]).as_slice());
+    assert!(
+        !granted.contains(&"c.example".to_string()),
+        "a no granted: {granted:?}"
+    );
+    assert_eq!(granted.len(), 3 + crate::confine::MOST_HOSTS_ASKED);
+    assert!(granted.contains(&"late.example".to_string()));
+    assert!(!granted.contains(&many[crate::confine::MOST_HOSTS_ASKED]));
+
+    let gates: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed { gate, detail } if *gate == "host_grant" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gates.len(), 5, "{gates:?}");
+    assert!(gates[0].starts_with("the user let programs reach a.example, b.example"));
+    assert!(gates[1].starts_with("programs were not let reach c.example"));
+    assert!(gates[3].starts_with("programs were not let reach late.example"));
+    assert!(gates[4].starts_with("the user let programs reach late.example"));
+}
+
+/// SANDBOX-24: a host a run was refused for want of an entry is put to the person once the
+/// run stops, and only where `onUnlisted` is `ask` and the turn is not a delegate's. The
+/// first case is the control: a foreground run under `ask` is asked once, about the host it
+/// was refused. Every case checks that the trail recorded the refusal, so the run reached
+/// the proxy in each. The regressions it rejects: a delegate putting the question to the
+/// person, and a session set to `refuse` asking anyway.
+#[cfg(unix)]
+#[test]
+fn a_refused_host_is_put_to_the_person_under_ask_and_not_for_a_delegate_or_under_refuse() {
+    use crate::confirm::{
+        CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest,
+        ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+        RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+        WriteRequest,
+    };
+    use bravebot_config::sandbox_network::{HostEntry, Hosts, OnUnlisted};
+    use bravebot_core::ask::{Answer, Asking};
+
+    #[derive(Default)]
+    struct RunsAndCountsHostQuestions {
+        asked: Vec<Vec<String>>,
+    }
+
+    impl Confirmer for RunsAndCountsHostQuestions {
+        fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+            self.asked.push(request.hosts.clone());
+            Decision::Reject
+        }
+
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+        fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+            RunDecision::approve()
+        }
+        fn confirm_path(&mut self, _request: &PathRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+            WriteDecision::reject()
+        }
+        fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+            CallDecision::reject()
+        }
+        fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+            Vec::new()
+        }
+        fn interjection(&mut self) -> Option<String> {
+            None
+        }
+    }
+
+    // Linux and Windows refuse a networked stage under a list, so no run there reaches a
+    // proxy to be refused a host.
+    if !bravebot_sandbox::for_current_platform()
+        .is_ok_and(|sandbox| sandbox.capabilities().egress_limited_to_a_port)
+    {
+        return;
+    }
+
+    // Seatbelt cannot be applied from inside a seatbelt, so a suite started by
+    // bravebot's own `run` tool on macOS cannot start the confined curl.
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    }
+
+    let scratch = Scratch::new("ask-about-refused-hosts");
+    let home = scratch.path.join("home");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+    let home: &'static std::path::Path = Box::leak(home.canonicalize().unwrap().into_boxed_path());
+
+    for (case, on_unlisted, delegated, asked) in [
+        ("ask", OnUnlisted::Ask, false, true),
+        ("ask-delegate", OnUnlisted::Ask, true, false),
+        ("refuse", OnUnlisted::Refuse, false, false),
+    ] {
+        // A proxy is kept for each list for the life of the process, so each case holds a
+        // list of its own and no case reads another's decisions.
+        let refused = format!("refused-{case}.example");
+        let _held = crate::tools::scripted_hosts::hold(Hosts {
+            allowed: Some(vec![HostEntry {
+                entry: format!("listed-{case}.example"),
+                by: None,
+            }]),
+            denied: Vec::new(),
+            on_unlisted: Some(on_unlisted),
+        });
+        let call: ToolCall = serde_json::from_value(json!({
+            "id": "1",
+            "function": {
+                "name": "run",
+                "arguments": json!({
+                    "command": format!("curl -s -m 5 https://{refused}/"),
+                })
+                .to_string(),
+            }
+        }))
+        .expect("a call");
+        let workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "fetch it");
+        let mut sink = RecordingSink::new();
+        let mut confirmer = RunsAndCountsHostQuestions::default();
+        let said = {
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::ShellExec]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(trust);
+            let output = with_tools(&workspace, |tools| {
+                tools.confine_runs = true;
+                tools.profile = Some(home);
+                tools.delegated = delegated;
+                dispatch(
+                    &mut policy,
+                    tools,
+                    &mut confirmer,
+                    &mut crate::report::IgnoreReports,
+                    &call,
+                )
+            });
+            told(&mut policy, &output.text)
+        };
+
+        let recorded = sink.events().iter().any(|event| {
+            matches!(
+                event,
+                Event::GatePassed { gate, detail }
+                    if *gate == "hosts"
+                        && detail.contains(&format!("{refused} refused, not listed"))
+            )
+        });
+        assert!(recorded, "{case}: the run reached no proxy: {said}");
+        let expected = match asked {
+            true => vec![vec![refused.clone()]],
+            false => Vec::new(),
+        };
+        assert_eq!(confirmer.asked, expected, "{case}: {said}");
+    }
+}

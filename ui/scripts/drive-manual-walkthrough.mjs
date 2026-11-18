@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
-import { COMPOSER_NAME } from './drive-support.mjs'
+import { COMPOSER_NAME, APPROVE_BUTTON } from './drive-support.mjs'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const root = mkdtempSync(join(tmpdir(), 'bravebot-walkthrough-'))
@@ -49,7 +49,8 @@ function writeFixtureSettings(model) {
   writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({ provider: { local: { options: { baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: fixtureToken }, models: { test: {} } } }, model }))
 }
 writeFixtureSettings('local/test')
-const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
+// The usage ping off, so its notice does not take the composer height the narrow approval steps are measured at.
+const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_USAGE_PING: '0' })
 async function until(predicate, label) {
   const deadline = Date.now() + 20000
   while (!await predicate()) { assert(Date.now() < deadline, `${label} timed out; fixture errors: ${failures}`); await delay(50) }
@@ -111,7 +112,7 @@ try {
         if (at >= furthest() - 1) break
       }
     })
-    await card.locator('.confirm-actions .approve:not([aria-disabled="true"])').waitFor()
+    await card.locator(`${APPROVE_BUTTON}:not([aria-disabled="true"])`).waitFor()
   }
   const hasFocus = (locator) => locator.evaluate(el => {
     if (el === document.activeElement) return true

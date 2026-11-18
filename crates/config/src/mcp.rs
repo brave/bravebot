@@ -141,6 +141,43 @@ pub fn is_alias(alias: &str) -> bool {
         && characters.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Whether `word` is a pattern for aliases: at least one `*`, and otherwise only the characters an
+/// alias has.
+///
+/// A `*` stands for any run of characters, including none, so `brave-tabs*` names every alias that
+/// starts with `brave-tabs`. A person types the pattern, and it is matched against the aliases they
+/// declared and request, so it can name no more than those.
+pub fn is_alias_pattern(word: &str) -> bool {
+    word.contains('*')
+        && word.len() <= MAX_ALIAS
+        && word.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '*')
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '*'))
+}
+
+/// Whether `alias` is named by `pattern`, in which each `*` stands for any run of characters.
+///
+/// A pattern with no `*` names exactly the alias that spells it.
+pub fn alias_matches(pattern: &str, alias: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = alias.strip_prefix(first) else {
+        return false;
+    };
+    let after: Vec<&str> = parts.collect();
+    let [between @ .., last] = after.as_slice() else {
+        return rest.is_empty();
+    };
+    for part in between {
+        match rest.split_once(part) {
+            Some((_, after)) => rest = after,
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
+}
+
 /// Whether `name` may name a tool in a tool allow or deny filter.
 ///
 /// Either a tool word alone, or qualified under an alias as `alias:tool`.
@@ -3194,6 +3231,52 @@ mod tests {
             Err(Problem::Key("enabled".into()))
         );
         assert!(declarations.get("docs").unwrap().declaration.is_ok());
+    }
+
+    /// SERVERS-19. A `*` stands for any run of characters, anywhere in the pattern, and a pattern
+    /// without one names one alias. Rejects a prefix-only match, which would take `*-read` for
+    /// everything, and a match that lets the text before a `*` overlap the text after it.
+    #[test]
+    fn a_pattern_names_the_aliases_whose_spelling_fits_around_its_stars() {
+        for (pattern, alias, named) in [
+            ("brave-tabs*", "brave-tabs-manage", true),
+            ("brave-tabs*", "brave-tabs", true),
+            ("brave-tabs*", "brave-page-read", false),
+            ("*-read", "brave-tabs-read", true),
+            ("*-read", "brave-tabs-manage", false),
+            ("brave-*-read", "brave-tabs-read", true),
+            ("brave-*-read", "brave-read", false),
+            ("a*a", "a", false),
+            ("a*a", "aa", true),
+            ("a*b*c", "axxbyyc", true),
+            ("a*b*c", "axxcyyb", false),
+            ("*", "weather", true),
+            ("weather", "weather", true),
+            ("weather", "weather2", false),
+        ] {
+            assert_eq!(alias_matches(pattern, alias), named, "{pattern} on {alias}");
+        }
+    }
+
+    /// SERVERS-19. A pattern has a `*` and otherwise only what an alias has, so a word such as
+    /// `--help` or `../*` is never taken for one.
+    #[test]
+    fn a_pattern_has_a_star_and_only_the_characters_of_an_alias() {
+        for word in ["*", "brave-tabs*", "*-read", "a*b_c*"] {
+            assert!(is_alias_pattern(word), "{word:?} was refused");
+        }
+        for word in [
+            "",
+            "weather",
+            "-*",
+            "../*",
+            "a:b*",
+            "a b*",
+            "a?*",
+            format!("{}*", "a".repeat(64)).as_str(),
+        ] {
+            assert!(!is_alias_pattern(word), "{word:?} was taken for a pattern");
+        }
     }
 
     #[test]

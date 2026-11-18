@@ -37,11 +37,16 @@ pub(super) fn status_height(session: &Session, width: u16, height: u16) -> u16 {
         Status::Working => (1 + session.todos.len()).min(ceiling) as u16,
         // A command spends no tokens and keeps no task list, so one line says everything.
         Status::Running => 1,
-        // Keep the failure reason visible even when its transcript entry is off screen.
-        Status::Idle if session.finished.is_some() => {
-            (1 + failure_rows(session, width).len()).min(ceiling) as u16
+        // The end of a turn, with the failure reason visible even when its transcript entry is off
+        // screen, and the row that says something is still active under it.
+        Status::Idle => {
+            let ended = match session.finished {
+                Some(_) => 1 + failure_rows(session, width).len(),
+                None => 0,
+            };
+            (ended + usize::from(session.is_standing())).min(ceiling) as u16
         }
-        Status::Idle | Status::Quitting => 0,
+        Status::Quitting => 0,
     }
 }
 
@@ -306,16 +311,16 @@ pub(super) fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
     let indicator = if running {
         // Elapsed time and nothing else, because a command spends no tokens and reports no phase.
         // The clock is what a waiting user wants, and Escape is the other half of the answer.
-        Line::from(vec![
+        Some(Line::from(vec![
             Span::styled(
                 format!("  {} ", session.spinner()),
                 Style::default().fg(theme::accent()),
             ),
             Span::styled("running… ", Style::default().fg(theme::accent())),
             Span::styled(format!("({})  esc to stop", session.elapsed_words()), dim()),
-        ])
+        ]))
     } else if working {
-        match session.indicator() {
+        Some(match session.indicator() {
             Some(indicator) => {
                 Line::from(vec![
                     Span::styled(
@@ -331,7 +336,7 @@ pub(super) fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
                 ])
             }
             None => Line::from(Span::styled("  waiting for the model…", dim())),
-        }
+        })
     } else if let Some(finished) = session.finished {
         // The end of a turn, said rather than left to the spinner's absence. A turn whose last
         // words were "now let me look at the dispatch code" is over, and nothing on the screen
@@ -360,15 +365,21 @@ pub(super) fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
                 dim(),
             ));
         }
-        Line::from(spans)
+        Some(Line::from(spans))
     } else {
-        return;
+        None
     };
+
+    // The row that says something is still active is the last of them and sits against the box. It
+    // is counted out of the room first, so a long failure reason is what is cut short.
+    let standing =
+        (!working && !running && session.is_standing()).then(|| standing_row(session, area.width));
+    let held = usize::from(standing.is_some());
 
     // The list sits under the indicator, so what is being worked on and what remains are read
     // together. Trimmed to what this area was given rather than overflowing into the box below.
-    let room = (area.height as usize).saturating_sub(1);
-    let mut lines = vec![indicator];
+    let room = (area.height as usize).saturating_sub(1 + held);
+    let mut lines: Vec<Line> = indicator.into_iter().collect();
     if working {
         lines.extend(todo_lines(&session.todos, false).into_iter().take(room));
     }
@@ -379,8 +390,65 @@ pub(super) fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
             .take(room)
             .map(|row| Line::from(Span::styled(format!("    {row}"), dim()))),
     );
+    lines.extend(standing);
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The row that says a session whose turn is over still has something going on, which is the one
+/// thing the end of a turn used to hide: the line above it says the turn is done, and a loop, a
+/// watch or a job that goes on after it is otherwise a dim part at the far end of the bottom row.
+///
+/// ```text
+///   ● still active  ·  looping, next in 4m 12s  ·  1 in the background  ·  /status for the list
+/// ```
+///
+/// Every figure is the driver's own count or clock, and no part names a command, a path or a line
+/// of output. What is drawn is cut whole at the width, with the pointer given up first.
+fn standing_row(session: &Session, width: u16) -> Line<'static> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    standing_row_at(session, width, seconds)
+}
+
+/// [`standing_row`] for a given second, which is what the light shows.
+fn standing_row_at(session: &Session, width: u16, second: u64) -> Line<'static> {
+    let glyph = crate::indicator::standing_glyph_at(second);
+    let label = t!(standing_label).to_string();
+    let mut parts = vec![super::hint::looping_part(session)];
+    parts.push(match session.watches().len() {
+        0 => String::new(),
+        count => t!(standing_watches, count = count),
+    });
+    parts.push(match session.jobs_running() {
+        0 => String::new(),
+        count => t!(jobs_hint, count = count),
+    });
+    parts.retain(|part| !part.is_empty());
+
+    // The columns the glyph and the label take, then each part with the separator before it.
+    let lead = 2 + 2 + wrap::display_width(&label);
+    let mut said = String::new();
+    let mut taken = lead;
+    for part in parts
+        .iter()
+        .cloned()
+        .chain([t!(standing_pointer).to_string()])
+    {
+        let next = taken + 5 + wrap::display_width(&part);
+        if next > usize::from(width) {
+            break;
+        }
+        said.push_str("  ·  ");
+        said.push_str(&part);
+        taken = next;
+    }
+    Line::from(vec![
+        Span::styled(format!("  {glyph} "), Style::default().fg(theme::accent())),
+        Span::styled(label, Style::default().fg(theme::accent())),
+        Span::styled(said, dim()),
+    ])
 }
 
 /// Draw the box, and give back the cells of its text that a click puts the caret in.
@@ -399,7 +467,7 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) -> Ve
     let hint = argument_hint(session);
     // The files state owns every key, so the box has no caret to draw and no selection to show
     // (FILES-9). The line keeps its text.
-    let held = session.files_open();
+    let held = session.files_open() || session.peeking();
 
     // Shell mode is coloured throughout rather than only in the marker, because the whole line
     // means something different: it goes to a shell instead of the model, and that is worth more

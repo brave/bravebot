@@ -146,6 +146,32 @@ pub(crate) fn context_reading(session: &Session) -> String {
     }
 }
 
+/// What the session says about the loops it holds, or nothing where it holds none.
+///
+/// Loops are named first. A line `/after` holds is not looping, so it is named only where no loop
+/// is live to be counted. The row above the box says the same words once a turn is over, so both
+/// read them from here.
+pub(super) fn looping_part(session: &Session) -> String {
+    let now = std::time::Instant::now();
+    let soonest = |once: bool| {
+        let held = || {
+            session
+                .loops()
+                .iter()
+                .filter(move |running| running.once() == once)
+        };
+        (
+            held().count(),
+            held().filter_map(|running| running.until(now)).min(),
+        )
+    };
+    match (soonest(false), soonest(true)) {
+        ((0, _), (0, _)) => String::new(),
+        ((0, _), (_, until)) => after_part(until),
+        ((count, until), _) => loop_part(count, until),
+    }
+}
+
 /// The six parts both lines draw, read before either branch is taken.
 struct HintFacts {
     looping: String,
@@ -190,29 +216,12 @@ mod ordinary {
 }
 
 /// The parts of the hint line that do not depend on which mode the box is in.
-fn hint_facts(session: &Session) -> HintFacts {
+///
+/// `below` is how many rows lie below the view, which the frame that draws the line has measured.
+fn hint_facts(session: &Session, below: u16) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
-    // Loops are named first. A line `/after` holds is not looping, so it is named only where no loop
-    // is live to be counted.
-    let now = std::time::Instant::now();
-    let soonest = |once: bool| {
-        let held = || {
-            session
-                .loops()
-                .iter()
-                .filter(move |running| running.once() == once)
-        };
-        (
-            held().count(),
-            held().filter_map(|running| running.until(now)).min(),
-        )
-    };
-    let looping = match (soonest(false), soonest(true)) {
-        ((0, _), (0, _)) => String::new(),
-        ((0, _), (_, until)) => after_part(until),
-        ((count, until), _) => loop_part(count, until),
-    };
+    let looping = looping_part(session);
 
     // Named only once a turn has left a trail to look at. Offering the key before that is a line
     // under the box inviting a press that changes nothing on screen, and what a person learns from
@@ -234,7 +243,7 @@ fn hint_facts(session: &Session) -> HintFacts {
     // The view is held where it was scrolled to, so what arrives goes below it and nothing else on
     // the screen says so. A count of rows from the layout and the key that returns, never any of
     // what those rows hold (VIEW-27).
-    let held = match session.rows_below() {
+    let held = match below {
         0 => String::new(),
         count => t!(held_hint, chord = "ctrl-end", count = count),
     };
@@ -488,15 +497,22 @@ fn expendable_parts(context_is_unmeasured: bool) -> [usize; 11] {
 /// Gives the cells of each hint a click acts on: the permission mode (MOUSE-14) and the parts that
 /// name a key (MOUSE-48). What the row only describes is not among them. With them, whether the row
 /// says a message that fills it and leaves no room for anything beside (MOUSE-51).
-pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> (Vec<Target>, bool) {
+pub(super) fn draw_hint(
+    frame: &mut Frame,
+    area: Rect,
+    session: &Session,
+    below: u16,
+) -> (Vec<Target>, bool) {
     // The files state names its keys in the panel and keeps the figures the panel has no section
     // for (FILES-4, FILES-9). Where the panel is not drawn nothing else shows the keys, so the line
     // names them, as it keeps a figure the panel does not draw (PANEL-8). Every other key does
     // nothing there, so nothing else on the line applies.
-    if session.files_open() {
+    if session.files_open() || session.peeking() {
         let panel_drawn = crate::panel::drawn(session, area.width);
         let keys = if panel_drawn {
             String::new()
+        } else if session.peeking() {
+            t!(peek_keys).to_string()
         } else {
             t!(files_keys).to_string()
         };
@@ -527,7 +543,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> (Ve
         frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
         return (Vec::new(), true);
     }
-    let facts = hint_facts(session);
+    let facts = hint_facts(session, below);
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
     // user needs to know is which shell and how to get back out again.
@@ -665,6 +681,13 @@ fn note_at_the_right(session: &Session) -> Option<Note> {
     // leaves, and the turn is when they are looking for one (CMD-2).
     if session.leave_word_sent && session.a_turn_is_running() {
         return Note::said(format!("{}  ", t!(leave_word_sent)));
+    }
+
+    // A command typed with words after it where it takes none is a prompt, and the person may have
+    // meant the command: `/model gpt-5` opens no picker and starts a turn. Nothing else on the
+    // screen says the line went to the model or what stops it, and the turn is when they look (CMD-2).
+    if session.command_sent_as_prompt && session.a_turn_is_running() {
+        return Note::said(format!("{}  ", t!(command_sent_as_prompt)));
     }
 
     // The line the person was writing has just gone, so the press that took it is the one thing

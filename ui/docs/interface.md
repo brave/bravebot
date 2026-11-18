@@ -811,11 +811,16 @@ docs/                       the protocol design, this document, testing and the 
 | `view` | Whether the chat list is grouped by checkout, which headings are shut, and which tab is open |
 | `recents` | The projects opened before, newest first |
 | `forks` | Which session came out of which |
-| `bots` | The bots defined here: name, purpose, avatar seed, home folder, model, each conversation ID with the folder it ran in, and memory bookkeeping |
 | `theme` | Appearance: `system`, `light`, or `dark` |
 
 Additional state lives outside this file:
 
+- `bots.json` in the agent's state directory (`~/.bravebot`, which `BRAVEBOT_HOME` moves): the bots
+  defined here. Each row holds the name, purpose, avatar seed, home folder, model, definition name,
+  each conversation ID with the folder it ran in, and the archive length last seen. The agent reads
+  and writes it, and the main process asks it through the bridge with this app's `userData` folder.
+  The first read moves any bots still held in the `bots` key of `bravebot-ui.json` to this file,
+  and this app does not write `bravebot-ui.json` until a read of the bots has answered.
 - `experience.json`: per-conversation drafts, scroll, pins, archives and bot associations;
   also recent model choices.
 - `bots/<slug>/ground.md` and `memory-history-<folder hash>.json`: cached briefing and memory
@@ -828,20 +833,21 @@ See [file access and retention](file-access-security.md) for retention and permi
 
 One file, but not one judgement: `src/shared/state.ts` decides nothing itself. It delegates each
 key whole to the validator that already owned that shape — `parseLayout`, `parseView`,
-`parseRecents`, `parseForks`, `parseBots`, so a hand-edited grouping flag still cannot cost
+`parseRecents`, `parseForks`, so a hand-edited grouping flag still cannot cost
 somebody their column widths. Every write goes through `src/main/state.ts`, which replaces exactly
 one key and leaves the rest of the file as it found it, and what lands on disk is always the parsed
 state rather than the object a caller passed.
 
-The renderer reaches four of those keys, and only through a channel of its own per shape:
-`layout`, `view`, `theme` and `bots`. `recents` and `forks` are written by the main process alone, from a
+The renderer reaches three of those keys, and only through a channel of its own per shape:
+`layout`, `view` and `theme`. It reaches the bots through their own channels, which end in the
+main process and the agent. `recents` and `forks` are written by the main process alone, from a
 native picker and from what the *agent* answered — the window can read them and has no way to
 write a line into either.
 
 Bot records split user preferences from main-process bookkeeping. The editor supplies
 name, purpose and model; a native picker supplies the project at creation. The project
 cannot change on an existing bot. Main-process code validates the avatar seed, creates
-the slug, and records conversation IDs and memory bookkeeping from agent events.
+the slug, and records conversation IDs and the archive length from agent events.
 Renderer input cannot replace those bookkeeping fields through the bot editor.
 
 This replaces `layout.json`, `view.json`, `recents.json` and `forks.json`. Those are read once, on
@@ -961,18 +967,45 @@ edited afterwards changes the next conversation.
 - An `ask` rule puts a card that would not otherwise have appeared.
 - An `allow` rule in your own `~/.bravebot/settings.json` answers a card for you, so none
   appears. It does not make what a command prints trusted.
-- An `allow` rule in a project's settings file is not in force. Only your own file may write
-  one. The terminal asks whether to grant a project's rules. This app has no such question
-  yet, so it grants none and you are still asked.
+- An `allow` rule in a project's settings file is not in force until you grant it. Once the
+  trust question is answered, the conversation asks once, as the terminal does, whether to
+  grant the project's rules you have not granted before, each listed with the file that wrote
+  it. The question says where a yes is kept, or that it holds for this chat only, and lists
+  the project's rules granted before, which stay granted. **Grant** stays unavailable until
+  every listed rule has been on screen: a short list counts as read at once, and a long one
+  scrolls inside its own box until you have scrolled through it. **Keep asking me** is always
+  available. Yes grants them all and is remembered for the project, so the next conversation
+  there does not ask about them again; in an incognito conversation it holds for that
+  conversation only. No grants none, and their cards still appear. A rule the project has
+  changed since is asked about again. Nothing runs until the question is answered, and it has
+  no default: the composer says which question it is waiting on. A conversation resumed from
+  history, or forked from one that answered, does not ask.
 - A settings file chosen under **Agent settings** counts as your own where it is outside the
   project, so an `allow` rule in it is in force. One inside the project is the project's
   file, and its `allow` rule is not.
-- A directory named in `additionalDirectories` is not opened.
+- A directory named in `additionalDirectories` is not opened until you say so. After the
+  question about the rules, the conversation asks about each named directory on its own, showing
+  where the name leads, how the settings wrote it, and how many more follow. **Open folder**
+  opens it as `/add-dir` does; **Don't open** leaves it closed. A yes that can no longer open it
+  says why. A name that cannot be opened, such as one that does not exist or is inside the
+  project, is not asked about and the folded note says why. Nothing runs until each is
+  answered. An answer to a question that was already answered elsewhere is not used: the
+  window reads what is waiting now and shows that. A conversation resumed from history does not
+  ask, and in bypass mode every one that can be opened is.
+- A folder is also opened beside the project when you choose it: **Add folder…** in the
+  **Folders** section of the **Files** tab, or in the header's **More** menu, opens the system's
+  folder picker. The section lists each open folder by name, with its full path under it, and a
+  close button that takes it away again. A named directory you said yes to is listed there too.
+  The file tree then shows the project first and each folder after it. The agent refuses the
+  project itself, a folder inside it, and one already open, and the refusal is said where you
+  asked. Adding and closing wait for a running turn to finish.
 - A plan run applies the rules about a server's tools and no others. A plan card names the other
   `deny` and `ask` rules the conversation holds, so you can check the steps against them.
 
 A folded note at the top of the conversation says what a settings file wrote that is not in
-force: an entry that is not a rule, a project's `allow` rule, or a named directory.
+force: an entry that is not a rule, a project's `allow` rule not granted, or a named directory
+not opened, with the reason where it could not be opened. It also lists the project's rules you
+granted, which are in force, and where the grant is kept or that it holds for this chat only.
 **Permissions…**, in the header's **More** menu, lists the rules in force. They cannot be
 revoked there, since they are changed in their file.
 

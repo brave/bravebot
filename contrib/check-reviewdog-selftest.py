@@ -53,6 +53,11 @@ if [ "$1" = --version ]; then echo 1.11.5; exit; fi
 case "$SCENARIO" in
   pipeline_failure|filtered_failure) exit 7 ;;
   findings) echo 'sample.rs:1: a finding without a bracket prefix' ;;
+  vendored) echo 'third_party/vendored/src/lib.rs:1: a vendored finding' ;;
+  vendored_and_own)
+    echo 'third_party/vendored/src/lib.rs:1: a vendored finding'
+    echo 'sample.rs:1: a finding without a bracket prefix'
+    echo 'crates/third_party/src/lib.rs:1: a finding in a directory named like the vendored one' ;;
 esac
 ''')
         self.executable("reviewdog", '''#!/usr/bin/env ruby
@@ -316,6 +321,29 @@ class ScanResults(Fixture):
                             self.assertIn("a finding without a bracket prefix", output)
                         else:
                             self.assertIn("security scan failed", output)
+
+    def test_findings_in_vendored_crates_are_not_counted_and_others_still_fail(self):
+        """Upstream code under third_party/ is not this branch's to fix, and nothing else is excused."""
+        (self.repo / "third_party/vendored/src").mkdir(parents=True)
+        (self.repo / "third_party/vendored/src/lib.rs").write_text("// vendored\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "vendor a crate")
+        for full in (False, True):
+            with self.subTest(full=full, scenario="vendored"):
+                result = self.scan("vendored", full)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, output)
+                self.assertIn("1 findings under third_party/ not counted", output)
+                self.assertIn("no findings", output)
+                self.assertNotIn("a vendored finding", result.stdout)
+            with self.subTest(full=full, scenario="vendored_and_own"):
+                result = self.scan("vendored_and_own", full)
+                output = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, output)
+                self.assertIn("a finding without a bracket prefix", result.stdout)
+                self.assertIn("crates/third_party/src/lib.rs", result.stdout)
+                self.assertNotIn("a vendored finding", result.stdout)
+                self.assertIn("security findings reported", result.stderr)
 
     def test_an_unsandboxed_local_run_is_not_a_failed_runner(self):
         """Outside CI the sandbox wrapper says it ran a scanner unsandboxed; the scan still completed."""

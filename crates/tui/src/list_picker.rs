@@ -7,6 +7,8 @@
 //!
 //! A press on a row puts the cursor on it and a second takes it, the wheel walks the list, and a press
 //! outside the panel leaves what was in force alone, as Escape does (MOUSE-15, MOUSE-46, MOUSE-47).
+//! A caller whose rows are switches that stay open asks for [`Press::First`], and the first press
+//! takes the row (PANEL-17).
 //!
 //! What differs between the pickers is data a caller hands in: the rows, the panel's title, keys
 //! line and width. The message ids stay named in each picker's own source, so the callers pass text
@@ -85,6 +87,11 @@ impl<R: PickerRow> ListPicker<R> {
     /// The row under the cursor.
     pub fn chosen(&self) -> Option<&R> {
         self.rows.get(self.selected)
+    }
+
+    /// The row under the cursor, to change in place.
+    pub fn chosen_mut(&mut self) -> Option<&mut R> {
+        self.rows.get_mut(self.selected)
     }
 
     /// The row in force when the picker opened.
@@ -188,6 +195,30 @@ pub fn handle_mouse<R: PickerRow>(
     now: std::time::Instant,
     wheel: u16,
 ) -> Outcome {
+    handle_mouse_taking(picker, placed, mouse, last, now, wheel, Press::Second)
+}
+
+/// Which press of a row takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Press {
+    /// The first press puts the cursor on the row and a second on it within [`select::MULTI_CLICK`]
+    /// takes it (MOUSE-15).
+    Second,
+    /// The press that puts the cursor on a row takes it, for a list whose rows are switches that
+    /// stay open (PANEL-17).
+    First,
+}
+
+/// [`handle_mouse`], with the press that takes a row given by `taking`.
+pub fn handle_mouse_taking<R: PickerRow>(
+    picker: &mut ListPicker<R>,
+    placed: Placed,
+    mouse: MouseEvent,
+    last: &mut Option<Click>,
+    now: std::time::Instant,
+    wheel: u16,
+    taking: Press,
+) -> Outcome {
     match mouse.kind {
         MouseEventKind::ScrollDown => {
             for _ in 0..wheel {
@@ -225,7 +256,7 @@ pub fn handle_mouse<R: PickerRow>(
     picker.selected = index;
     let (click, count) = select::count_press_on(*last, now, (mouse.row, mouse.column), &index);
     *last = Some(click);
-    if count == 2 {
+    if taking == Press::First || count == 2 {
         Outcome::Select
     } else {
         Outcome::Continue
@@ -651,6 +682,56 @@ mod tests {
         assert_eq!(corner.symbol(), "╭", "the panel does not start at its area");
         let far = &buffer[(shown.area.right() - 1, shown.area.bottom() - 1)];
         assert_eq!(far.symbol(), "╯", "the panel does not end at its area");
+    }
+
+    /// A picker that takes a row on the first press takes the row it landed on, with the cursor on
+    /// it, where `handle_mouse` waits for the second. A press that is not on a row takes nothing
+    /// in either, and a press outside the panel leaves it in both.
+    ///
+    /// Rejects: a first press that does not take, a `handle_mouse` that takes on the first press,
+    /// and a first-press picker that takes a press on the border or outside.
+    #[test]
+    fn a_picker_that_takes_on_the_first_press_does_and_the_others_still_need_two() {
+        let shown = placed_of(3);
+        let on_a_row = press(shown.list.y + 1, shown.list.x + 3);
+        let now = std::time::Instant::now();
+
+        let mut waiting = open_on(0);
+        let outcome = handle_mouse(&mut waiting, shown, on_a_row, &mut None, now, 3);
+        assert_eq!(outcome, Outcome::Continue);
+
+        let mut taking = open_on(0);
+        let outcome = handle_mouse_taking(
+            &mut taking,
+            shown,
+            on_a_row,
+            &mut None,
+            now,
+            3,
+            Press::First,
+        );
+        assert_eq!(outcome, Outcome::Select);
+        assert_eq!(taking.chosen().map(|row| row.0), Some("two"));
+
+        for off_the_rows in [
+            press(shown.area.y, shown.area.x + 3),
+            press(shown.list.y + 3, shown.list.x + 3),
+        ] {
+            let outcome = handle_mouse_taking(
+                &mut taking,
+                shown,
+                off_the_rows,
+                &mut None,
+                now,
+                3,
+                Press::First,
+            );
+            assert_eq!(outcome, Outcome::Continue, "{off_the_rows:?}");
+        }
+        let outside = press(0, 0);
+        let outcome =
+            handle_mouse_taking(&mut taking, shown, outside, &mut None, now, 3, Press::First);
+        assert_eq!(outcome, Outcome::Cancel);
     }
 
     /// MOUSE-15. Rejects: a press that moves nothing, a press that takes at once, and a row found

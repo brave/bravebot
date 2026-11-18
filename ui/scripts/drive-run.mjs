@@ -6,9 +6,9 @@
 //
 // Needs credentials baked into bravebot-rpc (`pnpm run bridge` in a configured shell).
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, approveTrust, trustQuestion } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, CONFIRM_BUTTON, APPROVE_BUTTON, openFirstSession, SHOTS_DIR } from './drive-support.mjs'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
@@ -27,21 +27,9 @@ async function appears(locator, seconds, what) {
 const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
-if ((await page.locator('.session').count()) === 0) {
-  console.log('RESULT: skipped — no sessions to open')
-  await app.close()
-  process.exit(0)
-}
-
-await page.locator('.session').first().click()
-await page.waitForTimeout(1500)
-
-// A session whose record kept no trust map asks again on open. Trusting is what lets the
-// turn get as far as wanting to run something.
-if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await approveTrust(trustQuestion(page))
-  await page.waitForTimeout(600)
-}
+// A session whose record kept no trust map asks again on open, and the helper trusts it. That is
+// what lets the turn get as far as wanting to run something.
+await openFirstSession(app, page)
 
 await page
   .locator(COMPOSER_INPUT)
@@ -79,9 +67,9 @@ if (await appears(page.locator('.confirm.run'), 120, 'the pipeline is put to the
     (await card.locator(CONFIRM_BUTTON).count()) === 3,
     'three answers: refuse, run once, run and stop asking',
   )
-  await page.screenshot({ path: '/tmp/bravebot-ui/13-run-asked.png' })
+  await page.screenshot({ path: `${SHOTS_DIR}/13-run-asked.png` })
 
-  await card.locator('.confirm-actions .approve:not(.always)').click()
+  await card.locator(`${APPROVE_BUTTON}:not(.always)`).click()
   await page.waitForTimeout(1200)
   check(
     (await card.locator('.decided.approve').textContent())?.includes('once') ?? false,
@@ -111,8 +99,8 @@ if (sawOutput) {
     actual === stated,
     `the bytes shown are all of them (${actual} lines, card says ${stated})`,
   )
-  await page.screenshot({ path: '/tmp/bravebot-ui/14-output-asked.png' })
-  await card.locator('.confirm-actions .approve').click()
+  await page.screenshot({ path: `${SHOTS_DIR}/14-output-asked.png` })
+  await card.locator(APPROVE_BUTTON).click()
   await page.waitForTimeout(1000)
 } else {
   console.log('  --   the planner did not ask to read the output this time')
@@ -134,7 +122,7 @@ check(
   (await page.locator('.quarantine').count()) > 0,
   'and that what it printed was confined rather than read',
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/15-run-done.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/15-run-done.png` })
 
 await app.close()
 console.log(problems.length ? `\nRESULT: ${problems.length} failed` : '\nRESULT: ok')

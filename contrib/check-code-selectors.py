@@ -45,7 +45,7 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
    `DBUS_SESSION_BUS_ADDRESS` are in the Rust list and are not in the others. The application and
    the agent it starts read them, and Electron reaches the session bus through the last two, so the
    application leaves them set. Without `HOME`, `gio` also reads the account's passwd home (the
-   comment at the top of external-open.ts and SANDBOX-30 give the reasons). The ten Windows names
+   comment at the top of external-open.ts and SANDBOX-30 give the reasons). The eleven Windows names
    of the rundll32 start are written down the same way. `APPLICATION_EXCEPTIONS` holds them.
    `FILE_NAME_PREFIXES` in the same two files (the names removed only when their value holds a
    `/`) must be the same list in both.
@@ -73,7 +73,7 @@ APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
 # deleting it protects nothing when the real home is the place a stage may write (SANDBOX-30).
 # The opener removes it from its own start instead. Electron finds the session bus from
 # `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` for its own file manager, portal and
-# notification calls, so deleting them would break those. The ten Windows
+# notification calls, so deleting them would break those. The eleven Windows
 # names (brave/bravebot#3860) are also left out of the application's list and removed by the
 # opener from its own start. Electron's own Windows start is not covered by that removal: it is
 # given those names as the application's process holds them.
@@ -98,6 +98,7 @@ APPLICATION_EXCEPTIONS = {
     "LOCALAPPDATA": WINDOWS_REASON,
     "APPDATA": WINDOWS_REASON,
     "USERPROFILE": WINDOWS_REASON,
+    "PSModulePath": WINDOWS_REASON,
 }
 
 # The file that holds the generic list and the shared names.
@@ -799,7 +800,7 @@ mod tests {
 # The opener's list as opener.rs writes it, with a name taken from the shared module, and the
 # application's two lists of the names the application deletes.
 OPENER_LIST = """\
-const CODE_SELECTORS: [(&str, Names); 16] = [
+const CODE_SELECTORS: [(&str, Names); 17] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_RUNTIME_DIR", Names::Directory),
@@ -816,6 +817,7 @@ const CODE_SELECTORS: [(&str, Names); 16] = [
     ("LOCALAPPDATA", Names::Directory),
     ("APPDATA", Names::Directory),
     ("USERPROFILE", Names::Directory),
+    ("PSModulePath", Names::Directories),
 ];
 """
 TS_LIST = """\

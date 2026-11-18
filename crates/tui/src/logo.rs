@@ -98,6 +98,22 @@ fn face_rows(
     avatar::rows(seed, look, stops, painted)
 }
 
+/// Where [`lines`] draws the face, as the line it begins at, the column it begins at and how many
+/// columns it takes, or nothing where it is not drawn. It is [`avatar::ROWS`] lines tall.
+///
+/// Takes what [`lines`] decides the face's place by, so the cells a click acts on are the cells it
+/// was drawn in.
+pub fn face_at(width: u16, available: u16) -> Option<(usize, u16, u16)> {
+    if theme::no_color() || !fits(width) || !face_fits(width) {
+        return None;
+    }
+    Some((
+        usize::from(top_padding(width, available)),
+        u16::try_from(INDENT.len()).unwrap_or(u16::MAX),
+        u16::try_from(avatar::WIDTH).unwrap_or(u16::MAX),
+    ))
+}
+
 /// Rows the block occupies, so the padding can be measured against what is left.
 fn height(with_mark: bool) -> u16 {
     // The mark when there is room for it, a blank, the name, and room for the invitation and the

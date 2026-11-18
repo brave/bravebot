@@ -52,7 +52,9 @@ the name of the skill that carries the documentation, which is CMD-24, and `/cha
 this program carries and starts no turn, which is CMD-25. `/todos` prints the plan the session holds
 and starts no turn, which is CMD-28. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19. `/open` is
-the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30.
+the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30. `/issues` and `/prs` list the issues and pull requests the session has met,
+which is CMD-31. `/sidebar` opens the checklist that turns the sections of the info panel on or off, and
+starts no turn, which is CMD-32.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -130,6 +132,32 @@ prompt and the row says so. Holding the first Enter would add a step in front of
 at once, which no other prompt has. The line is the text of the person's own box, and what it
 decides is only whether the note is drawn.
 
+**A command the table gives no argument, typed with words after it, is a prompt, and it gets a note
+under the box as well.** `/model gpt-5` opens no picker and sends the line, because the words after a
+command that takes none are the person's own (CMD-17 for `/model`). The same holds for every row of
+the command table whose argument column is empty, such as `/undo the last change`, `/exit now` and
+`/lsp servers`, and a command added to the table with no argument is covered without a second list.
+While the turn the line begins runs, the row under the box says that the line was sent as a prompt,
+that Ctrl-C stops it and that the bare word runs the command. The note is drawn on the same terms as
+the leave words' note: for a line the person typed in the box, sent at once or queued behind a
+running turn and sent when that turn ends, and never for a turn a loop's tick, a watch, a goal or a
+command begins, for a line sent together with another by Ctrl-Enter, or in shell mode, where the line
+is a command line (CMD-3). It is drawn only where the first word is the whole command word: the bare
+command runs the command, a command that takes an argument takes the words, `/undone` and `/models`
+are longer words and so a prompt of the person's own words with no note, and `why is /model slow` has
+a first word that is not a command. In English the note is as wide as the leave words' note, so any
+one permission mode name is still drawn beside it, and the vi mode with it, on a terminal eighty
+columns wide. The French note is wider, and where the parts of the line do not fit beside a note the
+left side is cleared while it is up.
+
+**Why.** A person who types a command and a name expects the command to act on the name, and a turn
+that starts with nothing on the screen saying the line went to the model reads as an interface that
+did not understand, and the person may cancel it before it answers. Two other routes were rejected.
+Opening the picker for `/model gpt-5` and sending nothing would give a no-argument command an
+argument that CMD-17 and the table say it does not take, for one command only. Making `/model <name>`
+a command would apply the name without the look at the roster that the picker gives. The line is the
+text of the person's own box, and what it decides is only which fixed note is drawn.
+
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_the_command_is_a_prompt`
 `verified-by: bravebot_tui::app::an_argument_is_taken_only_after_the_whole_command_word`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
@@ -175,6 +203,17 @@ decides is only whether the note is drawn.
 `verified-by: bravebot_tui::render::the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt`
 `verified-by: bravebot_tui::render::the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word`
 `verified-by: bravebot_tui::render::the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row`
+`verified-by: bravebot_tui::app::a_no_argument_command_given_words_is_sent_as_a_prompt_with_the_mark`
+`verified-by: bravebot_tui::app::a_line_that_is_not_a_no_argument_command_given_words_is_sent_without_that_mark`
+`verified-by: bravebot_tui::app::a_no_argument_command_given_words_in_shell_mode_is_run_as_the_command_line_it_is`
+`verified-by: bravebot_tui::state::a_turn_begun_on_a_command_given_words_is_marked_and_one_on_any_other_line_is_not`
+`verified-by: bravebot_tui::state::the_prompt_after_a_command_marked_turn_does_not_inherit_the_mark`
+`verified-by: bravebot_tui::state::a_turn_that_begins_without_a_line_from_the_box_takes_down_the_command_mark`
+`verified-by: bravebot_tui::state::a_command_given_words_that_waited_in_the_queue_is_marked_when_its_turn_begins`
+`verified-by: bravebot_tui::state::command_lines_hurried_together_are_not_marked_and_one_hurried_alone_is`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_a_command_given_words_went_to_the_model_as_a_prompt`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_nothing_of_a_line_that_is_not_a_command_given_words`
+`verified-by: bravebot_tui::render::the_note_on_a_command_given_words_leaves_the_permission_mode_on_an_eighty_column_row`
 
 
 <a id="CMD-3"></a>
@@ -274,10 +313,10 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::the_btw_command_carries_its_question`
 `verified-by: bravebot_tui::app::a_session_can_ask_for_a_manifest_run`
 `verified-by: bravebot_tui::app::a_tilde_is_expanded_only_as_a_whole_first_segment`
-`verified-by: bravebot_tui::app::a_picture_pasted_into_a_question_goes_with_it`
-`verified-by: bravebot_tui::app::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
-`verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_goes_with_it`
-`verified-by: bravebot_tui::app::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_pasted_into_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::tests::pasting::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
+`verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_goes_with_it`
+`verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
 `verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
 
 
@@ -303,6 +342,7 @@ it.
 `verified-by: bravebot_tui::app::the_config_command_is_offered_like_every_other`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::command_table::the_mcp_hint_names_every_subcommand_the_usage_message_names`
 `verified-by: bravebot_tui::app::tests::completions::the_list_under_the_box_scrolls_to_keep_the_cursor_drawn`
 
 
@@ -357,8 +397,8 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history` | carried out as it is typed |
-| everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>` and every other form of `/schedule` | waits for the turn to end |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
 box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
@@ -368,7 +408,13 @@ and the loop would start after it, so two lines of one command are carried out i
 were typed. `/loop` waits behind a waiting `/after` as well, since that takes the slot a loop takes.
 A `/schedule` that only reads (`list`, `pending`, `history` and the bare word) waits behind a waiting
 `/schedule` that writes, as `/loop stop` waits behind `/loop 5m ...`: a `list` typed after a waiting
-`add` would otherwise answer without the entry the person typed first.
+`add` would otherwise answer without the entry the person typed first. A `/mcp` that only lists (the
+bare word and `list`) waits behind a waiting `/mcp` in the same way, since the waiting line is one that
+starts, turns off or removes a server and the list would otherwise answer without its result. Which
+form a `/mcp` is depends on the words the person typed after it and on nothing a server sent: the
+bare word and `list` alone are the list, so `/mcp listing` and `/mcp list weather` wait. Where this
+section names a waiting `/mcp` as a line that holds another back or leaves it alone, it is one of the
+forms that wait.
 A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
 typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
@@ -434,7 +480,10 @@ as after them. `/branch` copies the session's record and goes on in the copy, fo
 answers no record keeps and ends the paths programs were let reach. It starts no program, leaves the
 working directory where it is and neither reads nor writes the file the answer is kept in or a `.git`
 entry, so it withdraws the same answers before it as after it. A
-command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
+command carried out as it is typed comes off the box and is remembered in the prompt history as it
+is at rest: as the words typed, with a folded paste put back to its words, and as the `/agent` line
+a pick addresses. Up and Ctrl-R bring it back, and Enter on it is a command again (CMD-1). A command
+that waits is remembered when it is typed and not again when it is carried out. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
 
@@ -442,7 +491,8 @@ A command that waits is taken off the box and joins the lines waiting for the tu
 as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
 waiting. It says why it waits, in a line held under the turn as a command's answer is: it acts on
 what the turn holds or starts a turn of its own, or it waits behind a line typed before it so that it lands where
-it was typed. A command that waits behind a line
+it was typed. The line names the command, and for `/mcp` also the first word typed after it
+(`/mcp reconnect`), because only some forms of `/mcp` wait and the line says which one does. A command that waits behind a line
 names the first line waiting that holds it back: a command as it was typed, such as `/clear`, and
 `the prompt before it` or `the shell line before it` where that line is not a command. Its mark
 under the box says the same in place of `carried out after this`, as `after /clear`, where the
@@ -589,6 +639,18 @@ does not read:
   turn stops it, and `/clear` drops it with the rows it clears. The exchange the turn publishes, and the one a question is asked over, hold the messages the
   conversation stores and copy none of them; the quarantine is not shared.
 
+- **`/mcp` and `/mcp list`.** They say which servers the session runs with how their tools stand and
+  which requested servers are not running, as `/status` reads the same facts
+  ([SERVERS-19](mcp-servers.md#SERVERS-19)). They read the session and the settings, and start,
+  stop and ask nothing, so the turn does not hold what they read. `reconnect` puts questions to the
+  person and takes the terminal, and `disable` and `remove` change the tools the turn offers, so
+  those and any other word after `/mcp` wait. The line says so under the turn, naming `/mcp`, as for
+  every command that waits for the turn to end.
+- **`/plugin`, in every form.** `add <path>` installs after a question put to the person and takes
+  the terminal, and `list`, `remove`, `enable` and `disable` change what the next turn is offered
+  ([PLUGIN-1](plugins.md#PLUGIN-1)), so every form waits. The line says so under the turn, naming
+  `/plugin`. The command is typed: no tool installs a plugin, and a line that arrives by paste is
+  text in the box.
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
   answers into both as it runs, so a copy taken when it began would state "every run is asked" about
@@ -622,11 +684,19 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_command_that_reads_or_ends_what_the_session_keeps_answers_mid_turn`
 `verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
 `verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
+`verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
 `verified-by: bravebot_tui::app::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
 `verified-by: bravebot_tui::status::a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs`
 `verified-by: bravebot_tui::app::a_command_typed_during_a_compaction_waits`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_command_answered_mid_turn_hurries_nothing`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_carried_out_at_rest_is_recalled_and_runs_again`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_carried_out_mid_turn_is_remembered`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_that_waited_is_remembered_once_and_not_when_it_is_released`
+`verified-by: bravebot_tui::app::tests::command_history::a_command_with_a_paste_is_remembered_as_the_words_pasted`
+`verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_is_remembered_as_the_agent_line_it_addresses`
 `verified-by: bravebot_tui::app::a_session_renamed_mid_turn_is_renamed_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_session_renamed_mid_turn_gives_up_the_running_turns_rewind_point`
 `verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
@@ -1178,10 +1248,11 @@ keys, are refused as a file that cannot be used is, since the box holds one form
 that has a `model` key is held to the same rule as one that has none: it may not begin with a
 command word.
 
-`/model <name>` is not a command. It stays a prompt (CMD-2), because the picker is where a name is
-checked against the roster and where the person sees the row, and a command that took the name
-would apply it without that look. The box also keeps the file's text to send after the choice, which
-a `/model <name>` line has no room for.
+`/model <name>` is not a command. It stays a prompt (CMD-2), and the row under the box says so while
+the turn it begins runs, as it does for any command typed with words after it where it takes none.
+The picker is where a name is checked against the roster and where the person sees the row, and a
+command that took the name would apply it without that look. The box also keeps the file's text to
+send after the choice, which a `/model <name>` line has no room for.
 
 **Why.** A prompt used often should be a word, and the file is the person's own, so it is as trusted
 as their typing. Putting the text in the box before it is sent keeps what reaches the planner a line
@@ -1255,9 +1326,12 @@ had at least three turns, the interface does what `/recap` does (CMD-16), once, 
 behind it. It does not do it again until another turn has completed, and a recap the person asked
 for counts as one. A terminal that reports no focus changes is taken to be in front of the person,
 so it never recaps by itself. An `awaySummaryEnabled` setting of `false` turns it off, and any other
-value, or none, leaves it on. `awaySummaryIdleSeconds` is a whole positive count: zero, or anything
-that is not a whole count, leaves the five minutes in force. It is the terminal interface's alone: a
-`-p` run and the desktop app have no such view and never make one.
+value, or none, leaves it on. A `false` in the person's own settings file or the file `--settings`
+names stands whatever a checkout's `.bravebot/settings.json` or `settings.local.json` says: a
+checkout may turn the recap off and may not turn it on, and `doctor` names a file whose `true` was
+not obeyed ([BACKEND-24](backends.md#BACKEND-24)). `awaySummaryIdleSeconds` is a whole positive
+count: zero, or anything that is not a whole count, leaves the five minutes in force. It is the
+terminal interface's alone: a `-p` run and the desktop app have no such view and never make one.
 
 Nothing from the conversation reaches the decision. It reads the clock, the focus reports, a count of
 turns and the settings, all of which the interface holds itself.
@@ -1277,6 +1351,8 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_away_recap_off`
 `verified-by: bravebot_config::settings::the_away_recap_switch_is_among_the_names_reported`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_long_before_the_away_recap`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_away_recap_off_and_not_on`
+`verified-by: bravebot_tui::app::a_checkouts_away_recap_does_not_turn_the_recap_on`
 
 <a id="CMD-21"></a>
 ### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one
@@ -1308,7 +1384,7 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 <a id="CMD-22"></a>
-### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach` and `/schedule` spell out what they take after the word
+### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach`, `/mcp` and `/schedule` spell out what they take after the word
 
 Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `read-only`,
 `workspace-write` and `off`, after the caret in place of `[<mode>]`. `/sandbox standard` is read
@@ -1319,10 +1395,13 @@ the end of the line, finishes it by the rule CMD-21 gives for `/effort`, so `/sa
 `/limit` draws `[<n>[k|m] | <n> credits | off]`, the figures it takes, and not the words `tokens`
 and `credits` as choices. `/review` draws `[staged | since <ref> | commit <ref> | pr <n>] [focus]`,
 the targets its parser reads. `/reach` draws the credential scopes, the `write` and `always`
-words, `remove <n>` and `keys`. In each, the words are the ones the parser compares against, taken
+words, `remove <n>` and `keys`. `/mcp` draws `[list | reconnect | disable | remove]`, the
+constants its parser reads, where the table and the list keep `[action]`. In each, the words are
+the ones the parser compares against, taken
 from the type or constant it reads, so a mode, scope or target added there appears in the hint.
-The completion list and the table keep the short form, so the description column does not move,
-and `--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
+The completion list and the table keep the short form, so the description column does not move
+and every row of the list shows its whole description on a terminal 120 columns wide.
+`--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
 because a name there may come from a file a person wrote. `/schedule` completes the subcommand word
 from `bravebot_schedule::words::SUBCOMMANDS` ([SCHEDULE-8](schedule.md#SCHEDULE-8)) and nothing
 after it.
@@ -1333,6 +1412,8 @@ Nothing from the conversation reaches any of them. They read the typed line and 
 apart from the parser drifts from it.
 
 `verified-by: bravebot_tui::render::the_sandbox_command_offers_its_modes_after_its_word`
+`verified-by: bravebot_tui::render::the_mcp_command_offers_its_subcommands_after_its_word`
+`verified-by: bravebot_tui::render::every_slash_row_shows_its_whole_description_at_120_columns`
 `verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
 `verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
 `verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
@@ -1811,3 +1892,84 @@ is over.
 `verified-by: bravebot_tui::app::moving_to_another_directory_ends_the_list_a_number_was_read_beside`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+
+<a id="CMD-31"></a>
+### CMD-31: `/issues` and `/prs` list the issues and the pull requests the session has met, and start no turn
+
+`/issues` puts the issues the session has met in the transcript, and `/prs` the pull requests. A line
+says how many there are, and a line after it for each gives the item as `{owner}/{repo}#{n}`, two
+spaces, and its address. The list is the one the info panel draws in its Issues or Pull requests
+section ([PANEL-9](info-panel.md#PANEL-9)): the session's own link of that kind first, where it is a
+GitHub address whose path names that kind, then each item the session met in the order it was first
+met ([PANEL-16](info-panel.md#PANEL-16)), without the item the own link names. A link of any other
+shape is not an item, so it is not listed. The one function builds both, so the command and the panel
+cannot disagree. A session with none says so in one sentence and prints no heading. Nothing is read,
+fetched or sent, no turn starts, and the printed lines are not kept with the session as part of any
+turn.
+
+The commands take no argument, so `/issues` or `/prs` followed by words is a prompt (CMD-2), and
+`/issues` is not `/issue` with an argument. `/issue` and `/pr` are still the commands that set the
+session's own link ([PANEL-12](info-panel.md#PANEL-12)), and `/prs` is not `/pr`. They touch nothing a
+running turn holds, so typed during one they are carried out as they are typed, and list what the turn
+has found so far (CMD-8). A prompt file or skill named `issues` or `prs` is shadowed by the command
+(CMD-17), and a slash offers both words with the commands that begin like them (CMD-9).
+
+**Why.** The panel is cut to the room the screen has and may be closed, and a person who cannot see
+it has no other way to read which issues and pull requests a session has named. The session already
+holds the list, so no model is needed to read it out. Every item is built from an owner, a repository
+and a number that [PANEL-16](info-panel.md#PANEL-16) validated, and nothing a reply or a tool result
+said is printed, so nothing branches on untrusted content.
+
+`verified-by: bravebot_tui::app::issues_and_prs_are_commands_of_their_own_beside_issue_and_pr`
+`verified-by: bravebot_tui::app::issues_and_prs_typed_mid_turn_answer_at_once_from_what_has_been_met`
+`verified-by: bravebot_tui::state::references::the_commands_print_each_item_with_its_address_or_say_there_are_none`
+`verified-by: bravebot_tui::state::references::the_list_of_a_kind_starts_with_the_own_link_and_leaves_out_what_is_not_one`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+
+<a id="CMD-32"></a>
+### CMD-32: `/sidebar` opens the checklist of the info panel's sections, and starts no turn
+
+`/sidebar` opens a checklist with a row for each section of the info panel, and the rows turn the
+sections on or off ([PANEL-17](info-panel.md#PANEL-17)). It reads nothing, sends nothing, spends no
+tokens and starts no turn. It takes no argument, so `/sidebar` followed by words is a prompt (CMD-2),
+and it is a command of its own beside `/panel`, which shows and hides the whole panel
+([PANEL-5](info-panel.md#PANEL-5)) and does not open the checklist. It does not open the panel. It
+touches nothing a running turn holds, so typed during one it opens the checklist as it is typed and
+the turn goes on (CMD-8), and the same keys and presses work at rest and while a turn runs. A prompt
+file or skill named `sidebar` is shadowed by the command (CMD-17), and a slash offers the word with
+the commands that begin like it (CMD-9).
+
+**Why.** Which sections the panel draws is a choice about the screen and the person's own
+preference, so it needs no model and no turn, and a person who is watching a long turn is the one
+most likely to want fewer sections.
+
+`verified-by: bravebot_tui::app::tests::pickers::the_bare_word_sidebar_opens_the_checklist_and_nothing_else_happens`
+`verified-by: bravebot_tui::app::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+
+<a id="CMD-33"></a>
+### CMD-33: `/redraw` gives the terminal's modes back, asks for them again and draws the whole screen
+
+`/redraw` repairs a terminal that was cleared or reset from outside the program, such as by a
+shortcut of the terminal emulator. Such a terminal shows nothing where the interface believes a cell
+is already drawn, because a frame sends only the cells that changed since the last one, and it
+reports the loss to nothing, so no event can start the repair. The command gives the terminal's
+modes back and asks for them again (the alternate screen, mouse reports, bracketed paste, focus
+reports and the keyboard flags), clears what the interface believes is on the screen, and draws the
+next frame in full. It takes no argument, so `/redraw` followed by words is a prompt (CMD-2). It
+reads nothing, sends nothing, spends no tokens, starts no turn and writes nothing to the transcript.
+It touches nothing a running turn holds, so typed during one it is carried out as it is typed and
+the turn goes on (CMD-8). A prompt file or skill named `redraw` is shadowed by the command (CMD-17),
+and a slash offers the word with the commands that begin like it (CMD-9).
+
+**Why.** A person who pressed a shortcut of the terminal by accident sees a blank screen, and
+returning to the window sends no event that would repair it. Opening a long list, such as the one a
+slash offers, repairs only the rows it covers.
+
+`verified-by: bravebot_tui::app::the_redraw_command_retakes_the_terminal_and_runs_mid_turn`
+`verified-by: bravebot_tui::app::redraw_is_a_command_only_as_the_whole_line`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`

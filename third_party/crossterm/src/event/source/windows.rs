@@ -97,4 +97,12 @@ impl EventSource for WindowsEventSource {
     fn waker(&self) -> Waker {
         self.poll.waker()
     }
+
+    fn mouse_buttons_pressed(&self) -> MouseButtonsPressed {
+        self.mouse_buttons_pressed
+    }
+
+    fn set_mouse_buttons_pressed(&mut self, buttons: MouseButtonsPressed) {
+        self.mouse_buttons_pressed = buttons;
+    }
 }

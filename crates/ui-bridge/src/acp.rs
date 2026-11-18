@@ -50,6 +50,10 @@ struct Session {
     next_tool: u64,
     /// How many prompts this session has sent, which names the next one's `messageId`.
     sent: u64,
+    /// What to tell the editor before the first prompt's answer: the file `--settings` named is read
+    /// as a checkout's file (#2599). Said once, because the editor does not know the session id
+    /// until `session/new` has answered, so nothing can be sent to it before then.
+    opening_note: Option<String>,
 }
 
 /// A question put to the editor and not yet answered.
@@ -143,8 +147,13 @@ impl Acp {
             queued: Vec::new(),
         }));
         let heard = Arc::clone(&shared);
-        let bridge =
-            Bridge::new(Box::new(move |event| on_event(&heard, event))).with_settings(settings);
+        let bridge = Bridge::new(Box::new(move |event| on_event(&heard, event)))
+            .with_settings(settings)
+            .with_front_end(bravebot_agent::FrontEnd::Editor)
+            .opening_in_ask()
+            // ACP has no request to put the questions about a checkout's settings with, so its
+            // sessions grant none of the rules proposed and open none of the directories named.
+            .not_putting_project_questions();
         Self { bridge, shared }
     }
 
@@ -290,11 +299,19 @@ impl Acp {
         // directory and asked about before it starts, and an editor's list is neither.
         let made = self.call("session.new", session_params).map_err(failed)?;
         let handle = made["session"].as_str().unwrap_or_default().to_string();
+        // The bridge opens the session asking, where the person's own settings would open a
+        // window's in auto (AUTO-1). An editor's modes are asking, accepting edits and planning, the
+        // editor is the person who answers its questions (ACP-5), and it is not offered auto to move
+        // back to.
+        let opening_note = made["settingsRules"]["namedWithheld"]
+            .as_str()
+            .map(str::to_string);
         let mut shared = self.lock();
         shared.sessions.insert(
             handle.clone(),
             Session {
                 directory: cwd.to_string(),
+                opening_note,
                 ..Session::default()
             },
         );
@@ -348,6 +365,9 @@ impl Acp {
             held.sent += 1;
             turn["messageId"] = json!(format!("acp-{}", held.sent));
             let directory = held.directory.clone();
+            if let Some(note) = held.opening_note.take() {
+                say(&mut shared, &session, &note);
+            }
             shared
                 .unasked
                 .remove(&session)

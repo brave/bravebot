@@ -395,6 +395,140 @@ fn a_press_that_closes_the_panel_is_read_back_next_session() {
     });
 }
 
+/// A session that persists is what keeps the sections of the panel that were turned off, and the
+/// next one reads them. A session that does not persist writes nothing, so a test or a private
+/// run leaves the person's own choice alone. The panel's own file is the press's and not this one's.
+/// Turning the last one back on replaces the choice with none rather than leaving it standing.
+#[test]
+fn the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them() {
+    use bravebot_tui::panel::{Section, Sections};
+    with_temp_home("sidebar", || {
+        let adopted = || {
+            let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+            next.adopt_panel();
+            next.panel_sections()
+        };
+        assert_eq!(store::load_sidebar(), None, "started with a choice");
+
+        let mut unsaved = bravebot_tui::state::Session::new("test");
+        unsaved.set_panel_sections(Sections::default().toggled(Section::Plan));
+        assert_eq!(
+            store::load_sidebar(),
+            None,
+            "a session that does not persist wrote"
+        );
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_panel();
+        let two = Sections::default()
+            .toggled(Section::Plan)
+            .toggled(Section::McpServers);
+        session.set_panel_sections(two);
+        assert_eq!(
+            store::load_sidebar(),
+            Some(vec!["mcp-servers".to_string(), "plan".to_string()])
+        );
+        assert_eq!(adopted(), two, "the choice was not read back next session");
+        let mut unsaved_next = bravebot_tui::state::Session::new("test");
+        unsaved_next.adopt_panel();
+        assert_eq!(
+            unsaved_next.panel_sections(),
+            Sections::default(),
+            "a session that does not persist read the person's choice"
+        );
+        assert_eq!(
+            store::load_panel(),
+            None,
+            "a toggle wrote the panel's own file"
+        );
+
+        session.set_panel_sections(Sections::default().toggled(Section::Files));
+        assert_eq!(adopted(), Sections::default().toggled(Section::Files));
+
+        session.set_panel_sections(Sections::default());
+        assert_eq!(store::load_sidebar(), Some(Vec::new()));
+        assert_eq!(
+            adopted(),
+            Sections::default(),
+            "an earlier choice outlived the last toggle"
+        );
+    });
+}
+
+/// A file somebody edited, or one half written, is no choice: every section is drawn, for no
+/// file, an unreadable one, a name that is no section anywhere in it, and a heading as the panel
+/// draws it. A section the file does not name, as one added later is not, is drawn.
+#[test]
+fn a_sidebar_file_that_does_not_read_cleanly_leaves_every_section_on() {
+    use bravebot_tui::panel::{Section, Sections};
+    with_temp_home("sidebar-corrupt", || {
+        let file = store::directory().expect("a home").join("sidebar");
+        std::fs::create_dir_all(file.parent().expect("the state directory")).expect("directory");
+        let adopted = || {
+            let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+            session.adopt_panel();
+            session.panel_sections()
+        };
+        assert_eq!(
+            adopted(),
+            Sections::default(),
+            "no file turned a section off"
+        );
+
+        for contents in [
+            "plan\nnonsense\n",
+            "nonsense\nplan\n",
+            "Plan\n",
+            "pull requests\n",
+            "plan files\n",
+            "plan\n\u{1b}[2J\n",
+            "plan\0\n",
+        ] {
+            std::fs::write(&file, contents).expect("write the choice");
+            assert_eq!(
+                adopted(),
+                Sections::default(),
+                "{contents:?} turned one off"
+            );
+        }
+        std::fs::write(&file, [b'p', b'l', b'a', b'n', b'\n', 0xff, 0xfe]).expect("write bytes");
+        assert_eq!(
+            adopted(),
+            Sections::default(),
+            "bytes that are no text turned one off"
+        );
+        std::fs::remove_file(&file).expect("remove");
+        std::fs::create_dir(&file).expect("a directory where the file is");
+        assert_eq!(
+            adopted(),
+            Sections::default(),
+            "an unreadable file turned one off"
+        );
+        std::fs::remove_dir(&file).expect("remove");
+
+        std::fs::write(&file, "").expect("write the choice");
+        assert_eq!(
+            adopted(),
+            Sections::default(),
+            "an empty file turned one off"
+        );
+        std::fs::write(&file, "  plan \r\n\n\tfiles\n").expect("write the choice");
+        assert_eq!(
+            adopted(),
+            Sections::default()
+                .toggled(Section::Plan)
+                .toggled(Section::Files),
+            "space and blank lines in a clean file refused it"
+        );
+        std::fs::write(&file, "plan\n").expect("write the choice");
+        assert_eq!(
+            adopted(),
+            Sections::default().toggled(Section::Plan),
+            "a section the file does not name was turned off"
+        );
+    });
+}
+
 /// The editing choice outlives the session that made it, and the word it is stored as is resolved by
 /// the same rule as the word in a settings file. The choice outranks the file, because somebody who
 /// picked a box during a session picked it knowing what their settings said. A record somebody edited
@@ -758,6 +892,141 @@ fn a_recorded_answer_about_vetting_outlives_the_session_that_gave_it() {
             Some(false),
             "off was read back as no answer at all"
         );
+    });
+}
+
+/// The usage-ping switch outlives the session that set it, and off is read back as off: read as
+/// no answer, the default would turn the ping back on for somebody who turned it off.
+#[test]
+fn the_usage_ping_switch_outlives_the_session_that_set_it() {
+    with_temp_home("usage-ping-switch", || {
+        assert_eq!(store::load_usage_ping(), None, "started with a choice");
+
+        store::save_usage_ping(false);
+        assert_eq!(
+            store::load_usage_ping(),
+            Some(false),
+            "off was not read back"
+        );
+
+        store::save_usage_ping(true);
+        assert_eq!(store::load_usage_ping(), Some(true), "on was not read back");
+    });
+}
+
+/// The answer every caller asks is gathered from the person's own settings file, the switch's file
+/// and the variables, so a front end cannot leave one of them out.
+#[test]
+fn the_usage_ping_answer_gathers_the_settings_file_the_switch_and_the_variables() {
+    use bravebot_config::env_var;
+    use bravebot_config::usage_ping::UsagePing;
+    with_temp_home("usage-ping-answer", || {
+        let saved: Vec<_> = [env_var::USAGE_PING, env_var::DO_NOT_TRACK]
+            .map(|name| (name, std::env::var_os(name)))
+            .into();
+        // SAFETY: single-threaded within the home lock, and restored before returning.
+        for (name, _) in &saved {
+            unsafe { std::env::remove_var(name) };
+        }
+        let home =
+            std::path::PathBuf::from(std::env::var_os("HOME").expect("a home")).join(".bravebot");
+        std::fs::create_dir_all(&home).expect("the state directory");
+
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::On,
+            "nothing said, and still off"
+        );
+
+        store::save_usage_ping(false);
+        assert_eq!(store::usage_ping(), UsagePing::OffByUser);
+
+        store::save_usage_ping(true);
+        std::fs::write(home.join("settings.json"), r#"{"usagePing": false}"#)
+            .expect("a settings file");
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::OffBySetting,
+            "the switch turned the ping back on over the settings file"
+        );
+
+        unsafe { std::env::set_var(env_var::DO_NOT_TRACK, "1") };
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::OffByEnvironment(env_var::DO_NOT_TRACK)
+        );
+
+        unsafe { std::env::set_var(env_var::USAGE_PING, "0") };
+        assert_eq!(
+            store::usage_ping(),
+            UsagePing::OffByEnvironment(env_var::USAGE_PING)
+        );
+
+        for (name, value) in saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    });
+}
+
+/// The usage-ping row in `/config` writes the switch's file, and the answer read fresh afterwards is
+/// the one picked: a switch that wrote nothing, or wrote what the next read does not understand,
+/// would leave the ping going for somebody who turned it off.
+#[test]
+fn turning_the_usage_ping_off_in_config_is_read_back_by_the_next_answer() {
+    use bravebot_config::env_var;
+    use bravebot_config::usage_ping::UsagePing;
+    with_temp_home("usage-ping-config", || {
+        let saved: Vec<_> = [env_var::USAGE_PING, env_var::DO_NOT_TRACK]
+            .map(|name| (name, std::env::var_os(name)))
+            .into();
+        // SAFETY: single-threaded within the home lock, and restored before returning.
+        for (name, _) in &saved {
+            unsafe { std::env::remove_var(name) };
+        }
+        let file = std::path::PathBuf::from(std::env::var_os("HOME").expect("a home"))
+            .join(".bravebot")
+            .join("usage-ping");
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        assert_eq!(session.usage_ping(), UsagePing::On);
+
+        session.choose_usage_ping(false);
+        assert_eq!(
+            std::fs::read_to_string(&file)
+                .map(|s| s.trim().to_string())
+                .ok(),
+            Some("off".to_string()),
+            "the switch's file was not written"
+        );
+        assert_eq!(store::usage_ping(), UsagePing::OffByUser);
+        let next = bravebot_tui::state::Session::new("test").with_stored_history();
+        assert_eq!(next.usage_ping(), UsagePing::OffByUser);
+
+        session.choose_usage_ping(true);
+        assert_eq!(store::usage_ping(), UsagePing::On);
+
+        for (name, value) in saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    });
+}
+
+/// A session that does not persist neither writes the switch nor reads it, so a test cannot turn
+/// off the developer's own ping, and its panel shows the switch as locked.
+#[test]
+fn a_session_that_does_not_persist_leaves_the_usage_ping_switch_alone() {
+    use bravebot_config::usage_ping::UsagePing;
+    with_temp_home("usage-ping-unpersisted", || {
+        let mut session = bravebot_tui::state::Session::new("test");
+        assert_eq!(session.usage_ping(), UsagePing::Incognito);
+        session.choose_usage_ping(false);
+        assert_eq!(store::load_usage_ping(), None, "the switch was written");
     });
 }
 

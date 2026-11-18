@@ -1,6 +1,6 @@
 //! MOUSE-50: what makes a release the end of a click, for every kind of target.
 
-use super::popups::{click_held, targets};
+use super::popups::{click_held, located_on_the_face, targets};
 use super::*;
 
 /// A mouse event at `cell` with `modifiers` held.
@@ -377,4 +377,76 @@ fn a_release_over_a_target_a_frame_since_the_press_put_there_ends_no_click() {
         !matches!(action, Action::CopyReply(_)),
         "the release copied a reply the press was not on: {action:?}"
     );
+}
+
+/// MOUSE-56. Rejects: a click on the face that leaves it as it was, and a second click that does
+/// what the first did. Each cell of the face is pressed on, so a target that covers only the first
+/// row or only some columns fails.
+#[test]
+fn a_click_on_any_cell_of_the_face_blinks_it_and_the_next_one_makes_it_glance() {
+    let (probe, (first, column)) = located_on_the_face();
+    let width = u16::try_from(crate::avatar::WIDTH).expect("a width");
+    let rows = u16::try_from(crate::avatar::ROWS).expect("a height");
+    drop(probe);
+    for row in first..first + rows {
+        for column in column..column + width {
+            let (mut session, _) = located_on_the_face();
+            let action = click(&mut session, row, column);
+            assert_eq!(action, Action::Redraw, "({row}, {column}) did nothing");
+            assert_eq!(
+                crate::avatar::last_poke(),
+                Some(crate::avatar::Motion::Blink),
+                "({row}, {column}) did not blink the face"
+            );
+            assert!(crate::avatar::look_now().blink, "({row}, {column})");
+            // A second press on the cell inside the double click interval begins nothing
+            // (MOUSE-50), so the next click is one made after it.
+            session.last_click = None;
+            session.click_acted = false;
+            click(&mut session, row, column);
+            assert_eq!(
+                crate::avatar::last_poke(),
+                Some(crate::avatar::Motion::Glance),
+                "({row}, {column}) did not turn the eyes"
+            );
+            assert!(crate::avatar::look_now().away, "({row}, {column})");
+        }
+    }
+}
+
+/// MOUSE-56. Rejects: a target wider or taller than the face, which would make a click beside it
+/// or on the mark blink the face.
+#[test]
+fn a_click_beside_the_face_or_on_the_mark_does_not_move_it() {
+    let (mut session, (first, column)) = located_on_the_face();
+    let width = u16::try_from(crate::avatar::WIDTH).expect("a width");
+    let rows = u16::try_from(crate::avatar::ROWS).expect("a height");
+    let beside = [
+        (first.saturating_sub(1), column),
+        (first + rows, column),
+        (first, column.saturating_sub(1)),
+        (first, column + width),
+        (first + 2, column + width + 4),
+    ];
+    for (row, column) in beside {
+        click(&mut session, row, column);
+        assert_eq!(
+            crate::avatar::last_poke(),
+            None,
+            "a click at ({row}, {column}) moved the face"
+        );
+    }
+}
+
+/// MOUSE-56. Rejects: a click that moves a face the person asked to keep still, and a click that
+/// moves the face of a session that has begun, which has no face drawn.
+#[test]
+fn the_face_is_a_target_only_on_the_opening_screen() {
+    let (mut session, (row, column)) = located_on_the_face();
+    session
+        .transcript
+        .push(crate::state::Entry::assistant("hello", Vec::new()));
+    drawn(&mut session);
+    click(&mut session, row, column);
+    assert_eq!(crate::avatar::last_poke(), None);
 }

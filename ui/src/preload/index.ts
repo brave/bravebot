@@ -266,6 +266,11 @@ const api = {
     return ipcRenderer.invoke('bravebot:bots:read') as Promise<Bot[]>
   },
 
+  /** What is wrong with the bots as last read or written, with the path and the reason, or `null`. */
+  readBotsProblem(): Promise<string | null> {
+    return ipcRenderer.invoke('bravebot:bots:problem') as Promise<string | null>
+  },
+
   /**
    * Define a bot, or change one that exists.
    *
@@ -409,17 +414,28 @@ const api = {
    * Names and kinds only. Nothing on this bridge reads a file's contents, so it adds no way for
    * something the agent was refused to reach the renderer regardless.
    */
-  listFiles(session: string, path: string): Promise<Listing | null> {
-    return ipcRenderer.invoke('bravebot:files:list', session, path) as Promise<Listing | null>
+  //
+  // `folder`, where given, is one of the folders the session has open beside its project, exactly
+  // as `session.folders.list` answered it, and `path` is relative to that folder instead.
+  listFiles(session: string, path: string, folder?: string): Promise<Listing | null> {
+    return ipcRenderer.invoke('bravebot:files:list', session, path, folder) as Promise<Listing | null>
   },
-  previewFile(session: string, path: string): Promise<FilePreview | null> {
-    return ipcRenderer.invoke('bravebot:files:preview', session, path) as Promise<FilePreview | null>
+  previewFile(session: string, path: string, folder?: string): Promise<FilePreview | null> {
+    return ipcRenderer.invoke('bravebot:files:preview', session, path, folder) as Promise<FilePreview | null>
+  },
+  /**
+   * Ask the person for a folder to open beside the session's project, natively, and ask the agent
+   * to open it (TRUST-9). `null` when nothing was picked; otherwise the agent's answer to
+   * `session.folders.add` or its refusal. There is no way to name the folder from here.
+   */
+  addFolder(session: string): Promise<null | { ok: unknown } | { error: { code: string; message: string } }> {
+    return ipcRenderer.invoke('bravebot:folders:add', session) as Promise<null | { ok: unknown } | { error: { code: string; message: string } }>
   },
   chooseAttachments(session: string): Promise<FileAttachment[]> {
     return ipcRenderer.invoke('bravebot:files:choose-attachments', session) as Promise<FileAttachment[]>
   },
-  searchFiles(session: string, query: string, hidden: boolean): Promise<FileSearch> {
-    return ipcRenderer.invoke('bravebot:files:search', session, query, hidden) as Promise<FileSearch>
+  searchFiles(session: string, query: string, hidden: boolean, folder?: string): Promise<FileSearch> {
+    return ipcRenderer.invoke('bravebot:files:search', session, query, hidden, folder) as Promise<FileSearch>
   },
 
   /**
@@ -429,8 +445,8 @@ const api = {
    * folder. Never throws; a refusal comes back in `status`, because somebody double-clicked and
    * deserves to hear that nothing happened.
    */
-  openFile(session: string, path: string): Promise<OpenOutcome> {
-    return ipcRenderer.invoke('bravebot:files:open', session, path) as Promise<OpenOutcome>
+  openFile(session: string, path: string, folder?: string): Promise<OpenOutcome> {
+    return ipcRenderer.invoke('bravebot:files:open', session, path, folder) as Promise<OpenOutcome>
   },
 
   /** A native picker grants this app run access to a configuration override. */

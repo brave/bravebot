@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, oneModelList } from './acceptance-fixture.mjs'
 import { CASES, TRUST_CASE } from './shown-cases.mjs'
-import { COMPOSER_NAME, readTrust as read } from './drive-support.mjs'
+import { APPROVE_BUTTON, COMPOSER_NAME, REJECT_BUTTON, readTrust as read } from './drive-support.mjs'
 
 const output = process.env.SHOWN_OUTPUT || join(tmpdir(), 'bravebot-shown')
 mkdirSync(output, { recursive: true })
@@ -82,7 +82,7 @@ try {
   // it was inside every box that clips it, its own included, and points across its middle hit it.
   // It knows nothing of `data-deciding` or of the card's own count, so a row the card forgot to
   // mark still fails here.
-  const CARD = { card: '.confirm', actions: '.confirm-actions', approve: '.confirm-actions .approve', reject: '.confirm-actions .reject' }
+  const CARD = { card: '.confirm', actions: '.confirm-actions', approve: APPROVE_BUTTON, reject: REJECT_BUTTON }
   const DIALOG = { card: '.modal.trust', actions: '.trust-answers', approve: '.trust-answers .approve', reject: '.trust-answers [data-test="trust-decline"]' }
   const watch = (found, where = CARD) => page.evaluate(({ tokens, standing, where }) => {
     const all = [...tokens, ...standing]
@@ -187,7 +187,7 @@ try {
     await page.evaluate((card) => { const entries = card.closest('.entries'); entries.scrollTo({ top: entries.scrollHeight, behavior: 'instant' }) }, await card.elementHandle())
     await frames(4)
   }
-  const states = (card) => card.locator('.confirm-actions .approve, .confirm-actions .reject').evaluateAll((buttons) => buttons.map((button) => ({
+  const states = (card) => card.locator(`${APPROVE_BUTTON}, ${REJECT_BUTTON}`).evaluateAll((buttons) => buttons.map((button) => ({
     label: button.textContent?.trim(),
     approve: button.classList.contains('approve'),
     closed: button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true',
@@ -216,7 +216,7 @@ try {
     assert.ok(before.some((button) => button.approve) && before.filter((button) => button.approve).every((button) => button.closed), `${name}: an approval is open at the bottom of a card nobody scrolled: ${JSON.stringify(before)}`)
     assert.match(await card.locator('.shown-left').innerText(), /^\d+ more lines? to read before approving$/, `${name}: the note`)
     const sent = (await replies()).length
-    for (const approve of await card.locator('.confirm-actions .approve').all()) {
+    for (const approve of await card.locator(APPROVE_BUTTON).all()) {
       await approve.click({ force: true })
       await approve.dispatchEvent('click')
     }
@@ -239,7 +239,7 @@ try {
     assert.ok((await states(card)).every((button) => !button.closed), `${name}: closed after it was read again`)
 
     const ready = (await replies()).length
-    await card.locator('.confirm-actions .approve:not(.always)').click()
+    await card.locator(`${APPROVE_BUTTON}:not(.always)`).click()
     const reply = await replied(ready)
     assert.equal(reply.method, `${found.kind}.reply`, `${name}: the reply`)
     assert.equal(reply.request, found.request.request, `${name}: answered the right question`)
@@ -355,20 +355,21 @@ try {
     // The count is a frame behind the window, so a press measures again: one in the same frame as
     // a change of width is refused, though the button has not closed yet.
     const sent = (await replies()).length
-    const pressed = await card.evaluate((card) => {
+    // The callback runs in the page and cannot see this module, so the selector goes in as its argument.
+    const pressed = await card.evaluate((card, selector) => {
       card.style.width = `${card.getBoundingClientRect().width - 40}px`
-      const approve = card.querySelector('.confirm-actions .approve')
+      const approve = card.querySelector(selector)
       const open = approve.getAttribute('aria-disabled') !== 'true'
       approve.click()
       return open
-    })
+    }, APPROVE_BUTTON)
     await frames(4)
     assert.ok(pressed, 'confirm: the approval had closed before the press, so the press tests nothing')
     assert.equal((await replies()).length, sent, 'confirm: a press in the frame the width changed sent a reply')
     await card.evaluate((card) => { card.style.width = '' })
     await sweep(card)
     const ready = (await replies()).length
-    await card.locator('.confirm-actions .reject').click()
+    await card.locator(REJECT_BUTTON).click()
     assert.equal((await replied(ready)).decision, 'reject', 'confirm: the refusal after the veil')
   }
 
@@ -406,7 +407,7 @@ try {
     await sweep(card)
     assert.ok((await states(card)).every((button) => !button.closed), 'confirm: closed after the drag ended and the card was read')
     const ready = (await replies()).length
-    await card.locator('.confirm-actions .reject').click()
+    await card.locator(REJECT_BUTTON).click()
     assert.equal((await replied(ready)).decision, 'reject', 'confirm: the refusal after the drop overlay')
   }
 
@@ -451,7 +452,7 @@ try {
     await sweep(card)
     assert.ok((await states(card)).every((button) => !button.closed), `${name}: closed after the veil lifted and the card was read`)
     const ready = (await replies()).length
-    await card.locator('.confirm-actions .reject').click()
+    await card.locator(REJECT_BUTTON).click()
     assert.equal((await replied(ready)).decision, 'reject', `${name}: the refusal after the veil`)
   }
   await endVeiled('mcp-move', { request: 801, destination: 'https://zqd02.example/zqd05' }, '', 'zqd05')
@@ -482,7 +483,7 @@ try {
       }
       await page.evaluate(() => document.documentElement.removeAttribute('data-theme'))
       const ready = (await replies()).length
-      await card.locator('.confirm-actions .reject').click()
+      await card.locator(REJECT_BUTTON).click()
       assert.equal((await replied(ready)).decision, 'reject', `${name}: the refusal`)
       await page.evaluate(() => globalThis.oracle.stop())
     }

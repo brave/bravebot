@@ -1,0 +1,719 @@
+//! `/plugin`: install a plugin from a local path, list the installed plugins, and remove, enable or
+//! disable one (PLUGIN-1).
+//!
+//! A person's word and nobody else's: the line is dispatched from the input box like every other
+//! command (CMD-1), and no tool the planner calls reaches this module. What a plugin says is never
+//! read to decide anything here: the manifest reader and the install in `bravebot_agent::plugins`
+//! decide, and this module only says what they answered.
+//!
+//! Nothing is installed unless [`confirm_install`] answers yes. It is the one place the install
+//! question is put, and no permission mode, allow rule or `skip_permissions` answers it.
+
+use bravebot_agent::plugins::{self, Asker, Installed, ManageRefusal, Refusal, Staged};
+use bravebot_agent::skills::Catalogue;
+use bravebot_config::plugin as manifest;
+use bravebot_core::delegate::Definitions;
+use bravebot_i18n::t;
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use std::path::Path;
+
+use crate::command_table::{PLUGIN_ADD, PLUGIN_DISABLE, PLUGIN_ENABLE, PLUGIN_LIST, PLUGIN_REMOVE};
+use crate::render::printable;
+use crate::state::Session;
+
+/// The words typed after `/plugin`, read once so the command and its tests read the same forms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Typed<'a> {
+    Add(&'a str),
+    List,
+    Remove(&'a str),
+    Enable(&'a str),
+    Disable(&'a str),
+    /// A word that needs a name or a path and was given none.
+    NeedsAnArgument(&'a str),
+    Usage,
+}
+
+/// Read `argument`, the text typed after `/plugin`. Only the person's own words are read.
+pub(crate) fn parse(argument: &str) -> Typed<'_> {
+    let argument = argument.trim();
+    let (word, rest) = match argument.split_once(char::is_whitespace) {
+        Some((word, rest)) => (word, rest.trim()),
+        None => (argument, ""),
+    };
+    match word {
+        PLUGIN_LIST if rest.is_empty() => Typed::List,
+        PLUGIN_ADD | PLUGIN_REMOVE | PLUGIN_ENABLE | PLUGIN_DISABLE if rest.is_empty() => {
+            Typed::NeedsAnArgument(match word {
+                PLUGIN_ADD => PLUGIN_ADD,
+                PLUGIN_REMOVE => PLUGIN_REMOVE,
+                PLUGIN_ENABLE => PLUGIN_ENABLE,
+                _ => PLUGIN_DISABLE,
+            })
+        }
+        PLUGIN_ADD => Typed::Add(rest),
+        PLUGIN_REMOVE if !rest.contains(char::is_whitespace) => Typed::Remove(rest),
+        PLUGIN_ENABLE if !rest.contains(char::is_whitespace) => Typed::Enable(rest),
+        PLUGIN_DISABLE if !rest.contains(char::is_whitespace) => Typed::Disable(rest),
+        _ => Typed::Usage,
+    }
+}
+
+/// Put the install question to the person: the plugin name, version and source, and the parts it
+/// offers. Returns whether the person said yes.
+///
+/// Nothing answers it but a person: no permission mode, no allow rule and no `skip_permissions`
+/// reach here (PLUGIN-4). The prompt is `confirm::ask_install`, which has no request type the
+/// confirmer's modes could name, and it answers no wherever it cannot be drawn or read.
+/// `catalogue` and `definitions` are what this session discovered, so a name a higher-ranked
+/// source takes is marked as shadowed.
+pub fn confirm_install<B: Backend>(
+    terminal: &mut Terminal<B>,
+    staged: &Staged,
+    catalogue: &Catalogue,
+    definitions: &Definitions,
+) -> bool {
+    let request = crate::confirm::InstallRequest::from_staged(staged, catalogue, definitions);
+    crate::confirm::ask_install(terminal, &request)
+}
+
+/// The terminal's side of the install question.
+pub struct TerminalAsker<'t, B: Backend> {
+    pub terminal: &'t mut Terminal<B>,
+    pub catalogue: &'t Catalogue,
+    pub definitions: &'t Definitions,
+}
+
+impl<B: Backend> Asker for TerminalAsker<'_, B> {
+    fn anybody_there(&self) -> bool {
+        true
+    }
+
+    fn confirm_install(&mut self, staged: &Staged) -> bool {
+        confirm_install(self.terminal, staged, self.catalogue, self.definitions)
+    }
+}
+
+/// Carry out `argument`, the words typed after `/plugin`, saying what happened in the transcript.
+///
+/// `home` is the state directory (`~/.bravebot`) and `root` the directory a relative path is read
+/// from. Where there is no state directory nothing is read or written.
+pub fn run<A: Asker + ?Sized>(
+    session: &mut Session,
+    home: Option<&Path>,
+    root: &Path,
+    argument: &str,
+    asker: &mut A,
+) {
+    let typed = parse(argument);
+    if let Typed::Usage = typed {
+        return session.note(t!(plugin_command_usage));
+    }
+    if let Typed::NeedsAnArgument(word) = typed {
+        return session.note(t!(plugin_command_needs_an_argument, command = word));
+    }
+    let Some(home) = home else {
+        return session.note(t!(plugin_command_no_home));
+    };
+    match typed {
+        Typed::Add(path) => add(session, home, root, path, asker),
+        Typed::List => list(session, home),
+        Typed::Remove(name) => managed(session, name, &plugins::remove(home, name), |name| {
+            t!(plugin_removed, name = name)
+        }),
+        Typed::Enable(name) => managed(
+            session,
+            name,
+            &plugins::set_enabled(home, name, true),
+            |name| t!(plugin_enabled, name = name),
+        ),
+        Typed::Disable(name) => managed(
+            session,
+            name,
+            &plugins::set_enabled(home, name, false),
+            |name| t!(plugin_disabled, name = name),
+        ),
+        Typed::Usage | Typed::NeedsAnArgument(_) => {}
+    }
+}
+
+fn add<A: Asker + ?Sized>(
+    session: &mut Session,
+    home: &Path,
+    root: &Path,
+    path: &str,
+    asker: &mut A,
+) {
+    let source = root.join(path);
+    let shown = printable(path);
+    match plugins::install_asked(&source, home, asker) {
+        Ok(name) => session.note(t!(plugin_added, name = printable(&name), path = shown)),
+        Err(refusal) => session.note(t!(
+            plugin_add_refused,
+            path = shown,
+            why = refused(&refusal)
+        )),
+    }
+}
+
+/// The words a refused install is said in. Only the shape of the refusal is read, never a plugin's
+/// own text; a name is drawn through [`printable`] since it is a manifest's.
+fn refused(refusal: &Refusal) -> String {
+    match refusal {
+        Refusal::Manifest(manifest::Refusal::NoManifest | manifest::Refusal::NoPluginToml(_)) => {
+            t!(plugin_refused_no_manifest).to_string()
+        }
+        Refusal::Manifest(other) => match other.named_key() {
+            Some(key) => t!(plugin_refused_manifest_key, key = printable(&key)).to_string(),
+            None => t!(plugin_refused_manifest).to_string(),
+        },
+        Refusal::PartMissing(part) => t!(
+            plugin_refused_part_missing,
+            key = manifest::Field::Part(*part).key()
+        )
+        .to_string(),
+        Refusal::Source(_) | Refusal::SourceNotText | Refusal::Io(_) => {
+            t!(plugin_refused_unreadable).to_string()
+        }
+        Refusal::AlreadyInstalled { name, .. } => {
+            t!(plugin_refused_already_installed, name = printable(name)).to_string()
+        }
+        Refusal::UpdateNotBuilt { name, .. } => {
+            t!(plugin_refused_update_not_built, name = printable(name)).to_string()
+        }
+        Refusal::NameOffered {
+            offered,
+            new_plugin,
+            existing_plugin,
+        } => t!(
+            plugin_refused_name_offered,
+            offered = printable(offered),
+            new = printable(new_plugin),
+            existing = printable(existing_plugin)
+        )
+        .to_string(),
+        Refusal::NobodyToAsk => t!(plugin_refused_nobody_to_ask).to_string(),
+        Refusal::Declined => t!(plugin_refused_declined).to_string(),
+    }
+}
+
+fn list(session: &mut Session, home: &Path) {
+    let installed = plugins::list(home);
+    if installed.is_empty() {
+        return session.note(t!(plugin_list_none));
+    }
+    for plugin in &installed {
+        session.note(row(plugin));
+    }
+}
+
+/// One installed plugin as a row: name, version, source, digest and whether it is enabled (R44).
+/// Every field but the digest is text the plugin or the person wrote, so each is drawn through
+/// [`printable`].
+pub(crate) fn row(plugin: &Installed) -> String {
+    t!(
+        plugin_list_row,
+        name = printable(&plugin.name),
+        version = printable(&plugin.version),
+        source = printable(&plugin.source.display().to_string()),
+        digest = printable(&plugin.digest),
+        state = match plugin.enabled {
+            true => t!(plugin_list_enabled),
+            false => t!(plugin_list_disabled),
+        }
+    )
+    .to_string()
+}
+
+fn managed(
+    session: &mut Session,
+    name: &str,
+    result: &Result<(), ManageRefusal>,
+    done: impl FnOnce(String) -> String,
+) {
+    let shown = printable(name);
+    session.note(match result {
+        Ok(()) => done(shown),
+        Err(ManageRefusal::BadName) => t!(plugin_not_a_name, name = shown).to_string(),
+        Err(ManageRefusal::NotInstalled(_)) => t!(plugin_not_installed, name = shown).to_string(),
+        Err(ManageRefusal::Io(_)) => t!(plugin_manage_failed, name = shown).to_string(),
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Speaker;
+    use bravebot_agent::plugins::Nobody;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    /// The asker `TerminalAsker` is, with the keys of a person scripted in place of the terminal.
+    /// It draws the real prompt, so a test reads what was shown.
+    struct Scripted {
+        keys: std::collections::VecDeque<KeyCode>,
+        terminal: Terminal<TestBackend>,
+        asked: usize,
+        screen: String,
+        with: Option<(Catalogue, Definitions)>,
+    }
+
+    impl Scripted {
+        fn new(keys: &[KeyCode]) -> Self {
+            Self {
+                keys: keys.iter().copied().collect(),
+                terminal: Terminal::new(TestBackend::new(100, 60)).unwrap(),
+                asked: 0,
+                screen: String::new(),
+                with: None,
+            }
+        }
+    }
+
+    impl Asker for Scripted {
+        fn anybody_there(&self) -> bool {
+            true
+        }
+
+        fn confirm_install(&mut self, staged: &Staged) -> bool {
+            self.asked += 1;
+            let (catalogue, definitions) = self.with.clone().unwrap_or_default();
+            let request =
+                crate::confirm::InstallRequest::from_staged(staged, &catalogue, &definitions);
+            let keys = &mut self.keys;
+            let answer = crate::confirm::ask_install_reading(&mut self.terminal, &request, || {
+                match keys.pop_front() {
+                    Some(code) => {
+                        crate::confirm::Next::Press(KeyEvent::new(code, KeyModifiers::NONE))
+                    }
+                    None => crate::confirm::Next::Lost,
+                }
+            });
+            let buffer = self.terminal.backend().buffer().clone();
+            self.screen = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            answer
+        }
+    }
+
+    /// An asker that answers as told and counts the questions.
+    struct Answering {
+        yes: bool,
+        asked: usize,
+    }
+
+    impl Asker for Answering {
+        fn anybody_there(&self) -> bool {
+            true
+        }
+
+        fn confirm_install(&mut self, _staged: &Staged) -> bool {
+            self.asked += 1;
+            self.yes
+        }
+    }
+
+    fn said(session: &Session) -> Vec<String> {
+        session
+            .transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::System)
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// A plugin called `name` offering one skill, in `parent`.
+    fn plugin_named(parent: &Path, name: &str) -> PathBuf {
+        let root = parent.join(format!("src-{name}"));
+        std::fs::create_dir_all(root.join("skills").join("hello")).unwrap();
+        std::fs::write(
+            root.join("plugin.toml"),
+            format!(
+                "name = \"{name}\"\nversion = \"2.3.4\"\ndescription = \"d\"\nskills = \"skills\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("skills").join("hello").join("SKILL.md"),
+            "---\nname: hello\ndescription: Says hello.\n---\n\nBody.\n",
+        )
+        .unwrap();
+        root
+    }
+
+    fn state_is_untouched(home: &Path) -> bool {
+        !home.exists()
+    }
+
+    /// R19: the subcommand words are read from what the person typed and from nothing else.
+    ///
+    /// Rejects: a word that carries out a subcommand it does not name, and a name with spaces
+    /// in it reaching remove, enable or disable.
+    #[test]
+    fn the_words_after_the_command_read_as_the_five_forms_and_nothing_else() {
+        assert_eq!(parse("add ./demo"), Typed::Add("./demo"));
+        assert_eq!(
+            parse("add   a path with spaces"),
+            Typed::Add("a path with spaces")
+        );
+        assert_eq!(parse("list"), Typed::List);
+        assert_eq!(parse("remove demo"), Typed::Remove("demo"));
+        assert_eq!(parse("enable demo"), Typed::Enable("demo"));
+        assert_eq!(parse("disable demo"), Typed::Disable("demo"));
+        assert_eq!(parse("add"), Typed::NeedsAnArgument("add"));
+        assert_eq!(parse("remove"), Typed::NeedsAnArgument("remove"));
+        for other in [
+            "",
+            "list demo",
+            "remove a b",
+            "install demo",
+            "ADD x",
+            "update demo",
+        ] {
+            assert_eq!(parse(other), Typed::Usage, "{other:?}");
+        }
+    }
+
+    /// R20, R21: where nobody can be asked nothing is installed, and the person is told why.
+    ///
+    /// Rejects: an install that goes ahead with no asker, and a refusal that says nothing.
+    #[test]
+    fn add_where_nobody_can_be_asked_installs_nothing_and_says_so() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        plugin_named(scratch.path(), "demo");
+        let mut session = Session::new("none");
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "add src-demo",
+            &mut Nobody,
+        );
+        assert!(state_is_untouched(&home));
+        let said = said(&session);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("nobody can be asked"), "{said:?}");
+    }
+
+    /// R22: `/plugin add` is answered by a person and by nothing else. The asker is handed no
+    /// permission mode, no rule and no `skip_permissions`, so each mode, the ladder's bypass
+    /// included, still puts the prompt, and a prompt that is not answered installs nothing.
+    ///
+    /// Rejects: a mode answering the prompt for the person, and a lost terminal that installs.
+    #[test]
+    fn every_permission_mode_still_puts_the_prompt_to_the_person() {
+        let mut modes_seen = Vec::new();
+        let mut session = Session::new("none");
+        for _ in 0..5 {
+            modes_seen.push(session.permission_mode());
+            let scratch = tempfile::tempdir().unwrap();
+            let home = scratch.path().join("home");
+            plugin_named(scratch.path(), "demo");
+            let mut asker = Scripted::new(&[KeyCode::Char('n')]);
+            run(
+                &mut session,
+                Some(&home),
+                scratch.path(),
+                "add src-demo",
+                &mut asker,
+            );
+            assert_eq!(
+                asker.asked,
+                1,
+                "{:?} did not put the prompt",
+                session.permission_mode()
+            );
+            assert!(state_is_untouched(&home));
+            // A prompt nobody answers installs nothing either.
+            let mut lost = Scripted::new(&[]);
+            run(
+                &mut session,
+                Some(&home),
+                scratch.path(),
+                "add src-demo",
+                &mut lost,
+            );
+            assert!(state_is_untouched(&home), "{:?}", session.permission_mode());
+            session.cycle_permission_mode();
+        }
+        use bravebot_agent::PermissionMode::*;
+        for mode in [Ask, AcceptEdits, Plan, Auto, Bypass] {
+            assert!(
+                modes_seen.contains(&mode),
+                "{mode:?} not exercised: {modes_seen:?}"
+            );
+        }
+    }
+
+    /// R22: a yes typed by the person installs, after one question.
+    ///
+    /// Rejects: a y that does not install.
+    #[test]
+    fn a_typed_yes_installs_after_one_prompt() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        plugin_named(scratch.path(), "demo");
+        let mut session = Session::new("none");
+        let mut asker = Scripted::new(&[KeyCode::Char('y')]);
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "add src-demo",
+            &mut asker,
+        );
+        assert_eq!(asker.asked, 1);
+        assert!(home.join("plugins").join("demo").exists());
+        assert!(asker.screen.contains("2.3.4"), "{}", asker.screen);
+    }
+
+    /// R29: a plugin skill named like a skill in the user's own directory is installed, is marked
+    /// shadowed in the prompt, and the home skill is the one a session offers afterwards.
+    ///
+    /// Rejects: a missing mark, a plugin skill that wins, and a shadowed skill that is not
+    /// installed.
+    #[test]
+    fn a_plugin_skill_named_like_a_home_skill_is_marked_and_the_home_one_is_offered() {
+        use bravebot_agent::skills::{self, Source};
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let own = home.join("skills").join("hello");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(
+            own.join("SKILL.md"),
+            "---\nname: hello\ndescription: The home one.\n---\n\nHome body.\n",
+        )
+        .unwrap();
+        plugin_named(scratch.path(), "demo");
+        let project = scratch.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let workspace = bravebot_agent::workspace::Workspace::new(&project).unwrap();
+        let offered = |home: &Path| {
+            skills::resolved(
+                &workspace,
+                Some(home),
+                bravebot_core::trust::TrustStore::new(workspace.root()),
+                bravebot_core::permissions::Permissions::default(),
+                &mut bravebot_session::audit::Trail::new(),
+            )
+        };
+        let before = offered(&home);
+        let mut asker = Scripted::new(&[KeyCode::Char('y')]);
+        asker.with = Some((before.clone(), Definitions::default()));
+        let mut session = Session::new("none");
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "add src-demo",
+            &mut asker,
+        );
+
+        assert!(asker.screen.contains("Says hello."), "{}", asker.screen);
+        assert!(asker.screen.contains("Shadowed by"), "{}", asker.screen);
+        assert!(home.join("plugins").join("demo").exists());
+        let after = offered(&home);
+        let skill = after.get("hello").expect("a skill named hello is offered");
+        assert_eq!(skill.source, Source::Home);
+        assert_eq!(skill.description, "The home one.");
+    }
+
+    /// A no copies nothing and records nothing, and the prompt is not a place Enter answers.
+    ///
+    /// Rejects: a no that still copies the plugin or writes the record.
+    #[test]
+    fn a_no_copies_and_records_nothing() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        plugin_named(scratch.path(), "demo");
+        let mut session = Session::new("none");
+        let mut asker = Scripted::new(&[KeyCode::Enter, KeyCode::Char('n')]);
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "add src-demo",
+            &mut asker,
+        );
+        assert!(state_is_untouched(&home));
+        assert!(
+            said(&session)[0].contains("declined"),
+            "{:?}",
+            said(&session)
+        );
+    }
+
+    /// A yes installs once after one question, and a no installs nothing.
+    ///
+    /// Rejects: an answer that is ignored, and a question put twice.
+    #[test]
+    fn add_installs_only_on_a_yes_after_one_question() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        plugin_named(scratch.path(), "demo");
+        let mut session = Session::new("none");
+        let mut no = Answering {
+            yes: false,
+            asked: 0,
+        };
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "add src-demo",
+            &mut no,
+        );
+        assert_eq!((no.asked, state_is_untouched(&home)), (1, true));
+        let mut yes = Answering {
+            yes: true,
+            asked: 0,
+        };
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "add src-demo",
+            &mut yes,
+        );
+        assert_eq!(yes.asked, 1);
+        assert!(bravebot_agent::plugins::read_record(&home, "demo").is_some());
+        assert!(
+            said(&session)[1].contains("Installed demo"),
+            "{:?}",
+            said(&session)
+        );
+    }
+
+    /// R44: list prints name, version, source, digest and whether the plugin is enabled.
+    ///
+    /// Rejects: a row that leaves one of the five out.
+    #[test]
+    fn list_prints_name_version_source_digest_and_enabled() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = plugin_named(scratch.path(), "demo");
+        let mut session = Session::new("none");
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "list",
+            &mut Nobody,
+        );
+        assert!(said(&session)[0].contains("No plugin is installed"));
+        bravebot_agent::plugins::install(&source, &home).unwrap();
+        let record = bravebot_agent::plugins::read_record(&home, "demo").unwrap();
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "list",
+            &mut Nobody,
+        );
+        let row = said(&session).pop().unwrap();
+        for part in [
+            "demo",
+            "2.3.4",
+            &record.source.display().to_string(),
+            &record.digest,
+            "enabled",
+        ] {
+            assert!(row.contains(part), "{part} missing from {row}");
+        }
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "disable demo",
+            &mut Nobody,
+        );
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "list",
+            &mut Nobody,
+        );
+        assert!(said(&session).pop().unwrap().contains("disabled"));
+    }
+
+    /// R14 to R16: remove, enable and disable act on the installed plugin without any question,
+    /// and say so when the name is not one.
+    ///
+    /// Rejects: a question put for enable, and a silent miss.
+    #[test]
+    fn remove_enable_and_disable_act_without_a_question_and_miss_in_words() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = plugin_named(scratch.path(), "demo");
+        bravebot_agent::plugins::install(&source, &home).unwrap();
+        let mut session = Session::new("none");
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "disable demo",
+            &mut Nobody,
+        );
+        assert!(
+            !bravebot_agent::plugins::read_record(&home, "demo")
+                .unwrap()
+                .enabled
+        );
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "enable demo",
+            &mut Nobody,
+        );
+        assert!(
+            bravebot_agent::plugins::read_record(&home, "demo")
+                .unwrap()
+                .enabled
+        );
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "remove demo",
+            &mut Nobody,
+        );
+        assert!(bravebot_agent::plugins::read_record(&home, "demo").is_none());
+        assert!(!bravebot_agent::plugins::installed_dir(&home, "demo").exists());
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "remove demo",
+            &mut Nobody,
+        );
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "remove ../x",
+            &mut Nobody,
+        );
+        let said = said(&session);
+        assert!(said[3].contains("No plugin named demo"), "{said:?}");
+        assert!(said[4].contains("not the name of a plugin"), "{said:?}");
+    }
+
+    /// With no state directory nothing is read or written.
+    #[test]
+    fn without_a_state_directory_nothing_is_read_or_written() {
+        let mut session = Session::new("none");
+        run(&mut session, None, Path::new("."), "add x", &mut Nobody);
+        assert!(said(&session)[0].contains("no state directory"));
+    }
+}

@@ -1368,7 +1368,9 @@ impl Conversation {
     ///
     /// The stub is a fixed sentence, the name of the tool and a count. The name is the planner's
     /// own call or the driver's own prefix, and is used only if it is made of the characters a
-    /// tool name is made of.
+    /// tool name is made of. The sentence says the result is no longer in the request and that
+    /// calling the tool again returns it, the same for every tool: it is not chosen from the
+    /// name, and it tells the planner not to repeat a call that changes something.
     fn stub_for(&self, index: usize) -> Option<String> {
         let stored = &self.messages[index];
         let by_id = stored.message.role == Role::Tool && stored.composed.is_none();
@@ -1405,7 +1407,9 @@ impl Conversation {
             .unwrap_or("a tool");
         Some(format!(
             "{TOOL_RESULT_PREFIX}{tool}: {} bytes, dropped from the request to make room. The \
-             call ran and its result was shown to you earlier.",
+             call ran, and its result is no longer in the request. Calling the tool again \
+             returns it (for a read, ask for only the lines you need); do not repeat a call that \
+             changes something.",
             text.len()
         ))
     }
@@ -5762,7 +5766,9 @@ mod tests {
             answer.content.text(),
             format!(
                 "{TOOL_RESULT_PREFIX}read_file: 50000 bytes, dropped from the request to make \
-                 room. The call ran and its result was shown to you earlier."
+                 room. The call ran, and its result is no longer in the request. Calling the \
+                 tool again returns it (for a read, ask for only the lines you need); do not \
+                 repeat a call that changes something."
             )
         );
         // The record is whole: what is stored, and what a snapshot writes.
@@ -5771,6 +5777,87 @@ mod tests {
             serde_json::to_string(&conversation.snapshot())
                 .unwrap()
                 .contains("BULK-LINE")
+        );
+    }
+
+    /// A planner told that a dropped result was shown to it earlier does not read the file again
+    /// and works from what it remembers. The stub says the result is gone from the request and
+    /// that calling the tool again returns it, for a result sent by id and for one sent as prose.
+    #[test]
+    fn a_dropped_result_says_it_is_no_longer_in_the_request_and_can_be_had_again() {
+        let mut by_id = a_session_that_began_with_a_large_read("BULK ".repeat(20_000));
+        assert!(by_id.mask_old_results().is_some());
+        let mut as_prose = Conversation::new();
+        as_prose.push(Message::user("search"));
+        as_prose.push_composed(
+            Message::user(format!(
+                "{TOOL_RESULT_PREFIX}search:\n\n{}",
+                "hit\n".repeat(10_000)
+            )),
+            Composed::ToolResult,
+        );
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            as_prose.push(Message::user(prompt));
+            as_prose.push(Message::assistant(answer));
+        }
+        assert!(as_prose.mask_old_results().is_some());
+
+        for conversation in [&by_id, &as_prose] {
+            let text = sent_text(conversation);
+            assert!(text.contains("is no longer in the request"), "{text}");
+            assert!(text.contains("Calling the tool again returns it"), "{text}");
+            assert!(text.contains("ask for only the lines you need"), "{text}");
+            assert!(
+                !text.contains("shown to you earlier"),
+                "the stub says the planner still has the result: {text}"
+            );
+        }
+    }
+
+    /// A delegate cannot ask the person what a dropped result held, so its request carries the
+    /// same sentence as any other, and its task is still there once.
+    #[test]
+    fn a_delegates_dropped_result_says_it_can_be_had_again() {
+        let task = format!("THE-TASK {}", "item ".repeat(600));
+        let mut conversation = a_delegate_after(&task, 20);
+        compact_now(&mut conversation);
+        for round in 0..8 {
+            a_round_that_read(
+                &mut conversation,
+                &format!("big-{round}"),
+                "read_file",
+                "BULK ".repeat(20_000),
+            );
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        let sent = sent_text(&conversation);
+        assert!(sent.contains("is no longer in the request"), "{sent}");
+        assert!(sent.contains("Calling the tool again returns it"), "{sent}");
+        assert!(!sent.contains("shown to you earlier"), "{sent}");
+        assert_eq!(sent.matches(&task).count(), 1);
+    }
+
+    /// A stub of 500 tokens or more would be a result worth dropping, so the next step would
+    /// drop it again and its own length would be counted as freed. The longest stub, for a tool
+    /// name of the longest length, stays well below the size of a result that is dropped.
+    #[test]
+    fn the_stub_is_shorter_than_a_result_that_is_dropped() {
+        let name = "a".repeat(64);
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("go"));
+        a_round_that_read(&mut conversation, "call-1", &name, "BULK ".repeat(20_000));
+        for (prompt, answer) in [("second", "b"), ("third", "c"), ("fourth", "d")] {
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(answer));
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        assert!(sent_text(&conversation).contains(&name));
+        let stub = conversation.stub_len(2);
+        assert!(
+            stub > 0 && stub < MASK_RESULT_MIN_BYTES / 4,
+            "a stub of {stub} bytes is too near the size of a result that is dropped"
         );
     }
 

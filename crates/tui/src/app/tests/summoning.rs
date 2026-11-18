@@ -226,3 +226,23 @@ fn shift_enter_on_a_picked_definition_starts_a_line_and_keeps_the_pick() {
         std::fs::remove_dir_all(&root).ok();
     }
 }
+
+/// A pick sent at rest is remembered as the `/agent` line it addresses, the form a pick queued
+/// mid-turn is remembered as, so Up brings back a command and not the marker. Rejects: the marker
+/// in the history, or the pick left out of it.
+#[test]
+fn a_picked_definition_is_remembered_as_the_agent_line_it_addresses() {
+    let (mut session, root) = typing("a_picked_definition_is_remembered_as_the", "@l");
+    handle_key(&mut session, key(KeyCode::Enter));
+    type_line(&mut session, "what changed?");
+    handle_key(&mut session, key(KeyCode::Enter));
+
+    let remembered: Vec<&str> = session
+        .history
+        .entries()
+        .iter()
+        .map(|entry| entry.prompt.as_str())
+        .collect();
+    assert_eq!(remembered, ["/agent lantern what changed?"]);
+    std::fs::remove_dir_all(&root).ok();
+}

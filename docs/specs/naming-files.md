@@ -328,9 +328,12 @@ letters in the path of most of a large tree, and the terminal draws every row un
 <a id="NAME-12"></a>
 ### NAME-12: a name that cannot be sent is refused where Enter is pressed
 
-Before a line is sent or queued, the terminal surveys each `@name` it holds, in the line the person
-wrote with a folded paste unfolded, and the desktop app does the same at `turn.send` (NAME-9). A
-name under a reference directory's alias is surveyed in the directory it resolves to. A name that
+Before a line is sent or queued, the terminal surveys each `@name` it holds, in the line as the box
+shows it, and the desktop app does the same at `turn.send` (NAME-9). The words behind a folded paste
+marker are sent as text and name no file: they are not surveyed, and an `@` in them does not vouch
+for a path. The person cannot see or edit those words in the box, so a refusal over one could not
+be answered by removing the `@`. The desktop app has no folded paste. A name under a reference
+directory's alias is surveyed in the directory it resolves to. A name that
 is not a text file in the project (missing, a directory written without its slash, binary, outside
 the workspace, or under a reference directory whose path has no text spelling) refuses the send.
 A name that is a file the program is not allowed to read, or that the disk fails to read, refuses
@@ -360,7 +363,10 @@ back.
 `verified-by: bravebot_tui::references::enter_refuses_a_directory_a_binary_file_and_a_path_outside_the_project`
 `verified-by: bravebot_tui::references::the_refusal_names_each_bad_name_and_not_the_good_one`
 `verified-by: bravebot_tui::references::a_refused_line_keeps_its_folded_paste`
-`verified-by: bravebot_tui::references::a_handle_inside_a_folded_paste_is_refused_and_the_marker_stays`
+`verified-by: bravebot_tui::references::a_handle_inside_a_folded_paste_is_sent_as_text`
+`verified-by: bravebot_tui::references::a_name_typed_beside_a_folded_paste_is_still_refused`
+`verified-by: bravebot_tui::references::while_a_turn_works_a_handle_inside_a_folded_paste_is_queued`
+`verified-by: bravebot_tui::app::a_name_inside_a_folded_paste_names_no_file`
 `verified-by: bravebot_tui::references::a_refused_line_keeps_its_attachments`
 `verified-by: bravebot_tui::references::a_name_under_a_reference_alias_is_surveyed_in_its_directory`
 `verified-by: bravebot_tui::references::a_prompt_the_driver_composed_is_never_surveyed`

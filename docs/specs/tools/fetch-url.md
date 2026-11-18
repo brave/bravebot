@@ -310,9 +310,16 @@ that hands credentials to whoever opens the socket, with a prompt that said noth
 refusal covers every address in the answer rather than the one that would be connected to: the
 public half of a mixed answer is trusted only as far as the server that wrote the other half.
 
-**Known cost.** Behind a proxy the proxy resolves the target, and the lookup this program makes is
-for the proxy itself, so a proxied fetch is not classified here. The proxy is the one that
-connects, and what it is allowed to reach is its own configuration's.
+**Behind a proxy.** The proxy connects to the target, and the lookup the client makes through its
+resolver is for the proxy itself. So a hop a proxy carries is classified before it is sent, by one
+lookup of its host made here, and refused on the same terms as a direct one. A host `NO_PROXY` excludes
+goes direct and is classified by the client's own lookup.
+
+**Known cost.** Behind a proxy the address that was classified is not the one connected to: the proxy
+looks the host up again, so an answer that differs for the proxy is not seen here, and what the proxy is
+allowed to reach is its own configuration's. A lookup made here that fails or does not finish in time
+refuses nothing and leaves the hop to the proxy, since a network that reaches the world only through a
+proxy need not resolve the world's names.
 
 `verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
 `verified-by: bravebot_sandbox::address::a_public_address_is_public`
@@ -326,6 +333,12 @@ connects, and what it is allowed to reach is its own configuration's.
 `verified-by: bravebot_net::lib::an_approved_host_that_is_itself_an_address_is_fetched`
 `verified-by: bravebot_net::lib::a_request_that_is_not_a_fetch_may_still_resolve_to_this_machine`
 `verified-by: bravebot_net::lib::a_proxied_fetch_is_not_sent_through_the_guarded_lookup`
+`verified-by: bravebot_net::lib::a_proxied_name_resolving_to_a_non_public_address_is_refused_before_the_proxy_is_asked`
+`verified-by: bravebot_net::lib::a_proxied_name_resolving_to_a_public_address_is_sent_to_the_proxy`
+`verified-by: bravebot_net::lib::a_proxied_name_with_one_non_public_address_among_public_ones_is_refused`
+`verified-by: bravebot_net::lib::a_proxied_redirect_hop_resolving_to_a_non_public_address_is_refused`
+`verified-by: bravebot_net::lib::a_proxied_request_that_is_not_a_fetch_is_not_classified`
+`verified-by: bravebot_net::lib::a_host_excluded_from_the_proxy_is_classified_once`
 `verified-by: bravebot_net::lib::a_refused_address_is_a_failure_that_says_nothing_of_the_address_and_is_not_retried`
 `verified-by: bravebot_net::egress::a_fetched_name_that_resolves_to_this_machine_is_refused_without_a_connection`
 `verified-by: bravebot_net::egress::the_same_name_is_reached_when_no_fetch_is_in_flight`

@@ -180,15 +180,14 @@ pub struct Bedrock {
     /// The cache lifetime the settings chose, set by [`crate::Config`] for the reason
     /// `output_budget` is.
     cache_ttl: Option<crate::CacheTtl>,
-    /// What the `provider` block stated about repeating a request and a reply gone quiet.
-    ///
-    /// Nothing stated for an account reached through the tier variables, which have no block to
-    /// state it in.
+    /// What the `provider` block stated about repeating a request and a reply gone quiet, or for
+    /// an account reached through the tier variables, what `BRAVEBOT_BEDROCK_MAX_RETRIES` and
+    /// `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` stated ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
     patience: Patience,
     /// Whether a `provider` block named this account, as against the tier variables.
     ///
-    /// The block is where `maxRetries` is stated, so a failure line names that setting only for an
-    /// account that has one ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    /// A block states `maxRetries` and the tier variables state `BRAVEBOT_BEDROCK_MAX_RETRIES`, so
+    /// a failure line names the one that account has ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
     named_by_block: bool,
 }
 
@@ -314,7 +313,10 @@ impl Bedrock {
             models,
             output_budget: None,
             cache_ttl: None,
-            patience: Patience::default(),
+            patience: Patience::from_variables(
+                lookup(env_var::BEDROCK_MAX_RETRIES).as_deref(),
+                lookup(env_var::BEDROCK_IDLE_TIMEOUT_MS).as_deref(),
+            ),
             named_by_block: false,
         })
     }
@@ -370,8 +372,8 @@ impl Bedrock {
         })
     }
 
-    /// Whether a `provider` block named this account rather than the tier variables, which have no
-    /// block to state `maxRetries` in.
+    /// Whether a `provider` block named this account rather than the tier variables, which state the
+    /// retry count in `BRAVEBOT_BEDROCK_MAX_RETRIES` instead of `options.maxRetries`.
     pub fn named_by_block(&self) -> bool {
         self.named_by_block
     }
@@ -525,6 +527,56 @@ mod tests {
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.clone())
         })
+    }
+
+    /// BACKEND-33, BACKEND-55: an account the tier variables configure states how often a request
+    /// to it is sent again and how long a reply may go quiet with two variables, held to the
+    /// bounds a `provider` entry is. A value that states nothing leaves the default in place.
+    ///
+    /// The faults this rejects: the variables not read, a count of zero treated as unstated, a gap
+    /// above the cap kept, and a gap of zero kept.
+    #[test]
+    fn a_tier_account_reads_its_retry_count_and_idle_gap_from_its_variables() {
+        let with = |retries: Option<&str>, gap: Option<&str>| {
+            let mut pairs = vec![
+                (env_var::USE_BEDROCK, "1"),
+                (env_var::AWS_REGION, "us-west-2"),
+            ];
+            if let Some(value) = retries {
+                pairs.push((env_var::BEDROCK_MAX_RETRIES, value));
+            }
+            if let Some(value) = gap {
+                pairs.push((env_var::BEDROCK_IDLE_TIMEOUT_MS, value));
+            }
+            configured(&pairs).expect("configured").patience()
+        };
+
+        let unstated = with(None, None);
+        assert_eq!(unstated.max_retries, None);
+        assert_eq!(unstated.idle_timeout, None);
+
+        let stated = with(Some("4"), Some("240000"));
+        assert_eq!(stated.max_retries, Some(4));
+        assert_eq!(
+            stated.idle_timeout,
+            Some(std::time::Duration::from_secs(240))
+        );
+        assert_eq!(stated.retry_window, None, "there is no variable for it");
+
+        assert_eq!(
+            with(Some("0"), None).max_retries,
+            Some(0),
+            "zero is a count"
+        );
+        assert_eq!(with(Some("99"), None).max_retries, Some(7), "capped");
+        assert_eq!(with(None, Some("0")).idle_timeout, None, "zero is no gap");
+        assert_eq!(
+            with(None, Some("99999999")).idle_timeout,
+            Some(std::time::Duration::from_secs(600)),
+            "capped"
+        );
+        assert_eq!(with(Some("two"), Some("1.5")).max_retries, None);
+        assert_eq!(with(Some("-1"), Some("1.5")).idle_timeout, None);
     }
 
     /// `options.maxRetries` has a place to be stated only where a `provider` block named the

@@ -862,6 +862,20 @@ test("a second call while the first waits for the person is refused and asks nob
   assert.equal((await call(chrome, SAYS)).result.status, "ran");
 });
 
+test("a call that fails before it asks anybody gives up its place, so the next call is not refused", async () => {
+  const chrome = browser();
+  person(chrome);
+  const fails = mock.method(globalThis.crypto, "randomUUID", () => {
+    throw new Error("no random numbers");
+  });
+  const first = await call(chrome, SAYS);
+  fails.mock.restore();
+  assert.equal(first.result, undefined);
+  assert.notEqual(first.error.message, BUSY_MESSAGE);
+  assert.equal(codes(chrome).length, 0);
+  assert.equal((await call(chrome, SAYS)).result.status, "ran");
+});
+
 test("the activity log holds the group, the tool, the outcome and the origin, and none of the code or the answer", async () => {
   const chrome = browser({ answer: "the answer text" });
   person(chrome);

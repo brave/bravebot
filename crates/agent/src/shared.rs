@@ -45,6 +45,10 @@ use std::sync::{Mutex, MutexGuard};
 /// the lock for one call each.
 pub struct Lent<'a, T: ?Sized> {
     inner: Mutex<&'a mut T>,
+    /// What the lent confirmer answers without a person, taken before it was lent so that reading
+    /// it never waits for the lock (DELEGATE-16). `None` for anything that is not a confirmer, and
+    /// for a confirmer that answers nothing in advance.
+    unasked: Option<crate::permission_mode::Unasked>,
     totals: Mutex<Totals>,
 }
 
@@ -87,7 +91,21 @@ impl<'a, T: ?Sized> Lent<'a, T> {
     pub fn new(inner: &'a mut T) -> Self {
         Self {
             inner: Mutex::new(inner),
+            unasked: None,
             totals: Mutex::new(Totals::default()),
+        }
+    }
+
+    /// Lend a confirmer, noting what it answers without a person so that a handle can decide those
+    /// questions without taking the lock another run's open question holds (DELEGATE-16).
+    pub fn confirming(inner: &'a mut T) -> Self
+    where
+        T: Confirmer,
+    {
+        let unasked = inner.answering_unasked();
+        Self {
+            unasked,
+            ..Self::new(inner)
         }
     }
 
@@ -170,11 +188,11 @@ impl<'a, T: ?Sized> Lent<'a, T> {
 /// belongs to the run that took it from the configuration.
 pub trait Spends: Sync {
     /// Take the lock and spend the next credential.
-    fn spend_one(&self) -> Result<SubscriptionCredential, String>;
+    fn spend_one(&self) -> SubscriptionCredential;
 }
 
 impl<T: Subscription + Send + ?Sized> Spends for Lent<'_, T> {
-    fn spend_one(&self) -> Result<SubscriptionCredential, String> {
+    fn spend_one(&self) -> SubscriptionCredential {
         self.hold().next_credential()
     }
 }
@@ -195,10 +213,10 @@ impl<'a> Counted<'a> {
 }
 
 impl Spends for Counted<'_> {
-    fn spend_one(&self) -> Result<SubscriptionCredential, String> {
-        let credential = self.source.spend_one()?;
+    fn spend_one(&self) -> SubscriptionCredential {
+        let credential = self.source.spend_one();
         self.limit.add_credit();
-        Ok(credential)
+        credential
     }
 }
 
@@ -215,7 +233,7 @@ impl<'a> Spending<'a> {
 }
 
 impl Subscription for Spending<'_> {
-    fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+    fn next_credential(&mut self) -> SubscriptionCredential {
         self.0.spend_one()
     }
 }
@@ -316,6 +334,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
 
     reports! {
         fn todos(&mut self, rows: Vec<Row>);
+        fn references(&mut self, found: &[crate::links::Reference]);
         fn output_tokens(&mut self, written: u64);
         fn phase(&mut self, phase: Phase);
         fn narration(&mut self, text: String);
@@ -395,8 +414,15 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
 }
 
 impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
+    /// The view taken when the confirmer was lent, so a delegate that lends this handle onward
+    /// decides the same questions without the lock.
+    fn answering_unasked(&self) -> Option<crate::permission_mode::Unasked> {
+        self.lent.unasked.clone()
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.asked(
+            |unasked| unasked.write(request),
             |held| held.confirm_write(request),
             |refuse| refuse.confirm_write(request),
         )
@@ -404,6 +430,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
         self.asked(
+            |unasked| unasked.run(request),
             |held| held.confirm_run(request),
             |refuse| refuse.confirm_run(request),
         )
@@ -411,6 +438,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
         self.asked(
+            |unasked| unasked.read_output(request),
             |held| held.confirm_read_output(request),
             |refuse| refuse.confirm_read_output(request),
         )
@@ -418,6 +446,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
         self.asked(
+            |unasked| unasked.vetted_read(request),
             |held| held.confirm_vetted_read(request),
             |refuse| refuse.confirm_vetted_read(request),
         )
@@ -425,6 +454,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
         self.asked(
+            |unasked| unasked.fetch(request),
             |held| held.confirm_fetch(request),
             |refuse| refuse.confirm_fetch(request),
         )
@@ -432,6 +462,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         self.asked(
+            |unasked| unasked.vouch().map(|(answer, _)| answer),
             |held| held.confirm_vouch(request),
             |refuse| refuse.confirm_vouch(request),
         )
@@ -442,6 +473,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &VouchRequest,
     ) -> (Decision, Option<&'static str>) {
         self.asked(
+            |unasked| unasked.vouch().map(|(answer, mode)| (answer, Some(mode))),
             |held| held.confirm_vouch_noting_the_mode(request),
             |refuse| refuse.confirm_vouch_noting_the_mode(request),
         )
@@ -449,6 +481,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
         self.asked(
+            |unasked| unasked.exposing_read().map(|(answer, _)| answer),
             |held| held.confirm_exposing_read(request),
             |refuse| refuse.confirm_exposing_read(request),
         )
@@ -459,6 +492,11 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &crate::confirm::ExposureRequest,
     ) -> (Decision, Option<&'static str>) {
         self.asked(
+            |unasked| {
+                unasked
+                    .exposing_read()
+                    .map(|(answer, mode)| (answer, Some(mode)))
+            },
             |held| held.confirm_exposing_read_noting_the_mode(request),
             |refuse| refuse.confirm_exposing_read_noting_the_mode(request),
         )
@@ -469,6 +507,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &crate::confirm::ToolListRequest,
     ) -> crate::confirm::Decision {
         self.asked(
+            |unasked| unasked.tool_list(),
             |held| held.confirm_tool_list(request),
             |refuse| refuse.confirm_tool_list(request),
         )
@@ -479,6 +518,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &crate::confirm::McpCallRequest,
     ) -> crate::confirm::CallDecision {
         self.asked(
+            |unasked| unasked.mcp_call(request),
             |held| held.confirm_mcp_call(request),
             |refuse| refuse.confirm_mcp_call(request),
         )
@@ -488,14 +528,18 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         &mut self,
         request: &crate::confirm::ApplyRequest,
     ) -> crate::confirm::ApplyDecision {
+        // No mode answers an apply step's list: only the person does (MANIFEST-16).
         self.asked(
+            |_| None,
             |held| held.confirm_apply(request),
             |refuse| refuse.confirm_apply(request),
         )
     }
 
     fn can_put_apply_lists(&mut self) -> bool {
+        // What the client behind the lock can draw, which no mode answers.
         self.asked(
+            |_| None,
             |held| held.can_put_apply_lists(),
             |refuse| refuse.can_put_apply_lists(),
         )
@@ -503,6 +547,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
         self.asked(
+            |unasked| unasked.path(),
             |held| held.confirm_path(request),
             |refuse| refuse.confirm_path(request),
         )
@@ -510,6 +555,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
         self.asked(
+            |unasked| unasked.host(),
             |held| held.confirm_host(request),
             |refuse| refuse.confirm_host(request),
         )
@@ -520,6 +566,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &crate::confirm::MessageRequest,
     ) -> crate::confirm::MessageDecision {
         self.asked(
+            |unasked| unasked.message(),
             |held| held.confirm_message(request),
             |refuse| refuse.confirm_message(request),
         )
@@ -527,6 +574,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
         self.asked(
+            |unasked| unasked.moved(),
             |held| held.confirm_move(request),
             |refuse| refuse.confirm_move(request),
         )
@@ -534,6 +582,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
         self.asked(
+            |unasked| unasked.server().map(|(answer, _)| answer),
             |held| held.confirm_server(request),
             |refuse| refuse.confirm_server(request),
         )
@@ -544,6 +593,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &crate::confirm::ServerRequest,
     ) -> (Decision, Option<&'static str>) {
         self.asked(
+            |unasked| unasked.server().map(|(answer, mode)| (answer, Some(mode))),
             |held| held.confirm_server_noting_the_mode(request),
             |refuse| refuse.confirm_server_noting_the_mode(request),
         )
@@ -551,6 +601,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
         self.asked(
+            |unasked| unasked.manifest().map(|(answer, _)| answer),
             |held| held.confirm_manifest(request),
             |refuse| refuse.confirm_manifest(request),
         )
@@ -561,6 +612,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &crate::confirm::ManifestRequest,
     ) -> (Decision, Option<&'static str>) {
         self.asked(
+            |unasked| unasked.manifest().map(|(answer, mode)| (answer, Some(mode))),
             |held| held.confirm_manifest_noting_the_mode(request),
             |refuse| refuse.confirm_manifest_noting_the_mode(request),
         )
@@ -568,6 +620,7 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
         self.asked(
+            |_| None,
             |held| held.ask_user(asking),
             |refuse| refuse.ask_user(asking),
         )
@@ -595,13 +648,24 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 }
 
 impl<T: Confirmer + ?Sized> Borrowed<'_, '_, T> {
-    /// Put a question to the person, or refuse it where this delegate has been stopped.
+    /// Answer a question, put it to the person, or refuse it where this delegate has been stopped.
     ///
-    /// Checked again once the lock is held: a delegate waiting its turn behind another's question
-    /// can be stopped while it waits, and the person should not be shown the question of a run
-    /// they just ended.
+    /// A stopped delegate is refused first, whatever the mode would have answered, so stopping a
+    /// delegate ends its questions in every mode (DELEGATE-25).
+    ///
+    /// Then the mode's answer, if it has one, is taken without the lock (`unasked`): a question
+    /// nobody is asked has nobody to wait for, and holding it behind another run's open question
+    /// would idle this one for as long as the person takes to answer that (DELEGATE-16). The
+    /// answer is read from the mode once, here, and decided on the flags the policy layer derived.
+    ///
+    /// Only a question that reaches the person takes the lock. It is checked for a stop again once
+    /// the lock is held: a delegate waiting its turn behind another's question can be stopped
+    /// while it waits, and the person should not be shown the question of a run they just ended.
+    /// The confirmer behind the lock reads the mode again, so a mode changed while this waited
+    /// decides the question (MODE-8).
     fn asked<R>(
         &mut self,
+        unasked: impl FnOnce(&crate::permission_mode::Unasked) -> Option<R>,
         ask: impl FnOnce(&mut T) -> R,
         refuse: impl FnOnce(&mut crate::confirm::Unattended) -> R,
     ) -> R {
@@ -610,6 +674,9 @@ impl<T: Confirmer + ?Sized> Borrowed<'_, '_, T> {
         };
         if stopped(&self.stop) {
             return refuse(&mut crate::confirm::Unattended);
+        }
+        if let Some(answer) = self.lent.unasked.as_ref().and_then(unasked) {
+            return answer;
         }
         let mut held = self.lent.hold();
         if stopped(&self.stop) {
@@ -649,6 +716,7 @@ impl<T: ?Sized> Borrowed<'_, '_, T> {
 mod tests {
     use super::*;
     use crate::outcome::Spent;
+    use crate::permission_mode::PermissionMode;
     use crate::report::RecordingReporter;
 
     fn a_total(tokens: u64) -> Spent {
@@ -730,117 +798,145 @@ mod tests {
         );
     }
 
+    /// A confirmer whose `ask_user` announces the question and then waits to be released, and
+    /// which refuses everything else, so an answer to any other question is the mode's.
+    struct Slow(
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    );
+    impl Slow {
+        /// The double, the receiver that hears a question reach it, the sender that lets the
+        /// question go, and a count of the questions other than `ask_user` that reached it.
+        fn new() -> (
+            Self,
+            std::sync::mpsc::Receiver<()>,
+            std::sync::mpsc::Sender<()>,
+            std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        ) {
+            let (asked_tx, asked_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            (
+                Self(asked_tx, release_rx, reached.clone()),
+                asked_rx,
+                release_tx,
+                reached,
+            )
+        }
+        fn reached(&self) {
+            self.2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    impl crate::confirm::Confirmer for Slow {
+        fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+            self.0.send(()).expect("announce the question");
+            self.1
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("be let go");
+            crate::confirm::ChoosesFirst.ask_user(asking)
+        }
+        fn confirm_write(
+            &mut self,
+            r: &crate::confirm::WriteRequest,
+        ) -> crate::confirm::WriteDecision {
+            self.reached();
+            crate::confirm::Unattended.confirm_write(r)
+        }
+        fn confirm_run(&mut self, r: &crate::confirm::RunRequest) -> crate::confirm::RunDecision {
+            self.reached();
+            crate::confirm::Unattended.confirm_run(r)
+        }
+        fn confirm_read_output(
+            &mut self,
+            r: &crate::confirm::OutputRequest,
+        ) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_read_output(r)
+        }
+        fn confirm_vetted_read(
+            &mut self,
+            r: &crate::confirm::VetRequest,
+        ) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_vetted_read(r)
+        }
+        fn confirm_fetch(&mut self, r: &crate::confirm::FetchRequest) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_fetch(r)
+        }
+        fn confirm_vouch(&mut self, r: &crate::confirm::VouchRequest) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_vouch(r)
+        }
+        fn confirm_exposing_read(
+            &mut self,
+            r: &crate::confirm::ExposureRequest,
+        ) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_exposing_read(r)
+        }
+        fn confirm_tool_list(
+            &mut self,
+            r: &crate::confirm::ToolListRequest,
+        ) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_tool_list(r)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            r: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            self.reached();
+            crate::confirm::Unattended.confirm_mcp_call(r)
+        }
+        /// Refuses. This double answers no question about reach.
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            self.reached();
+            Decision::Reject
+        }
+
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            self.reached();
+            Decision::Reject
+        }
+
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            self.reached();
+            crate::confirm::MessageDecision::Decline
+        }
+
+        fn confirm_move(&mut self, r: &crate::confirm::MoveRequest) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_move(r)
+        }
+        fn confirm_server(
+            &mut self,
+            r: &crate::confirm::ServerRequest,
+        ) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_server(r)
+        }
+        fn confirm_manifest(
+            &mut self,
+            r: &crate::confirm::ManifestRequest,
+        ) -> crate::confirm::Decision {
+            self.reached();
+            crate::confirm::Unattended.confirm_manifest(r)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            None
+        }
+    }
+
     /// The press can arrive while the delegate is queued behind somebody else's question, which
     /// is the one case a check before taking the lock cannot see.
     #[test]
     fn a_question_waiting_for_the_person_is_declined_when_its_delegate_is_stopped_meanwhile() {
-        use std::sync::mpsc;
-
-        struct Slow(mpsc::Sender<()>, mpsc::Receiver<()>);
-        impl crate::confirm::Confirmer for Slow {
-            fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-                self.0.send(()).expect("announce the question");
-                self.1
-                    .recv_timeout(std::time::Duration::from_secs(5))
-                    .expect("be let go");
-                crate::confirm::ChoosesFirst.ask_user(asking)
-            }
-            fn confirm_write(
-                &mut self,
-                r: &crate::confirm::WriteRequest,
-            ) -> crate::confirm::WriteDecision {
-                crate::confirm::Unattended.confirm_write(r)
-            }
-            fn confirm_run(
-                &mut self,
-                r: &crate::confirm::RunRequest,
-            ) -> crate::confirm::RunDecision {
-                crate::confirm::Unattended.confirm_run(r)
-            }
-            fn confirm_read_output(
-                &mut self,
-                r: &crate::confirm::OutputRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_read_output(r)
-            }
-            fn confirm_vetted_read(
-                &mut self,
-                r: &crate::confirm::VetRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_vetted_read(r)
-            }
-            fn confirm_fetch(
-                &mut self,
-                r: &crate::confirm::FetchRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_fetch(r)
-            }
-            fn confirm_vouch(
-                &mut self,
-                r: &crate::confirm::VouchRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_vouch(r)
-            }
-            fn confirm_exposing_read(
-                &mut self,
-                r: &crate::confirm::ExposureRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_exposing_read(r)
-            }
-            fn confirm_tool_list(
-                &mut self,
-                r: &crate::confirm::ToolListRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_tool_list(r)
-            }
-            fn confirm_mcp_call(
-                &mut self,
-                r: &crate::confirm::McpCallRequest,
-            ) -> crate::confirm::CallDecision {
-                crate::confirm::Unattended.confirm_mcp_call(r)
-            }
-            /// Refuses. This double answers no question about reach.
-            fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
-                Decision::Reject
-            }
-
-            fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
-                Decision::Reject
-            }
-
-            fn confirm_message(
-                &mut self,
-                _request: &crate::confirm::MessageRequest,
-            ) -> crate::confirm::MessageDecision {
-                crate::confirm::MessageDecision::Decline
-            }
-
-            fn confirm_move(
-                &mut self,
-                r: &crate::confirm::MoveRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_move(r)
-            }
-            fn confirm_server(
-                &mut self,
-                r: &crate::confirm::ServerRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_server(r)
-            }
-            fn confirm_manifest(
-                &mut self,
-                r: &crate::confirm::ManifestRequest,
-            ) -> crate::confirm::Decision {
-                crate::confirm::Unattended.confirm_manifest(r)
-            }
-            fn interjection(&mut self) -> Option<String> {
-                None
-            }
-        }
-
-        let (asked_tx, asked_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let mut person = Slow(asked_tx, release_rx);
+        let (mut person, asked_rx, release_tx, _) = Slow::new();
         let lent = Lent::new(&mut person);
         let stop = bravebot_core::cancel::DelegateStop::new();
         let mut first = lent.delegate(DelegateId::nth(1));
@@ -870,6 +966,328 @@ mod tests {
         assert!(
             asked_rx.try_recv().is_err(),
             "the stopped delegate's question reached the person"
+        );
+    }
+
+    fn an_exposure() -> crate::confirm::ExposureRequest {
+        crate::confirm::ExposureRequest {
+            path: ".env".to_string(),
+            credentials: Vec::new(),
+        }
+    }
+
+    fn a_file_write() -> WriteRequest {
+        WriteRequest {
+            written_since_checkout: false,
+            path: "src/main.rs".to_string(),
+            contents: "fn main() {}\n".to_string(),
+            existing: None,
+            diff: crate::diff::Diff::compute("", "fn main() {}\n"),
+            intent: crate::confirm::Intent::Create,
+            untrusted: false,
+            remark: None,
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        }
+    }
+
+    fn a_file_vouch() -> VouchRequest {
+        VouchRequest {
+            path: "notes.txt".to_string(),
+            rule: "notes.txt".to_string(),
+            preview: "a line".to_string(),
+            truncated: false,
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
+            label: String::new(),
+            reason_label: None,
+        }
+    }
+
+    fn a_command() -> RunRequest {
+        RunRequest::from_pipeline(
+            &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                "git",
+                vec!["log".into()],
+            )]),
+            &["/usr/bin/git".into()],
+            "/tmp/project",
+        )
+    }
+
+    fn a_plan() -> crate::confirm::ManifestRequest {
+        crate::confirm::ManifestRequest {
+            task: "tidy the notes".to_string(),
+            steps: vec!["1. [act] write summary to summary.md".to_string()],
+        }
+    }
+
+    /// Puts `question` from one delegate while a second delegate's `ask_user` is open on the
+    /// person, and says whether `question` returned while that was still open, what it returned,
+    /// and how many questions other than `ask_user` reached the person's confirmer. `between` runs
+    /// once the delegate has been started and before the open question is released, as a person
+    /// changing the mode would.
+    fn while_a_question_is_open<R: Send>(
+        mode: &crate::permission_mode::LiveMode,
+        between: impl FnOnce(),
+        question: impl FnOnce(&mut Borrowed<'_, '_, crate::permission_mode::Confining<'_, Slow>>) -> R
+        + Send,
+    ) -> (bool, R, usize) {
+        let (mut person, asked_rx, release_tx, reached) = Slow::new();
+        let mut confining =
+            crate::permission_mode::Confining::new(&mut person, mode.clone(), false);
+        let lent = Lent::confirming(&mut confining);
+        let mut holder = lent.delegate(DelegateId::nth(1));
+        let mut other = lent.delegate(DelegateId::nth(2));
+        std::thread::scope(|scope| {
+            let holding = scope.spawn(move || holder.ask_user(&a_question()));
+            asked_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the open question reached the person");
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let asking = scope.spawn(move || {
+                let answer = question(&mut other);
+                let _ = done_tx.send(());
+                answer
+            });
+            between();
+            let early = done_rx
+                .recv_timeout(std::time::Duration::from_millis(500))
+                .is_ok();
+            release_tx.send(()).expect("let the open question go");
+            holding.join().expect("the open question");
+            let answer = asking.join().expect("the delegate's question");
+            (
+                early,
+                answer,
+                reached.load(std::sync::atomic::Ordering::SeqCst),
+            )
+        })
+    }
+
+    /// DELEGATE-16, MODE-4, TRACE-7: a read bypass approves is answered at once, with the mode's
+    /// name, while another delegate's `ask_user` is still open. It is the case the issue
+    /// reported, where a reader idled for as long as the person took to answer the other. The
+    /// regression it rejects is deciding the question only after the single confirmer is free,
+    /// which blocks here until the open question is released and so returns late.
+    #[test]
+    fn a_read_bypassing_approves_is_not_held_behind_another_delegates_open_question() {
+        let mode = crate::permission_mode::LiveMode::new(PermissionMode::Bypass);
+        let (early, answer, reached) = while_a_question_is_open(
+            &mode,
+            || {},
+            |delegate| delegate.confirm_exposing_read_noting_the_mode(&an_exposure()),
+        );
+        assert!(
+            early,
+            "a question bypass answers waited for another delegate's open question"
+        );
+        assert_eq!(
+            answer,
+            (Decision::Approve, Some("bypass")),
+            "the answer was not recorded as the mode's"
+        );
+        assert_eq!(
+            reached, 0,
+            "a question the mode answered reached the person"
+        );
+    }
+
+    /// DELEGATE-16: every kind of question a mode answers without a person is decided at once.
+    /// The regression it rejects is moving only the exposing read out of the queue, which leaves a
+    /// delegate's write, command, vouch or plan waiting behind a question it has nothing to do
+    /// with.
+    #[test]
+    fn what_a_mode_answers_unasked_is_not_held_behind_an_open_question() {
+        let bypass = crate::permission_mode::LiveMode::new(PermissionMode::Bypass);
+        let (early, answer, reached) = while_a_question_is_open(
+            &bypass,
+            || {},
+            |delegate| {
+                (
+                    delegate.confirm_write(&a_file_write()),
+                    delegate.confirm_run(&a_command()).approved(),
+                    delegate.confirm_vouch_noting_the_mode(&a_file_vouch()),
+                    delegate.confirm_manifest(&a_plan()),
+                )
+            },
+        );
+        assert!(early, "bypass answers waited for the open question");
+        assert_eq!(
+            answer,
+            (
+                WriteDecision::approve(),
+                true,
+                (Decision::Approve, Some("bypass")),
+                Decision::Approve
+            )
+        );
+        assert_eq!(reached, 0);
+
+        let accepting = crate::permission_mode::LiveMode::new(PermissionMode::AcceptEdits);
+        let (early, answer, reached) = while_a_question_is_open(
+            &accepting,
+            || {},
+            |delegate| delegate.confirm_write(&a_file_write()),
+        );
+        assert!(
+            early,
+            "accepting edits' answer waited for the open question"
+        );
+        assert_eq!(answer, WriteDecision::approve());
+        assert_eq!(reached, 0);
+
+        let planning = crate::permission_mode::LiveMode::new(PermissionMode::Plan);
+        let (early, answer, reached) = while_a_question_is_open(
+            &planning,
+            || {},
+            |delegate| delegate.confirm_write(&a_file_write()),
+        );
+        assert!(early, "plan mode's refusal waited for the open question");
+        assert_eq!(answer, WriteDecision::reject());
+        assert_eq!(reached, 0);
+    }
+
+    /// DELEGATE-16: a question the mode does not answer is put to the person and waits its turn,
+    /// so the open question is not disturbed. The regression it rejects is answering for the
+    /// person, or putting a second question to them at the same time.
+    #[test]
+    fn a_question_the_mode_does_not_answer_still_waits_for_the_open_one() {
+        let mode = crate::permission_mode::LiveMode::new(PermissionMode::Ask);
+        let (early, answer, reached) = while_a_question_is_open(
+            &mode,
+            || {},
+            |delegate| {
+                (
+                    delegate.confirm_exposing_read_noting_the_mode(&an_exposure()),
+                    delegate.confirm_run(&a_command()).approved(),
+                )
+            },
+        );
+        assert!(
+            !early,
+            "a question for the person was put while another was open"
+        );
+        assert_eq!(answer, ((Decision::Reject, None), false));
+        assert_eq!(
+            reached, 2,
+            "the questions did not reach the person in their turn"
+        );
+
+        let accepting = crate::permission_mode::LiveMode::new(PermissionMode::AcceptEdits);
+        let (early, _, reached) = while_a_question_is_open(
+            &accepting,
+            || {},
+            |delegate| delegate.confirm_run(&a_command()).approved(),
+        );
+        assert!(!early, "accepting edits answered a command");
+        assert_eq!(reached, 1);
+    }
+
+    /// MODE-8: the mode is read when the question is decided, so a change after the confirmer was
+    /// lent decides the questions after it, and a question already waiting is decided under the
+    /// mode in force when its turn comes. The regressions it rejects are a mode copied when the
+    /// confirmer was lent, which keeps approving after the person leaves bypass, and a waiting
+    /// question decided under the mode it queued in.
+    #[test]
+    fn the_mode_in_force_when_a_question_is_decided_answers_it() {
+        let left = crate::permission_mode::LiveMode::new(PermissionMode::Bypass);
+        let (early, answer, reached) = while_a_question_is_open(
+            &left,
+            || left.set(PermissionMode::Ask),
+            |delegate| delegate.confirm_exposing_read_noting_the_mode(&an_exposure()),
+        );
+        assert!(!early, "a question answered under the mode left behind");
+        assert_eq!(answer, (Decision::Reject, None));
+        assert_eq!(reached, 1);
+
+        let entered = crate::permission_mode::LiveMode::new(PermissionMode::Ask);
+        let (_, answer, reached) = while_a_question_is_open(
+            &entered,
+            || {
+                // Long enough for the delegate to have found the mode asks and queued.
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                entered.set(PermissionMode::Bypass);
+            },
+            |delegate| delegate.confirm_exposing_read_noting_the_mode(&an_exposure()),
+        );
+        assert_eq!(
+            answer,
+            (Decision::Approve, Some("bypass")),
+            "a queued question was decided under the mode it queued in"
+        );
+        assert_eq!(reached, 0);
+    }
+
+    /// DELEGATE-25: a stopped delegate is refused where the mode would have approved, and its
+    /// sibling is not. The regression it rejects is answering from the mode before looking at the
+    /// stop, which would let a delegate the person ended go on writing in bypass.
+    #[test]
+    fn a_stopped_delegate_is_refused_what_the_mode_would_have_approved() {
+        let (mut person, _asked, _release, reached) = Slow::new();
+        let mut confining = crate::permission_mode::Confining::new(
+            &mut person,
+            crate::permission_mode::LiveMode::new(PermissionMode::Bypass),
+            false,
+        );
+        let lent = Lent::confirming(&mut confining);
+        let stop = bravebot_core::cancel::DelegateStop::new();
+        let mut stopped = lent.delegate_stoppable(DelegateId::nth(1), stop.clone());
+        let mut sibling = lent.delegate_stoppable(
+            DelegateId::nth(2),
+            bravebot_core::cancel::DelegateStop::new(),
+        );
+        stop.request();
+
+        assert_eq!(
+            stopped.confirm_write(&a_file_write()),
+            WriteDecision::reject()
+        );
+        assert_eq!(
+            stopped.confirm_exposing_read_noting_the_mode(&an_exposure()),
+            (Decision::Reject, None)
+        );
+        assert_eq!(
+            sibling.confirm_write(&a_file_write()),
+            WriteDecision::approve(),
+            "stopping one delegate refused another's"
+        );
+        assert_eq!(reached.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// DELEGATE-16: the view of the mode is taken only from a confirmer that offers one, and a
+    /// delegate that lends its handle onward passes it on, so a delegate's own delegates decide
+    /// the same way. Anything else is put to the confirmer, which is the safe default.
+    #[test]
+    fn the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles() {
+        let mut confining_over = crate::confirm::Unattended;
+        let mut confining = crate::permission_mode::Confining::new(
+            &mut confining_over,
+            PermissionMode::Bypass,
+            false,
+        );
+        let lent = Lent::confirming(&mut confining);
+        assert!(
+            lent.delegate(DelegateId::nth(1))
+                .answering_unasked()
+                .is_some()
+        );
+
+        let mut plain = crate::confirm::Unattended;
+        let lent = Lent::confirming(&mut plain);
+        assert!(
+            lent.delegate(DelegateId::nth(1))
+                .answering_unasked()
+                .is_none()
+        );
+        let lent = Lent::new(&mut plain);
+        assert!(
+            lent.delegate(DelegateId::nth(1))
+                .answering_unasked()
+                .is_none()
         );
     }
 
@@ -1053,23 +1471,19 @@ mod tests {
             asked: usize,
         }
         impl Subscription for Counting {
-            fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+            fn next_credential(&mut self) -> SubscriptionCredential {
                 self.asked += 1;
-                Ok(SubscriptionCredential {
+                SubscriptionCredential {
                     key: bravebot_config::Secret::new("a-key"),
-                })
+                }
             }
         }
 
         let mut source = Counting { asked: 0 };
         {
             let lent = Lent::new(&mut source);
-            Spending::new(&lent)
-                .next_credential()
-                .expect("the turn presents the key");
-            Spending::new(&lent)
-                .next_credential()
-                .expect("the delegate presents the key");
+            Spending::new(&lent).next_credential();
+            Spending::new(&lent).next_credential();
         }
 
         assert_eq!(

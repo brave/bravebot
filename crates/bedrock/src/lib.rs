@@ -25,12 +25,12 @@ pub mod protocol;
 
 #[cfg(test)]
 use bravebot_aichat::ATTEMPTS;
-use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
+use bravebot_aichat::call::{CallState, Concession, Driven, Plan, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
-    Completion, CutOff, OpenCall, Progress, attempts_allowed, backoff, pause_after_failure,
-    rate_limit_backoff, rate_limit_without_wait, read_in_background, reply_bound,
-    retryable_within_ceiling,
+    Arrived, Completion, CutOff, OpenCall, Progress, attempts_allowed, backoff,
+    pause_after_failure, rate_limit_backoff, rate_limit_without_wait, read_in_background,
+    reply_bound, retryable_within_ceiling,
 };
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
@@ -42,7 +42,7 @@ use bravebot_net::{Egress, EgressError, Request};
 use eventstream::FrameDecoder;
 use protocol::StreamEvent;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The service name SigV4 signs for.
 const SERVICE: &str = "bedrock";
@@ -129,22 +129,7 @@ impl fmt::Display for BedrockError {
             Self::Reported { kind } => {
                 write!(f, "AWS stopped the reply part way through and reported {kind}")
             }
-            Self::TooLong(cut_off) => {
-                let ceiling = cut_off.ceiling;
-                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
-                match (&cut_off.call, cut_off.thought) {
-                    (Some(OpenCall { tool: Some(tool), .. }), _) => write!(
-                        f,
-                        "while writing a call to {tool}, so the call was not made"
-                    )?,
-                    (Some(OpenCall { tool: None, .. }), _) => {
-                        f.write_str("while writing a tool call, so the call was not made")?
-                    }
-                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
-                    (None, false) => f.write_str("before writing anything")?,
-                }
-                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
-            }
+            Self::TooLong(cut_off) => write!(f, "{cut_off}"),
             Self::NoModel => f.write_str(
                 "no Bedrock model is configured. Set ANTHROPIC_DEFAULT_OPUS_MODEL (or the sonnet or \
                  haiku equivalent) in ~/.bravebot/settings.json",
@@ -177,12 +162,72 @@ pub use bravebot_aichat::Refusals;
 /// agent puts back with [`known_to_refuse_showing_thinking`] ([BACKEND-63]).
 ///
 /// [BACKEND-63]: ../../../docs/specs/backends.md#BACKEND-63
-struct Learned(std::sync::Mutex<std::collections::HashMap<String, Refusals>>);
+struct Learned(std::sync::Mutex<std::collections::HashMap<String, Known>>);
+
+/// What one model has been found to refuse, and what is suspected of it.
+///
+/// The breakpoints, and the lifetime that rides on them, are refused with the status an expired
+/// credential, a credential replaced between two requests and a burst of requests answered
+/// together are refused with too, and a request answered once they were dropped does not say which
+/// it was. So the first such answer is held as a doubt, and the model is recorded as refusing them
+/// only when a call that began after the doubt was held is refused and answered the same way. A
+/// request that carried them and was answered clears the doubt. The record lapses after
+/// [`REFUSAL_LASTS`], after which they are sent again. Every other refusal is a status of the
+/// request's contents and is recorded at once.
+#[derive(Clone, Copy, Default)]
+struct Known {
+    refusals: Refusals,
+    /// When the breakpoints or their lifetime were recorded as refused, if they were.
+    recorded: Option<Instant>,
+    /// The first answered request after a 403, not yet a refusal.
+    doubt: Option<Doubt>,
+}
+
+/// One answered request after a 403 that dropped the breakpoints or the lifetime.
+#[derive(Clone, Copy)]
+struct Doubt {
+    /// The last call that had begun when the doubt was held. A call numbered at or below it saw
+    /// the same moment, so its refusal is the same event and counts for nothing more.
+    watermark: u64,
+    at: Instant,
+}
+
+/// How long a model recorded as refusing the breakpoints is sent none, and how long one refusal is
+/// held as a doubt. After it the breakpoints are sent again, which costs one refused request for a
+/// model that still does not read them.
+const REFUSAL_LASTS: Duration = Duration::from_secs(30 * 60);
+
+impl Known {
+    /// Drop what has lapsed by `now`.
+    fn lapse(&mut self, now: Instant) {
+        if self
+            .recorded
+            .is_some_and(|at| now.saturating_duration_since(at) >= REFUSAL_LASTS)
+        {
+            self.recorded = None;
+            self.refusals.caching = false;
+            self.refusals.cache_ttl = false;
+        }
+        if self
+            .doubt
+            .is_some_and(|d| now.saturating_duration_since(d.at) >= REFUSAL_LASTS)
+        {
+            self.doubt = None;
+        }
+    }
+}
 
 fn learned() -> &'static Learned {
     static LEARNED: std::sync::OnceLock<Learned> = std::sync::OnceLock::new();
     LEARNED.get_or_init(|| Learned(std::sync::Mutex::new(std::collections::HashMap::new())))
 }
+
+/// The number of the call that begins now, which only ever rises.
+fn next_call() -> u64 {
+    CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// What `model` has been found to refuse.
 ///
@@ -190,17 +235,75 @@ fn learned() -> &'static Learned {
 /// reports refused is one no later request carries, so reporting it as in force would be reporting
 /// a charge somebody chose and is not getting.
 pub fn refusals(model: &str) -> Refusals {
+    refusals_at(model, Instant::now())
+}
+
+fn refusals_at(model: &str, now: Instant) -> Refusals {
     learned()
         .0
         .lock()
-        .map(|known| known.get(model).copied().unwrap_or_default())
+        .map(|known| {
+            let mut entry = known.get(model).copied().unwrap_or_default();
+            entry.lapse(now);
+            entry.refusals
+        })
         .unwrap_or_default()
 }
 
-/// Record what a model refused.
-fn remember(model: &str, refusals: Refusals) {
-    if let Ok(mut known) = learned().0.lock() {
-        known.insert(model.to_string(), refusals);
+/// Whether `model` is recorded as refusing the cache breakpoints, so that requests to it carry
+/// none until the record lapses.
+///
+/// Asked so an interface can say that the model's prefix is paid for in full on every request. Not
+/// content: the record is made from statuses and counts of requests alone.
+pub fn breakpoints_given_up(model: &str) -> bool {
+    refusals(model).caching
+}
+
+/// Record what a model refused, as found by the call numbered `call`.
+fn remember(model: &str, found: Refusals, call: u64) {
+    remember_at(model, found, call, Instant::now());
+}
+
+fn remember_at(model: &str, found: Refusals, call: u64, now: Instant) {
+    let Ok(mut known) = learned().0.lock() else {
+        return;
+    };
+    let entry = known.entry(model.to_string()).or_default();
+    entry.lapse(now);
+    let newly = (found.caching && !entry.refusals.caching)
+        || (found.cache_ttl && !entry.refusals.cache_ttl);
+    if !newly {
+        entry.refusals = found;
+        return;
+    }
+    if entry.doubt.is_some_and(|d| call > d.watermark) {
+        entry.refusals = found;
+        entry.recorded = Some(now);
+        entry.doubt = None;
+        return;
+    }
+    // Held, not recorded: the next request carries what this one gave up. A call that began before
+    // the doubt was held leaves it as it was.
+    entry.refusals = Refusals {
+        caching: false,
+        cache_ttl: false,
+        ..found
+    };
+    if entry.doubt.is_none() {
+        entry.doubt = Some(Doubt {
+            watermark: CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            at: now,
+        });
+    }
+}
+
+/// A request that carried the breakpoints was answered, so whatever doubt a refusal left is
+/// settled: the model reads them.
+fn doubt_cleared(model: &str) {
+    if let Ok(mut known) = learned().0.lock()
+        && let Some(entry) = known.get_mut(model)
+    {
+        entry.doubt = None;
     }
 }
 
@@ -221,6 +324,7 @@ pub fn known_to_refuse_showing_thinking(model: &str) {
             thinking_shown: true,
             ..refusals(model)
         },
+        0,
     );
 }
 
@@ -311,26 +415,27 @@ impl From<credentials::CredentialError> for BedrockError {
 }
 
 pub struct BedrockClient<'a> {
-    spent: Spent,
-    // Tests replace signing and credentials while exercising the real HTTP and retry paths.
-    #[cfg(test)]
-    test_request: Option<Request>,
-    config: &'a Bedrock,
-    egress: &'a Egress,
-    /// What this client's model has refused so far in the call in progress, loaded and settled by
-    /// [`bravebot_aichat::call::drive`].
+    /// What this call has spent, how it waits and learns that it should stop, and what this
+    /// client's model has refused so far in the call in progress, loaded and settled by
+    /// [`bravebot_aichat::call::drive`]. The wait before the first retry is [`BACKOFF`] unless a
+    /// test shortens it.
     ///
     /// Nothing is refused until a model says so, which is the only way to find out: an
     /// inference-profile ARN does not say which model is behind it, so nothing says whether it
     /// does prompt caching, reads a lifetime on a breakpoint, defines an effort field, allows the
     /// assumed ceiling, takes the ask for arguments as they are written, or takes the ask to show
     /// thinking. A model that refuses the ceiling is sent the fallback.
-    refusals: Refusals,
+    call: CallState,
+    // Tests replace signing and credentials while exercising the real HTTP and retry paths.
+    #[cfg(test)]
+    test_request: Option<Request>,
+    config: &'a Bedrock,
+    egress: &'a Egress,
     /// The model the refusals were loaded for, so what is learned is written back under it.
     learned_for: String,
-    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
-    /// unless a test shortens it.
-    pace: Pace,
+    /// The number the call in progress began under, which says whether a refusal it found is the
+    /// same event as another call's or a later one.
+    call_number: u64,
 }
 
 impl Driven for BedrockClient<'_> {
@@ -340,20 +445,12 @@ impl Driven for BedrockClient<'_> {
         BedrockError::Cancelled
     }
 
-    fn spent_mut(&mut self) -> &mut Spent {
-        &mut self.spent
+    fn state(&self) -> &CallState {
+        &self.call
     }
 
-    fn pace(&self) -> &Pace {
-        &self.pace
-    }
-
-    fn refusals(&self) -> &Refusals {
-        &self.refusals
-    }
-
-    fn refusals_mut(&mut self) -> &mut Refusals {
-        &mut self.refusals
+    fn state_mut(&mut self) -> &mut CallState {
+        &mut self.call
     }
 
     fn recall(&self, key: &str) -> Refusals {
@@ -361,7 +458,7 @@ impl Driven for BedrockClient<'_> {
     }
 
     fn remember(&self, key: &str, found: Refusals) {
-        remember(key, found);
+        remember(key, found, self.call_number);
     }
 
     /// The breakpoints, and the lifetime that rides on them, are refused with the status an
@@ -374,7 +471,7 @@ impl Driven for BedrockClient<'_> {
     fn refused(&self, request: &ChatRequest, concession: Concession, error: &BedrockError) -> bool {
         match concession {
             Concession::CacheTtl => {
-                !self.refusals.caching
+                !self.call.refusals.caching
                     && self.config.cache_ttl().is_some()
                     && error.may_refuse_caching()
             }
@@ -409,14 +506,14 @@ impl Driven for BedrockClient<'_> {
 
     fn pause(&self, failures: u32, error: &BedrockError) -> Duration {
         match error {
-            BedrockError::Egress(e) => pause_after_failure(self.pace.backoff, failures, e),
+            BedrockError::Egress(e) => pause_after_failure(self.call.pace.backoff, failures, e),
             // A throttle reported inside the stream names no wait, so it is paused for as a 429
             // that named none is.
             BedrockError::Reported { .. } if throttled_without_wait(error) => {
-                rate_limit_backoff(self.pace.backoff, failures)
-                    .max(backoff(self.pace.backoff, failures))
+                rate_limit_backoff(self.call.pace.backoff, failures)
+                    .max(backoff(self.call.pace.backoff, failures))
             }
-            _ => backoff(self.pace.backoff, failures),
+            _ => backoff(self.call.pace.backoff, failures),
         }
     }
 
@@ -428,35 +525,34 @@ impl Driven for BedrockClient<'_> {
 impl<'a> BedrockClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.spent.attempts
+        self.call.attempts()
     }
 
     /// The request fields the last call left out after the service refused them, in order.
     pub fn conceded(&self) -> bravebot_aichat::call::Conceded {
-        self.spent.conceded
+        self.call.conceded()
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        self.spent.total()
+        self.call.completed_usage()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.spent.last_prompt_tokens()
+        self.call.last_request_tokens()
     }
 
     pub fn new(config: &'a Bedrock, egress: &'a Egress) -> Self {
         Self {
-            spent: Spent::default(),
+            call: CallState::new(BACKOFF),
             #[cfg(test)]
             test_request: None,
             config,
             egress,
-            refusals: Refusals::default(),
             learned_for: String::new(),
-            pace: Pace::new(BACKOFF),
+            call_number: 0,
         }
     }
 
@@ -465,13 +561,13 @@ impl<'a> BedrockClient<'a> {
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     #[cfg(test)]
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.pace.backoff = backoff;
+        self.call = self.call.with_backoff(backoff);
         self
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.pace.cancel = Some(cancel);
+        self.call = self.call.with_cancel(cancel);
         self
     }
 
@@ -481,21 +577,35 @@ impl<'a> BedrockClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let model = self.model_for(request)?;
         self.learned_for = model.clone();
+        self.call_number = next_call();
         let plan = Plan {
             key: &model,
             order: &Self::CONCESSIONS,
         };
-        drive(
+        let result = drive(
             self,
             request,
             plan,
             policy,
             |client, policy, _| client.complete_once(policy, request),
             |_, _| {},
-        )
+        );
+        self.settle_doubt(&model, result.is_ok());
+        result
+    }
+
+    /// Where a request that carried the breakpoints and their lifetime was answered, the model reads
+    /// them and the doubt an earlier refusal left is gone. A request sent without them says nothing.
+    fn settle_doubt(&self, model: &str, answered: bool) {
+        let carried = !self.call.refusals.caching
+            && !self.call.conceded().has(Concession::Breakpoints)
+            && !self.call.conceded().has(Concession::CacheTtl);
+        if answered && carried {
+            doubt_cleared(model);
+        }
     }
 
     /// The order a refusal of a whole-reply request is answered in.
@@ -534,7 +644,7 @@ impl<'a> BedrockClient<'a> {
     fn ceiling_for(&self, model: &str) -> u64 {
         self.config
             .stated_output_limit(model)
-            .unwrap_or(if self.refusals.ceiling {
+            .unwrap_or(if self.call.refusals.ceiling {
                 bravebot_config::bedrock::OUTPUT_LIMIT_FALLBACK
             } else {
                 bravebot_config::bedrock::OUTPUT_LIMIT
@@ -548,7 +658,7 @@ impl<'a> BedrockClient<'a> {
     /// that an argument parses.
     fn streams_arguments(&self, request: &ChatRequest, streaming: bool) -> bool {
         streaming
-            && !self.refusals.arguments_as_written
+            && !self.call.refusals.arguments_as_written
             && request
                 .tools
                 .as_deref()
@@ -579,7 +689,7 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
         let (http, model) = self.build(request, false)?;
-        self.spent.sent();
+        self.call.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol, like the JSON envelope in the other backend: the bytes come out
@@ -595,7 +705,8 @@ impl<'a> BedrockClient<'a> {
             serde_json::from_slice(&bytes).map_err(|e| BedrockError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
-        self.spent
+        self.call
+            .spent
             .record(reported_usage(&envelope).map(Usage::from));
 
         let parsed: protocol::ConverseResponse =
@@ -720,14 +831,15 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let model = self.model_for(request)?;
         self.learned_for = model.clone();
+        self.call_number = next_call();
         let plan = Plan {
             key: &model,
             order: &Self::STREAMING_CONCESSIONS,
         };
-        drive(
+        let result = drive(
             self,
             request,
             plan,
@@ -738,7 +850,9 @@ impl<'a> BedrockClient<'a> {
                 // while it is happening. Reply progress resets; completed costs remain charged.
                 progress(Progress::announcing(retry));
             },
-        )
+        );
+        self.settle_doubt(&model, result.is_ok());
+        result
     }
 
     fn stream_once<S: Sink>(
@@ -749,51 +863,30 @@ impl<'a> BedrockClient<'a> {
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
         let (http, model) = self.build(request, true)?;
-        self.spent.sent();
+        self.call.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.pace.cancel.as_ref(),
+            self.call.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = FrameDecoder::new();
         let mut reply = Reply::default();
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("converse stream", Label::untrusted_public());
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // A read that fails once the reply has begun is the reply stopping, whatever the
-                // socket reported: the request plainly got through.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(self.stopped_part_way(request));
-                }
-                // A reply cut at its deadline among them: asked for again, it runs as long.
-                Ok(Err(e)) => return Err(e.into()),
-                // Nothing has arrived yet, which is the only chance to look at anything while a
-                // reply is still being waited for.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(BedrockError::Cancelled);
-                    }
-                    continue;
-                }
-                // The reader is gone without having said the body ended, which is the silence a dead
-                // connection leaves, and is answered as one below.
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.call.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(self.stopped_part_way(request)),
+                Arrived::Failed(e) => return Err(e.into()),
+                Arrived::Cancelled => return Err(BedrockError::Cancelled),
             };
-            began = true;
-
-            if self.pace.cancelled() {
-                return Err(BedrockError::Cancelled);
-            }
 
             let (bytes, _) = decoding.decode(piece);
             let written_before = reply.text.len();
@@ -823,7 +916,7 @@ impl<'a> BedrockClient<'a> {
                     }
                 }
                 if reply.ended && reply.counted {
-                    self.spent.record(Some(reply.usage));
+                    self.call.spent.record(Some(reply.usage));
                 }
             }
 
@@ -894,15 +987,19 @@ impl<'a> BedrockClient<'a> {
     ) -> protocol::ConverseRequest {
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
             .with_ceiling(self.ceiling_for(model))
-            .with_effort(request.effort.filter(|_| !self.refusals.effort))
-            .with_cache_ttl(self.config.cache_ttl().filter(|_| !self.refusals.cache_ttl));
+            .with_effort(request.effort.filter(|_| !self.call.refusals.effort))
+            .with_cache_ttl(
+                self.config
+                    .cache_ttl()
+                    .filter(|_| !self.call.refusals.cache_ttl),
+            );
         let converse = if self.streams_arguments(request, streaming) {
             converse.with_arguments_as_written()
         } else {
             converse
         };
         // A whole reply is sent once written, so its thinking leaves no gap in it to fill.
-        let converse = if streaming && !self.refusals.thinking_shown {
+        let converse = if streaming && !self.call.refusals.thinking_shown {
             converse.with_thinking_shown()
         } else {
             converse
@@ -912,7 +1009,7 @@ impl<'a> BedrockClient<'a> {
         } else {
             converse.without_the_conversation_breakpoint()
         };
-        if self.refusals.caching {
+        if self.call.refusals.caching {
             converse.without_breakpoints()
         } else {
             converse
@@ -1198,9 +1295,6 @@ const TRANSIENT_REPORTS: [&str; 4] = [
 /// How long to wait after the first failure. Doubled for each attempt after that.
 const BACKOFF: Duration = Duration::from_secs(1);
 
-/// How often a reply that has not started arriving looks up to see whether it should stop.
-const WAKE: Duration = Duration::from_millis(50);
-
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///
 /// Only transport failures qualify. A reply that arrived and would not decode is not a connection
@@ -1312,6 +1406,24 @@ mod tests {
         result.expect("the request without either answers");
         assert_eq!(sent.len(), 3);
 
+        // The breakpoints are held as a doubt after one answer, the level is recorded at once.
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                effort: true,
+                ..Refusals::default()
+            }
+        );
+
+        // A later client that refuses them again settles the doubt and keeps the level.
+        let (result, sent) = complete_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
+        );
+        result.expect("the request without the breakpoints answers");
+        assert_eq!(sent.len(), 2, "the level was asked about again");
+
         assert_eq!(
             refusals(model),
             Refusals {
@@ -1326,9 +1438,9 @@ mod tests {
 
         // The next turn builds a new client and starts from what the last one found.
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         assert!(
-            next.refusals.caching && next.refusals.effort,
+            next.call.refusals.caching && next.call.refusals.effort,
             "it asked all over again"
         );
     }
@@ -1368,8 +1480,171 @@ mod tests {
         );
         result.expect("the request without the breakpoints answers");
 
+        // One refusal is not yet the record, so the model is asked again before it is held to it.
+        let (result, _) = complete_against(
+            &config_for(model),
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
+        );
+        result.expect("the request without the breakpoints answers");
+
         assert!(refusals("a-model-that-refuses-caching").caching);
         assert!(!refusals("a-model-that-was-never-asked").caching);
+    }
+
+    /// Whether a sent body carried a cache breakpoint anywhere.
+    fn marked(body: &serde_json::Value) -> bool {
+        body.to_string().contains("cachePoint")
+    }
+
+    /// The same 403 is what an expired credential, a throttled burst and a model without caching
+    /// answer, and a request answered once the breakpoints were dropped does not say which it was.
+    /// Recording the model as refusing them on that one answer left every later request of the
+    /// process without them, at full price for the whole prefix, with nothing on the screen saying
+    /// so. The regression it rejects is the record made on the first answered probe.
+    #[test]
+    fn one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints() {
+        let model = "a-model-refused-once-and-answered-after";
+        let config = config_for(model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+
+        let (result, sent) = complete_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
+        );
+        result.expect("the request without the breakpoints answers");
+        assert!(marked(&sent[0]) && !marked(&sent[1]), "{sent:?}");
+        assert!(!refusals(model).caching, "one answered probe was recorded");
+
+        let (result, sent) = complete_against(&config, &request, vec![whole_reply()]);
+        result.expect("the next request answers");
+        assert_eq!(sent.len(), 1);
+        assert!(
+            marked(&sent[0]),
+            "a later request of the process lost its breakpoints: {}",
+            sent[0]
+        );
+
+        // The answered request cleared the doubt, so a refusal after it is a first one again.
+        let (result, _) = complete_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
+        );
+        result.expect("the request without the breakpoints answers");
+        assert!(
+            !refusals(model).caching,
+            "a refusal after an answered request completed the pair held before it"
+        );
+    }
+
+    /// A model that refuses the breakpoints on a second request is the one that does not do
+    /// caching, and from then on no request pays a refused attempt to find it out again. The
+    /// regressions it rejects are a record that is never made, which sends every request twice, and
+    /// a record that is made and not read back, which sends the breakpoints on every request.
+    #[test]
+    fn a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it() {
+        let model = "a-model-refused-on-two-requests";
+        let config = config_for(model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+        for _ in 0..2 {
+            let (result, _) = complete_against(
+                &config,
+                &request,
+                vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
+            );
+            result.expect("the request without the breakpoints answers");
+        }
+        assert!(refusals(model).caching);
+
+        let (result, sent) = complete_against(&config, &request, vec![whole_reply()]);
+        result.expect("answers");
+        assert_eq!(
+            sent.len(),
+            1,
+            "a probe was spent on a model known to refuse"
+        );
+        assert!(!marked(&sent[0]), "{}", sent[0]);
+    }
+
+    /// Requests that were already running when a 403 was answered saw the same transient failure,
+    /// so their refusals are one event and not two. Only a request that began after the first was
+    /// recorded is a second one. The regression it rejects is counting every refusal, which a
+    /// burst of delegate requests meets together.
+    #[test]
+    fn refusals_by_requests_that_began_together_count_once() {
+        let model = "a-model-refused-by-a-burst";
+        let found = Refusals {
+            caching: true,
+            ..Refusals::default()
+        };
+        let first = next_call();
+        let second = next_call();
+        remember(model, found, first);
+        remember(model, found, second);
+        assert!(
+            !refusals(model).caching,
+            "two requests begun before the first refusal was recorded were counted as two"
+        );
+        remember(model, found, next_call());
+        assert!(refusals(model).caching);
+    }
+
+    /// A record of a refusal lapses, so a model that was refused for another reason is tried
+    /// again, and a record is not kept past the time it is worth. The regression it rejects is a
+    /// record that lasts as long as the process.
+    #[test]
+    fn a_record_of_refused_breakpoints_lapses() {
+        let model = "a-model-whose-refusal-lapses";
+        let found = Refusals {
+            caching: true,
+            ..Refusals::default()
+        };
+        remember(model, found, next_call());
+        remember(model, found, next_call());
+        let now = Instant::now();
+        assert!(refusals_at(model, now).caching);
+        assert!(
+            !refusals_at(model, now + REFUSAL_LASTS + Duration::from_secs(1)).caching,
+            "the record outlived its time"
+        );
+        assert!(
+            refusals_at(model, now + REFUSAL_LASTS - Duration::from_secs(1)).caching,
+            "the record lapsed early"
+        );
+    }
+
+    /// The first refusal of a model is not a record, and neither is one made so long before the
+    /// second that the second is the only evidence. The regression it rejects is a count that is
+    /// never reset.
+    #[test]
+    fn a_first_refusal_is_forgotten_with_the_record() {
+        let model = "a-model-refused-long-ago";
+        let found = Refusals {
+            caching: true,
+            ..Refusals::default()
+        };
+        remember(model, found, next_call());
+        // As if the second came after the first had lapsed.
+        remember_at(
+            model,
+            found,
+            next_call(),
+            Instant::now() + REFUSAL_LASTS + Duration::from_secs(1),
+        );
+        assert!(!refusals(model).caching);
+    }
+
+    /// What the thinking refusal of an earlier session adds leaves a caching record as it is,
+    /// and is not itself counted as a refusal of the breakpoints.
+    #[test]
+    fn taking_the_thinking_refusal_from_an_earlier_session_counts_no_breakpoint_refusal() {
+        let model = "a-model-that-refused-thinking-last-week";
+        known_to_refuse_showing_thinking(model);
+        known_to_refuse_showing_thinking(model);
+        assert!(refusals(model).thinking_shown);
+        assert!(!refusals(model).caching);
     }
 
     /// A refusal carrying one status, as the egress layer reports one.
@@ -1728,6 +2003,35 @@ mod tests {
         );
     }
 
+    /// The sentence for a reply the ceiling stopped is the one the aichat client uses, in each of
+    /// its four forms. Two copies of it would drift, and a person reads the same failure from
+    /// whichever backend they use.
+    #[test]
+    fn a_reply_the_ceiling_stopped_is_described_as_the_aichat_client_describes_it() {
+        let call = |tool: Option<&str>| {
+            Some(OpenCall {
+                tool: tool.map(str::to_string),
+                arguments: 10,
+            })
+        };
+        for (call, thought) in [
+            (call(Some("write_file")), true),
+            (call(None), false),
+            (None, true),
+            (None, false),
+        ] {
+            let cut_off = CutOff {
+                ceiling: 32_000,
+                call,
+                thought,
+            };
+            assert_eq!(
+                BedrockError::TooLong(cut_off.clone()).to_string(),
+                bravebot_aichat::ChatError::TooLong(cut_off).to_string()
+            );
+        }
+    }
+
     /// Prompt caching is not something every model this backend can reach offers, and an
     /// inference-profile ARN does not say which model is behind it. A model that refuses the
     /// breakpoints refuses the whole request, so without asking again without them, every request
@@ -1940,15 +2244,18 @@ mod tests {
             "a refusal that outlived the breakpoints still cost the session its caching"
         );
 
-        // A probe that answered is the model saying it does not read them, and they stay dropped.
+        // A probe that answered is the model saying it does not read them, once it has said so on
+        // two requests, and then they stay dropped.
         let model = "a-model-whose-probe-answered";
         let request = ChatRequest::new(model, vec![Message::user("hello")]);
-        let (result, _) = complete_against(
-            &config_for(model),
-            &request,
-            vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
-        );
-        result.expect("the request without the breakpoints answers");
+        for _ in 0..2 {
+            let (result, _) = complete_against(
+                &config_for(model),
+                &request,
+                vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()],
+            );
+            result.expect("the request without the breakpoints answers");
+        }
         assert!(refusals(model).caching);
 
         // A request that never probed is left exactly as it was, whichever way it ended.
@@ -2443,7 +2750,7 @@ mod tests {
             "a request offering no tool asked about tool arguments"
         );
 
-        client.refusals.arguments_as_written = true;
+        client.call.refusals.arguments_as_written = true;
         assert_eq!(
             asks(&client, &offering, true),
             None,
@@ -2480,7 +2787,7 @@ mod tests {
             );
         }
 
-        client.refusals.thinking_shown = true;
+        client.call.refusals.thinking_shown = true;
         assert!(
             body(&client, &bare, true)
                 .get("additionalModelRequestFields")
@@ -2680,6 +2987,7 @@ mod tests {
                 arguments_as_written: true,
                 ..Refusals::default()
             },
+            next_call(),
         );
         let (result, sent) = stream_against_with(
             impatient(),
@@ -2714,7 +3022,7 @@ mod tests {
             matches!(client.stopped_part_way(&bare), BedrockError::Incomplete),
             "a reply with no tool to hold back was not asked for again"
         );
-        client.refusals.arguments_as_written = true;
+        client.call.refusals.arguments_as_written = true;
         assert!(matches!(
             client.stopped_part_way(&offering),
             BedrockError::Stalled
@@ -2772,7 +3080,7 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         let body = serde_json::to_value(next.converse_for(&request, model, true)).expect("a body");
         assert!(
             body.get("additionalModelRequestFields").is_none(),
@@ -2889,7 +3197,7 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         let body = serde_json::to_value(next.converse_for(&request, model, true)).expect("a body");
         assert_eq!(
             carried(&body),
@@ -2919,6 +3227,7 @@ mod tests {
                 effort: true,
                 ..Refusals::default()
             },
+            next_call(),
         );
         known_to_refuse_showing_thinking(known);
         assert_eq!(
@@ -2984,7 +3293,7 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         assert_eq!(
             next.converse_for(&request, model, true)
                 .inference_config
@@ -3083,7 +3392,7 @@ mod tests {
             effort: true,
             ..Refusals::default()
         };
-        remember(model, known);
+        remember(model, known, next_call());
 
         let (result, sent) = stream_against(
             &config_for(model),
@@ -3810,7 +4119,7 @@ mod tests {
             "a higher ceiling was given no longer than a lower one"
         );
 
-        client.refusals.ceiling = true;
+        client.call.refusals.ceiling = true;
         assert_eq!(
             given(&client, "unstated"),
             bravebot_net::Timeouts::default().reply,
@@ -4789,7 +5098,7 @@ mod tests {
         let chosen = config().with_cache_ttl(Some(bravebot_config::CacheTtl::OneHour));
         let mut client = BedrockClient::new(&chosen, &egress);
         assert_eq!(ttl_of(&client), Some(json!("1h")));
-        client.refusals.cache_ttl = true;
+        client.call.refusals.cache_ttl = true;
         assert_eq!(
             ttl_of(&client),
             None,
@@ -4833,6 +5142,20 @@ mod tests {
         );
         assert_eq!(
             refusals(model),
+            Refusals::default(),
+            "one answered request was recorded"
+        );
+
+        // The same answer on a request that began later is the record.
+        let (result, sent) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), answered()],
+        );
+        result.expect("the request without the lifetime answers");
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            refusals(model),
             Refusals {
                 cache_ttl: true,
                 ..Refusals::default()
@@ -4841,9 +5164,9 @@ mod tests {
 
         let egress = Egress::new();
         let mut next = BedrockClient::new(&config, &egress);
-        next.refusals = refusals(model);
+        next.call.refusals = refusals(model);
         assert!(
-            next.refusals.cache_ttl && !next.refusals.caching,
+            next.call.refusals.cache_ttl && !next.call.refusals.caching,
             "it asked all over again"
         );
     }
@@ -4913,7 +5236,10 @@ mod tests {
             Some(json!({"type": "default"})),
             "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
         );
-        assert!(refusals(model).cache_ttl);
+        assert!(
+            !refusals(model).cache_ttl,
+            "one answered request was recorded"
+        );
     }
 
     /// The configured account with the retry count and quiet gap a `provider` block would have
@@ -5043,6 +5369,7 @@ mod tests {
     /// whole of the limit, and one that sits out the window and past it.
     #[test]
     fn an_account_stating_a_window_is_asked_again_past_its_count_and_not_past_the_window() {
+        const WINDOW_MS: u64 = 1_000;
         // The count alone would stop at the second request, and the window carries on to the fifth.
         let (http, _received) = scripted_responses(vec![
             refused_with(503),
@@ -5065,22 +5392,28 @@ mod tests {
 
         for streaming in [false, true] {
             // A service that never recovers is given up on when the window is spent, well before
-            // the sixty requests it was ready to refuse.
+            // the sixty requests it was ready to refuse. The pauses double from a millisecond, so
+            // ten requests fit in the window, and a fourth is sent unless the first three take most
+            // of a second to answer.
             let (http, _received) = refused_requests(vec![503; 60]);
             let started = std::time::Instant::now();
             let (result, attempts) = asked_through(
-                &account_stating_a_window(None, 150),
+                &account_stating_a_window(None, WINDOW_MS),
                 &Egress::new(),
                 http,
                 streaming,
             );
             assert!(result.is_err(), "streaming {streaming}: {result:?}");
             assert!(
-                (4..30).contains(&attempts),
-                "streaming {streaming}: {attempts} requests went out in a window of 150 ms"
+                attempts > 3,
+                "streaming {streaming}: the window sent only {attempts} requests"
             );
             assert!(
-                started.elapsed() < Duration::from_secs(3),
+                attempts < 30,
+                "streaming {streaming}: {attempts} requests went out in a window of {WINDOW_MS} ms"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
                 "streaming {streaming}: the call outlasted its window: {:?}",
                 started.elapsed()
             );
@@ -5400,7 +5733,10 @@ mod tests {
                 }
             });
 
-            let config = config();
+            let config = config().with_patience(bravebot_config::provider::Patience {
+                max_retries: Some(2),
+                ..bravebot_config::provider::Patience::default()
+            });
             let bound = if stopped {
                 Duration::from_secs(4)
             } else {

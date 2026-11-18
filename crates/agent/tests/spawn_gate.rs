@@ -28,6 +28,9 @@ use std::time::Duration;
 #[path = "../test-support/pipelines.rs"]
 mod pipelines;
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 /// Runs `start` on another thread while this one holds the gate, and checks that the start reaches
 /// the gate, is held there, and finishes once the gate is released.
 fn start_waits_for_the_gate(start: impl FnOnce() + Send + 'static) {
@@ -72,12 +75,10 @@ fn a_shell_mode_command_waits_for_a_channel_being_created() {
     });
 }
 
-/// A directory of the test's own, under the build directory because the probes refuse one under the
-/// temporary directory.
+/// A directory of the test's own, under the scratch root, which is outside the temporary directory
+/// where that is possible, because the probes refuse one under it.
 fn scratch(name: &str) -> std::path::PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch")
-        .join(format!("spawn-gate-{name}"));
+    let path = scratch_root::scratch_dir(&format!("spawn-gate-{name}"));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("a scratch directory");
     path.canonicalize().expect("a real scratch directory")
