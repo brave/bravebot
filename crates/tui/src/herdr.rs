@@ -8,9 +8,10 @@
 //! The command that reopens the session is told from the same reporter, below the states
 //! ([HERDR-9](../../../docs/specs/herdr.md#HERDR-9)).
 
+use std::io::{self, Write};
 use std::sync::OnceLock;
 
-use bravebot_herdr::{Reporter, Resume, State as Shown};
+use bravebot_herdr::{Reporter, Resume, State as Shown, Status};
 use bravebot_i18n::t;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::network::Network;
@@ -56,6 +57,67 @@ pub(crate) fn state(state: State) {
 fn tell(reporter: &Reporter, state: State) {
     let (shown, message) = shown(state);
     reporter.report(shown, message);
+}
+
+/// Tell herdr the session is in `state`, over its socket and as the status printed to `out`, the
+/// terminal the interface draws on ([HERDR-16](../../../docs/specs/herdr.md#HERDR-16)).
+pub(crate) fn mark<W: Write>(out: &mut W, state: State) -> io::Result<()> {
+    self::state(state);
+    let (shown, message) = shown(state);
+    match status::with(|status| status.report(shown, message.as_deref())) {
+        Some(sequence) => {
+            out.write_all(sequence.as_bytes())?;
+            out.flush()
+        }
+        None => Ok(()),
+    }
+}
+
+/// Remove the status printed to `out`, which herdr's core keeps after the run exits to the shell,
+/// then release the pane ([HERDR-15](../../../docs/specs/herdr.md#HERDR-15)).
+pub(crate) fn leave<W: Write>(out: &mut W) -> io::Result<()> {
+    let cleared = match status::with(Status::release) {
+        Some(sequence) => out
+            .write_all(sequence.as_bytes())
+            .and_then(|()| out.flush()),
+        None => Ok(()),
+    };
+    release();
+    cleared
+}
+
+/// The run's status, one per process as the title is. A test has its own per thread, inactive
+/// unless it holds one, so tests that mark side by side each see only their own sequences.
+pub(crate) mod status {
+    use bravebot_herdr::Status;
+
+    #[cfg(not(test))]
+    pub(super) fn with<R>(f: impl FnOnce(&mut Status) -> R) -> R {
+        use std::sync::{Mutex, OnceLock, PoisonError};
+        static STATUS: OnceLock<Mutex<Status>> = OnceLock::new();
+        let status = STATUS.get_or_init(|| Mutex::new(Status::from_env()));
+        f(&mut status.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        static STATUS: std::cell::RefCell<Status> =
+            std::cell::RefCell::new(Status::from_variables(|_| None));
+    }
+
+    #[cfg(test)]
+    pub(super) fn with<R>(f: impl FnOnce(&mut Status) -> R) -> R {
+        STATUS.with(|status| f(&mut status.borrow_mut()))
+    }
+
+    /// Make this thread's status one inside herdr's core.
+    #[cfg(test)]
+    pub(crate) fn hold_inside() {
+        STATUS.with(|status| {
+            *status.borrow_mut() =
+                Status::from_variables(|name| (name == "HC_TERMINAL_ID").then(|| "t7".into()));
+        });
+    }
 }
 
 /// Tell herdr the run has left its pane, waiting a quarter of a second at most for it to have it
@@ -709,5 +771,50 @@ mod command_tests {
                 "~/notes",
             ]))
         );
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use crate::title::Title;
+    use base64::Engine;
+
+    fn mark(title: &mut Title, state: State) -> String {
+        let mut out = Vec::new();
+        title.mark(&mut out, state).expect("mark");
+        String::from_utf8(out).expect("utf-8")
+    }
+
+    /// HERDR-16. Each state the title tracks is printed as herdr's word for it, a question with the
+    /// fixed sentence, whether or not a title is written, and an unchanged state prints nothing.
+    #[test]
+    fn each_state_the_title_tracks_is_printed_for_herdrs_core_with_the_title_off() {
+        status::hold_inside();
+        let mut title = Title::new();
+        title.adopt(Some(false), false);
+        let waiting =
+            base64::engine::general_purpose::STANDARD.encode(t!(herdr_waiting).as_bytes());
+        assert_eq!(
+            mark(&mut title, State::Working),
+            "\x1b]7501;state=working:app=bravebot\x1b\\"
+        );
+        assert_eq!(mark(&mut title, State::Working), "");
+        assert_eq!(
+            mark(&mut title, State::Waiting),
+            format!("\x1b]7501;state=blocked:app=bravebot:msg={waiting}\x1b\\")
+        );
+        assert_eq!(
+            mark(&mut title, State::Ready),
+            "\x1b]7501;state=idle:app=bravebot\x1b\\"
+        );
+    }
+
+    /// Outside herdr's core the terminal is sent nothing it did not get before.
+    #[test]
+    fn outside_herdrs_core_marking_prints_only_the_title() {
+        let mut title = Title::new();
+        title.adopt(Some(false), false);
+        assert_eq!(mark(&mut title, State::Working), "");
     }
 }

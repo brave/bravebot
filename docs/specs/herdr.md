@@ -4,6 +4,7 @@ title: Reporting to herdr
 status: normative
 governs:
   - crates/herdr/src/lib.rs
+  - crates/herdr/src/status.rs
   - crates/herdr/src/transport.rs
   - crates/tui/src/herdr.rs
   - crates/tui/src/app/terminal.rs
@@ -20,6 +21,11 @@ is active, what a report carries, and what reporting may never do to the session
 the terminal interface reports through it ([HERDR-8](#HERDR-8)), and the command it hands herdr
 to reopen the session ([HERDR-9](#HERDR-9)).
 
+Herdr.app runs its terminals on a core of its own, `herdr-core`, which sets none of the variables
+the socket reporter reads and has no socket request for a report. It shows a terminal as an agent
+once the terminal's program prints an OSC 7501 status sequence to it. The status a session prints
+for the core is [HERDR-13](#HERDR-13) to [HERDR-16](#HERDR-16).
+
 The socket is local and names a process the person started, so a report is not network egress
 ([network-egress.md](network-egress.md)). It is still a channel into something that can type into
 every pane herdr runs, which is why who holds the connection matters
@@ -30,9 +36,10 @@ every pane herdr runs, which is why who holds the connection matters
 <a id="HERDR-1"></a>
 ### HERDR-1: the reporter is active only inside a herdr pane
 
-The reporter is active when `HERDR_ENV` is `1` and `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` are both
-set, non-empty and valid UTF-8. Otherwise every call does nothing and nothing is connected to. It
-reads no other variable.
+The socket reporter is active when `HERDR_ENV` is `1` and `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`
+are both set, non-empty and valid UTF-8. Otherwise every call does nothing and nothing is connected
+to. It reads no other variable. The status printed for herdr's core is turned on by its own
+variable ([HERDR-13](#HERDR-13)).
 
 **Why.** A socket path in the environment of a process herdr did not start could name anything's
 socket, and a session must not write to one on the strength of a stray variable.
@@ -259,3 +266,69 @@ pane when it sees the shell prompt again, later than a release would.
 `verified-by: bravebot_tui::app::tests::herdr::handing_the_terminal_over_for_a_while_leaves_the_run_in_its_pane`
 `verified-by: bravebot_tui::app::tests::herdr::nothing_the_title_marks_after_leaving_reaches_herdr`
 `verified-by: bravebot_tui::app::tests::herdr::a_herdr_that_never_answers_holds_the_way_out_up_only_briefly`
+
+<a id="HERDR-13"></a>
+### HERDR-13: a status is printed only inside a terminal of herdr's core
+
+The status is active when `HC_TERMINAL_ID` is set, non-empty and valid UTF-8. Otherwise nothing is
+printed. It reads no other variable.
+
+**Why.** The core sets `HC_TERMINAL_ID` in every terminal it runs. A terminal that is not one of
+the core's may show an escape sequence it does not know, so the sequence is printed only where it
+is read.
+
+`verified-by: bravebot_herdr::status::a_status_outside_herdrs_core_prints_nothing`
+`verified-by: bravebot_herdr::status::a_terminal_id_that_is_not_utf8_leaves_the_status_inactive`
+`verified-by: bravebot_herdr::status::a_status_asks_the_environment_for_the_terminal_id_alone`
+
+<a id="HERDR-14"></a>
+### HERDR-14: a status carries the state, bravebot's name and what its caller hands it
+
+A status is `ESC ] 7501 ; state=<state>:app=bravebot ESC \`, with `:msg=` and the base64 of the
+message after `app` when the caller gives one. The state is `idle`, `working` or `blocked`. A status
+carries no other key. A status the same as the last one printed is not printed again.
+
+**Why.** The core names the agent in the panel by `app` and refuses the whole status for a `msg`
+that is not base64. A status names no session, prompt or path, so what reaches the core is only the
+state and the fixed sentence the interface chose.
+
+**Known cost.** No `kind` is sent with `blocked`, since a status does not say whether the session
+waits on an approval or a question.
+
+`verified-by: bravebot_herdr::status::each_state_is_printed_as_the_cores_word_under_bravebots_name`
+`verified-by: bravebot_herdr::status::a_message_is_carried_as_base64`
+`verified-by: bravebot_herdr::status::an_unchanged_report_is_not_printed_again`
+
+<a id="HERDR-15"></a>
+### HERDR-15: leaving clears the status, and nothing is printed after it
+
+When the terminal interface leaves for good ([HERDR-12](#HERDR-12)), it prints
+`ESC ] 7501 ; state=clear ESC \` after handing the terminal back, if it printed a status. After it,
+nothing is printed. Handing the terminal over for a while does not clear it.
+
+**Why.** The core keeps a status after the program that printed it exits to the shell, so without
+the clear the pane shows bravebot after the person is back at their shell.
+
+**Known cost.** A panic or a signal that ends the session clears nothing, and the pane shows
+bravebot in its last state until the next program in it prints a status.
+
+`verified-by: bravebot_herdr::status::a_release_clears_the_report_once_and_nothing_follows_it`
+`verified-by: bravebot_herdr::status::a_status_that_never_reported_clears_nothing`
+`verified-by: bravebot_tui::app::tests::herdr::leaving_clears_the_status_after_the_terminal_is_handed_back`
+
+<a id="HERDR-16"></a>
+### HERDR-16: the terminal interface prints the state its title says it is doing
+
+Each state the title tracks is printed from the call that marks the title, to the terminal the
+interface draws on, whether or not a title is written. The states and the message are the ones
+[HERDR-8](#HERDR-8) reports. A session has no command to hand the core: the core keeps a terminal
+alive across its own restarts and does not take one.
+
+**Why.** The title and the status are written from one call, so the panel and the tab cannot
+disagree about whether the session is waiting for the person.
+
+**Known cost.** The first status is printed with the first frame, so a question asked before it is
+not shown by the core. herdr's socket reporter is told idle earlier, once the settings are read.
+
+`verified-by: bravebot_tui::herdr::each_state_the_title_tracks_is_printed_for_herdrs_core_with_the_title_off`
+`verified-by: bravebot_tui::herdr::outside_herdrs_core_marking_prints_only_the_title`

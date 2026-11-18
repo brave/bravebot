@@ -333,6 +333,7 @@ version = "0.23.0"
 name = "bravebot-herdr"
 version = "0.23.0"
 dependencies = [
+ "base64 0.22.1",
  "bravebot-sandbox",
  "rustix 1.1.6",
  "serde_json",

@@ -88,7 +88,7 @@ impl Title {
     /// herdr is told the same state here, title or none, so what it shows never disagrees with the
     /// title ([HERDR-8](../../../docs/specs/herdr.md#HERDR-8)).
     pub(crate) fn mark<W: Write>(&mut self, out: &mut W, state: State) -> io::Result<()> {
-        crate::herdr::state(state);
+        crate::herdr::mark(out, state)?;
         self.state = state;
         self.write(out)
     }

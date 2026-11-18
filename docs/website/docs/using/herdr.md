@@ -56,3 +56,17 @@ Reporting works on macOS and Linux. On Windows Brave Bot does not report to herd
 
 If Brave Bot exits without quitting, after a crash for example, herdr clears the pane by itself
 once the shell prompt is back.
+
+## The Herdr app
+
+The Herdr app runs its terminals on its own core, `herdr-core`, which sets `HC_TERMINAL_ID` in
+each terminal instead of the variables above. In one of its terminals Brave Bot prints its state
+to the terminal, and the app lists it in the agents panel as `bravebot`, `working`, `blocked` or
+`idle`, with the same fixed sentence beside a blocked session. Quitting removes it from the panel.
+
+The app has no resume command to give. It keeps terminals running across its own restarts, so the
+session is still there when the app comes back. If Brave Bot exits after a crash, it stays in the
+panel in its last state until another program in that terminal reports its own.
+
+A question asked before the first screen is drawn, such as whether to trust a new folder, is not
+shown in the panel.
