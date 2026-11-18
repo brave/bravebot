@@ -1433,23 +1433,41 @@ fn what_a_stage_left_running_after_it_ended_by_itself_is_not_signalled() {
         &scratch.path,
         "stage",
         &format!(
-            "#!/bin/sh\n{COUNTING}count &\necho $! > counter.pid\nwaiting_for_the_count\necho done\n"
+            "#!/bin/sh\n{COUNTING}count &\necho $! > counter.pid\nwaiting_for_the_count\necho done\n\
+             : > ended\n"
         ),
     )];
     let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
 
     // The program the stage left holds the write end of the pipe, so this is also the stage that
     // ended by itself while a child kept its output open: the run comes back within the grace the
-    // drain is given, with what the stage printed.
-    let started = std::time::Instant::now();
-    let ran = stopped_within(&pipeline, &resolved, &scratch.path, Duration::from_secs(60));
+    // drain is given, with what the stage printed. That is measured from the moment the stage
+    // wrote `ended` on its way out, and the limit is three minutes, so a runner that stalls while
+    // the stage sets up reaches neither bound.
+    let ended = scratch.path.join("ended");
+    let watching = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(300);
+        while !ended.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::time::Instant::now()
+    });
+    let ran = stopped_within(
+        &pipeline,
+        &resolved,
+        &scratch.path,
+        Duration::from_secs(180),
+    );
+    let returned = std::time::Instant::now();
 
     assert!(ran.stopped.is_none(), "the stage ended by itself");
     assert!(ran.succeeded(), "the stage ended by itself: {ran:?}");
     assert_eq!(ran.stdout.trim(), "done");
+    let ended_at = watching.join().expect("the watch ends");
     assert!(
-        started.elapsed() < Duration::from_secs(20),
-        "the run hung on a pipe a child was holding open"
+        returned.saturating_duration_since(ended_at) < Duration::from_secs(20),
+        "the run hung on a pipe a child was holding open: it came back {:?} after the stage ended",
+        returned.saturating_duration_since(ended_at)
     );
     assert!(
         still_counting(&scratch.path),
