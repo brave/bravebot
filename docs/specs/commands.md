@@ -399,6 +399,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 |---|---|---|
 | touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/layout`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
+
 `/layout` is carried out as it is typed so that it can refuse while a turn runs, which it does with a
 line saying why and nothing ended. It is never queued, because a layout opened after the turn ended would
 change the screen with nothing typed ([BOT-17](bots.md#BOT-17)).
