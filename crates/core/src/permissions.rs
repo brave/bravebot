@@ -1420,9 +1420,13 @@ impl PathPattern {
     /// A pattern that restricts covers what is under the place it names as well as the place, as a
     /// trailing `/**` does and as a walk that does not descend into a covered directory assumes
     /// (PERM-3). A pattern that grants covers the place it names and no more.
+    ///
+    /// The search for a covered ancestor starts at the empty prefix, which is the root the path is
+    /// held under. A pattern with no segments names that root, so `Read(./)` and `Read(//)` cover
+    /// every path under it and not the root alone.
     fn matches(&self, path: &[&str], restricting: bool) -> bool {
         self.names(path, restricting)
-            || (restricting && (1..path.len()).any(|end| self.names(&path[..end], restricting)))
+            || (restricting && (0..path.len()).any(|end| self.names(&path[..end], restricting)))
     }
 
     /// Whether this pattern names `path` itself.
@@ -4058,6 +4062,176 @@ mod tests {
             permissions.for_path(Subject::Edit, "secrets/key"),
             Decision::Unmatched
         );
+
+        // A rule naming a root is a directory like any other: it covers the root and every path
+        // under it. `/` is the directory the settings file is in, and `//` the filesystem root.
+        // Each spelling is in the other namespace's way too: a relative rule says nothing about a
+        // full path, and a full-path rule says nothing about a relative one.
+        for (subject, family) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+            for (spelling, root, below, elsewhere) in [
+                (".", "", "a/b/c", "/etc/passwd"),
+                ("./", "", "a/b/c", "/etc/passwd"),
+                (
+                    "/",
+                    "/home/someone/.bravebot",
+                    "/home/someone/.bravebot/a/b",
+                    "/home/someone/proj/a",
+                ),
+                ("//", "/", "/etc/passwd", "a/b"),
+            ] {
+                let rule = format!("{family}({spelling})");
+                for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                    let permissions = match ruling {
+                        "deny" => rules(&[&rule], &[], &[]),
+                        _ => rules(&[], &[&rule], &[]),
+                    };
+                    for path in [root, "marker.txt", below]
+                        .into_iter()
+                        .filter(|path| path.starts_with('/') == root.starts_with('/'))
+                    {
+                        assert_eq!(
+                            permissions.for_path(subject, path),
+                            Decision::Ruled(list),
+                            "{rule} in {ruling} did not cover {path:?}"
+                        );
+                    }
+                    assert_eq!(
+                        permissions.for_path(subject, elsewhere),
+                        Decision::Unmatched,
+                        "{rule} in {ruling} covered {elsewhere:?} in the other namespace"
+                    );
+                }
+                // A grant covers the place it names and nothing under it.
+                let allow = rules(&[], &[], &[&rule]);
+                assert_eq!(
+                    allow.for_path(subject, root),
+                    Decision::Ruled(Ruling::Allow),
+                    "{rule} as an allow rule did not grant {root:?}"
+                );
+                assert_eq!(
+                    allow.for_path(subject, below),
+                    Decision::Unmatched,
+                    "{rule} as an allow rule granted {below}"
+                );
+            }
+        }
+    }
+
+    /// PERM-3, PERM-7: a `deny` or `ask` rule naming the workspace root covers every path in the
+    /// workspace, for `Read` and for `Edit`, in each spelling of the root and quoted. A rule that
+    /// fences the root and refuses no file in it is a protection that is not there.
+    #[test]
+    fn a_deny_or_ask_rule_naming_the_workspace_root_covers_every_path_under_it() {
+        for (subject, family, spellings) in [
+            (
+                Subject::Read,
+                "Read",
+                &["./", ".", "\"./\"", "./**"] as &[&str],
+            ),
+            (Subject::Edit, "Edit", &["./", "."]),
+        ] {
+            for spelling in spellings {
+                let rule = format!("{family}({spelling})");
+                for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                    let permissions = match ruling {
+                        "deny" => rules(&[&rule], &[], &[]),
+                        _ => rules(&[], &[&rule], &[]),
+                    };
+                    for path in ["", "marker.txt", "a/b", "a/b/c", ".env"] {
+                        assert_eq!(
+                            permissions.for_path(subject, path),
+                            Decision::Ruled(list),
+                            "{rule} in {ruling} did not cover {path:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// PERM-3, PERM-7: a `deny` or `ask` rule naming the filesystem root covers every full path,
+    /// spelled `//` or as the quoted name `"//"`.
+    #[test]
+    fn a_deny_or_ask_rule_naming_the_filesystem_root_covers_every_path_under_it() {
+        for spelling in ["//", "\"//\""] {
+            let rule = format!("Read({spelling})");
+            for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                let permissions = match ruling {
+                    "deny" => rules(&[&rule], &[], &[]),
+                    _ => rules(&[], &[&rule], &[]),
+                };
+                for path in ["/", "/etc/passwd", "/home/someone/proj/a/b"] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, path),
+                        Decision::Ruled(list),
+                        "{rule} in {ruling} did not cover {path}"
+                    );
+                }
+            }
+        }
+        // The quoted workspace root is the relative name, so it covers `a/b` and not a full path.
+        let permissions = rules(&["Read(\"./\")"], &[], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "a/b"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/etc/passwd"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3: an `allow` rule naming a root grants the root and not what is under it, as one
+    /// naming any other directory does, so widening the descendant search for a rule that restricts
+    /// leaves a grant alone.
+    #[test]
+    fn an_allow_rule_naming_a_root_grants_that_place_and_not_what_is_under_it() {
+        for (rule, root, below) in [
+            ("Read(./)", "", "a/b"),
+            ("Read(.)", "", "marker.txt"),
+            ("Edit(./)", "", "a/b"),
+            ("Read(//)", "/", "/etc/passwd"),
+        ] {
+            let permissions = rules(&[], &[], &[rule]);
+            let subject = match rule.starts_with("Edit") {
+                true => Subject::Edit,
+                false => Subject::Read,
+            };
+            assert_eq!(
+                permissions.for_path(subject, root),
+                Decision::Ruled(Ruling::Allow),
+                "{rule} did not grant the place it names"
+            );
+            assert_eq!(
+                permissions.for_path(subject, below),
+                Decision::Unmatched,
+                "{rule} as an allow rule granted {below}"
+            );
+        }
+    }
+
+    /// PERM-3, PERM-7: a rule that names the workspace by its full path is also given the
+    /// workspace-relative spelling, which has no segments, and that spelling covers every file in
+    /// the workspace as the full path does.
+    #[test]
+    fn a_rule_naming_the_workspace_by_its_full_path_covers_every_file_in_it() {
+        for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+            let mut permissions = match ruling {
+                "deny" => rules(&["Read(//home/someone/proj/)"], &[], &[]),
+                _ => rules(&[], &["Read(//home/someone/proj/)"], &[]),
+            };
+            permissions.follow_links(|prefix| match prefix == "/home/someone/proj" {
+                true => Some(String::new()),
+                false => None,
+            });
+            for path in ["marker.txt", "a/b/c", "/home/someone/proj/a"] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(list),
+                    "the rule in {ruling} did not cover {path}"
+                );
+            }
+        }
     }
 
     /// PERM-3: an `allow` rule keeps its reading. Widening a grant to what is under the directory

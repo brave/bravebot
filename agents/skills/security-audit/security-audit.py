@@ -381,10 +381,15 @@ START_CALL_LINES = 12
 # Every lookup of a program by name outside the tests. A command that opens no session (`auth`,
 # `schedule`, `doctor`) records one directory, the one `main` was run in, before it chooses a command
 # (SANDBOX-30). A lookup is `programs::find`, `find_on` or `find_in` under any prefix, `Resolved::find`
-# or `Resolved::find_on`, or a bare `find_on(` or `find_in(` in a file that imports it.
-LOOKUP_QUALIFIED = re.compile(r"\b(?:programs|Resolved)::find(?:_on|_in)?\(")
+# or `Resolved::find_on`, `programs::resolve` under any prefix (which is `find` keeping only the
+# resolved path), or a bare `find_on(`, `find_in(` or `resolve(` in a file that imports that name from
+# `programs`. Each bare name is gated by its own import, so a file importing `find_in` does not make its
+# own `resolve(` a lookup.
+LOOKUP_QUALIFIED = re.compile(r"\b(?:programs::(?:find(?:_on|_in)?|resolve)|Resolved::find(?:_on|_in)?)\(")
 LOOKUP_BARE = re.compile(r"(?<![\w:.])(?<!fn )find_(?:on|in)\(")
 LOOKUP_IMPORT = re.compile(r"\buse\b[^;]*\bprograms::(?:find_(?:on|in)\b|\{[^}]*\bfind_(?:on|in)\b)")
+LOOKUP_BARE_RESOLVE = re.compile(r"(?<![\w:.])(?<!fn )resolve\(")
+LOOKUP_IMPORT_RESOLVE = re.compile(r"\buse\b[^;]*\bprograms::(?:resolve\b|\{[^}]*\bresolve\b)")
 RECORD_IN = Path("crates/cli/src/main.rs")
 RECORD_CALL = re.compile(r"(?<!fn )(?<![\w:])keep_out_where_this_ran\(\)")
 RECORD_BEFORE = re.compile(r"\bmatch\s+args\.first\(\)")
@@ -396,13 +401,25 @@ LOOKUPS_LISTED = {
     "crates/agent/src/gcloud.rs": (1, "`gcloud`, for a session and for `auth` and `doctor`"),
     "crates/agent/src/hooks.rs": (1, "a hook's program, in a session"),
     "crates/agent/src/lsp.rs": (1, "a language server, in a session"),
+    "crates/agent/src/preamble.rs": (
+        2,
+        "the `gh` and `jk` probes through `programs::resolve`, once per turn of a session, after the "
+        "workspace recorded its directory with `keep_out_with_checkout`; they decide a sentence of the "
+        "system prompt and start nothing. `agent::programs::find` searches `$PATH` without the recorded-"
+        "directory exclusion, so a `gh` or `jk` planted in a directory a stage can write changes only a "
+        "sentence of the system prompt",
+    ),
     "crates/agent/src/usability.rs": (1, "the probe of whether a program is usable, in a session"),
     "crates/bedrock/src/credentials.rs": (1, "`aws`, for a session and for `auth` and `doctor`"),
     "crates/cli/src/push_identity.rs": (1, "`doctor --push-identity`, which has no session"),
     "crates/sandbox/src/openshell.rs": (1, "`openshell`, for a session"),
     "crates/schedule/src/schedule.rs": (1, "the programs `schedule` registers, which has no session"),
     "crates/tui/src/caffeinate.rs": (1, "the sleep inhibitor, in a session"),
-    "crates/tui/src/editor.rs": (1, "the editor, in a session"),
+    "crates/tui/src/editor.rs": (
+        2,
+        "the editor, in a session: a bare name through `programs::find`, and a name written as a path "
+        "through `programs::resolve`, which does not search `PATH`",
+    ),
     "crates/tui/src/opener.rs": (1, "the browser opener, in a session"),
 }
 SELECTOR_CLAUSES = ("SANDBOX-30",)
@@ -1207,18 +1224,25 @@ def start_allowance_findings(sources, marked):
 def program_lookups(sources):
     """Every lookup of a program by name outside the tests, with the function it is in.
 
-    A lookup is `programs::find`, `find_on` or `find_in` under any prefix, `Resolved::find` or
-    `Resolved::find_on`, or a bare `find_on(` or `find_in(` in a file that imports it from
-    `programs`. The definitions in `programs.rs` are not lookups.
+    A lookup is `programs::find`, `find_on` or `find_in` under any prefix, `programs::resolve` under
+    any prefix, `Resolved::find` or `Resolved::find_on`, or a bare `find_on(`, `find_in(` or
+    `resolve(` in a file that imports that name from `programs`. The definitions in `programs.rs`
+    are not lookups.
     """
     found = []
     for path, lines in sources.items():
         if is_test_path(path) or path == PROGRAMS_FILE:
             continue
         stripped = mechanics.strip_comments(lines)
-        imports = bool(LOOKUP_IMPORT.search("\n".join(stripped)))
+        text = "\n".join(stripped)
+        imports = bool(LOOKUP_IMPORT.search(text))
+        imports_resolve = bool(LOOKUP_IMPORT_RESOLVE.search(text))
         for number, raw in code_lines(lines):
-            if LOOKUP_QUALIFIED.search(raw) or (imports and LOOKUP_BARE.search(raw)):
+            if (
+                LOOKUP_QUALIFIED.search(raw)
+                or (imports and LOOKUP_BARE.search(raw))
+                or (imports_resolve and LOOKUP_BARE_RESOLVE.search(raw))
+            ):
                 found.append(site_at(path, lines, number, raw))
     return found
 

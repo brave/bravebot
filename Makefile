@@ -145,9 +145,22 @@ hooks:
 build:
 	cargo build
 
+# The workspace tests. nextest runs every test as a process of its own across all the test binaries
+# at once, where `cargo test` runs the binaries one after another and waits on each one's slowest
+# test, which is how CI runs them. Where cargo-nextest is not installed this runs `cargo test`, so
+# a checkout without it still passes. nextest does not run doctests, so those run after it.
+# RUST_TEST_THREADS is the number of tests running at once in either case.
+RUST_TEST_THREADS ?= 4
+NEXTEST := $(shell command -v cargo-nextest >/dev/null 2>&1 && echo yes)
 .PHONY: test
 test:
-	cargo test --all
+ifeq ($(NEXTEST),yes)
+	cargo nextest run --workspace --locked --no-fail-fast --test-threads "$(RUST_TEST_THREADS)"
+	cargo test --workspace --doc --locked
+else
+	@echo "cargo-nextest is not installed, so the tests run one binary at a time (cargo install cargo-nextest --locked)"
+	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
+endif
 
 .PHONY: fmt
 fmt:
@@ -168,12 +181,11 @@ aws-logout:
 # Host formatting, Clippy, tests and toolchain age. Platform and UI checks are separate.
 # Report an old toolchain after the test results, since CI may use newer lints.
 .PHONY: check
-RUST_TEST_THREADS ?= 4
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
 	@python3 contrib/check-lint-increase.py
-	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
+	@$(MAKE) --no-print-directory test
 	@python3 contrib/check-versions.py
 	@python3 contrib/check-code-selectors.py --selftest
 	@python3 contrib/check-code-selectors.py
@@ -501,8 +513,15 @@ check-fuzz: fuzz-prerequisites check-fuzz-lints
 # verify/mutations.txt, which has to fail, so a contract a broken body also meets fails here.
 # verify/history.rs holds the fixes from the history that are not yet contracts in their crates,
 # each refused under the `before_<commit>` cfg that restores the code before the fix. Verus brings
-# its own toolchain, so this is run by name and is not part of check.
+# its own toolchain, so `check` does not run this; the Verus job in ci.yml does.
 VERUS_VERSION = 0.2026.11.02.8bf68ee
+# The Rust toolchain this release of Verus runs on, which `verus --version` reports and rustup has to
+# hold. Bumped with VERUS_VERSION, never on its own.
+VERUS_TOOLCHAIN = 1.99.1
+# The x86_64 Linux release CI installs, checked against this digest before it is unpacked, since the
+# job runs what it downloads on every pull request that reaches it.
+VERUS_SHA256 = f3a0119292df8855e4435da8130bee1873b0e6a60c306accf81a08ea687bba3c
+VERUS_HOME = $(HOME)/.cache/bravebot-verus/$(VERUS_VERSION)
 VERUS ?= verus
 VERUS_HISTORY = before_3facf14a before_e0cd1903 before_20ce6086
 
@@ -523,6 +542,35 @@ check-verus: check-verus-contracts
 		}; \
 		echo "verus: verify/history.rs --cfg $$cfg refused, as it must be"; \
 	done
+
+# The release and the toolchain it runs on, for the Verus job in ci.yml to read without writing
+# either twice.
+.PHONY: verus-version verus-toolchain
+verus-version:
+	@echo $(VERUS_VERSION)
+
+verus-toolchain:
+	@echo $(VERUS_TOOLCHAIN)
+
+# Downloads the x86_64 Linux release into VERUS_HOME, refuses it unless it matches VERUS_SHA256, and
+# prints the directory holding `verus`, for CI to put on PATH. A directory already unpacked is used
+# as it is. Other hosts install a release by hand (docs/development/verification.md).
+.PHONY: verus-install
+verus-install:
+	@set -e; dir="$(VERUS_HOME)/verus-x86-linux"; \
+	if [ ! -x "$$dir/verus" ]; then \
+		mkdir -p "$(VERUS_HOME)"; \
+		zip="$(VERUS_HOME)/verus.zip"; \
+		curl -sSfL --retry 3 -o "$$zip" \
+			"https://github.com/verus-lang/verus/releases/download/release/$(VERUS_VERSION)/verus-$(VERUS_VERSION)-x86-linux.zip"; \
+		echo "$(VERUS_SHA256)  $$zip" | sha256sum -c --quiet - || { \
+			echo "verus: the download does not match VERUS_SHA256, so it is not unpacked" >&2; \
+			rm -f "$$zip"; exit 1; \
+		}; \
+		unzip -q -o "$$zip" -d "$(VERUS_HOME)"; \
+		rm -f "$$zip"; \
+	fi; \
+	echo "$$dir"
 
 # Whether the Verus contracts in crates/ are the ones verify/contracts.txt records. Needs no
 # toolchain, so `check` runs it, and so does `check-scripts`, which the Security job in CI runs: a
@@ -603,11 +651,12 @@ docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
 # The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
-# or skipped, whose latest review by REVIEWER is an approval, and with no latest review by anyone
-# that requests changes. REPO names another repository, REVIEWER another account and LIMIT raises
-# how many are read. GitHub reports mergeable as UNKNOWN for every open pull request after main
-# moves, until each has been read, so contrib/review-ready.py reads the list again every few seconds
-# while an approved, passing, non-draft pull request is UNKNOWN, for WAIT seconds in total, and
+# or skipped, whose latest review by REVIEWER is an approval, with no latest review by anyone that
+# requests changes, and that is not in the merge queue. REPO names another repository, REVIEWER
+# another account and LIMIT raises how many are read. GitHub reports mergeable as UNKNOWN for every
+# open pull request after main moves, until each has been read, so contrib/review-ready.py reads the
+# list again every few seconds while an approved, passing, non-draft pull request is UNKNOWN, for
+# WAIT seconds in total, and
 # names on stderr any still UNKNOWN at the end. The ready pull requests are printed after the last
 # read, the one that has waited longest first and the most recent last. A pull request waits from the
 # reviewer's latest approval, or from when it was opened if that has no time.

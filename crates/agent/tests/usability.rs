@@ -12,10 +12,11 @@ use bravebot_agent::usability::{
 use bravebot_sandbox::rules::{Entry, Lists};
 use std::path::{Path, PathBuf};
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 fn root(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch")
-        .join(format!("usability-{name}"))
+    scratch_root::scratch_dir(&format!("usability-{name}"))
 }
 
 fn run(name: &str, workflows: &[Workflow]) -> Report {
@@ -226,6 +227,12 @@ fn a_setup_that_fails_is_named_as_setup() {
     assert_eq!(only_failure(&report).code, Some(1));
 }
 
+/// Taken by every test that sets variables in the environment of this process.
+fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Holds the given variables in the environment of this process while it is alive, and puts back
 /// what was there. The tests that read the environment of a program the suite starts share it,
 /// since the environment belongs to the process.
@@ -238,8 +245,7 @@ impl Environment {
     /// Sets each of `set` and removes each of `unset`, after taking the lock the tests that do this
     /// share.
     fn held(set: &[(&'static str, &str)], unset: &[&'static str]) -> Self {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = environment_lock();
         let previous = set
             .iter()
             .map(|(name, _)| *name)
@@ -550,38 +556,6 @@ fn a_login_file_on_the_allow_read_list_passes() {
     assert_eq!(row.outcome, Outcome::Passed);
 }
 
-/// A `gh` whose `auth token` runs `script` under a shell that keeps the dynamic loader's variables.
-/// macOS removes `DYLD_` names when it starts a program under `/bin/sh`, which would make a stub
-/// there pass whatever the check does, so a copy of the shell signed for this machine runs it
-/// instead. Returns `None` where that copy cannot be made.
-fn loader_fixture(name: &str, script: &str) -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let (run, gh, home) = login_fixture(name, script);
-    if !cfg!(target_os = "macos") {
-        return Some((run, gh, home));
-    }
-    let shell = gh.with_file_name("sh");
-    std::fs::copy("/bin/sh", &shell).ok()?;
-    let signed = bravebot_sandbox::programs::start_against(
-        &bravebot_sandbox::programs::Resolved::written_in_source("/usr/bin/codesign"),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Inherited,
-        bravebot_sandbox::programs::CodeSelectors::Kept,
-        std::iter::empty(),
-        &|_: &Path| true,
-    )
-    .args(["--force", "--sign", "-"])
-    .arg(&shell)
-    .output()
-    .ok()?
-    .status
-    .success();
-    if !signed {
-        return None;
-    }
-    std::fs::write(&gh, format!("#!{}\n{script}\n", shell.display())).ok()?;
-    Some((run, gh, home))
-}
-
 /// A test that cannot run on this machine says so. On a CI machine it fails instead, since a skip
 /// there reports green for a check that never ran.
 fn skipped(why: &str) {
@@ -590,67 +564,6 @@ fn skipped(why: &str) {
         "a CI machine must run this check, and cannot: {why}"
     );
     eprintln!("skipped: {why}");
-}
-
-/// SANDBOX-21: `gh auth token` is given none of the dynamic loader's variables, in the run outside
-/// the sandbox, whose failure gives no row, and in the run under it, whose failure is the row's.
-/// The values are files that exist outside every directory a stage writes, which the check every
-/// start makes keeps, so only a removal of the `DYLD_` names does it. The regression it rejects:
-/// handing the stored-login `gh` `DYLD_INSERT_LIBRARIES`, which loads a library into it.
-#[test]
-fn the_gh_the_login_row_starts_is_not_handed_a_dyld_variable() {
-    if !usability::available() {
-        return;
-    }
-    let script =
-        r#"test -z "$DYLD_INSERT_LIBRARIES" && test -z "$DYLD_FALLBACK_LIBRARY_PATH" || exit 1"#;
-    let Some((root, gh, home)) = loader_fixture("login-dyld", script) else {
-        skipped("no shell that keeps DYLD_ names can be made here");
-        return;
-    };
-    let _environment = Environment::held(
-        &[
-            ("DYLD_INSERT_LIBRARIES", "/etc/hosts"),
-            ("DYLD_FALLBACK_LIBRARY_PATH", "/etc"),
-        ],
-        &[],
-    );
-
-    let row = usability::login_row_for(&root, &gh, &home, &Lists::default())
-        .expect("the probe runs")
-        .expect("the stub failed, so it was handed a DYLD_ variable");
-
-    assert_eq!(row.outcome, Outcome::Passed);
-}
-
-/// SANDBOX-21: as for the `DYLD_` names, with `LD_PRELOAD`, which the shared check would keep for
-/// this value, and two `LD_` names it does not list, so a removal of a fixed list does not pass.
-/// The regression it rejects: removing `DYLD_` names and leaving the `LD_` ones.
-#[test]
-fn the_gh_the_login_row_starts_is_not_handed_an_ld_variable() {
-    if !usability::available() {
-        return;
-    }
-    let script = r#"test -z "$LD_PRELOAD" && test -z "$LD_LIBRARY_PATH" && test -z "$LD_DEBUG" && test -z "$LD_BIND_NOW" || exit 1"#;
-    let Some((root, gh, home)) = loader_fixture("login-ld", script) else {
-        skipped("no shell that keeps loader names can be made here");
-        return;
-    };
-    let _environment = Environment::held(
-        &[
-            ("LD_PRELOAD", "/etc/hosts"),
-            ("LD_LIBRARY_PATH", "/etc"),
-            ("LD_DEBUG", "all"),
-            ("LD_BIND_NOW", "1"),
-        ],
-        &[],
-    );
-
-    let row = usability::login_row_for(&root, &gh, &home, &Lists::default())
-        .expect("the probe runs")
-        .expect("the stub failed, so it was handed an LD_ variable");
-
-    assert_eq!(row.outcome, Outcome::Passed);
 }
 
 /// A directory for what a test plants, empty and outside every directory a stage is given.

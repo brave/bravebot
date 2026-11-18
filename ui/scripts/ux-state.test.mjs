@@ -780,12 +780,19 @@ test('settledBy lands each field the bridge settled unchanged, and gives null fo
   const rules = [{ path: '/d', integrity: 'high' }]
   assert.deepEqual(
     settledBy({ remembered: kept, keeping: '/k', shownKeeping: '~/k', confinedLines: 'also', autoVetting: true, permissionMode: 'plan', sandboxMode: 'off', settingsRules: rules }),
-    { keepingTrust: '/k', shownKeepingTrust: '~/k', confinedLinesNotice: 'also', trustRemembered: kept, autoVetting: true, permissionMode: 'plan', sandboxMode: 'off', rules },
+    { rulesQuestion: null, folderQuestion: null, foldersRefused: [], keepingTrust: '/k', shownKeepingTrust: '~/k', confinedLinesNotice: 'also', trustRemembered: kept, autoVetting: true, permissionMode: 'plan', sandboxMode: 'off', rules },
   )
   assert.deepEqual(
     settledBy({ autoVetting: false, permissionMode: 'ask', sandboxMode: 'on' }),
-    { keepingTrust: null, shownKeepingTrust: null, confinedLinesNotice: null, trustRemembered: null, autoVetting: false, permissionMode: 'ask', sandboxMode: 'on', rules: null },
+    { rulesQuestion: null, folderQuestion: null, foldersRefused: [], keepingTrust: null, shownKeepingTrust: null, confinedLinesNotice: null, trustRemembered: null, autoVetting: false, permissionMode: 'ask', sandboxMode: 'on', rules: null },
   )
+  // The questions asked after trust, and the folders a bypass opened, land as the bridge put them.
+  const question = { request: 3, rules: [], grantedBefore: [], keeping: null, shownKeeping: null }
+  const refused = [{ directory: '/x', shownDirectory: '/x', problem: 'gone', shownProblem: 'gone' }]
+  const asked = settledBy({ autoVetting: false, permissionMode: 'ask', sandboxMode: 'on', rulesQuestion: question, folderQuestion: null, foldersRefused: refused, folders: ['/y'] })
+  assert.equal(asked.rulesQuestion, question)
+  assert.deepEqual(asked.foldersRefused, refused)
+  assert.deepEqual(asked.folders, ['/y'])
 })
 
 /** A bot's face shows the model writing apart from a tool at work, from the turn's shape alone. */

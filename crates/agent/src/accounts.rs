@@ -878,9 +878,7 @@ mod tests {
     use bravebot_skus::oauth::Defect;
 
     fn scratch(name: &str) -> PathBuf {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/accounts")
-            .join(name);
+        let path = crate::testutil::scratch_dir("accounts").join(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("a scratch directory");
         path

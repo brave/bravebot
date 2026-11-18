@@ -261,6 +261,12 @@ class Candidates(unittest.TestCase):
                 self.assertIn(problem, pf.check_gap(gap(**change)))
         self.assertIsNone(pf.check_gap(gap()))
 
+    def test_every_area_the_prompt_offers_is_accepted_and_labelled(self):
+        for area in ("sandbox", "mcp", "browser", "connectors", "background", "plugins", "desktop", "acp", "remote", "release"):
+            with self.subTest(area=area):
+                self.assertIsNone(pf.check_gap(gap(area=area)))
+                self.assertIn(f"area/{area}", pf.labels_for(gap(area=area)))
+
     def test_a_group_that_cannot_be_applied_is_refused_with_the_reason(self):
         confirmed = {g: ("spec:HOOK", gap(g)) for g in ("parity-a", "parity-b", "parity-c", "beyond-d")}
         for group, problem in (

@@ -1120,7 +1120,7 @@ pub trait Reporter {
     fn todos(&mut self, rows: Vec<Row>);
 
     /// Issues and pull requests the turn has just named that it had not named before, as the
-    /// planner's own arguments and trusted results gave them (PANEL-16).
+    /// planner's own arguments gave them (PANEL-16).
     ///
     /// Sent as they are found, so a front end lists them while the turn runs and a turn that then
     /// fails or is stopped has still handed back what it found. Each reference has had its parts

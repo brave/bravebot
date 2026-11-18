@@ -107,7 +107,7 @@ try {
   assert.match(await usage.locator('.turn-usage-line').innerText(), /sample\/actual/)
   assert.doesNotMatch(await usage.locator('.turn-usage-line').innerText(), /Answered by/)
   assert.equal(await footer.locator('summary').count(), 0)
-  const placed = await footer.evaluate(el => {
+  const footerPlacement = await footer.evaluate(el => {
     const audit = el.querySelector('[data-test="turn-audit"]').getBoundingClientRect()
     const line = el.querySelector('[data-test="turn-usage"]').getBoundingClientRect()
     const box = el.getBoundingClientRect()
@@ -118,9 +118,9 @@ try {
       notAtEnd: box.right - line.right > 24,
     }
   })
-  assert.equal(placed.shieldBefore, true, 'the audit control sits left of the model line')
-  assert.equal(placed.withTheActions, true, 'the audit control stays with the other actions')
-  assert.equal(placed.notAtEnd, true, 'the model line is not pushed to the right edge')
+  assert.equal(footerPlacement.shieldBefore, true, 'the audit control sits left of the model line')
+  assert.equal(footerPlacement.withTheActions, true, 'the audit control stays with the other actions')
+  assert.equal(footerPlacement.notAtEnd, true, 'the model line is not pushed to the right edge')
   assert.equal(await usage.evaluate(el => getComputedStyle(el).cursor), 'pointer')
   await usage.hover()
   let openedOnHover = false

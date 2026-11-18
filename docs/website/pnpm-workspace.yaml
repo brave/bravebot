@@ -12,7 +12,9 @@ overrides:
   image-size: "npm:image-size-next@2.1.1"
 
 # Known high and critical advisories in build-time tooling that is not shipped; braces has no
-# patched release. Any other high or critical advisory fails `pnpm audit --audit-level=high` in CI.
+# patched release, and neither has picomatch (GHSA-fc5q-39xc-vjpf, a ReDoS in extglob matching).
+# Remove the picomatch entry once a release above 4.0.7 is published and the lockfile uses it.
+# Any other high or critical advisory fails `pnpm audit --audit-level=high` in CI.
 auditConfig:
   ignoreGhsas:
     - GHSA-qhr7-859c-m2p7
@@ -21,3 +23,4 @@ auditConfig:
     - GHSA-vfj7-8cjw-p6xm
     - GHSA-5gmw-xhrv-c9v3
     - GHSA-85c8-ppgw-ccpr
+    - GHSA-fc5q-39xc-vjpf

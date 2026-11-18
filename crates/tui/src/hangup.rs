@@ -13,7 +13,13 @@
 #[cfg(unix)]
 use std::os::fd::{AsFd, OwnedFd};
 #[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
 use std::time::Duration;
+
+/// Whether [`end_with_the_terminal`] found a terminal on standard input and is watching it.
+#[cfg(unix)]
+static WATCHING: AtomicBool = AtomicBool::new(false);
 
 /// How often the terminal is looked at. Nothing needs the program gone sooner than this, and a look
 /// is one system call.
@@ -39,12 +45,28 @@ pub(crate) fn end_with_the_terminal() {
     let Ok(terminal) = stdin.as_fd().try_clone_to_owned() else {
         return;
     };
+    WATCHING.store(true, Ordering::Relaxed);
     // A thread that cannot start leaves the program as it was, which is all a missing look costs.
     drop(watch(terminal, LOOK_EVERY, || std::process::exit(HUNG_UP)));
 }
 
 #[cfg(not(unix))]
 pub(crate) fn end_with_the_terminal() {}
+
+/// End the program as the watch would, now, if the terminal it watches has hung up.
+///
+/// For a thread that has just failed to write to the terminal: it can notice the hangup before the
+/// watch's next look, and anything it then writes to the closed terminal fails again, which a
+/// `println!` or `eprintln!` turns into a panic.
+#[cfg(unix)]
+pub(crate) fn end_if_the_terminal_hung_up() {
+    if WATCHING.load(Ordering::Relaxed) && hung_up(&std::io::stdin()) {
+        std::process::exit(HUNG_UP);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn end_if_the_terminal_hung_up() {}
 
 /// Look at `terminal` every `every`, and call `then` once, the first time it has hung up.
 #[cfg(unix)]

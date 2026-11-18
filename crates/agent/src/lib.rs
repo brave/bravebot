@@ -60,6 +60,7 @@ pub mod mode;
 pub mod named;
 pub mod notebook;
 pub mod open_loops;
+pub mod opening;
 pub mod outcome;
 pub mod output_schema;
 pub mod permission_mode;
