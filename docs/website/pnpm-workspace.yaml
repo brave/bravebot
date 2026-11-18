@@ -10,6 +10,7 @@ overrides:
   body-parser: "^1.20.9"
   gray-matter: "npm:@11ty/gray-matter@^3.0.0"
   image-size: "npm:image-size-next@2.1.1"
+  tinypool: "^2.1.2"
 
 # Known high and critical advisories in build-time tooling that is not shipped; braces has no
 # patched release, and neither has picomatch (GHSA-fc5q-39xc-vjpf, a ReDoS in extglob matching).
@@ -21,6 +22,4 @@ auditConfig:
     - GHSA-6j4f-fj2g-mc7p
     - GHSA-ch52-4w7c-c8xp
     - GHSA-vfj7-8cjw-p6xm
-    - GHSA-5gmw-xhrv-c9v3
-    - GHSA-85c8-ppgw-ccpr
     - GHSA-fc5q-39xc-vjpf
