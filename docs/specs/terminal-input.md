@@ -2370,8 +2370,8 @@ suspend the session, sixteen on one that cannot (INPUT-47), and nothing else can
   an action on Windows, so a settings file naming it there names nothing.
 - `enhance` (default: `ctrl-p`): rewrite the line in the box to be more specific (INPUT-48).
 - `panes` (default: `alt-p`): move focus between the prompt and the panes of the bots layout
-  ([BOT-17](bots.md#BOT-17)). In the default layout the key does what it did before the action
-  existed.
+  ([BOT-17](bots.md#BOT-17)). In the default layout the chord types its letter. The bindings
+  report it as a chord, and the layout does not take the key.
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk

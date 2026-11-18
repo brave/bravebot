@@ -855,8 +855,8 @@ info panel's files state is ([FILES-3](files-mode.md#FILES-3)). The prompt
 and the chat keep the keys they have in any session. The action `panes` moves focus from the prompt to
 the panes, and pressed again it moves focus back. Its default chord is `alt-p`, and a settings file
 can move it as it moves the other actions ([INPUT-32](terminal-input.md#INPUT-32)). Esc at the top
-level of a pane also returns focus to the prompt. In the default layout the key does what it did
-before the action existed. The panel chord ([PANEL-5](info-panel.md#PANEL-5)) is taken and does
+level of a pane also returns focus to the prompt. In the default layout the chord types its
+letter. The bindings report it as a chord, and the layout does not take the key. The panel chord ([PANEL-5](info-panel.md#PANEL-5)) is taken and does
 nothing in the bots layout: it does not open or close the info panel, which the layout does not draw,
 and it does not write the saved choice of whether the panel is open. In a pane, Up and Down or `j` and `k` move through a list, Enter picks,
 Tab moves to the next pane, and Esc goes back one level. A list is drawn as the `--resume` picker is

@@ -1118,7 +1118,8 @@ mod tests {
         );
     }
 
-    /// INPUT-32.
+    /// The panes chord is Alt-P, which a person whose terminal already uses it can move, with the
+    /// old chord no longer moving focus (INPUT-32).
     #[test]
     fn the_panes_chord_is_alt_p_and_can_be_moved() {
         let defaults = Keybindings::default();
@@ -1136,6 +1137,9 @@ mod tests {
         assert!(!bindings.is_panes(&vacated) && !bindings.claims(&vacated));
     }
 
+    /// A settings file that gave Alt-P to another action, or that gives the panes chord another
+    /// action's chord, leaves both on their defaults. Otherwise one of the two keys is unreachable
+    /// (INPUT-32).
     #[test]
     fn the_panes_chord_is_contested_like_every_other() {
         let mut map = BTreeMap::new();
