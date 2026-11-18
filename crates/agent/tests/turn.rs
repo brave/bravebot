@@ -8968,28 +8968,37 @@ fn a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it()
     std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "DELEGATE-THE-WORK",
-            vec![
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
-                // Nothing of its own to call, so the turn waits here until the delegate has
-                // finished, which is what the planner is told to do with a round it has no work
-                // for. It also puts every boundary the delegate reaches inside one window of the
-                // parent's: the parent's first asking is over before the delegate can have a reply
-                // to its own opening request, and its next one waits on the delegate being joined.
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        (
-            "DO-THE-WORK",
-            vec![
-                tool_request("read_file", r#"{"path":"a.txt"}"#),
-                reply_with("read it"),
-            ],
-        ),
-    ]);
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-THE-WORK",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                    // Nothing of its own to call, so the turn waits here until the delegate has
+                    // finished, which is what the planner is told to do with a round it has no
+                    // work for.
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "DO-THE-WORK",
+                vec![
+                    tool_request("read_file", r#"{"path":"a.txt"}"#),
+                    reply_with("read it"),
+                ],
+            ),
+        ],
+        // The delegate is answered only once the parent's second request has arrived, so it is
+        // still working when the parent answers "waiting" and the turn waits on it. Unheld, it
+        // could finish first and be taken back before that request, and the turn would end on
+        // "waiting" with the line still to be read, which INPUT-10 leaves for a turn of its own.
+        Order::After {
+            held: "DO-THE-WORK",
+            after: "DELEGATE-THE-WORK",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -9008,6 +9017,11 @@ fn a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it()
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was never held for the parent's second request, so it could have ended \
+         before the turn waited on it"
+    );
     // A turn replays the arguments it called with, so the task it handed out is in its own requests
     // as well as in the delegate's. Its own prompt is what tells the two apart.
     let asked = every_request(&received);
@@ -88747,23 +88761,32 @@ fn the_view_of_the_request_labels_a_line_typed_mid_turn_as_typed() {
     std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_by_marker(vec![
-        (
-            "DELEGATE-THE-WORK",
-            vec![
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        (
-            "DO-THE-WORK",
-            vec![
-                tool_request("read_file", r#"{"path":"a.txt"}"#),
-                reply_with("read it"),
-            ],
-        ),
-    ]);
+    // The delegate is held until the parent's second request, so the turn waits on it and takes
+    // the line at that wait, as the test of a prompt typed while a delegate runs does.
+    let (endpoint, _received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-THE-WORK",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "DO-THE-WORK",
+                vec![
+                    tool_request("read_file", r#"{"path":"a.txt"}"#),
+                    reply_with("read it"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "DO-THE-WORK",
+            after: "DELEGATE-THE-WORK",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -88782,6 +88805,10 @@ fn the_view_of_the_request_labels_a_line_typed_mid_turn_as_typed() {
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was never held for the parent's second request"
+    );
     let line = reporter
         .requests
         .iter()
