@@ -1332,4 +1332,71 @@ mod tests {
         assert_eq!(yes.asked, 1);
         assert!(read_record(&home, "demo").is_some());
     }
+
+    /// PATH-003: a source directory whose name is not UTF-8 is refused as `SourceNotText`, before
+    /// the manifest is read and before anything is created. Its lossy lookalike, `src-\u{FFFD}`,
+    /// is a different directory with the same plugin in it and stages under its own path. Both
+    /// plugins are valid, so the refusal can only come from the name. Linux only: a macOS file
+    /// system cannot hold the first name.
+    ///
+    /// Rejects: a `stage` that renders the source lossily and so stages the first directory as
+    /// the second, and one that refuses the lookalike as well.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_source_whose_name_is_not_text_is_refused_and_its_lossy_lookalike_is_staged() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let invalid = scratch.path().join(OsStr::from_bytes(b"src-\xff"));
+        let lookalike = scratch.path().join(OsStr::new("src-\u{FFFD}"));
+        std::fs::rename(plugin_dir(scratch.path(), "plain", MANIFEST), &invalid).unwrap();
+        std::fs::rename(plugin_dir(scratch.path(), "other", MANIFEST), &lookalike).unwrap();
+
+        assert_eq!(stage(&invalid, &home).unwrap_err(), Refusal::SourceNotText);
+        assert!(
+            !home.exists(),
+            "a refused source created the state directory"
+        );
+
+        let staged = stage(&lookalike, &home).unwrap();
+        assert_eq!(staged.source, std::fs::canonicalize(&lookalike).unwrap());
+        assert_eq!(staged.manifest.name, "demo");
+    }
+
+    /// PATH-003: two plugin trees that differ only in a file named `tool-\xff` and one named
+    /// `tool-\u{FFFD}`, with the same content, stage to different digests, and each staged copy
+    /// holds the name it was given and not the other. A third tree with the first name again
+    /// stages to the first digest, so the name is all that tells them apart. Linux only: a macOS
+    /// file system cannot hold the first name.
+    ///
+    /// Rejects: a copy or a digest that renders a file name lossily, which makes the two trees
+    /// one tree, so that an install of one is taken for the other.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trees_differing_only_in_a_name_that_is_not_text_and_its_lossy_lookalike_have_two_digests() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"tool-\xff");
+        let lookalike = OsStr::new("tool-\u{FFFD}");
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let with_tool = |directory: &str, name: &OsStr| {
+            let root = plugin_dir(scratch.path(), directory, MANIFEST);
+            std::fs::write(root.join(name), "tool\n").unwrap();
+            root
+        };
+        let first = stage(&with_tool("one", invalid), &home).unwrap();
+        let second = stage(&with_tool("two", lookalike), &home).unwrap();
+        let again = stage(&with_tool("three", invalid), &home).unwrap();
+
+        assert_ne!(first.digest, second.digest);
+        assert_eq!(first.digest, again.digest);
+        assert!(first.tree.join(invalid).is_file());
+        assert!(!first.tree.join(lookalike).exists());
+        assert!(second.tree.join(lookalike).is_file());
+        assert!(!second.tree.join(invalid).exists());
+    }
 }
