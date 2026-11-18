@@ -130,6 +130,19 @@ joiner, such as Persian and Hindi, are left as they were, and a paste that held 
 nothing. Only a paste is cleaned: text you type, a path in a dropped file's name and a prompt given
 with `-p` are not. A drop onto a line armed with `!` where a name holds such a character writes nothing.
 
+### Reading a folded paste
+
+To read a folded paste whole before you send it, click its marker, or put the caret on it and press
+Alt-V (the `peek` action, which a [`keybindings`](../customize/configuration.md#keybindings) entry can
+move). The info panel opens on the pasted text under a heading such as `Pasted text #2` with its line
+count. Long lines wrap, and a control character is drawn as a visible one, so the text cannot move the
+cursor. Up, Down, PageUp, PageDown, `g`, `G` and the wheel over the panel scroll it. `q`, Escape, Ctrl-C
+and the `x` at the top right close it and put the panel back as it was.
+
+The line, the caret and the paste are not changed, and nothing is sent to a model or written to the
+session record. It works while a turn runs. A terminal too narrow for the info panel says so and opens
+nothing. Alt-V with the caret on no marker does nothing.
+
 ### Pictures
 
 Ctrl-V also pastes a picture: a screenshot, or an image copied from a browser. Command-V does not:

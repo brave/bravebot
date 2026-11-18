@@ -175,9 +175,9 @@ export interface SettingsRules {
   shownAllow?: string[]
   /** An entry nothing could read as a rule, and the agent's sentence about why. `shownRule` is `rule` spelled as text. */
   unreadable: { rule: string; shownRule?: string; said: string }[]
-  /** The `allow` rules a project's settings file wrote. They answer no question here. */
+  /** The `allow` rules a project's settings file wrote and nobody granted. They answer no question here. */
   proposed: ProposedRule[]
-  /** A directory a settings file asked to have opened. This app opens none of them. */
+  /** A directory a settings file named that is not open: not answered yet, said no to, or refused (§9.1). */
   directories: string[]
   /** `directories` spelled as a name is (PROMPT-1). Draw this and not `directories`. */
   shownDirectories?: string[]
@@ -190,9 +190,87 @@ export interface SettingsRules {
   filesystem?: { key: FilesystemKey; path: string; shownPath?: string; file: string | null; shownFile?: string | null; pinned: boolean; refused: string | null }[]
   /** `allowRead` and `allowWrite` a project's file wrote, which are not in force. Absent from an older bridge. `shownFile` is `file` spelled. */
   filesystemIgnored?: { key: FilesystemKey; file: string; shownFile?: string }[]
+  /** The checkout rules granted (§9.1), which are in force and also in `allow`. Absent from an older bridge. */
+  granted?: GrantedRule[]
+  /** The checkout's grant record, where it proposed rules and one is kept. Draw `shownGrantedRecord`. */
+  grantedRecord?: string | null
+  shownGrantedRecord?: string | null
+  /** The agent's sentence for the file `--settings` named where it is read as a checkout's file, or null. Absent from an older bridge. */
+  namedWithheld?: string | null
 }
 
 export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'
+
+/** A checkout rule a yes to the rules question granted (PERM-15). */
+export interface GrantedRule extends ProposedRule {
+  /** Granted in an earlier session, from the grant record, rather than in this one. */
+  before: boolean
+}
+
+/**
+ * The question about the `allow` rules a checkout's settings propose, put once the trust question
+ * is answered (PERM-15, §9.1). A yes grants every rule in `rules`, and is answered with the
+ * request id alone: the window never names a rule back.
+ */
+export interface RulesQuestion {
+  request: number
+  rules: ProposedRule[]
+  /** The rules from the same files the grant record already holds, which stay granted. */
+  grantedBefore: ProposedRule[]
+  /** The grant record a yes is written to, or null where a yes lasts for this chat only (incognito). */
+  keeping: string | null
+  /** `keeping` spelled as a path is (PROMPT-1). Draw this. */
+  shownKeeping: string | null
+}
+
+/** The question about one directory a checkout's settings name in `additionalDirectories` (TRUST-9, §9.1). */
+export interface FolderQuestion {
+  request: number
+  /** Where the names resolve to, canonical: what a yes opens. */
+  directory: string
+  shownDirectory: string
+  /** Each name in the files that resolves there, as written. */
+  named: string[]
+  shownNamed: string[]
+  /** How many folder questions come after this one. */
+  remaining: number
+}
+
+/** A name in `additionalDirectories` that cannot be opened at all, with the agent's sentence about why. */
+export interface RefusedFolder {
+  directory: string
+  shownDirectory: string
+  problem: string
+  shownProblem: string
+}
+
+/** What a response that may make a question after trust due carries about it (§9.1). Absent from an older bridge. */
+export interface ProjectQuestionsReport {
+  rulesQuestion?: RulesQuestion | null
+  folderQuestion?: FolderQuestion | null
+  foldersRefused?: RefusedFolder[]
+  /** The folders open beside the project now, as `session.folders.list` lists them. */
+  folders?: string[]
+  settingsRules?: SettingsRules | null
+}
+
+/** `rules.reply`'s answer. `kept` is null where nothing was to be kept, and false where writing a yes failed. */
+export interface RulesReplied {
+  granted: boolean
+  kept: boolean | null
+  settingsRules: SettingsRules
+  folderQuestion: FolderQuestion | null
+}
+
+/** `folder.reply`'s answer. `problem` is the agent's sentence where a yes could not open the directory. */
+export interface FolderReplied {
+  opened: boolean
+  folder: string
+  shownFolder: string
+  problem: string | null
+  folders: string[]
+  folderQuestion: FolderQuestion | null
+}
 
 export interface SessionSummary {
   id: string
@@ -265,7 +343,7 @@ export interface RewindPoint {
  *
  * The same eight fields in all three answers, so a window reads them one way (`settledBy`).
  */
-export interface SessionSettled {
+export interface SessionSettled extends ProjectQuestionsReport {
   /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
   remembered?: KeptTrust | null
   /** Where a yes would be kept, where the question is asked and the answer may be kept. */

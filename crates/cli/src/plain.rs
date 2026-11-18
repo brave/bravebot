@@ -336,6 +336,11 @@ fn say_startup_notes<R: BufRead, W: Write>(
             crate::progress::described(problem),
         ));
     }
+    // The file `--settings` named, where this platform cannot hold it back from a directory a
+    // stage may write and so it grants nothing (#2599). Said for the reason the rejects above are.
+    if let Some(said) = bravebot_agent::permissions::named_withheld_said(settings) {
+        asking.say(&said);
+    }
     // And the `allow` entries a checkout wrote, which are dropped wherever the file is read
     // (PERM-14) and which this session grants none of: it puts no question, so there is nowhere
     // an answer to one could have been collected (PERM-15). Said for the reason the rejects above
@@ -2945,6 +2950,45 @@ mod tests {
                 "{surface} dropped the name: {text:?}"
             );
         }
+    }
+
+    /// #2599: the opening of a session in lines says why a file `--settings` named grants nothing
+    /// where the platform cannot hold it back from a directory a stage may write, naming the file,
+    /// and says nothing where it can. Rejects a start that leaves the withholding unsaid, or says
+    /// it for a file that grants.
+    #[test]
+    fn the_opening_says_why_a_named_file_in_a_writable_directory_grants_nothing() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/plain-named-withheld");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create the scratch directory");
+        let project = base.canonicalize().expect("canonical directory");
+        let file = project.join("override.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "off"}}"#).expect("write the named file");
+        let roots = [project.clone()];
+        let opening = |can_hold_one_file_back: bool| {
+            let settings = bravebot_config::Settings::layered_reaching(
+                None,
+                Some(&project),
+                Some(&file),
+                &roots,
+                can_hold_one_file_back,
+            );
+            let mut asking = Prompting::new(std::io::empty(), Vec::new());
+            say_startup_notes(&mut asking, "a-model", None, None, &[], &settings, None);
+            String::from_utf8(asking.output).expect("utf-8")
+        };
+        let withheld = opening(false);
+        let held_back = opening(true);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(withheld.contains("override.json"), "{withheld}");
+        assert!(withheld.contains("--settings"), "{withheld}");
+        assert!(
+            withheld.contains("read as a checkout's file is"),
+            "{withheld}"
+        );
+        assert!(!held_back.contains("override.json"), "{held_back}");
     }
 
     /// LAYER-3: the line a kept answer opens a session with names the directory and the file the

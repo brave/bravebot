@@ -1921,7 +1921,9 @@ after it is held: the words on the first row it covers, from its first drawn cel
 the rows of an address or a path that was wrapped. The blanks before and after them are left as they
 were, and no cell's text changes. These are the marks an address and the word that copies a block are
 already drawn with, with bold to tell a hovered one from the rest, and neither is a colour, so they
-show in every theme and under `NO_COLOR`. The track of the scrollbar has no text to mark and is not.
+show in every theme and under `NO_COLOR`. The track of the scrollbar has no text to mark and is not, and
+the face on the opening screen is a picture drawn in cells, which an underline would cut across, so it
+is said on the row of hints and not marked.
 
 The row where the frame draws its hints, which is the row under the box, the scroller's footer and the
 footer of a delegate's view, says in one line what a click on the target does, from a message of the
@@ -2193,3 +2195,32 @@ change anything else.
 `verified-by: bravebot_tui::app::tests::clicks::a_release_on_another_cell_than_the_press_ends_no_click_on_any_target`
 `verified-by: bravebot_tui::app::tests::popups::a_click_on_a_panel_reaches_no_target_beneath_it`
 `verified-by: bravebot_tui::app::tests::hover::the_row_of_hints_says_what_a_click_on_the_target_under_the_pointer_does_in_the_room_it_leaves`
+
+<a id="MOUSE-57"></a>
+### MOUSE-57: a click on a folded paste's marker opens it in the panel, and the `x` and the wheel work in that state
+
+In the prompt box, a left click that sweeps nothing on the cells of a `[Pasted text #N +M lines]`
+marker puts the caret at the marker's start ([MOUSE-16](#MOUSE-16)) and opens the info panel in its
+peek state, which shows the paste whole ([PASTE-13](pasting.md#PASTE-13)). As for
+[MOUSE-16](#MOUSE-16), the press and the release are on one cell and the press is a single click, so a
+drag is a selection. A click on the box's other text does what MOUSE-16 says and opens nothing. The
+click acts at rest and while a turn runs, and on a terminal too narrow for the panel it leaves a note
+and opens nothing.
+
+In the state, a left click on the `x` at the right end of the heading row ends it as `q` does, and the
+panel goes back to what it was before ([PASTE-13](pasting.md#PASTE-13)). With the pointer over the
+panel, a turn of the wheel scrolls the text by `tui.wheelRows` ([SCROLL-3](scroller.md#SCROLL-3)),
+and with the pointer elsewhere the wheel does what it did before the state opened. The panel records
+the `x` and its cells as it draws ([MOUSE-50](#MOUSE-50)), and they stand in the state they are drawn
+in, as the controls of the files state do. The key route is the `peek` chord.
+
+**Why.** A marker is the only thing in the box that stands for text that is not shown, so pointing at
+it is the most direct way to ask to see it, and the control and the wheel work as they do in the files
+state so that the panel behaves the same in both.
+
+`verified-by: bravebot_tui::app::tests::peeking::a_click_on_the_marker_opens_the_viewer_and_leaves_the_line`
+`verified-by: bravebot_tui::app::tests::peeking::a_click_on_other_box_text_moves_the_caret_and_opens_nothing`
+`verified-by: bravebot_tui::app::tests::peeking::a_click_opens_the_viewer_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::peeking::a_terminal_too_narrow_gets_a_note_and_nothing_opens`
+`verified-by: bravebot_tui::app::tests::peeking::every_way_of_closing_returns_the_panel_to_what_it_was`
+`verified-by: bravebot_tui::app::tests::peeking::the_wheel_scrolls_the_text_under_the_pointer_only`

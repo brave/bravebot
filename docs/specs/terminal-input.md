@@ -2317,13 +2317,13 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move fifteen chords, and nothing else
+### INPUT-32: a settings file can move sixteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
 action's key says nothing about the others. There is no second file and no other spelling of the
-block, so one place answers what a key does. Fifteen actions can be moved on a platform that can
-suspend the session, fourteen on one that cannot (INPUT-47), and nothing else can be moved:
+block, so one place answers what a key does. Sixteen actions can be moved on a platform that can
+suspend the session, fifteen on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2344,6 +2344,11 @@ suspend the session, fourteen on one that cannot (INPUT-47), and nothing else ca
   nothing. Where the prompt search, a search typed in the transcript scroller or the model picker
   takes letters, it is read as the letter it carries, as is any chord a mode did not ask the
   bindings about. Alt and not Ctrl because every Ctrl letter is taken.
+- `peek` (default: `alt-v`): open the full text of the folded paste the caret is on in the info
+  panel ([PASTE-13](pasting.md#PASTE-13)). It works at the box, and while a turn runs. With the caret
+  on no marker it does nothing. In the state it opens, the files state and the other modes that ask
+  the bindings first, it does nothing, and the state's own keys are not moved by it. Alt and not Ctrl
+  because every Ctrl letter is taken.
 - `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
   this session's prompts (INPUT-40).
 - `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
@@ -2433,6 +2438,10 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
 `verified-by: bravebot_tui::keybindings::the_todos_chord_is_alt_a_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_todos_chord_and_the_todos_action_cannot_take_another`
+`verified-by: bravebot_tui::keybindings::the_peek_chord_is_alt_v_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_peek_chord_and_the_peek_action_cannot_take_another`
+`verified-by: bravebot_tui::app::tests::peeking::the_key_opens_the_viewer_with_the_caret_on_a_marker`
+`verified-by: bravebot_tui::app::tests::peeking::the_key_does_nothing_with_the_caret_off_a_marker`
 `verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
 `verified-by: bravebot_tui::app::the_todos_key_prints_nothing_in_the_files_state`
 `verified-by: bravebot_tui::app::a_mode_that_types_letters_reads_the_todos_key_as_the_letter`
@@ -3314,8 +3323,11 @@ ever. The interface that draws looks at its terminal twice a second, from a thre
 because the thread that reads does not come back from a terminal that has gone, and ends with status
 129, which a shell reports for a program ended by SIGHUP, the first time the other end has closed.
 The look begins before the terminal is taken, so the questions asked of it on the way in are
-covered. A key waiting to be read is not a hangup, and nothing is looked at where standard input is
-not a terminal.
+covered. The interface can find the closed terminal before the next look, when a write to it fails
+on the way in or on the way out. It then looks at once, and on a hangup it ends with 129 without
+writing anything more, since a write to the closed terminal from the cursor's restore or a
+message on standard error would end the program with a panic. A key waiting to be read is not a
+hangup, and nothing is looked at where standard input is not a terminal.
 
 **Why.** crossterm takes a read of nothing for no event yet and reads again, so a session whose
 terminal has gone spins at a core's worth of CPU for as long as it lives, and every other process on
@@ -3326,7 +3338,9 @@ the machine slows with it. Sessions left behind this way add up, one core each.
 `verified-by: bravebot_tui::hangup::a_terminal_that_is_idle_or_has_a_key_waiting_has_not_hung_up`
 `verified-by: bravebot_tui::hangup::a_terminal_whose_other_end_closed_has_hung_up`
 `verified-by: bravebot_tui::hangup::a_watch_calls_once_the_terminal_hangs_up_and_not_before`
+`verified-by: bravebot_tui::app::tests::hangup::a_run_whose_terminal_cannot_be_handed_back_asks_whether_it_hung_up`
 `verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_ends_with_the_status_of_a_hangup`
+`verified-by: bravebot_cli::hangup::a_session_whose_terminal_closed_while_it_wrote_ends_with_the_status_of_a_hangup`
 
 <a id="INPUT-52"></a>
 ### INPUT-52: keys typed while the terminal is asked about itself at startup are kept, in order
@@ -3361,3 +3375,21 @@ the questions hold the first frame for as long as they wait.
 `verified-by: bravebot_tui::preview::the_graphics_query_waits_no_longer_than_the_keyboard_query`
 `verified-by: bravebot_tui::trust_prompt::the_loop_says_when_it_refused_keys_that_arrived_together`
 `verified-by: bravebot_cli::startup_queries::an_unanswered_keyboard_query_is_not_waited_on_for_two_seconds`
+
+<a id="INPUT-53"></a>
+### INPUT-53: the first bytes of a sequence do not hold the interface in a read of the terminal
+
+A read of the terminal that completes no event, such as the first two bytes of `ESC [`, goes back
+to waiting with the timeout the caller of `input::poll` gave, and reads again only where more input
+is already waiting. The interface therefore draws, handles a change of the window's size and reads
+its next key while the rest of a sequence is still to arrive, which a terminal writing slowly, as an
+ssh link does, makes ordinary.
+
+**Why.** The terminal is a blocking descriptor, so a read with nothing waiting does not return
+until the next byte arrives. A read loop that reads again after a read that completes no event, as
+the published crossterm does, stays in that read past the caller's timeout: nothing is drawn and a
+resize is ignored until the person types the rest of the sequence, seconds later or never.
+
+**Known costs.** One extra `ioctl(2)` on the terminal after each read that completed no event.
+
+`verified-by: bravebot_cli::partial_sequence::a_window_resized_while_half_a_sequence_is_waiting_is_drawn_again`

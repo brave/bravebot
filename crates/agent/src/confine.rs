@@ -158,6 +158,11 @@ pub struct Confinement {
     /// Directories no stage of this confinement is given a row for, which a delegate in a checkout
     /// holds: the working directory and every other checkout (CHECKOUT-7, SANDBOX-28).
     withheld_writes: Vec<PathBuf>,
+    /// The settings file the person named on the command line, as typed made absolute and where it
+    /// lands after links. The next launch reads allow rules and sandbox settings from it wherever
+    /// it sits, so no stage may write, replace or link it (SANDBOX-14). Held on macOS, where a row
+    /// for the directory holding it would otherwise grant it.
+    named_settings: Vec<PathBuf>,
     /// The hosts the person let programs reach for this session beyond `allowedHosts`
     /// (SANDBOX-24), added to the allowed set of every stage that is held to a proxy.
     host_grants: Vec<String>,
@@ -380,6 +385,7 @@ impl Confinement {
             path_reach: Vec::new(),
             unasked_writes: false,
             withheld_writes: Vec::new(),
+            named_settings: Vec::new(),
             host_grants: Vec::new(),
             requested: Vec::new(),
             requests_offered: false,
@@ -626,6 +632,18 @@ impl Confinement {
     #[must_use]
     pub fn with_withheld_writes(mut self, directories: Vec<PathBuf>) -> Self {
         self.withheld_writes = directories;
+        self
+    }
+
+    /// This confinement holding the settings file the person named on the command line, under each
+    /// of `paths` (the workspace's list, which the file tools read too). On macOS no stage writes
+    /// the file wherever a row would otherwise grant it, whether the session was opened on the
+    /// directory holding it or `--add-dir` named it, and none renames it, replaces it, links to it
+    /// or replaces a directory above it, in every mode and for a `git` stage. A file that is not
+    /// there yet is held at the same names.
+    #[must_use]
+    pub fn with_named_settings(mut self, paths: &[PathBuf]) -> Self {
+        self.named_settings = paths.to_vec();
         self
     }
 
@@ -1773,6 +1791,16 @@ impl Confinement {
             policy = policy.deny_write(self.temporary.clone());
         }
         policy = self.deny_writes_beneath_read_refusals(policy, unasked.is_empty());
+        // Not skipped for a stage that lifts the `.git` hold-back: these are refusals of their own
+        // and not protected names (SANDBOX-14).
+        if self.prelude == Prelude::MacOs {
+            for named in &self.named_settings {
+                if !policy.unwritable.contains(named) {
+                    policy = policy.deny_write(named.clone());
+                }
+                policy = policy.keep_in_place(named.clone());
+            }
+        }
         let machine: Vec<PathBuf> = unasked
             .into_iter()
             .filter(|row| !held.contains(row))
@@ -2410,9 +2438,38 @@ impl Confinement {
             .then_some(temporary)
     }
 
+    /// The named settings file, where it is a file that another name on this machine leads to as
+    /// well. A refusal of writes is by path and a second link to the file is written through, so
+    /// on macOS a stage cannot be kept from the file while one exists.
+    #[cfg(unix)]
+    fn named_settings_with_another_link(&self) -> Option<&Path> {
+        use std::os::unix::fs::MetadataExt;
+        if self.prelude != Prelude::MacOs {
+            return None;
+        }
+        self.named_settings
+            .iter()
+            .map(PathBuf::as_path)
+            .find(|named| {
+                std::fs::metadata(named).is_ok_and(|found| found.is_file() && found.nlink() > 1)
+            })
+    }
+
+    #[cfg(not(unix))]
+    fn named_settings_with_another_link(&self) -> Option<&Path> {
+        None
+    }
+
     /// Why a stage cannot be started because of a session, scratch or temporary directory, if it
     /// cannot (SANDBOX-18).
     fn directory_refusal(&self) -> Option<String> {
+        if let Some(path) = self.named_settings_with_another_link() {
+            return Some(format!(
+                "the settings file `{}` named on the command line has another hard link, which a \
+                 stage is not kept from writing through; remove the link, or name another file",
+                path.display()
+            ));
+        }
         if let Some((root, location)) = self.root_reaching_credentials() {
             return Some(match self.prelude {
                 Prelude::Windows => format!(
@@ -4537,8 +4594,7 @@ mod tests {
     /// much a place to plant an `aws` as the project.
     #[test]
     fn a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs() {
-        let granted = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-programs-granted");
+        let granted = crate::testutil::scratch_dir("confine-programs-granted");
         let _ = std::fs::remove_dir_all(&granted);
         std::fs::create_dir_all(&granted).expect("granted directory");
         let granted = granted.canonicalize().expect("canonical");
@@ -5384,8 +5440,7 @@ mod tests {
     /// interpreter, is. Run in a directory of its own so a file the session wrote is a real one.
     #[test]
     fn an_interpreter_handed_a_file_the_plan_could_write_is_not_held() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-script");
+        let root = crate::testutil::scratch_dir("confine-held-script");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5482,8 +5537,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_file_name_holding_a_separator_is_looked_up_as_one_name() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-separator-names");
+        let root = crate::testutil::scratch_dir("confine-held-separator-names");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5557,8 +5611,7 @@ mod tests {
     /// `=`, which never names `key=value run.sh`.
     #[test]
     fn a_quoted_name_in_a_command_string_names_the_file_it_runs() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-held-quoted-names");
+        let root = crate::testutil::scratch_dir("confine-held-quoted-names");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("sub")).expect("scratch root");
         let root = root.canonicalize().expect("canonical");
@@ -5653,9 +5706,15 @@ mod tests {
             let directory = std::env::temp_dir()
                 .canonicalize()
                 .expect("a temporary directory");
+            Self::at_in(&directory, name)
+        }
+
+        /// The socket at `directory`, which may be longer than a socket path can be bound at:
+        /// it is bound through a short link, so it still stands at the full path.
+        fn at_in(directory: &Path, name: &str) -> Self {
             let path = directory.join(format!("bb{}-{name}.sock", std::process::id()));
             let _ = std::fs::remove_file(&path);
-            drop(std::os::unix::net::UnixListener::bind(&path).expect("a socket"));
+            drop(crate::testutil::socket_standing_at(&path));
             Self { path }
         }
 
@@ -5674,6 +5733,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+
+    /// A test that needs an agent socket must get one whatever the length of the temporary
+    /// directory, and the socket has to stand at the path `SSH_AUTH_SOCK` names, since a row is
+    /// granted for that path. The regression it rejects is binding the socket at its full path,
+    /// which fails with `path must be shorter than SUN_LEN` once the directory is long.
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_socket_stands_at_its_path_where_the_directory_is_longer_than_a_socket_can_be_bound()
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let top = crate::testutil::scratch_dir("agent-socket-long-directory");
+        let mut long = top.clone();
+        while long.as_os_str().len() <= 120 {
+            long.push("a-directory-name-of-forty-characters-xxxx");
+        }
+        std::fs::create_dir_all(&long).unwrap();
+
+        let agent = AgentSocket::at_in(&long, "long-directory");
+
+        assert!(agent.path.starts_with(&long) && agent.name().len() > 120);
+        let kind = std::fs::symlink_metadata(&agent.path)
+            .expect("something at the path")
+            .file_type();
+        assert!(kind.is_socket(), "the path holds a socket");
+        assert_eq!(
+            agent.environment(),
+            vec![("SSH_AUTH_SOCK".to_string(), agent.name().to_string())]
+        );
+        drop(agent);
+        std::fs::remove_dir_all(&top).unwrap();
     }
 
     fn prepared_in(confinement: &Confinement) -> Result<(), ExecError> {
@@ -9389,8 +9479,7 @@ mod tests {
     fn a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries() {
         // A home that exists with its links followed, as a real one is: the list resolves a path
         // through the links of its deepest part on disk, and `/home` is a link on macOS.
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-unit-refusal-home");
+        let home = crate::testutil::scratch_dir("confine-unit-refusal-home");
         std::fs::create_dir_all(&home).expect("home directory");
         let home = home.canonicalize().expect("canonical home");
         let known_hosts = format!("{}/.ssh/known_hosts", home.display());
@@ -9423,8 +9512,7 @@ mod tests {
     /// that the default reaches each.
     #[test]
     fn what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists() {
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/confine-unit-default-reach-home");
+        let home = crate::testutil::scratch_dir("confine-unit-default-reach-home");
         std::fs::create_dir_all(&home).expect("home directory");
         let home = home.canonicalize().expect("canonical home");
         let at = |rest: &str| {
@@ -9998,12 +10086,10 @@ mod tests {
         std::fs::write(home.join("keys/work.pub"), "a key").unwrap();
         std::fs::write(outside.join("plain-file"), "not a socket").unwrap();
         std::fs::write(home.join(".gitconfig"), SIGNS_WITH_A_KEY).unwrap();
-        // A socket is made at a short path and moved, since a path under a home can be longer
-        // than a socket can be bound at.
+        // A path under a home can be longer than a socket can be bound at, so the socket is
+        // bound through a short link and still stands at the path.
         let socket_at = |path: PathBuf| {
-            let made = outside.join("made.sock");
-            drop(std::os::unix::net::UnixListener::bind(&made).unwrap());
-            std::fs::rename(made, &path).unwrap();
+            drop(crate::testutil::socket_standing_at(&path));
             path
         };
         let in_ssh = socket_at(home.join(".ssh/agent.sock"));
@@ -12150,9 +12236,7 @@ mod tests {
     /// A session directory under the build directory, which no row of the base reaches, and a
     /// confinement of this machine's own over it.
     fn a_session(name: &str) -> (PathBuf, Confinement) {
-        let session = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-unit-{name}"));
+        let session = crate::testutil::scratch_dir(&format!("confine-unit-{name}"));
         let _ = std::fs::remove_dir_all(&session);
         std::fs::create_dir_all(&session).expect("session directory");
         let session = session.canonicalize().expect("canonical session");
@@ -12679,9 +12763,7 @@ mod tests {
         gitconfig: &str,
         files: &[&str],
     ) -> (PathBuf, Confinement) {
-        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-signing-{name}"));
+        let home = crate::testutil::scratch_dir(&format!("confine-signing-{name}"));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("a home");
         for file in files {
@@ -12744,7 +12826,7 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket path short enough to bind under any checkout. The path is the one the temporary directory resolves to, since the stage's row is the path its name leads to.
+    /// Writes `~/.ssh/repo.pub` and starts an agent that holds the key it names, at a socket the driver can connect to under any temporary directory. The path is the one its directory resolves to, since the stage's row is the path its name leads to.
     #[cfg(unix)]
     fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
@@ -12754,13 +12836,20 @@ mod tests {
             format!("ssh-ed25519 {HELD} comment\n"),
         )
         .unwrap();
-        // A socket path must fit in sun_path, which a home under a deep checkout does not.
         let name = home.file_name().unwrap().to_str().unwrap();
+        let file = format!("bb{}-{name}.sock", std::process::id());
+        // The driver connects to this socket by its path to ask which keys it holds, so the path
+        // has to fit in sun_path. A temporary directory that is too long for that gives way to
+        // `/tmp`.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let directory = std::env::temp_dir().canonicalize().unwrap();
-        let socket = directory.join(format!("bb{}-{name}.sock", std::process::id()));
+        let socket = if directory.join(&file).as_os_str().len() < 100 {
+            directory.join(&file)
+        } else {
+            Path::new("/tmp").canonicalize().unwrap().join(&file)
+        };
         let _ = std::fs::remove_file(&socket);
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let listener = crate::testutil::socket_standing_at(&socket);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -13290,9 +13379,7 @@ mod tests {
     /// source tree, and without one that repository would be the checkout above the session and
     /// would hold the home and the directory beside.
     fn unasked_places(name: &str) -> (PathBuf, PathBuf) {
-        let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("confine-unit-unasked-{name}"));
+        let top = crate::testutil::scratch_dir(&format!("confine-unit-unasked-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("home/.ssh")).expect("home directory");
         std::fs::create_dir_all(top.join("beside/project/.git")).expect("a directory beside");
@@ -13817,9 +13904,7 @@ mod tests {
     #[cfg(unix)]
     impl IdentityPlaces {
         fn new(name: &str) -> Self {
-            let top = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/test-scratch")
-                .join(format!("confine-identities-{name}"));
+            let top = crate::testutil::scratch_dir(&format!("confine-identities-{name}"));
             let _ = std::fs::remove_dir_all(&top);
             for file in [
                 "home/.ssh/work",

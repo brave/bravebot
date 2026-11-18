@@ -4140,10 +4140,12 @@ fn a_gateway_stating_a_window_is_asked_again_past_its_count_and_not_past_the_win
         assert_eq!(received.try_iter().count(), 5, "streaming {streaming}");
 
         // A service that never recovers is given up on when the window is spent, well before the
-        // sixty requests it was ready to refuse.
+        // sixty requests it was ready to refuse. The pauses double from a millisecond, so ten
+        // requests fit in the window, and a fourth is sent unless the first three take most of a
+        // second to answer.
         let (endpoint, received) = serve_attempts((0..60).map(|_| Attempt::Status(503)).collect());
         let config = config_for(&endpoint);
-        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 150"#);
+        let gateway = gateway_stating(&endpoint, model, r#""retryWindowMs": 1000"#);
         let started = std::time::Instant::now();
         let (result, attempts) = asked_of(&gateway, &config, &Egress::new(), model, streaming);
         assert!(result.is_err(), "streaming {streaming}: {result:?}");
@@ -4153,10 +4155,10 @@ fn a_gateway_stating_a_window_is_asked_again_past_its_count_and_not_past_the_win
         );
         assert!(
             attempts < 30,
-            "streaming {streaming}: {attempts} requests went out in a window of 150 ms"
+            "streaming {streaming}: {attempts} requests went out in a window of 1000 ms"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < Duration::from_secs(5),
             "streaming {streaming}: the call outlasted its window: {:?}",
             started.elapsed()
         );

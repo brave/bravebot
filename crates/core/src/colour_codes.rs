@@ -14,6 +14,9 @@
 //! code out from between two halves of another, is still replaced by the caller's `printable`
 //! where the text is drawn.
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// The longest run of parameters taken as one colour code.
 ///
 /// A code that sets two colours in a 24-bit palette is 33 parameter characters. A longer run is

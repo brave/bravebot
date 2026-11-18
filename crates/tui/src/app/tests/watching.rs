@@ -350,7 +350,7 @@ fn the_chord_an_action_was_moved_off_does_nothing_inside_the_view() {
         ("background", "alt-b"),
         ("editor", "alt-e"),
         ("history", "alt-r"),
-        ("paste", "alt-v"),
+        ("paste", "alt-u"),
         ("scroller", "alt-o"),
         ("stash", "alt-s"),
         ("trail", "alt-t"),

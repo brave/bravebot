@@ -874,13 +874,13 @@ fn a_refused_line_keeps_its_attachments() {
     assert!(session.sent_attachments().is_empty());
 }
 
-/// NAME-9, PASTE-1: a handle that is only inside a folded paste is surveyed, because the words
-/// are what is sent and the box shows the marker. The issue's case: `cc @alice` in a paste.
-/// Rejects a survey of the box text, which sees only `[Pasted text #1 +4 lines]` and lets the
-/// line through to fail the turn.
+/// NAME-12, PASTE-1: a handle that is only inside a folded paste is sent as text. The box shows
+/// the marker, so the person cannot see the `@` or take it out, and the words are what is sent.
+/// The issue's case: a transcript with `@alice` in it. Rejects a survey of the unfolded words,
+/// which refuses the send with a line the person cannot act on.
 #[test]
-fn a_handle_inside_a_folded_paste_is_refused_and_the_marker_stays() {
-    let scratch = Scratch::new("refuse-in-paste");
+fn a_handle_inside_a_folded_paste_is_sent_as_text() {
+    let scratch = Scratch::new("send-in-paste");
     let mut session = surveying(&scratch);
     typing(&mut session, "propose labels for these ");
     handle_paste(
@@ -893,14 +893,50 @@ fn a_handle_inside_a_folded_paste_is_refused_and_the_marker_stays() {
         "the paste was not folded: {before}"
     );
 
+    let Action::Submit(sent) = handle_key(&mut session, key(KeyCode::Enter)) else {
+        panic!(
+            "a handle inside a paste refused the send: {}",
+            noticed(&session)
+        );
+    };
+    assert!(sent.contains("cc @alice for thoughts"), "{sent}");
+    assert!(sent.contains("@README.md"), "{sent}");
+    assert!(!noticed(&session).contains("is not a file"));
+}
+
+/// NAME-12: a name the person typed beside a folded paste is still surveyed, and the paste keeps
+/// its marker. Rejects a fix that stops surveying any line holding a paste.
+#[test]
+fn a_name_typed_beside_a_folded_paste_is_still_refused() {
+    let scratch = Scratch::new("refuse-beside-paste");
+    let mut session = surveying(&scratch);
+    typing(&mut session, "explain @bob using ");
+    handle_paste(&mut session, "one\ncc @alice for thoughts\nthree\nfour\n");
+    let before = session.input().to_string();
+
     assert_eq!(
         handle_key(&mut session, key(KeyCode::Enter)),
         Action::Redraw
     );
     assert_eq!(session.input(), before);
     let said = noticed(&session);
-    assert!(said.contains("@alice is not a file"), "{said}");
-    assert!(!said.contains("@README.md"), "{said}");
+    assert!(said.contains("@bob is not a file"), "{said}");
+    assert!(!said.contains("@alice"), "{said}");
+}
+
+/// NAME-12: a handle inside a folded paste is sent while a turn works as well, queued and not
+/// refused.
+#[test]
+fn while_a_turn_works_a_handle_inside_a_folded_paste_is_queued() {
+    use bravebot_tui::app::handle_key_while_working;
+    let scratch = Scratch::new("queue-in-paste");
+    let mut session = surveying(&scratch);
+    session.status = bravebot_tui::Status::Working;
+    handle_paste(&mut session, "one\ncc @alice for thoughts\nthree\nfour\n");
+
+    handle_key_while_working(&mut session, key(KeyCode::Enter));
+    assert_eq!(session.queued.len(), 1, "the line was refused");
+    assert!(!noticed(&session).contains("is not a file"));
 }
 
 /// NAME-1: a line the driver composes names nothing. `/help` is sent with a prompt the driver

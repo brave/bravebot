@@ -1,4 +1,4 @@
-# The check contexts branch protection on `main` has to require, one per line.
+# The check contexts the `main` ruleset has to require, one per line.
 #
 # A job in .github/workflows/ reports whether it passed. What decides whether a pull request can
 # merge is a separate list of required contexts, and that list is a repository setting: no file in
@@ -9,10 +9,11 @@
 # `make check-security` holds the three things a checkout can decide: that every name below is the
 # display name of a job that exists, that every job running a `make check-` target is named below,
 # and that a target docs/development/checks.md promises will fail a pull request is run by some job
-# at all. What is left is the live comparison, which needs the network and, for the first of these,
-# a maintainer's token:
+# at all. What is left is the live comparison, which needs the network and no token for the first of
+# these:
 #
-#   gh api repos/brave/bravebot/branches/main/protection/required_status_checks --jq '.contexts'
+#   gh api repos/brave/bravebot/rules/branches/main --jq \
+#     '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context]'
 #
 #   gh api graphql -f query='{repository(owner:"brave",name:"bravebot"){pullRequest(number:N){
 #     commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename
@@ -39,4 +40,10 @@ Versions
 Code selectors
 Dependency policy
 Fuzz build and replay
+Verus
 Process narration
+Lint and test on macOS
+Lint the Windows target
+Sandbox on Windows
+Awkward names on Windows
+Documentation website

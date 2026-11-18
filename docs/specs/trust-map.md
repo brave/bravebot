@@ -128,15 +128,22 @@ trusted directory afterwards is therefore read as trusted, whoever put it there.
 the working directory is on, so it is asked of the volume and not read from the operating system.
 The front end that makes the map asks by looking the working directory's own name up in the other
 case (the nearest directory above it with a letter in its name, on the same volume) and comparing
-which file each spelling names. No file is created and no name inside the tree is read. Where they
+which file each spelling names. On Linux it first reads the casefold flag of the working directory
+itself, because ext4 and f2fs fold case per directory: a working directory with the flag set folds
+the names inside it whatever its parent does, and a working directory without it does not fold them
+even where the directory its own name is looked up in does. No file is created and no name inside
+the tree is read. Where they
 name one file, `src/fetched.json` and `SRC/fetched.json` are one path and a rule about either
 decides both, in both polarities. Where they name different files, or the lookup misses, the map
 compares bytes, and a rule about `Docs` decides nothing about `docs`. Where the volume cannot be
 asked (an error, a mount point, a name with no letter anywhere on the path, a host with no way of
-telling files apart), the map also compares bytes: the answer only widens what a rule reaches, and
-a map that does not fold has never made trust cover a path it was not written about. A map made
-without the answer compares bytes, and a map moved to another directory takes that directory's
-answer. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
+telling files apart), the map reads the volume as one that might fold, for what withholds trust and
+not for what grants it. A distrust, an undecided boundary, the writer reservation ([TRUST-4](#TRUST-4))
+and the record of an untrusted memory compare under the full fold and reach both spellings, since
+a miss reads a refused file as trusted under another case and a hit costs a question. A trust
+compares bytes, so a map that could not ask has never made trust cover a path it was not written
+about. A map made without the answer compares bytes throughout, and a map moved to another
+directory takes that directory's answer, including that it could not be asked. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
 as `src` and `ſ` is its own lower case. A letter whose upper or lower case is more than one
 character, such as `ß` (`SS`), is the one place volumes differ: APFS opens `class.md` as `claß.md`
 and NTFS holds them apart. The map is not told which, and the volume cannot be asked without
@@ -378,6 +385,19 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_volume_answering_to_either_spelling_folds_case`
 `verified-by: bravebot_agent::workspace::a_volume_holding_the_spellings_apart_does_not_fold_case`
 `verified-by: bravebot_agent::workspace::a_probe_that_cannot_tell_does_not_fold_case`
+`verified-by: bravebot_agent::workspace::a_workspace_that_folds_inside_a_parent_that_does_not_folds_case`
+`verified-by: bravebot_agent::workspace::a_workspace_that_does_not_fold_inside_a_parent_that_does_does_not_fold_case`
+`verified-by: bravebot_agent::workspace::the_other_layouts_of_the_casefold_flag_keep_their_answers`
+`verified-by: bravebot_agent::workspace::a_filesystem_with_no_flags_is_read_by_the_lookup_of_the_name`
+`verified-by: bravebot_agent::workspace::the_trust_map_the_writer_reservation_and_the_memory_record_follow_the_workspace_s_own_casefold_flag`
+`verified-by: bravebot_agent::workspace::a_workspace_whose_volume_cannot_be_asked_distrusts_folds_and_grants_none`
+`verified-by: bravebot_agent::workspace::a_trust_store_for_a_directory_that_cannot_be_asked_says_so`
+`verified-by: bravebot_agent::workspace::a_real_directory_with_the_casefold_flag_folds_case_for_the_map`
+`verified-by: bravebot_core::trust::a_volume_that_could_not_be_asked_reads_a_refusal_in_every_case_and_a_trust_in_one`
+`verified-by: bravebot_core::trust::an_undecided_boundary_reaches_the_other_case_where_the_volume_might_fold`
+`verified-by: bravebot_core::trust::a_probe_answer_is_read_as_the_case_folding_it_says`
+`verified-by: bravebot_core::trust::a_map_moved_takes_a_volume_that_could_not_be_asked`
+`verified-by: bravebot_core::file_authority::a_second_writer_is_refused_under_the_other_case_where_the_volume_could_not_be_asked`
 `verified-by: bravebot_agent::workspace::a_name_without_a_letter_is_asked_of_the_directory_above`
 `verified-by: bravebot_agent::workspace::a_trust_store_takes_the_answer_of_the_volume_it_is_on`
 `verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
@@ -1220,7 +1240,9 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 The user's own directory is read as trusted by provenance rather than by any rule here. A
 project's own files are **not** covered by that and are read through this spec, whatever their
 names. What is kept in that directory and how it is found is
-[instructions.md](instructions.md); what it is trusted for is [skills.md](skills.md).
+[instructions.md](instructions.md); what it is trusted for is [skills.md](skills.md). That includes
+`~/.bravebot/plugins`: an installed plugin's skills and definitions are read from provenance as the
+user's own are ([PLUGIN-5](plugins.md#PLUGIN-5)), and the map has no rule for any path there.
 [CHECKOUT-6](checkouts.md#CHECKOUT-6) puts the checkouts delegates are given under that directory. They hold a project's files, so they are read through this spec
 ([CHECKOUT-8](checkouts.md#CHECKOUT-8)).
 

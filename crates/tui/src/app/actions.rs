@@ -420,6 +420,36 @@ impl Held<'_> {
         );
     }
 
+    pub(super) fn plugin(&mut self, terminal: &mut Tty, argument: &str) {
+        let home = bravebot_agent::home::directory();
+        // What a session finds today, so the prompt marks a name a higher-ranked source takes.
+        let catalogue = bravebot_agent::skills::resolved(
+            self.workspace,
+            home.as_deref(),
+            self.recorded_trust(),
+            self.answers.rules.permissions.clone(),
+            &mut Trail::new(),
+        );
+        let definitions = bravebot_agent::agents::resolved(
+            self.workspace,
+            home.as_deref(),
+            self.recorded_trust(),
+            self.answers.rules.permissions.clone(),
+            &mut Trail::new(),
+        );
+        crate::plugin_command::run(
+            self.session,
+            home.as_deref(),
+            self.workspace.root(),
+            argument,
+            &mut crate::plugin_command::TerminalAsker {
+                terminal,
+                catalogue: &catalogue,
+                definitions: &definitions,
+            },
+        );
+    }
+
     pub(super) fn list_checkouts(&mut self) {
         let mut branches = std::collections::BTreeMap::new();
         self.session

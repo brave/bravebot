@@ -370,7 +370,7 @@ fn reject_asking<S: Sink>(
         return Err(Refused::Changed);
     }
 
-    let folds = trust.folds_case();
+    let folds = trust.case_folding().restricts();
     let previous = trust.clone();
     trust.distrust(&key);
     match write(&backup.path, text.into_bytes()) {
@@ -916,6 +916,75 @@ mod tests {
             );
             let _ = std::fs::remove_dir_all(&home);
         }
+    }
+
+    /// A write that fails after it may have begun records a memory under another spelling as a
+    /// session asks about it, on a volume that folds case and on one that cannot be asked, which
+    /// is read as one that might fold. A volume known to keep case holds the spelling apart.
+    #[test]
+    fn a_failed_write_into_a_memory_in_another_case_is_recorded_as_a_session_asks_about_it() {
+        use bravebot_core::CaseFolding;
+        let home = crate::testutil::scratch_dir("hunks-memory-case-home");
+        for (case, recorded) in [
+            (CaseFolding::Folds, true),
+            (CaseFolding::Unknown, true),
+            (CaseFolding::Keeps, false),
+        ] {
+            let _ = std::fs::remove_dir_all(&home);
+            let mut project = Project::new("hunks-memory-case", "");
+            project.trust = TrustStore::new(project.workspace.root()).with_case_folding(case);
+            project.trust.trust(".");
+            project.snapshot = project.trust.clone();
+            let memory = project.workspace.root().join(".Bravebot/memory/NOTES.md");
+            std::fs::create_dir_all(memory.parent().unwrap()).unwrap();
+            std::fs::write(&memory, AFTER).unwrap();
+            let backup = Backup {
+                kept: false,
+                path: memory.clone(),
+                was: Before::Bytes(BEFORE.as_bytes().to_vec()),
+                captured_trust: Integrity::Trusted,
+            };
+            let hunks = project.listed(&backup).files.remove(0).hunks;
+            let workspace = project.workspace.clone();
+
+            let result = reject_asking(
+                &workspace,
+                &backup,
+                &hunks[0],
+                &project.snapshot,
+                &mut project.trust,
+                Some(&home),
+                &mut NullSink,
+                |_| Ok(()),
+                |path| workspace.read_back(path),
+                |path, _| {
+                    Err(WorkspaceError::Io {
+                        path: path.display().to_string(),
+                        detail: "disk full".into(),
+                    })
+                },
+            );
+
+            assert!(
+                matches!(result, Err(Refused::Io(_))),
+                "{case:?}: {result:?}"
+            );
+            let kept =
+                crate::memory::Record::new(&home, &workspace.root().to_string_lossy()).paths();
+            assert_eq!(
+                kept,
+                if recorded {
+                    vec![format!(
+                        "{}/.bravebot/memory/notes.md",
+                        key_of(workspace.root()).trim_end_matches('/')
+                    )]
+                } else {
+                    Vec::new()
+                },
+                "{case:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// Files that were written in different turns of a line are not mixed: a path is taken from

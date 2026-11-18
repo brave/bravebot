@@ -362,6 +362,13 @@ pub struct Definition {
     /// cannot take one away. Kept as written: reading a pattern needs the host's separators and
     /// case folding, which the kernel has from the rules in force when a delegate is started.
     writes: Vec<Vec<String>>,
+    /// The keys its file declared that nothing reads, in the order a sorted block declares them
+    /// (DELEGATE-19).
+    ///
+    /// Carried so a report can name them: a key nothing reads is a line whose author believes it
+    /// is in force. Never read by the kernel, so it decides nothing. A replacement carries its own
+    /// file's keys and not those of the definition it replaced.
+    unread: Vec<String>,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -390,6 +397,7 @@ impl Definition {
             memory: false,
             checkout: false,
             writes: Vec::new(),
+            unread: Vec::new(),
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -419,6 +427,7 @@ impl Definition {
             memory: false,
             checkout: false,
             writes: Vec::new(),
+            unread: Vec::new(),
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -571,6 +580,18 @@ impl Definition {
     /// line into patterns; an empty list is a limit that covers nothing.
     pub fn with_writes(mut self, patterns: Vec<String>) -> Self {
         self.writes.push(patterns);
+        self
+    }
+
+    /// The keys its file declared that nothing reads, for whoever wrote them to be told
+    /// (DELEGATE-19).
+    pub fn unread_keys(&self) -> &[String] {
+        &self.unread
+    }
+
+    /// Record the keys its file declared that nothing reads.
+    pub fn with_unread_keys(mut self, keys: Vec<String>) -> Self {
+        self.unread = keys;
         self
     }
 

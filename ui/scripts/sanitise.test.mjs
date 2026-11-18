@@ -73,3 +73,17 @@ test('a session list is always the whole one, whatever directory the window put 
   assert.deepEqual(forwarded, { other: 1 })
   assert.deepEqual(sanitised('session.list', undefined), {})
 })
+
+test('a new session opens no folder beside its project that the window named', () => {
+  const forwarded = sanitised('session.new', { directory: '/Users/me/app', directories: ['/Users/me/.ssh'] })
+
+  assert.deepEqual(forwarded, { directory: '/Users/me/app' }, 'a folder beside the project comes from the main process picker alone')
+})
+
+test('a folder list and a folder close forward the session and the folder, and nothing else', () => {
+  assert.deepEqual(sanitised('session.folders.list', { session: 's1', path: '/x' }), { session: 's1' })
+  assert.deepEqual(
+    sanitised('session.folders.close', { session: 's1', path: '/Users/me/docs', trusted: true, directories: ['/etc'] }),
+    { session: 's1', path: '/Users/me/docs' },
+  )
+})

@@ -967,18 +967,45 @@ edited afterwards changes the next conversation.
 - An `ask` rule puts a card that would not otherwise have appeared.
 - An `allow` rule in your own `~/.bravebot/settings.json` answers a card for you, so none
   appears. It does not make what a command prints trusted.
-- An `allow` rule in a project's settings file is not in force. Only your own file may write
-  one. The terminal asks whether to grant a project's rules. This app has no such question
-  yet, so it grants none and you are still asked.
+- An `allow` rule in a project's settings file is not in force until you grant it. Once the
+  trust question is answered, the conversation asks once, as the terminal does, whether to
+  grant the project's rules you have not granted before, each listed with the file that wrote
+  it. The question says where a yes is kept, or that it holds for this chat only, and lists
+  the project's rules granted before, which stay granted. **Grant** stays unavailable until
+  every listed rule has been on screen: a short list counts as read at once, and a long one
+  scrolls inside its own box until you have scrolled through it. **Keep asking me** is always
+  available. Yes grants them all and is remembered for the project, so the next conversation
+  there does not ask about them again; in an incognito conversation it holds for that
+  conversation only. No grants none, and their cards still appear. A rule the project has
+  changed since is asked about again. Nothing runs until the question is answered, and it has
+  no default: the composer says which question it is waiting on. A conversation resumed from
+  history, or forked from one that answered, does not ask.
 - A settings file chosen under **Agent settings** counts as your own where it is outside the
   project, so an `allow` rule in it is in force. One inside the project is the project's
   file, and its `allow` rule is not.
-- A directory named in `additionalDirectories` is not opened.
+- A directory named in `additionalDirectories` is not opened until you say so. After the
+  question about the rules, the conversation asks about each named directory on its own, showing
+  where the name leads, how the settings wrote it, and how many more follow. **Open folder**
+  opens it as `/add-dir` does; **Don't open** leaves it closed. A yes that can no longer open it
+  says why. A name that cannot be opened, such as one that does not exist or is inside the
+  project, is not asked about and the folded note says why. Nothing runs until each is
+  answered. An answer to a question that was already answered elsewhere is not used: the
+  window reads what is waiting now and shows that. A conversation resumed from history does not
+  ask, and in bypass mode every one that can be opened is.
+- A folder is also opened beside the project when you choose it: **Add folder…** in the
+  **Folders** section of the **Files** tab, or in the header's **More** menu, opens the system's
+  folder picker. The section lists each open folder by name, with its full path under it, and a
+  close button that takes it away again. A named directory you said yes to is listed there too.
+  The file tree then shows the project first and each folder after it. The agent refuses the
+  project itself, a folder inside it, and one already open, and the refusal is said where you
+  asked. Adding and closing wait for a running turn to finish.
 - A plan run applies the rules about a server's tools and no others. A plan card names the other
   `deny` and `ask` rules the conversation holds, so you can check the steps against them.
 
 A folded note at the top of the conversation says what a settings file wrote that is not in
-force: an entry that is not a rule, a project's `allow` rule, or a named directory.
+force: an entry that is not a rule, a project's `allow` rule not granted, or a named directory
+not opened, with the reason where it could not be opened. It also lists the project's rules you
+granted, which are in force, and where the grant is kept or that it holds for this chat only.
 **Permissions…**, in the header's **More** menu, lists the rules in force. They cannot be
 revoked there, since they are changed in their file.
 

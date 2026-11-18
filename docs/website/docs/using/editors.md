@@ -46,7 +46,9 @@ the rest in `session/new`'s `additionalDirectories`. Each of those is opened the
 `--add-dir` opens one on the command line: reachable for the session, but nothing in it is
 vouched for, so a write there is still asked about as any write outside the session's directory
 is. An entry that is not an absolute path to a directory that exists refuses the whole session
-before it starts.
+before it starts. So does any entry while [`permissions.readsStayInWorkspace`](../customize/configuration.md)
+is set, since that key keeps the file tools inside the session's directory, and the refusal names
+the key.
 
 ## Approvals
 

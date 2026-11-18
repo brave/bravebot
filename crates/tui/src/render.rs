@@ -6653,10 +6653,10 @@ mod tests {
 
         // The key it names is the one that carries a picture here, which a settings file can move.
         let mut moved = std::collections::BTreeMap::new();
-        moved.insert("paste".to_string(), "alt-v".to_string());
+        moved.insert("paste".to_string(), "alt-u".to_string());
         session.adopt_keybindings(&moved);
         let output = rendered(&session);
-        assert!(output.contains("alt-v"), "the hint named the old key");
+        assert!(output.contains("alt-u"), "the hint named the old key");
     }
 
     /// One line, two things that want it. What a copy took is the answer to something the user did
@@ -7331,15 +7331,16 @@ mod tests {
     fn a_turn_that_ended_with_a_loop_live_says_so_against_the_box_under_its_own_line() {
         let session = a_session_whose_turn_has_ended_in_a_loop();
 
+        // One draw: the light in the row follows the clock second, so rows from two draws can
+        // differ by it.
         let rows = screen_rows(&session, 120);
         let done = rows
             .iter()
             .position(|row| row.contains("done ("))
             .expect("the turn's own line is gone");
-        let (row, below) = the_still_active_row(&session, 120).expect("no row says it is active");
-        assert_eq!(
-            rows[done + 1],
-            row,
+        let (row, below) = (&rows[done + 1], &rows[done + 2]);
+        assert!(
+            row.contains(&t!(standing_label).to_string()),
             "the row is not directly under the end of the turn: {rows:?}"
         );
         assert!(row.contains("looping, next in"), "{row}");
@@ -7915,6 +7916,28 @@ mod tests {
         );
     }
 
+    /// The `?` list has a row for the key that shows a folded paste whole, on its default and on a
+    /// moved chord (INPUT-13).
+    ///
+    /// Rejects: a list that omits the action, and one that names the default after it was moved.
+    #[test]
+    fn the_shortcut_list_names_the_peek_chord() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-v"), "{listed}");
+        assert!(listed.contains("show the pasted text"), "{listed}");
+
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("peek".to_string(), "alt-y".to_string());
+        session.adopt_keybindings(&moved);
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-y"), "{listed}");
+        assert!(!listed.contains("alt-v"), "{listed}");
+    }
+
     /// The `?` list has a row for the key that prints the whole plan, on its default and on a moved
     /// chord, so the key is written down in the one place that lists the keys (INPUT-13).
     #[test]
@@ -8412,6 +8435,26 @@ mod tests {
         }
     }
 
+    /// CMD-22. On a terminal 120 columns wide every row of the slash list shows its whole
+    /// description. The description column starts after the widest hint, so a long argument in the
+    /// table clips the descriptions of other commands at this width.
+    #[test]
+    fn every_slash_row_shows_its_whole_description_at_120_columns() {
+        let mut session = Session::new("none");
+        session.type_char('/');
+        let height = crate::command_table::commands().len() as u16 + 6;
+        let output = rendered_at(&session, 120, height);
+
+        for command in crate::command_table::commands() {
+            assert!(
+                output.contains(command.description),
+                "{} does not show its whole description at 120 columns: {:?}",
+                command.name,
+                command.description
+            );
+        }
+    }
+
     /// SKILL-21. The mode in force is named on the box for as long as it is in force, and the box
     /// of a session in none says nothing of one.
     #[test]
@@ -8478,6 +8521,41 @@ mod tests {
             !rows[1].contains(['\u{1b}', '\n']),
             "an escape or a line break reached the row: {rows:?}"
         );
+    }
+
+    /// R61 of issue 4286: a skill a plugin offers is drawn with `(plugin)` and not with the label of
+    /// the user's own or the project's, so a person choosing from the row sees where it came from.
+    /// Rejects a `Source::Plugin` row drawn as `(user)`.
+    #[test]
+    fn a_plugin_skill_row_says_it_came_from_a_plugin() {
+        use bravebot_agent::skills::Source;
+        let mut session = Session::new("none");
+        for c in "this is /rev".chars() {
+            session.type_char(c);
+        }
+        session.settle_skills(|| {
+            vec![crate::skills::Skill {
+                name: "review-plan".to_string(),
+                description: "Review a plan".to_string(),
+                argument_hint: None,
+                source: Source::Plugin.into(),
+                person_only: false,
+            }]
+        });
+
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].contains("/review-plan"), "{rows:?}");
+        assert!(rows[0].ends_with("Review a plan (plugin)"), "{rows:?}");
     }
 
     /// The rows the box offers when a session holds a server with a prompt, settled for `line`.
@@ -8755,6 +8833,18 @@ mod tests {
         let row = input_row(&typed("/sandbox "), 90);
         assert!(
             row.ends_with("/sandbox  [strict | read-only | workspace-write | off]"),
+            "{row}"
+        );
+    }
+
+    /// `/mcp` spells out its subcommands once the word is typed, while the completion list keeps
+    /// `[action]`. With the long form in the table the description column starts so far right that
+    /// the longer descriptions are cut off at 120 columns.
+    #[test]
+    fn the_mcp_command_offers_its_subcommands_after_its_word() {
+        let row = input_row(&typed("/mcp "), 90);
+        assert!(
+            row.ends_with("/mcp  [list | reconnect | disable | remove]"),
             "{row}"
         );
     }

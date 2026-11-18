@@ -29,6 +29,7 @@ import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { basename, extname, join, sep, relative } from 'node:path'
 import { isProjectPath } from '../shared/recents'
+import { isSessionId } from '../shared/forks'
 import {
   ROWS_MAX,
   parseListing,
@@ -53,6 +54,72 @@ export const rootForSession = (handle: string): string | undefined => roots.get(
 const attachments = new Map<string, Map<string, string>>()
 
 /**
+ * The folders each session has open beside its project, as the agent last listed them.
+ *
+ * Taken only off the agent's answers (to `session.folders.list`, `.add` and `.close`, to a
+ * `folder.reply`, and the list `session.new`, `.open`, `.fork` and `trust.reply` carry), never off
+ * what the window sent, so a folder the tree can browse is one the bridge validated and opened,
+ * and one it has closed stops being browsable with the answer that closed it.
+ */
+const folders = new Map<string, string[]>()
+
+/** The folders `handle` has open beside its project, as the agent last listed them. */
+export const foldersForSession = (handle: string): string[] => folders.get(handle) ?? []
+
+/**
+ * Remember which folders a session has open beside its project, from the agent's answer. Anything
+ * that is not a list of absolute paths leaves the session with none, rather than with a guess.
+ */
+export function noteFolders(handle: string, listed: unknown): void {
+  if (!Array.isArray(listed)) {
+    folders.delete(handle)
+    return
+  }
+  folders.set(handle, listed.filter((each): each is string => isProjectPath(each)))
+}
+
+/** The methods whose answer lists the session's open folders, and where the session is named. */
+const LISTS_FOLDERS: Record<string, 'params' | 'answer'> = {
+  'session.folders.list': 'params',
+  'session.folders.close': 'params',
+  // A yes to a directory a checkout's settings named opens it, as a picked folder is (TRUST-9).
+  'folder.reply': 'params',
+  // A session that opens bypassing has its named directories opened before anything is asked.
+  'trust.reply': 'params',
+  'session.new': 'answer',
+  'session.open': 'answer',
+  'session.fork': 'answer',
+}
+
+/**
+ * Note the folders a session has open from the agent's answer `ok` to `method`, where that answer
+ * lists them. The session is the one the request named, or for a session opened, the one the
+ * answer names. An answer that does not list them leaves the list as it was, except from the
+ * folder methods themselves, whose answer always does.
+ */
+export function noteAnsweredFolders(method: string, params: unknown, ok: unknown): void {
+  const from = Object.hasOwn(LISTS_FOLDERS, method) ? LISTS_FOLDERS[method] : undefined
+  if (!from || typeof ok !== 'object' || ok === null) return
+  const answer = ok as { session?: unknown; folders?: unknown }
+  const handle = from === 'answer' ? answer.session : (params as { session?: unknown } | null)?.session
+  if (!isSessionId(handle)) return
+  if (!Array.isArray(answer.folders) && !method.startsWith('session.folders.')) return
+  noteFolders(handle, answer.folders)
+}
+
+/**
+ * The directory a session-relative path is relative to: the project where `folder` is absent, and
+ * otherwise `folder` itself, if and only if it is one of the session's open folders as the agent
+ * listed them. The window names a folder by the path the agent gave it, and a path it composed is
+ * no folder at all.
+ */
+function rootOf(handle: string, folder?: unknown): string | undefined {
+  if (folder === undefined || folder === null) return roots.get(handle)
+  if (typeof folder !== 'string') return undefined
+  return folders.get(handle)?.includes(folder) ? folder : undefined
+}
+
+/**
  * Remember where a session is working.
  *
  * The caller reads the handle off the agent's *answer* rather than off the request, for the
@@ -68,6 +135,7 @@ export function noteRoot(handle: string, directory: unknown): void {
 export function forgetRoot(handle: string): void {
   roots.delete(handle)
   attachments.delete(handle)
+  folders.delete(handle)
 }
 
 /** Attachment authority comes from the native picker, never a renderer-supplied path. */
@@ -90,6 +158,32 @@ export async function chooseAttachments(window: BrowserWindow, handle: string): 
   for (const item of chosen) tokens.set(item.id, item.path)
   attachments.set(handle, tokens)
   return chosen
+}
+
+/** What a folder add came to: nothing picked, the agent's answer, or the agent's refusal. */
+export type FolderAdded = null | { ok: unknown } | { error: { code: string; message: string } }
+
+/**
+ * Ask the person for a folder to open beside `handle`'s project, and ask the agent to open it.
+ *
+ * The path the agent is asked about is the one the native picker returned, never one the window
+ * sent, and every check of it (absolute, a directory, not open already, not the project) is the
+ * agent's (TRUST-9). The folders this process lets the tree browse are the ones the agent's answer
+ * lists. `add` is the call to the agent, passed in so this can be tried without one.
+ */
+export async function chooseFolder(window: BrowserWindow, handle: string, add: (path: string) => Promise<unknown>): Promise<FolderAdded> {
+  const root = roots.get(handle)
+  if (!root) return { error: { code: 'bad_request', message: 'Open a project before adding a folder.' } }
+  const selected = await dialog.showOpenDialog(window, {
+    title: 'Choose a folder to open beside this project',
+    message: 'The agent will be able to read and change files in it for the rest of this chat.',
+    defaultPath: root, properties: ['openDirectory'],
+  })
+  const path = selected.canceled ? undefined : selected.filePaths[0]
+  if (!path) return null
+  const ok = await add(path)
+  noteFolders(handle, (ok as { folders?: unknown } | null)?.folders)
+  return { ok }
 }
 
 export function attachmentPaths(handle: string, ids: unknown): string[] {
@@ -141,9 +235,9 @@ export function namesWhatItSpells(subpath: string, platform: NodeJS.Platform = p
  * to do about any of them, and a message that told the difference would tell the renderer whether
  * a path it may not read exists.
  */
-function inside(handle: string, subpath: string): string | null {
+function inside(handle: string, subpath: string, folder?: unknown): string | null {
   if (!isSubpath(subpath) || !namesWhatItSpells(subpath)) return null
-  const root = roots.get(handle)
+  const root = rootOf(handle, folder)
   if (root === undefined) return null
   try {
     const base = realpathSync(root)
@@ -157,21 +251,21 @@ function inside(handle: string, subpath: string): string | null {
 }
 
 /** Human-only raw preview. Reading here never releases content to the agent. */
-export function preview(handle: string, subpath: string): FilePreview | null {
-  const root = roots.get(handle)
+export function preview(handle: string, subpath: string, folder?: unknown): FilePreview | null {
+  const root = rootOf(handle, folder)
   if (!root || !isSubpath(subpath) || !subpath || !namesWhatItSpells(subpath)) return null
   const file = readProjectText(root, subpath)
   return file ? { path: subpath, ...file } : null
 }
 
 /** Search names recursively, independently of which tree branches the user expanded. */
-export async function search(handle: string, query: string, hidden: boolean): Promise<FileSearch> {
+export async function search(handle: string, query: string, hidden: boolean, folder?: unknown): Promise<FileSearch> {
   const paths: string[] = [], pending = [''], seen = new Set<string>()
   const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
   let examined = 0, incomplete = false
   while (pending.length && examined < 50000 && paths.length < 500) {
     const path = pending.shift()!
-    const directory = inside(handle, path)
+    const directory = inside(handle, path, folder)
     if (!directory || seen.has(directory)) continue
     seen.add(directory)
     let rows
@@ -211,8 +305,8 @@ function kindOf(directory: string, entry: { name: string; isDirectory(): boolean
  * layout and recents writers hand on the parsed value: the one judgement about this shape runs on
  * the way out as well, so a bug here cannot put a row on screen that the renderer would refuse.
  */
-export function list(handle: string, subpath: string): Listing | null {
-  const target = inside(handle, subpath)
+export function list(handle: string, subpath: string, folder?: unknown): Listing | null {
+  const target = inside(handle, subpath, folder)
   if (target === null) return null
 
   let entries
@@ -276,8 +370,8 @@ const CANCEL = 'Cancel'
  * after the person answers a question the main process asks. The renderer cannot answer it. The
  * default button is Show in folder, so a stray Enter never starts a program.
  */
-export async function open(handle: string, subpath: string, parent?: BrowserWindow | null): Promise<OpenOutcome> {
-  const target = inside(handle, subpath)
+export async function open(handle: string, subpath: string, parent?: BrowserWindow | null, folder?: unknown): Promise<OpenOutcome> {
+  const target = inside(handle, subpath, folder)
   // The same refusal for a path outside the project as for one that is not a file. The renderer
   // has no business telling those apart, and the person sees a row that would not open either way.
   if (target === null) return { status: 'failed', message: 'that is not a file in this project' }

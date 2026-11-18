@@ -150,6 +150,17 @@
 /* A line from the record, which has no outcome behind it. */
 .file-row.from-record .file-path { color: var(--ink-secondary); }
 
+/* A folder open beside the project: its name over its whole path, which gives way in the middle,
+   and a Close at the end of the row. */
+.folder-row { padding-block: var(--leo-spacing-s); }
+.folder-text { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-meta-strong); color: var(--ink-primary); }
+.folder-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-caption); color: var(--ink-tertiary); }
+.folder-close { flex: none; }
+/* A refusal names the whole path the agent was handed, which has nowhere to break but anywhere. */
+.folders-problem { display: block; box-sizing: border-box; max-width: 100%; margin-top: var(--leo-spacing-m); font: var(--type-meta); overflow-wrap: anywhere; }
+.folder-add { margin-top: var(--leo-spacing-m); }
+
 .confined-row { align-items: flex-start; padding-block: var(--leo-spacing-s); }
 .confined-row .row-icon { margin-top: var(--leo-spacing-xs); color: var(--status-info); }
 .confined-text { display: flex; flex-direction: column; min-width: 0; }

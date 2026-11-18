@@ -3,10 +3,13 @@ import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
 import { isConfined, type Activity, type SessionNote, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
-import { Button, Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
+import { Alert, Button, Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 import { FileGlyph } from './FileGlyph'
+import { IconButton } from './IconButton'
 import { LabelChip } from './LabelChip'
 import { middleTruncate } from '../truncate'
+import { folderName } from '../folders'
+import { t } from '../i18n'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -21,6 +24,10 @@ interface Live {
   running: boolean
   /** The conversation's integrity word, where it is known since the last turn began. */
   context?: string | null
+  /** The folders open beside the project, as the agent last listed them (TRUST-9). */
+  folders?: string[]
+  /** What the agent said when it last refused to add or close a folder here. */
+  folderProblem?: string | null
 }
 
 /**
@@ -43,10 +50,14 @@ interface Live {
  * in there, and what does this file look like in a real editor — is not one the transcript can be
  * asked.
  */
-export const Context = memo(function Context({ live, audit, details, onAddNote }: {
+export const Context = memo(function Context({ live, audit, details, onAddNote, onAddFolder, onCloseFolder }: {
   live: Live | null
   /** Open the dialog that adds a note to this session's record. */
   onAddNote?: () => void
+  /** Ask for a folder to open beside the project, through the main process's picker. */
+  onAddFolder?: () => void
+  /** Close one of the folders open beside the project, by the path the agent listed it under. */
+  onCloseFolder?: (path: string) => void
   audit?: React.ReactNode
   /** Drawn in place of the panels, for a bot's own page and its home conversation, which have no project to inspect. */
   details?: React.ReactNode
@@ -265,11 +276,19 @@ export const Context = memo(function Context({ live, audit, details, onAddNote }
 
           Keyed by the handle so switching sessions resets the tree rather than showing one
           project's folders under another's root while the new listing arrives. */}
+      {/* The folders the chat has open beside its project, on the tab whose tree browses them.
+          Read off the agent's answers, so a folder is listed here only once it is open there. */}
+      {onAddFolder && onCloseFolder && (
+        <Folders folders={live.folders ?? []} running={live.running} problem={live.folderProblem ?? null}
+          off={off.has('files')} onAdd={onAddFolder} onClose={onCloseFolder} />
+      )}
+
       <section className={`files-panel ${off.has('files') ? 'off' : ''}`} id="panel-files" aria-label="Project files">
         <FileTree
           key={live.handle}
           session={live.handle}
           root={live.summary.directory}
+          folders={live.folders}
           running={live.running}
         />
       </section>
@@ -309,6 +328,8 @@ function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {
 
 /** How many characters of a path fit a row of this column before the middle gives way. */
 const PATH_WIDTH = 40
+/** A folder's path sits under its name beside a Close, in caption type: narrower than an origin. */
+const FOLDER_PATH_WIDTH = 32
 
 /**
  * A path in one of the lists, which takes the transcript to where it was touched.
@@ -332,6 +353,58 @@ function Empty({ icon, children }: { icon: IconName; children: React.ReactNode }
   return <p className="panel-empty"><Icon name={icon} />{children}</p>
 }
 
+/**
+ * The folders open beside the project in this chat, each with a way to close it, and a way to add
+ * one (TRUST-9), as `/add-dir` and `/add-dir close` do in the terminal.
+ *
+ * Whether a folder may be added or closed is the agent's to say, and what it says when it refuses
+ * is drawn here as it said it. Both are greyed while a turn runs, which the agent refuses anyway.
+ */
+export function Folders({ folders, running, problem, off, onAdd, onClose }: {
+  folders: readonly string[]
+  running: boolean
+  problem: string | null
+  off: boolean
+  onAdd: () => void
+  onClose: (path: string) => void
+}): React.JSX.Element {
+  const wait = t.uiFoldersWait()
+  return (
+    <Section id="folders" title={t.uiFoldersHeading()} count={folders.length} off={off} about={t.uiFoldersAbout()}>
+      {folders.length === 0 ? (
+        <Empty icon="folder">{t.uiFoldersEmpty()}</Empty>
+      ) : (
+        <ul className="files folders" data-test="folders">
+          {folders.map((path) => {
+            const name = folderName(path)
+            return (
+              <li key={path} className="file-row folder-row">
+                <Icon name="folder" className="row-icon" />
+                <span className="folder-text" data-tooltip={path}>
+                  <span className="folder-name">{name}</span>
+                  <code className="folder-path">{middleTruncate(path, FOLDER_PATH_WIDTH)}</code>
+                </span>
+                <IconButton key={running ? 'waiting' : 'ready'} icon="close" label={t.uiFoldersClose({ name })} size="tiny" className="folder-close"
+                  tooltip={running ? wait : t.uiFoldersCloseExplained({ name })} disabled={running}
+                  data-test="folder-close" onClick={() => onClose(path)} />
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {problem && <Alert type="error" size="small" className="folders-problem" role="alert" data-test="folders-problem">{problem}</Alert>}
+      {/* Keyed on the turn: once Leo's wrapper has set `data-tooltip` as a property on the host,
+          React updates the property rather than the attribute the tooltip reads, so a changed
+          tooltip needs a fresh host. */}
+      <Button key={running ? 'waiting' : 'ready'} kind="plain-faint" size="small" className="folder-add" isDisabled={running}
+        onClick={onAdd} data-tooltip={running ? wait : undefined} data-test="folders-add">
+        <Icon slot="icon-before" name="plus-add" />
+        {t.uiFoldersAdd()}
+      </Button>
+    </Section>
+  )
+}
+
 function Section({
   id,
   title,
@@ -340,8 +413,8 @@ function Section({
   off = false,
   children,
 }: {
-  /** Which panel this is, so the button in the bar can point at it. */
-  id: PanelName
+  /** Which panel this is, so the button in the bar can point at it. The folders are part of the Files tab. */
+  id: PanelName | 'folders'
   title: string
   /** How many things are in it, for the count in the head. Shown at zero as well: "none" is an answer. */
   count: number

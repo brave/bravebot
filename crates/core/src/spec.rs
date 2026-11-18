@@ -64,4 +64,51 @@ pub proof fn the_middle_labels_are_incomparable()
 {
 }
 
+/// The label of a value computed from `a` and `b`: untrusted if either is, private if either is.
+pub open spec fn taint(a: Label, b: Label) -> Label {
+    Label {
+        integrity: meet(a.integrity, b.integrity),
+        confidentiality: join(a.confidentiality, b.confidentiality),
+    }
+}
+
+/// Both inputs degrade into their taint, and the taint degrades into every label both inputs
+/// degrade into, so it is the least upper bound of the two. The contracts on `Integrity::meet` and
+/// `Confidentiality::join` state that they compute `meet` and `join`, so each step of `taint_all`
+/// takes this bound.
+pub proof fn taint_is_the_least_upper_bound(a: Label, b: Label, c: Label)
+    ensures
+        degrades(a, taint(a, b)),
+        degrades(b, taint(a, b)),
+        degrades(a, c) && degrades(b, c) ==> degrades(taint(a, b), c),
+{
+}
+
+/// Every two labels have a greatest lower bound: a label that degrades into both, and into which
+/// every other such label degrades. With the least upper bound, this makes the order a lattice.
+pub proof fn every_two_labels_have_a_greatest_lower_bound(a: Label, b: Label)
+    ensures
+        exists|l: Label|
+            #![trigger degrades(l, a), degrades(l, b)]
+            degrades(l, a) && degrades(l, b) && forall|c: Label|
+                #![trigger degrades(c, l)]
+                degrades(c, a) && degrades(c, b) ==> degrades(c, l),
+{
+    let l = Label {
+        integrity: if a.integrity == Integrity::Trusted || b.integrity == Integrity::Trusted {
+            Integrity::Trusted
+        } else {
+            Integrity::Untrusted
+        },
+        confidentiality: if a.confidentiality == Confidentiality::Public
+            || b.confidentiality == Confidentiality::Public {
+            Confidentiality::Public
+        } else {
+            Confidentiality::Private
+        },
+    };
+    assert(degrades(l, a) && degrades(l, b));
+    assert forall|c: Label| degrades(c, a) && degrades(c, b) implies degrades(c, l) by {}
+}
+
 } // verus!

@@ -189,7 +189,10 @@ impl Host {
         // The host offers its client no `session.mode` ([`allowlist::DENIED`]), and nobody is at
         // the host to press a key, so a session opened in auto, as the person's own
         // `permissions.startInAuto` makes a window's (AUTO-1), could not be moved out of it.
-        .opening_in_ask();
+        .opening_in_ask()
+        // Nor does it offer the replies to the questions about a checkout's settings, so its
+        // sessions grant none of the rules proposed and open none of the directories named.
+        .not_putting_project_questions();
         Self {
             instance: new_instance(),
             inspection: setup.inspection,
