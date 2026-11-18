@@ -45,6 +45,7 @@ fr:command-sessions
 fr:command-unfinished
 fr:commit-message-untrusted
 fr:configured-start-heading
+fr:desktop-model-retrieves
 fr:doctor-embeddings
 fr:doctor-embeddings-answered
 fr:doctor-embeddings-brave
@@ -106,6 +107,7 @@ fr:memory-source-person
 fr:memory-standing-live
 fr:memory-standing-superseded
 fr:memory-verified-never
+fr:model-retrieves
 fr:named-not-a-file
 fr:named-not-text
 fr:named-not-utf8

@@ -2286,6 +2286,42 @@ mod tests {
         assert!(allowed.output.is_empty());
     }
 
+    /// LABEL-8: a start on a model that searches the web over chat completions is ended with no file
+    /// named, whether the model is the configured default or a recorded pick, and a model beside it
+    /// that does not search is not ended. The regression it rejects is a refusal that needs a managed
+    /// file, which would leave a `model` setting naming the search model as the one route open.
+    #[test]
+    fn a_start_on_a_model_that_searches_the_web_is_ended_without_a_file() {
+        let mut config = Config::from_lookup(|name| match name {
+            bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+            bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+            bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configured gateway");
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai-compatible",
+                "options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}, "gpt-5.5": {}}}}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config.providers = bravebot_config::provider::Provider::all(&root);
+
+        let said = refused_model(&config, Some("openai/gpt-5-search-api"))
+            .expect("the search model ended the start");
+        assert!(said.contains("openai/gpt-5-search-api"), "{said}");
+        assert!(said.contains("searches the web"), "{said}");
+        assert_eq!(refused_model(&config, Some("openai/gpt-5.5")), None);
+
+        config.default_model = "openai/gpt-5-search-api".to_string();
+        assert!(
+            refused_model(&config, None).is_some(),
+            "the configured default was not asked"
+        );
+    }
+
     /// BG-8: a recorded choice or a settings key for automatic vetting answers a foreground session's
     /// prompts and none of a background session's.
     #[test]

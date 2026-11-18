@@ -275,14 +275,21 @@ fn badges(advertised: &Advertised) -> Vec<&'static str> {
 ///
 /// `None` for the model means the configured one, which is what a request naming none asks for. In
 /// English here rather than through a catalog, as the warnings of `roster` for a gateway and for Brave
-/// are. The file is the only actionable thing in the sentence: nobody using this window can write it.
+/// are, except the refusal of a model that searches the web, which is the catalog message
+/// `desktop-model-retrieves` and names no file. The file is the only actionable thing in the other
+/// sentences: nobody using this window can write it.
 pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
     let asked = model.unwrap_or(&config.default_model);
     let (file, why) = config.model_refused(asked)?;
     let reason = match why {
         ModelRefusal::NotAllowed => "allows only the models its models.allow names",
         ModelRefusal::Denied => "denies it with a models.deny entry",
+        // No file refused it, so there is none to name: the sentence is a catalog message.
+        ModelRefusal::Retrieves => {
+            return Some(bravebot_i18n::t!(desktop_model_retrieves, model = asked));
+        }
     };
+    let file = file?;
     Some(format!(
         "{asked} is not requested on this machine: {}, which this machine's administrator \
          manages, {reason}.",

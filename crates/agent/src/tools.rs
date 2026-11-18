@@ -13737,10 +13737,16 @@ fn advise<S: Sink>(
         Err(crate::advisor::AdviceError::Chat(error)) => {
             model_request_failed("advisor", &error, waited)
         }
-        Err(crate::advisor::AdviceError::Refused) => Produced::problem(
-            "refused: the settings on this machine do not allow the advisor model. Carry on \
-             without it.",
-        )
+        Err(crate::advisor::AdviceError::Refused(why)) => Produced::problem(match why {
+            bravebot_config::ModelRefusal::Retrieves => {
+                "refused: the advisor model searches the web before it replies, so it is not \
+                 asked. Carry on without it."
+            }
+            _ => {
+                "refused: the settings on this machine do not allow the advisor model. Carry on \
+                 without it."
+            }
+        })
         .waiting(waited),
         Err(crate::advisor::AdviceError::Denied(error)) => request_denied(&error, waited),
     }

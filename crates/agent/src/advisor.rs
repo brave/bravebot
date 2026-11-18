@@ -64,8 +64,9 @@ pub struct Advice {
 
 #[derive(Debug)]
 pub enum AdviceError {
-    /// The machine-level settings refuse the advisor model.
-    Refused,
+    /// The advisor model is refused: by the machine-level settings, or because it searches the web
+    /// before it replies.
+    Refused(bravebot_config::ModelRefusal),
     /// The question or the answer was refused by the kernel.
     Denied(Denial),
     /// The call failed or was refused in transit.
@@ -75,7 +76,7 @@ pub enum AdviceError {
 impl fmt::Display for AdviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Refused => write!(f, "the settings on this machine refuse the advisor model"),
+            Self::Refused(why) => write!(f, "advisor model refused: {why:?}"),
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
         }
@@ -122,8 +123,8 @@ pub fn consult<S: Sink>(
     // Asked here as well as at the start of a run, because a model the machine-level layer
     // refuses is refused whichever route named it (BACKEND-48), and this is the route that names
     // one in the middle of a turn.
-    if chat.config.model_refused(model).is_some() {
-        return Err(AdviceError::Refused);
+    if let Some((_, why)) = chat.config.model_refused(model) {
+        return Err(AdviceError::Refused(why));
     }
 
     let request = request_for(model, context, question);

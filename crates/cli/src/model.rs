@@ -354,7 +354,7 @@ pub(crate) fn nothing_serves(config: &Config, model: &str) -> Option<String> {
             None,
         )),
         bravebot_agent::backend::Serving::Refused { file, why } => {
-            Some(managed_refusal(model, &file, why))
+            Some(managed_refusal(model, file.as_deref(), why))
         }
         bravebot_agent::backend::Serving::Configured => None,
     }
@@ -392,7 +392,7 @@ pub(crate) fn put_processor_model_in_force(
         // fix a processor model, and it names neither the model nor what it was named for.
         match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
             bravebot_agent::backend::Serving::Refused { file, why } => {
-                return Err(managed_refusal(&model, &file, why));
+                return Err(managed_refusal(&model, file.as_deref(), why));
             }
             bravebot_agent::backend::Serving::NothingConfigured { .. } => {
                 return Err(bravebot_agent::report::processor_model_refusal(
@@ -418,7 +418,7 @@ pub(crate) fn put_processor_model_in_force(
 /// every caller prints pictures (LAYER-3). The drawing maps each character and decides nothing.
 pub(crate) fn managed_refusal(
     model: &str,
-    file: &Path,
+    file: Option<&Path>,
     why: bravebot_config::ModelRefusal,
 ) -> String {
     t!(
@@ -504,7 +504,7 @@ mod tests {
         ] {
             let said = managed_refusal(
                 "a-model\u{1b}[8mhidden",
-                Path::new("/etc/\u{1b}]52;c;aGVsbG8=\u{7}managed.json"),
+                Some(Path::new("/etc/\u{1b}]52;c;aGVsbG8=\u{7}managed.json")),
                 why,
             );
 

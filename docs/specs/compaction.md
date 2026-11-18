@@ -378,7 +378,9 @@ A model needing a sign-in this machine has not made refuses the compaction, whic
 conversation exactly as it was, as every other refusal here does. It is not replaced by the
 session's model. A model the machine-level layer excludes is refused on the same terms: a model that
 layer rules out is requested by no route, and a key in a person's own file is a route, so this one
-asks before it sends rather than leaving an administrator's exclusion to the request. A name no
+asks before it sends rather than leaving an administrator's exclusion to the request. A model that
+searches the web before it replies, reached over chat completions, is refused the same way with no
+file named ([LABEL-8](labels.md#LABEL-8)), and the reason says that it searches the web. A name no
 configured service answers for is refused too, by the same question `model` and the advisor are put:
 sent anyway, it reaches a service that answers without the exchange, and a summary or a verdict
 written from nothing reads as an answer rather than as a failure.
@@ -402,6 +404,7 @@ against the window of the planner's model rather than this one
 `verified-by: bravebot_agent::compact::a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes`
 `verified-by: bravebot_agent::compact::a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent`
 `verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::compact::a_summary_model_that_searches_the_web_is_refused_over_chat_completions_only`
 `verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_summary_model_that_is_not_obeyed`
 
 <a id="COMPACT-16"></a>

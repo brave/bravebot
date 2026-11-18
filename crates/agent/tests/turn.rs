@@ -86383,6 +86383,183 @@ fn an_addressed_definition_whose_model_the_managed_layer_denies_sends_nothing_an
     );
 }
 
+/// A config whose `openai` entry is reached over chat completions at `endpoint` and lists
+/// `gpt-5-search-api`, which searches the web before it replies (LABEL-8, BACKEND-19).
+fn a_config_listing_a_search_model(endpoint: &str) -> Config {
+    let mut config = config_for(endpoint);
+    let root: serde_json::Value = serde_json::from_str(&format!(
+        r#"{{"provider": {{"openai": {{"npm": "@ai-sdk/openai-compatible",
+            "options": {{"baseURL": "{endpoint}", "apiKey": "SYNTHETIC_TOKEN"}},
+            "models": {{"gpt-5-search-api": {{}}}}}}}}}}"#
+    ))
+    .expect("json");
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    config
+}
+
+/// LABEL-8, DELEGATE-22. A delegate the planner starts with `spawn_agent` is not requested on a
+/// model that searches the web over chat completions: the definition is refused with the model and
+/// the reason, and its task is never sent. The regression it rejects is a delegate that runs on the
+/// model, whose reply the planner would read as its own context's output.
+#[test]
+fn a_delegate_whose_model_searches_the_web_sends_nothing_and_says_why() {
+    let scratch = Scratch::new("delegate-model-retrieves");
+    let home = Scratch::new("delegate-model-retrieves-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("searching-reader.md"),
+        "---\nname: searching-reader\ndescription: Reads on a search model.\nkind: reader\nmodel: openai/gpt-5-search-api\n---\n\nREAD-ON-A-SEARCH-MODEL\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-SEARCHING-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"searching-reader","task":"CHECK-ON-A-SEARCH-MODEL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-ON-A-SEARCH-MODEL", vec![reply_with("clear")]),
+    ]);
+    let config = a_config_listing_a_search_model(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-TO-SEARCHING-READER").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        !requests
+            .iter()
+            .any(|body| body.contains("gpt-5-search-api\"")),
+        "a request carried the search model: {requests:?}"
+    );
+    assert!(
+        matches!(reporter.delegates_finished.as_slice(), [(_, _, true)]),
+        "the delegate was not reported as not finishing: {:?}",
+        reporter.delegates_finished
+    );
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("searching-reader")
+                && notice.contains("openai/gpt-5-search-api")
+                && notice.contains("searches the web")
+        }),
+        "the refusal named neither the definition, the model nor the reason: {:?}",
+        reporter.notices
+    );
+}
+
+/// LABEL-8, DELEGATE-22. A definition a turn is addressed to is refused on the same ground inside
+/// the driver, where an interface that never ran `definition_named` starts it.
+#[test]
+fn an_addressed_definition_whose_model_searches_the_web_sends_nothing_and_says_why() {
+    let scratch = Scratch::new("address-model-retrieves");
+    let home = Scratch::new("address-model-retrieves-home");
+    define(
+        &home,
+        "searching-reviewer",
+        "kind: reader\nmodel: openai/gpt-5-search-api\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = a_config_listing_a_search_model(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "searching-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "the definition ran"
+    );
+    assert_eq!(received.try_iter().count(), 0, "a request was sent");
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("searching-reviewer")
+                && notice.contains("openai/gpt-5-search-api")
+                && notice.contains("searches the web")
+        }),
+        "the refusal named neither the definition, the model nor the reason: {:?}",
+        reporter.notices
+    );
+}
+
+/// LABEL-8, GOAL-19. A goal check whose `summaryModel` searches the web over chat completions sends
+/// nothing and ends on a reason that names the model and says why, not a sign-in or a file. The
+/// regression it rejects is a judge that runs on the model. The Responses route cannot be built
+/// here, since it is keyed on OpenAI's host, and is pinned beside `side_request_model`.
+#[test]
+fn a_summary_model_that_searches_the_web_sends_no_check() {
+    let (endpoint, received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+    let mut check = |config: &Config| {
+        turn::goal(
+            config,
+            &egress,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            bravebot_agent::goal::Check::of(
+                &conversation,
+                "a.txt exists",
+                bravebot_agent::Work::default(),
+            ),
+            Some("an-expensive-session-model"),
+            &mut sink,
+            bravebot_core::trust::TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+    };
+
+    let mut config = a_config_listing_a_search_model(&endpoint);
+    config.summary_model = Some("openai/gpt-5-search-api".to_string());
+    let said = match check(&config) {
+        Err(failure) => failure.to_string(),
+        Ok(_) => panic!("a summary model that searches the web must send no check"),
+    };
+    assert!(
+        said.contains("openai/gpt-5-search-api") && said.contains("searches the web"),
+        "the refusal did not name the model and the reason: {said}"
+    );
+    assert!(
+        !said.contains("sign-in"),
+        "a search model was reported as one needing a sign-in: {said}"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "the search model was sent a check: {sent:?}"
+    );
+}
+
 /// BACKEND-48. A skill naming a model the managed layer denies does not move the turn onto it: the
 /// rounds after the skill loads keep the session's model, and the person is told which file refused.
 #[test]
@@ -87814,6 +87991,44 @@ fn an_advisor_model_the_machine_refuses_is_not_asked() {
     assert!(
         requests[1].contains("do not allow the advisor model"),
         "got: {}",
+        requests[1]
+    );
+}
+
+/// LABEL-8, ADVISOR-7: a model that searches the web over chat completions is not asked, whichever
+/// route named it, and the planner is told to carry on without it. The regression it rejects is an
+/// advisor request sent to the model, whose reply would reach the planner labelled from a context
+/// that holds none of its pages.
+#[test]
+fn an_advisor_model_that_searches_the_web_is_not_asked() {
+    let scratch = Scratch::new("advisor-retrieves");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("done"),
+    ]);
+    let config = a_config_listing_a_search_model(&endpoint);
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read")
+            .with_advisor(Some("openai/gpt-5-search-api".into())),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let requests = every_request(&received);
+    assert_eq!(requests.len(), 2, "a request went to the search model");
+    assert!(
+        requests[1].contains("the advisor model searches the web before it replies"),
+        "got: {}",
+        requests[1]
+    );
+    assert!(
+        !requests[1].contains("do not allow the advisor model"),
+        "the settings were blamed for a search model: {}",
         requests[1]
     );
 }

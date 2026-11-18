@@ -570,6 +570,21 @@ the policy layer tracked.
 
 If you find yourself relabelling a value that already has a label, stop: that is LABEL-7.
 
+The sentence holds for every model this program requests, and the program keeps it true by not
+requesting one it does not hold for. A model that searches the web before it replies, which OpenAI's
+Chat Completions search models do on every request, adds the pages its provider's search returns to
+its context, so its reply is a function of more than the context built here and the context's label
+would be given to bytes that came from the web. The models on the list `RETRIEVING_MODELS` in
+`crates/config/src/provider.rs` are therefore not offered in a roster and not requested over chat
+completions, as `model`, `summaryModel`, `advisorModel`, `planModel`, `processorModel`, a
+definition's `model` or a recorded pick, and the refusal is the machine-level layer's, asked in
+`Config::model_refused` without a file to name ([BACKEND-19](backends.md#BACKEND-19),
+[BACKEND-48](backends.md#BACKEND-48)). Over the Responses protocol search is a tool a request has to ask
+for, and a request this program builds asks for none, so the same id is offered there. The ids on the
+list come from OpenAI's web search guide, read on 2026-11-13, and the claim that they search on every
+request has not been exercised against the service. A model that retrieves and is not on the list is
+not detected: see [Known costs](#known-costs).
+
 A reply arrives from a backend wrapped in the label the *network* gave it, because a JSON string
 carries no provenance and a transport can know nothing else. Taking it out of that envelope and
 giving it the context's label is one step in the policy layer, not two in a driver: a driver doing
@@ -652,6 +667,8 @@ is told that it answered and given a reference to the reply, and the reply is in
 `verified-by: bravebot_agent::conversation::what_the_planner_was_shown_only_ever_rises`
 `verified-by: bravebot_agent::conversation::compaction_does_not_make_a_private_conversation_public`
 `verified-by: bravebot_ui_bridge::fork::a_conversation_whose_planner_was_shown_private_content_forks_private`
+`verified-by: bravebot_config::lib::a_model_that_searches_the_web_is_refused_over_chat_completions_only`
+`verified-by: bravebot_aichat::models::a_listing_is_not_offered_a_model_that_searches_the_web_over_chat_completions`
 
 <a id="LABEL-9"></a>
 ### LABEL-9: context integrity falls when the planner is shown something, never when a turn reads it
@@ -1224,3 +1241,11 @@ arrives at all.
   include pattern, the rules, the resolved directory argument and the name order above, no name is
   in any of these conditions. A name in that sentence, or a choice of which directory to cut or how
   to word the sentence made from a name, is a violation and not covered here.
+
+- **A model that searches the web is kept out by a list of ids, and a model nobody listed is not.**
+  Whether a model adds retrieved pages to its context is not something a request or a reply states,
+  so `RETRIEVING_MODELS` is a list a developer writes from a provider's documentation
+  ([LABEL-8](#LABEL-8)). A search model released since, an id under a proxy's own name, and a model
+  that a gateway routes to a search backend are requested and labelled from the context this program
+  built, which is the label the pages did not earn. The list is compared with the name a request
+  carries and with nothing a reply says, so no byte from outside decides it.

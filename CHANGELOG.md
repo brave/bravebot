@@ -4,6 +4,8 @@
 
  - Added a daily usage ping, which tells Brave once a UTC day that a copy of bravebot ran: its platform, version, install method, front end, kind of model service, whether a premium key is held, four first-of-period flags and the week it was first counted. It holds no prompt, file, key, path or identifier, nothing is sent until bravebot has said so once, and the switch in `/config`, **Settings → General → Privacy**, `"usagePing": false`, `BRAVEBOT_USAGE_PING=0`, `DO_NOT_TRACK` or the managed file turns it off.
 
+ - Fixed a model that searches the web over chat completions, such as `gpt-5-search-api`, being requested with the pages it fetched inside a reply labelled as a trusted conversation. Bravebot now refuses it with "it searches the web before it replies, so its reply cannot be labelled from what was sent to it" wherever it would request the model: `--model`, the `model` key, a recorded pick, `summaryModel` (compaction and the goal check), `advisorModel`, `/advisor` and a definition's `model`. The chat completions listing leaves these ids out, and naming one under `models` does not allow it. The Responses protocol keeps them. The list is compiled into the release, so a model that searches and is not on it is not detected. ([#4100](https://github.com/brave/bravebot/issues/4100))
+
 ## [0.23.0](https://github.com/brave/bravebot/releases/tag/v0.23.0)
 
  - Added `/issues` and `/prs`, and Pull requests and Issues sections in the info panel, which list the issues and pull requests the session has met in text you typed, in the agent's own fetches and in trusted tool results. They cost no tokens and answer at once while a turn runs. ([#4223](https://github.com/brave/bravebot/issues/4223))
