@@ -53810,11 +53810,14 @@ fn a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_
 /// DELEGATE-17 and AGENT-3: a call that sets `wake_after` to the number of delegates it starts is
 /// not asked again until all of them have ended, and is then asked once with every report.
 ///
-/// The fast delegate answers at once. The slow one is held until a third planner request arrives,
-/// or for the server's bound of ten seconds where none does. A turn that woke at the first
-/// delegate's end sends that request with the fast report alone, which releases the slow one and
-/// sets the flag saying the hold was met. The turn under test sends no third request until the
-/// slow delegate has ended, so the hold runs to its bound and the flag stays false.
+/// The fast delegate is held until the planner's second request has arrived, so it ends while the
+/// turn waits and never before that request is written. Unheld, it could end first, and the turn
+/// takes back what has finished before it asks (AGENT-3), which leaves only the slow delegate to
+/// wait for and no first end for the count to hold back. The slow one is held until a third
+/// planner request arrives, or for the server's bound of ten seconds where none does. A turn that
+/// woke at the fast delegate's end sends a third request with the fast report alone, which
+/// releases the slow one and costs a fourth. The turn under test sends no third request until the
+/// slow delegate has ended, so the hold runs to its bound and the planner is asked three times.
 #[test]
 fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_last_ends() {
     let scratch = Scratch::new("delegates-wake-after-all");
@@ -53837,11 +53840,7 @@ fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_la
             ("FAST-ONE", vec![reply_with("THE-FAST-REPORT")]),
             ("SLOW-ONE", vec![reply_with("THE-SLOW-REPORT")]),
         ],
-        Order::After {
-            held: "SLOW-ONE",
-            after: "ASK-ALL",
-            asked: 3,
-        },
+        Order::Staged(&[("FAST-ONE", "ASK-ALL", 2), ("SLOW-ONE", "ASK-ALL", 3)]),
     );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -53862,9 +53861,9 @@ fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_la
     .expect("turn runs");
 
     assert!(
-        !kept.load(Ordering::SeqCst),
-        "a third planner request arrived while the slow delegate was still held, so the planner \
-         was asked again before the last of the call's delegates ended: {:?}",
+        kept.load(Ordering::SeqCst),
+        "the fast delegate was never held for the planner's second request, so it could have ended \
+         before the wait and this proves nothing: {:?}",
         reporter.lines()
     );
     let requests = every_request(&received);
@@ -53875,7 +53874,8 @@ fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_la
     assert_eq!(
         planner.len(),
         3,
-        "the planner was not asked exactly once after both delegates ended"
+        "the planner was not asked exactly once after both delegates ended, so it was asked again \
+         before the last of the call's delegates ended"
     );
     assert!(
         !planner[1].contains("THE-FAST-REPORT"),
