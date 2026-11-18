@@ -603,7 +603,11 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         request: &crate::confirm::ManifestRequest,
     ) -> (Decision, Option<&'static str>) {
         self.asked(
-            |unasked| unasked.manifest().map(|(answer, mode)| (answer, Some(mode))),
+            |unasked| {
+                unasked
+                    .manifest()
+                    .map(|(answer, mode)| (answer, Some(mode)))
+            },
             |held| held.confirm_manifest_noting_the_mode(request),
             |refuse| refuse.confirm_manifest_noting_the_mode(request),
         )
