@@ -203,7 +203,9 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   test file the bracket relies on is also listed in the spec's `governs`, so a change to it
   re-reviews the spec.
   **A named test is a Rust test.** The check resolves a name against the `#[test]` functions in
-  `crates/`, so a test written in anything else cannot be cited however it is spelled. A clause about
+  `crates/`, and against the Verus `proof fn`s in the crates `CRATES` in `contrib/check-verus.py`
+  names, which `make check-verus` proves for every input. A test written in anything else cannot be
+  cited however it is spelled. A clause about
   behaviour only another language implements therefore has two honest forms and no third: a Rust test
   that observes the behaviour from outside, which is what a clause about a separate process gets, or
   `verified-by: none`, which lands in [../../unverified-clauses.txt](../../unverified-clauses.txt)

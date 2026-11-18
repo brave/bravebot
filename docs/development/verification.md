@@ -10,7 +10,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | Item | Contract |
 |---|---|
 | `Integrity::meet`, `Confidentiality::join` | Each returns the pessimistic answer |
-| `Label::degrades_to` | It is the axis-by-axis order taint travels in, which `crates/core/src/spec.rs` proves a partial order with `(T,priv)` and `(U,pub)` incomparable |
+| `Label::degrades_to` | It is the axis-by-axis order taint travels in, which `crates/core/src/spec.rs` proves a lattice with `(T,priv)` and `(U,pub)` incomparable, in which the taint of two labels is their least upper bound |
 | `Label::is_trusted`, `Label::is_public` | Each reads its axis |
 | `Labelled::label`, `Labelled::declassify` | Each returns the label or the value held |
 | `Labelled::into_trusted` | The value comes out exactly when the label is `(T,pub)`, and otherwise the labelled value comes back unchanged |
@@ -65,7 +65,8 @@ pub fn meet(self, other: Self) -> Self {
   `derive(Structural)` there too where a contract compares it with `==`.
 - Definitions a contract names, and proofs, go in `crates/core/src/spec.rs` inside `verus! { }`.
   Write them from what the code is for, not by copying the body: a spec copied from the code proves
-  the code equals itself.
+  the code equals itself. A proof of what a spec clause says is cited under the clause as
+  `verified-by: bravebot_core::spec::<proof>`, and `make check-spec` fails if it does not exist.
 - A private field is read in a contract through a `closed spec fn` written beside the type, as
   `spec_label_of` and `spec_value_of` are in `crates/core/src/value.rs`. A spec function exists only
   for Verus, so it opens nothing in a build, and it is not a function of the type's own.
@@ -101,6 +102,11 @@ or the scripts that run them, on the merge queue's branch, and on `main`. It ins
 `VERUS_VERSION` names with `make verus-install`, which refuses a download that does not match
 `VERUS_SHA256`, and the toolchain `VERUS_TOOLCHAIN` names. A bump of the release changes all three
 together.
+
+`crates/core/src/spec.rs`, `verify/` and the two scripts have code owners in `.github/CODEOWNERS`.
+A contract that is removed or weakened in the crate has to change `verify/contracts.txt` to pass,
+and a definition a contract names lives in `spec.rs`, so either change needs an owner's approval.
+The body a contract holds needs none, because Verus checks it.
 
 ## Running
 
