@@ -416,9 +416,10 @@ fn a_failed_write_names_the_path_and_keeps_the_list() {
 #[cfg(unix)]
 fn deny_writing(path: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o400)).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o400)).expect("deny writing");
     if std::fs::OpenOptions::new().write(true).open(path).is_ok() {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("restore writing");
         eprintln!("SKIPPED (permissions do not bind this user)");
         return false;
     }
