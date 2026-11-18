@@ -183,6 +183,13 @@ STRUCT_LABELLED = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+Labelled\b"
 # A derive writes the same implementation an `impl` does, inside the module that can see the
 # private fields, so it is held to the same list. `Clone` is the one the type derives.
 ALLOWED_DERIVES = {"Clone"}
+# The types that hold a slot's address, by the file that declares them, which may not derive
+# `Debug`: a derive prints every field, and the address is a filename out of a quarantined listing.
+# `check_slot_address_debug` reads these; each has a hand-written `Debug` that leaves the address out.
+SLOT_ADDRESS_TYPES = {
+    "crates/core/src/slot.rs": ("SlotStore", "Entry", "Deferred", "Home"),
+    "crates/core/src/vetting.rs": ("VettingSpec", "Origin"),
+}
 
 # The gates. A witness may be minted nowhere else, and reaching content through anything but one of
 # these is shape 3. `Policy::read_a_number` releases a processor's answer to a function the caller
@@ -1862,6 +1869,64 @@ def check_labelled_impls(sources):
                 "a time, which is how a quarantined secret is read out of a program that never "
                 "shows it",
             )
+
+
+def check_slot_address_debug(sources):
+    """No type that holds a slot's address may derive `Debug`.
+
+    A slot out of a quarantined listing keeps a filename chosen by whoever can create a file in
+    the listed directory, as its path, its verbatim path, the path of a `Home::Only` and its
+    origin, and a spec for a check keeps the origin. `Debug` prints every field, so a derive on
+    one of `SLOT_ADDRESS_TYPES` writes the address into any log line or failed assertion that
+    formats the type, with no witness. `labels.md` LABEL-4 and `layering.md` LAYER-2 hold that only
+    the accessors named there return an address, and a derived `Debug` is one more. The types are
+    found by the file that declares them, since `Origin` and `Entry` are also declared elsewhere
+    in the tree with no address in them. A type the file no longer declares is reported too,
+    because a renamed type would otherwise leave the check reading nothing.
+
+    A hand-written `Debug` is not read for the fields it prints: that is a review question, and
+    `labels.md` records it as one.
+    """
+    for path, lines in sources.items():
+        types = SLOT_ADDRESS_TYPES.get(path.as_posix())
+        if types is None:
+            continue
+        stripped = _mask("\n".join(lines)).split("\n")
+        for name in types:
+            declaration = re.compile(
+                r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum)\s+" + re.escape(name) + r"\b"
+            )
+            at = next((i for i, line in enumerate(stripped) if declaration.match(line)), None)
+            if at is None:
+                yield finding(
+                    ERROR,
+                    "labelled-impl",
+                    f"{name} is not declared in {path}, so the check for a derived Debug reads nothing",
+                    f"`{name}` holds a slot's address and `SLOT_ADDRESS_TYPES` expects `{path}` to "
+                    "declare it, so a derived `Debug` on it would not be found",
+                    "trust",
+                    "high",
+                    evidence=[str(path)],
+                    fix="update `SLOT_ADDRESS_TYPES` to where the type is declared now",
+                    gain="a filename out of a quarantined listing is not printed by a log line or a "
+                    "failed assertion that formats the type",
+                )
+                continue
+            if "Debug" in _derives_above(stripped, at):
+                yield finding(
+                    ERROR,
+                    "labelled-impl",
+                    f"{name} derives Debug, so a slot's address is printed with no witness",
+                    f"`{name}` holds a slot's path or origin, which is a filename out of a "
+                    "quarantined listing, and a derived `Debug` prints every field of it",
+                    "trust",
+                    "high",
+                    evidence=[f"{path}:{at + 1} {lines[at].strip()[:120]}"],
+                    fix=f"write `impl fmt::Debug for {name}` to print ids, labels and kinds, never an "
+                    f"address, and record it in `{LABELS_SPEC}`",
+                    gain="a filename out of a quarantined listing is not printed by a log line or a "
+                    "failed assertion that formats the type",
+                )
 
 
 def check_construction_pinned(specs, sources):
@@ -4177,6 +4242,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_process_starts_are_marked(sources))
     findings += list(check_program_lookups_follow_the_record(sources))
     findings += list(check_labelled_impls(sources))
+    findings += list(check_slot_address_debug(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))
     findings += list(check_gates_pinned(specs, sources))

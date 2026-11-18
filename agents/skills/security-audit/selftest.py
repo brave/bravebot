@@ -2142,6 +2142,100 @@ def test_the_gates_that_trust_a_planner_argument_are_counted():
         )
 
 
+def test_slot_address_debug():
+    slot = Path("crates/core/src/slot.rs")
+    vetting = Path("crates/core/src/vetting.rs")
+    declared = {
+        "SlotStore": (slot, "pub struct SlotStore {"),
+        "Entry": (slot, "enum Entry {"),
+        "Deferred": (slot, "pub(crate) struct Deferred {"),
+        "Home": (slot, "pub enum Home {"),
+        "VettingSpec": (vetting, "pub struct VettingSpec {"),
+        "Origin": (vetting, "pub(crate) enum Origin {"),
+    }
+
+    def file_with(name, *above):
+        path, header = declared[name]
+        lines = ["pub struct Other {", "}"]
+        for other, (where, text) in declared.items():
+            if where == path and other != name:
+                lines += [text, "}"]
+        return {path: [*lines, *above, header, "}"]}
+
+    for name in declared:
+        for how, above in {
+            "a bare derive": ("#[derive(Debug, Clone)]",),
+            "a derive wrapped over lines": ("#[derive(", "    Clone,", "    std::fmt::Debug,", ")]"),
+            "a derive inside cfg_attr": ("#[cfg_attr(test, derive(Debug))]",),
+            "a derive above another attribute": ("#[derive(Debug)]", "#[must_use]"),
+        }.items():
+            found = list(audit.check_slot_address_debug(file_with(name, *above)))
+            check(
+                f"{how} on {name} is an error",
+                kinds(found) == ["labelled-impl"] and name in found[0]["title"],
+                str([f["title"] for f in found]),
+            )
+
+        found = list(audit.check_slot_address_debug(file_with(name, "#[derive(Clone)]")))
+        check(f"{name} deriving Clone alone is clean", found == [], str(found))
+
+        written = file_with(name, "#[derive(Clone)]")
+        path = next(iter(written))
+        written[path] += [f"impl fmt::Debug for {name} {{", "}"]
+        check(
+            f"{name} with a hand-written Debug is clean",
+            list(audit.check_slot_address_debug(written)) == [],
+        )
+
+    # A type of the same name in another file derives Debug and has no address in it.
+    for elsewhere in (
+        Path("crates/core/src/manifest.rs"),
+        Path("crates/tui/src/skills.rs"),
+        Path("crates/aichat/src/roster.rs"),
+    ):
+        check(
+            f"a derived Debug on Origin or Entry in {elsewhere} is not read",
+            list(
+                audit.check_slot_address_debug(
+                    {elsewhere: ["#[derive(Debug, Clone)]", "pub enum Origin {", "}",
+                                 "#[derive(Debug)]", "enum Entry {", "}"]}
+                )
+            )
+            == [],
+        )
+
+    # A derive on a type the check does not name, in the same file, is not its business.
+    check(
+        "a derived Debug on another type of the same file is clean",
+        list(
+            audit.check_slot_address_debug(
+                {
+                    slot: [
+                        "#[derive(Debug)]",
+                        "pub struct Measured {",
+                        "}",
+                        *(text for name, (where, text) in declared.items() if where == slot),
+                    ]
+                }
+            )
+        )
+        == [],
+    )
+
+    # A type that moved leaves nothing to read, which is reported rather than passed.
+    moved = list(audit.check_slot_address_debug({slot: ["pub struct SlotStore {", "}"]}))
+    check(
+        "a file that no longer declares one of the types is an error",
+        kinds(moved) == ["labelled-impl"] * 3 and all("not declared" in f["title"] for f in moved),
+        str([f["title"] for f in moved]),
+    )
+
+    # The tree's own files are the fixtures that decide the check agrees with the code.
+    real = {path: path.read_text().splitlines() for path in (slot, vetting)}
+    found = list(audit.check_slot_address_debug(real))
+    check("the real slot.rs and vetting.rs are clean", found == [], str([f["title"] for f in found]))
+
+
 def test_label_builders_are_accounted():
     def policy(*functions):
         body = ["impl Policy {"]
@@ -6490,6 +6584,7 @@ TESTS = (
     test_prompt_split,
     test_exhaustive_reader_docs,
     test_labelled_impls,
+    test_slot_address_debug,
     test_label_builders_are_accounted,
     test_pinned_actions,
     test_pinned_images,

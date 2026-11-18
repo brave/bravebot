@@ -192,13 +192,26 @@ pub fn auto(asked: bool, chosen: Option<bool>, configured: Option<bool>) -> bool
 /// The content is carried here rather than fetched later, which is what "fixed before the call"
 /// means: the one thing a check will read is settled when the spec is built, and there is no store
 /// left for a second piece to be reached through.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VettingSpec {
     reads: Labelled<String>,
     named: String,
     origin: Origin,
     expects: Option<String>,
     picture: Option<String>,
+}
+
+/// Shows the content's label and shape and the media type of a picture. Never what is named, where
+/// it came from or what the planner expected, since the first two can be a filename out of a
+/// quarantined listing.
+impl std::fmt::Debug for VettingSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VettingSpec")
+            .field("reads", &self.reads)
+            .field("origin", &self.origin)
+            .field("picture", &self.picture)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What a check is given, as a person watching is told it: the shape of it and never a byte.
@@ -252,12 +265,23 @@ impl Attached {
 /// comparing the two addresses would be a decision taken from a filename whoever could write in a
 /// listed directory chose, in `bravebot-core`, outside the module that owns the gates, which is
 /// what `docs/specs/labels.md` LABEL-4 and `docs/specs/layering.md` LAYER-2 forbid.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) enum Origin {
     /// A path read directly. The file is its own origin, and saying so twice would be noise.
     TheFileItself,
     /// A slot, with the driver's own record of where its bytes came from.
     Recorded(String),
+}
+
+/// Shows which case this is and never the recorded origin, which can be a filename out of a
+/// quarantined listing.
+impl std::fmt::Debug for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TheFileItself => f.write_str("TheFileItself"),
+            Self::Recorded(_) => f.write_str("Recorded(..)"),
+        }
+    }
 }
 
 impl VettingSpec {
@@ -583,6 +607,17 @@ fn string_at(text: &str, from: usize) -> Option<(String, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A slot's recorded origin is a filename out of a quarantined listing, and formatting the
+    /// origin must not print it. A derived `Debug` prints `Recorded("secret-plans.md")`.
+    #[test]
+    fn formatting_an_origin_does_not_print_the_recorded_name() {
+        let recorded = Origin::Recorded("secret-plans.md".to_string());
+        let rendered = format!("{recorded:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(rendered.contains("Recorded"), "{rendered}");
+        assert_eq!(format!("{:?}", Origin::TheFileItself), "TheFileItself");
+    }
 
     /// The containment claim in one assertion: whatever went in, what comes out is one line.
     #[test]

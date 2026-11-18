@@ -13,6 +13,7 @@ guards:
       - crates/agent/src/backend.rs: 2
       - crates/agent/src/classifier.rs: 1
       - crates/agent/src/commit_message.rs: 1
+      - crates/agent/src/conversation.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 4
@@ -32,8 +33,8 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 151
-      - crates/core/src/slot.rs: 12
+      - crates/core/src/policy.rs: 154
+      - crates/core/src/slot.rs: 14
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
       - crates/mcp/src/http.rs: 2
@@ -292,7 +293,7 @@ guards:
   - symbol: Policy::before_vetting
     sites:
       - crates/agent/src/tools.rs: 4
-      - crates/core/src/policy.rs: 8
+      - crates/core/src/policy.rs: 10
   - symbol: ProcessorSpec::instruction
     sites:
       - crates/agent/src/permission_mode.rs: 4
@@ -464,6 +465,16 @@ The counts pin releases, not the decisions taken from bytes a counted release al
 a branch added inside a function that holds a counted use moves nothing and is found by reading the
 diff ([reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md)).
 
+Formatting is a release as well, and no witness stands in front of it. A derived `Debug` prints
+every field, so `SlotStore`, `Entry`, `Deferred`, `Home`, `VettingSpec` and `Origin` write theirs
+by hand. Each prints slot ids, labels and kinds and never a path, a verbatim path, the path of a
+`Home::Only` or an origin, and `VettingSpec` leaves out what it names and what the planner expected
+of it. `SlotWriter` and `Conversation` derive `Debug` and inherit that, since each holds a
+`SlotStore`. `check_slot_address_debug` in the security-audit skill fails a derived `Debug` on any
+of the six, found by the file that declares each. It does not read what a hand-written one prints,
+so a field added to one of those bodies is found by reading the diff, and so is a new type that
+holds an address.
+
 Three gates let a slot's address leave the kernel, each recorded and each pinned file by file in
 `guards`, so a further reader of a slot's address anywhere downstream is a line in a diff rather
 than a branch nobody is shown:
@@ -496,7 +507,19 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref, AsRef and a conversion into the content, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest, every function of the type's own impl blocks against the seven the type has (new, trusted, label, declassify, into_trusted, relabel and shape) by name, visibility and signature, every impl whose subject is Labelled, a Box of it, a type alias of it or a wrapper declared beside it, an impl in that file whose subject is a generic parameter or a projection, and every impl for another type that takes a Labelled as an argument of its trait, such as From<Labelled<String>> for String, with comments, strings, raw strings and character literals blanked before any brace is counted; it does not see a wrapper declared in another file, which has no access to the private fields)`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
-`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above; formatting a type that holds one is the other way out, which SlotStore, Entry, Deferred, Home, VettingSpec and Origin close by writing Debug by hand to print ids, labels and kinds, and check_slot_address_debug in the security-audit skill fails a derive of Debug on any of them, so a hand-written Debug that printed an address would be found by reading the diff and a type that began to hold one is found the same way)`
+`verified-by: bravebot_core::slot::formatting_a_store_does_not_print_the_name_of_a_file_waiting_to_be_read`
+`verified-by: bravebot_core::slot::formatting_a_store_does_not_print_the_name_a_read_slot_keeps`
+`verified-by: bravebot_core::slot::formatting_a_home_does_not_print_the_one_file_it_is_restricted_to`
+`verified-by: bravebot_core::slot::formatting_a_store_lists_a_choice_by_name_and_label_only`
+`verified-by: bravebot_core::slot::formatting_a_store_lists_its_slots_in_the_order_they_were_minted`
+`verified-by: bravebot_core::slot::formatting_a_writer_does_not_print_the_names_in_the_store_it_writes_into`
+`verified-by: bravebot_core::vetting::formatting_an_origin_does_not_print_the_recorded_name`
+`verified-by: bravebot_core::policy::formatting_a_store_with_a_reserved_listing_does_not_print_the_filename`
+`verified-by: bravebot_core::policy::formatting_a_store_after_the_listed_file_is_read_does_not_print_the_filename`
+`verified-by: bravebot_core::policy::formatting_a_vetting_spec_does_not_print_the_filename_it_was_built_from`
+`verified-by: bravebot_core::policy::formatting_a_vetting_spec_does_not_print_what_it_names_or_what_was_expected_of_it`
+`verified-by: bravebot_agent::conversation::formatting_a_conversation_does_not_print_the_names_its_quarantine_holds`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
 `verified-by: bravebot_core::slot::a_slot_is_unread_only_while_it_is_waiting_on_its_file`
 

@@ -18676,6 +18676,129 @@ five
         );
     }
 
+    /// One entry out of a quarantined listing, reserved as `ref:1`. The name is the one thing no
+    /// formatted value may carry.
+    fn reserve_a_listed_file(
+        policy: &mut Policy<'_, RecordingSink>,
+        slots: &mut SlotStore,
+    ) -> SlotId {
+        let slot = SlotId::new("ref:1");
+        let entries = Labelled::new(
+            vec!["secret-plans.md".to_string()],
+            Label::untrusted_private(),
+        );
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                slots,
+            )
+            .expect("one entry may be reserved");
+        slot
+    }
+
+    /// Formatting a store that holds a slot waiting on a listed file shows the slot and not the
+    /// file. A derived `Debug` on the store, its entries or the deferral prints the filename
+    /// whoever can create a file in the listed directory chose.
+    #[test]
+    fn formatting_a_store_with_a_reserved_listing_does_not_print_the_filename() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        reserve_a_listed_file(&mut policy, &mut slots);
+
+        let rendered = format!("{slots:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("Unread"), "{rendered}");
+    }
+
+    /// Reading the file copies the name into the slot's path, its verbatim path and its origin.
+    /// None of the three is printed, and the slot is still told apart by id and kind.
+    #[test]
+    fn formatting_a_store_after_the_listed_file_is_read_does_not_print_the_filename() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("read_file", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when something needs the bytes");
+
+        let rendered = format!("{slots:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("Read"), "{rendered}");
+        assert!(!rendered.contains("Unread"), "{rendered}");
+    }
+
+    /// The spec a check is built from carries where the bytes came from. Formatting it shows that
+    /// there is an origin and not what it is, which a derived `Debug` on the spec or on its origin
+    /// prints as `Recorded("secret-plans.md")`. Only this module can build one, so the pin sits
+    /// here.
+    #[test]
+    fn formatting_a_vetting_spec_does_not_print_the_filename_it_was_built_from() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+        let spec = policy
+            .before_vetting(&slot, None, &slots)
+            .expect("a slot with bytes in it");
+
+        let rendered = format!("{spec:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("VettingSpec"), "{rendered}");
+        assert!(rendered.contains("Recorded"), "{rendered}");
+    }
+
+    /// The check over a file read directly names the path the planner gave, which is a filename
+    /// out of a listing wherever a listed file was what it named, and a check from a slot carries
+    /// the planner's own expectation of it. A derived `Debug` on the spec prints both whatever its
+    /// origin prints.
+    #[test]
+    fn formatting_a_vetting_spec_does_not_print_what_it_names_or_what_was_expected_of_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        let by_path = policy.before_vetting_a_path(
+            "secret-plans.md",
+            Labelled::new("body".to_string(), Label::untrusted_private()),
+        );
+        let rendered = format!("{by_path:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("VettingSpec"), "{rendered}");
+        assert!(rendered.contains("TheFileItself"), "{rendered}");
+
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+        let expects = Labelled::new("secret-expectation".to_string(), Label::untrusted_private());
+        let by_slot = policy
+            .before_vetting(&slot, Some(&expects), &slots)
+            .expect("a slot with bytes in it");
+        let rendered = format!("{by_slot:?}");
+        assert!(!rendered.contains("secret-expectation"), "{rendered}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+    }
+
     /// The other route, which is where saying it twice would be noise: a read of a file says the
     /// path once, because a path is its own origin and the driver knows that without comparing
     /// anything.
