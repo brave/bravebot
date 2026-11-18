@@ -1,9 +1,12 @@
 use super::{
-    AVATAR_MAX, CEILING, Conversation, LOCK_WAIT, MAX_SAFE_INTEGER, Parsed, Problem, Reading,
-    Refused, Row, bots_file, composed_home, entries_of, is_absolute_path, is_identifier, is_model,
-    is_slug, is_text, list_waiting, lock, make_state_directory, move_with, now, parse_entries,
+    AVATAR_MAX, CEILING, Conversation, LOCK_WAIT, Parsed, Problem, Reading, Refused, Row,
+    bots_file, composed_home, entries_of, is_absolute_path, is_identifier, is_model, is_slug,
+    is_text, list_waiting, lock, make_state_directory, move_with, now, parse_entries,
     write_entries,
 };
+
+#[cfg(test)]
+use super::MAX_SAFE_INTEGER;
 use crate::agents::{self, Made, MakeRefused, RedefineRefused};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -352,7 +355,7 @@ pub fn record_archived_in(
         let Some(held) = rows.iter_mut().find(|row| row.slug == slug) else {
             return Ok((quiet(None), false));
         };
-        let Some(next) = whole_archived(archived) else {
+        let Some(next) = super::counted_whole(archived) else {
             return Ok((quiet(Some(held.clone())), false));
         };
         if next <= held.archived {
@@ -445,14 +448,6 @@ pub fn forget_conversation_in(
         }
         Ok((changed, changed > 0))
     })
-}
-
-fn whole_archived(value: f64) -> Option<u64> {
-    if value.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(&value) {
-        Some(value as u64)
-    } else {
-        None
-    }
 }
 
 fn stamp_retired(
