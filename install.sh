@@ -275,7 +275,14 @@ main() {
   INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 
   if [ -z "$TAG" ]; then
-    TAG="$(curl -fsSL "$API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    LATEST="$(curl -fsSL "$API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    # The tag is composed into a URL, so it is held to the shape of one that is published, the
+    # same as a version given as an argument above. Without this, whoever controls the answer
+    # from the API controls part of the download path: a tag_name holding ../ would resolve, once
+    # curl collapses it, to a release of another repository entirely.
+    case "$LATEST" in
+      v*) is_version "${LATEST#v}" && TAG="$LATEST" ;;
+    esac
     [ -n "$TAG" ] || fail "unable to resolve the latest release tag from $API_URL"
   fi
 
