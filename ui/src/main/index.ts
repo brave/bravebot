@@ -85,7 +85,7 @@ import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
 import { faultReporter } from './window-fault'
-import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
+import { editMemory, memoryHistory, snapshotMemory, tidyMemory } from './memory'
 import { forgetSummons, noteTurnEnded, summons } from './summons'
 import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
 
