@@ -36,7 +36,10 @@ body, or a person's screen. Each of those has a gate of its own, `Policy::presen
 have `Policy::read_planner_argument`. A processor's answer that a crate outside the driver reads for
 one number has `Policy::read_a_number`. A reshape that reads two pieces of content at once, which
 a diff is, goes through `Policy::render_pair_in_place`: the same gate, taking the taint of both
-rather than one side's label. A `declassify` anywhere else is almost certainly a
+rather than one side's label. The planner's own strings that go to a model or a check have
+`Policy::before_advice`, `Policy::before_processor`, `Policy::before_chooser` and
+`Policy::before_vetting`: each releases the string whatever its label and decides nothing from it.
+A `declassify` anywhere else is almost certainly a
 violation, and it can only be written inside the policy layer: `Declassification::authorise` is
 `pub(in crate::policy)`, so no other module and no other crate can mint one at all. Every file
 that declassifies is pinned with a count in [specs/labels.md](../specs/labels.md), so

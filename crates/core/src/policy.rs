@@ -4545,7 +4545,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and what it can reach was fixed by the session's configuration rather than by the value.
     /// The answer is labelled from the context the advisor was shown ([`Policy::adopt_model_output`]),
     /// which is private where the question is.
+    ///
+    /// The release is recorded with the label the question carried and none of its words. It
+    /// is not refused for any label, and not in a context that has met something untrusted,
+    /// because the advisor is shown that context either way.
     pub fn before_advice(&mut self, question: &Labelled<String>) -> Gated<String> {
+        self.allow(
+            "advice",
+            format!(
+                "the question the planner put to its advisor, {}, released to be sent",
+                question.label()
+            ),
+        );
         let proof = Declassification::authorise("the question the planner put to its advisor");
         Ok(question.clone().declassify(&proof))
     }
@@ -9814,6 +9825,81 @@ mod tests {
                 .before_advice(&public)
                 .expect("a public question passes"),
             "which file first?"
+        );
+    }
+
+    /// The question is released to the advisor, so the trail says so with the label the question
+    /// carried, and says nothing of its words.
+    #[test]
+    fn an_advice_question_is_released_with_a_record_naming_its_label() {
+        let advice_lines = |sink: &RecordingSink| -> Vec<String> {
+            sink.events()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::GatePassed {
+                        gate: "advice",
+                        detail,
+                    } => Some(detail.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let private = Labelled::new(
+            "quoted secret words".to_string(),
+            Label::untrusted_private(),
+        );
+        policy
+            .before_advice(&private)
+            .expect("a private question is put to the advisor");
+        drop(policy);
+        let lines = advice_lines(&sink);
+        assert_eq!(lines.len(), 1, "{:?}", sink.events());
+        assert!(lines[0].contains("(U,priv)"), "{}", lines[0]);
+        assert!(!lines[0].contains("(U,pub)"), "{}", lines[0]);
+        assert!(
+            !lines[0].contains("secret") && !lines[0].contains("quoted"),
+            "the line carries the question's words: {}",
+            lines[0]
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let public = Labelled::new("which file first?".to_string(), Label::untrusted_public());
+        policy
+            .before_advice(&public)
+            .expect("a public question passes");
+        drop(policy);
+        let lines = advice_lines(&sink);
+        assert_eq!(lines.len(), 1, "{:?}", sink.events());
+        assert!(lines[0].contains("(U,pub)"), "{}", lines[0]);
+        assert!(!lines[0].contains("(U,priv)"), "{}", lines[0]);
+        assert!(!lines[0].contains("which file"), "{}", lines[0]);
+    }
+
+    /// The advisor is shown the planner's context whatever it holds, so a context that has met
+    /// something untrusted still puts its question, and the release is recorded.
+    #[test]
+    fn a_question_is_put_to_the_advisor_after_the_context_has_met_something_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).resuming(Integrity::Untrusted);
+        let question = Labelled::new("is this right?".to_string(), Label::untrusted_private());
+        assert_eq!(
+            policy
+                .before_advice(&question)
+                .expect("a fallen context still asks its advisor"),
+            "is this right?"
+        );
+        drop(policy);
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "advice", detail } if detail.contains("(U,priv)")
+            )),
+            "{:?}",
+            sink.events()
         );
     }
 
@@ -17429,6 +17515,32 @@ five
         assert!(
             policy.before_vetting(&slot, Some(&private), &slots).is_ok(),
             "a private expectation was refused"
+        );
+    }
+
+    /// The expectation is released into the spec whatever its label, and the trail names the
+    /// check by its slot and origin, so none of the planner's words about the slot reach it.
+    #[test]
+    fn the_trail_line_for_a_check_carries_no_word_of_the_expectation() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        let private = Labelled::new(
+            "quoted ledger passphrase".to_string(),
+            Label::untrusted_private(),
+        );
+
+        let spec = policy
+            .before_vetting(&slot, Some(&private), &slots)
+            .expect("a private expectation is put to the check");
+        assert_eq!(spec.expects(), Some("quoted ledger passphrase"));
+        drop(policy);
+
+        let trail = format!("{:?}", sink.events());
+        assert!(trail.contains("a check over"), "{trail}");
+        assert!(
+            !trail.contains("ledger") && !trail.contains("passphrase"),
+            "the trail carries the planner's expectation: {trail}"
         );
     }
 

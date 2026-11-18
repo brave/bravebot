@@ -187,6 +187,9 @@ ALLOWED_DERIVES = {"Clone"}
 # The gates. A witness may be minted nowhere else, and reaching content through anything but one of
 # these is shape 3. `Policy::read_a_number` releases a processor's answer to a function the caller
 # names and takes one byte back, so it is counted like the gates that release to a closure.
+# `Policy::before_advice`, `Policy::before_processor`, `Policy::before_chooser` and
+# `Policy::before_vetting` release a planner-supplied string of any label as a bare `String` and
+# refuse nothing about the label, so each is counted per file.
 GATES = (
     "Policy::present",
     "Policy::render_in_place",
@@ -194,6 +197,10 @@ GATES = (
     "Policy::read_trusted_content",
     "Policy::read_planner_argument",
     "Policy::read_a_number",
+    "Policy::before_advice",
+    "Policy::before_processor",
+    "Policy::before_chooser",
+    "Policy::before_vetting",
 )
 WITNESS = "Declassification::authorise"
 

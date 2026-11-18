@@ -52,9 +52,14 @@ destination it chose. A tool for the advisor would make it a second planner.
 The question follows the request the planner was sent on that round ([ADVISOR-2](#ADVISOR-2)),
 which holds whatever the planner was shown, so a question that quotes it adds nothing to what the
 advisor receives. A question labelled private is put to the advisor, and the reply is labelled from
-the context the advisor was shown ([ADVISOR-4](#ADVISOR-4)).
+the context the advisor was shown ([ADVISOR-4](#ADVISOR-4)). The release of the question is
+recorded in the trail as an `advice` line that names the label the question carried and none of
+its words, on every call that puts a question to the advisor. A context that has met untrusted
+content still puts its question.
 
 `verified-by: bravebot_core::policy::a_private_question_is_put_to_the_advisor`
+`verified-by: bravebot_core::policy::an_advice_question_is_released_with_a_record_naming_its_label`
+`verified-by: bravebot_core::policy::a_question_is_put_to_the_advisor_after_the_context_has_met_something_untrusted`
 
 <a id="ADVISOR-4"></a>
 ### ADVISOR-4: the reply is labelled by the context the advisor was shown

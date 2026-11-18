@@ -9196,11 +9196,11 @@ fn release_vetted_text<S: Sink, C: Confirmer>(
         // would be a second, uncounted way for one to leave `bravebot-core`. The gate records the
         // release, and it answers what the spec was built from.
         //
-        // The words are released for a display rather than checked public as `before_vetting`
-        // checks them, because what that refusal is about is a private string becoming a second
-        // model's prompt, and there is no second model on this branch. What is left is the
-        // person's own content going to the person's own screen, which is what a display release
-        // is for. It reaches that screen and stops: no gate reads it.
+        // The words are released for a display, not through `before_vetting`, which releases
+        // them whatever their label and checks nothing about it. No second model is sent them on
+        // this branch, so what is left is the person's own content going to the person's own
+        // screen, which is what a display release is for. It reaches that screen and stops: no
+        // gate reads it.
         //
         // A processor's output is recorded as the planner's copy of its origin, which names
         // references. The person has no use for `ref:0`, so they are put back as the files they
@@ -9610,11 +9610,11 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // would be a second, uncounted way for one to leave `bravebot-core`. The gate records the
         // release, and it answers what the spec was built from.
         //
-        // The words are released for a display rather than checked public as `before_vetting`
-        // checks them, because what that refusal is about is a private string becoming a second
-        // model's prompt, and there is no second model on this branch. What is left is the
-        // person's own content going to the person's own screen, which is what a display release
-        // is for. It reaches that screen and stops: no gate reads it.
+        // The words are released for a display, not through `before_vetting`, which releases
+        // them whatever their label and checks nothing about it. No second model is sent them on
+        // this branch, so what is left is the person's own content going to the person's own
+        // screen, which is what a display release is for. It reaches that screen and stops: no
+        // gate reads it.
         //
         // A processor's output is recorded as the planner's copy of its origin, which names
         // references. The person has no use for `ref:0`, so they are put back as the files they

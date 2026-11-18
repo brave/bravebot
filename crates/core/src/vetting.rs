@@ -345,9 +345,10 @@ impl VettingSpec {
     /// What the planner says the content is supposed to hold, where the planner asked for the
     /// check.
     ///
-    /// The planner's own words, checked public before the spec was built, on the same footing a
-    /// processor's instruction sits on: it is not content anybody read, it is the sentence the
-    /// driver is about to send.
+    /// The planner's own words, released by [`crate::policy::Policy::before_vetting`] whatever
+    /// label they carry, on the same footing a processor's instruction sits on: it is not content
+    /// anybody read, it is the sentence the driver is about to send. Nothing checks the label
+    /// before the spec is built, and the trail line for the spec does not mention these words.
     ///
     /// `None` where the driver ran the check on its own initiative, before a prompt the planner did
     /// not ask for. Nothing claimed anything about these bytes, and a spec that filled the gap in

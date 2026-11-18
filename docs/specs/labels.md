@@ -32,7 +32,7 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 147
+      - crates/core/src/policy.rs: 151
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -262,6 +262,39 @@ guards:
     sites:
       - crates/choice/src/lib.rs: 1
       - crates/core/src/policy.rs: 8
+  - symbol: Policy::before_advice
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Policy::before_processor
+    sites:
+      - crates/agent/src/commit_message.rs: 1
+      - crates/agent/src/manifest.rs: 1
+      - crates/agent/src/processor.rs: 1
+      - crates/agent/src/tools.rs: 1
+      - crates/choice/src/lib.rs: 1
+      - crates/core/src/policy.rs: 28
+  - symbol: Policy::before_chooser
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/choice/src/lib.rs: 1
+      - crates/core/src/policy.rs: 14
+  - symbol: Policy::before_vetting
+    sites:
+      - crates/agent/src/tools.rs: 4
+      - crates/core/src/policy.rs: 8
+  - symbol: ProcessorSpec::instruction
+    sites:
+      - crates/agent/src/permission_mode.rs: 4
+      - crates/agent/src/processor.rs: 2
+      - crates/agent/src/turn/setup.rs: 1
+      - crates/core/src/policy.rs: 1
+      - crates/core/src/processor.rs: 1
+  - symbol: VettingSpec::expects
+    sites:
+      - crates/agent/src/tools.rs: 2
+      - crates/core/src/policy.rs: 4
+      - crates/core/src/vetting.rs: 1
   - symbol: Policy::store_a_choice
     sites:
       - crates/agent/src/turn.rs: 1
@@ -390,9 +423,23 @@ they were counted from never leave.
 
 Everything else the driver needs out of a labelled value it asks a gate for, and every gate records
 the read: the planner's own arguments, a transport envelope a decoder has to see, a model's reply on
-its way out of that envelope, and a processor's answer to the one reader that takes a number out of
-it ([PROC-16](processors.md#PROC-16)). A driver holding the bytes without one is the shape this
-clause exists to stop.
+its way out of that envelope, a processor's answer to the one reader that takes a number out of
+it ([PROC-16](processors.md#PROC-16)), and the question the planner puts to its advisor. A driver
+holding the bytes without one is the shape this clause exists to stop.
+
+Four gates release a string the planner wrote, whatever its label, and decide nothing from the
+label: `Policy::before_advice` (the question put to the advisor, recorded with the label the
+question carried and none of its words), `Policy::before_processor` and `Policy::before_chooser`
+(a processor's instruction, whose label is folded into the answer's), and `Policy::before_vetting`
+(what the planner says a slot holds). The instruction and the expectation are two more strings
+that may be untrusted and that the kernel holds outside a labelled value, once a gate has released
+them into a spec, so the reads of each are pinned too: `ProcessorSpec::instruction` and
+`VettingSpec::expects`. Each gate's call sites are pinned file by file in `guards`. The checker
+matches a method by its bare name, so the count for
+`ProcessorSpec::instruction` also holds the uses of `PermissionMode::instruction` in
+`crates/agent/src/permission_mode.rs` and `crates/agent/src/turn/setup.rs`, and the test helper
+named `instruction` in `crates/core/src/policy.rs`. The reads of a processor's instruction are the
+two in `crates/agent/src/processor.rs`, and `crates/core/src/processor.rs` counts its definition.
 
 **A slot's address is untrusted content too, and is not carried in a labelled value.** The file a
 slot names, the file its bytes are a copy of, the file an answer produced from it belongs to, the
