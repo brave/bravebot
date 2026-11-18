@@ -134,14 +134,30 @@ pub struct Diagnosis {
     /// Set from the variant that sent the request and never from a reply or an address. Never
     /// given to the planner.
     pub backend: Option<BackendKind>,
-    /// Whether the request went to a backend with a `provider` entry, which is where `maxRetries`
-    /// is stated ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    /// Where the backend that sent the request lets a person state `maxRetries`, which is a `provider`
+    /// entry or, for an AWS account reached through the tier variables, `BRAVEBOT_BEDROCK_MAX_RETRIES`
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
     ///
     /// Set from the variant that sent the request and the configuration it was selected with, and
     /// never from a reply or an address. A front end uses it to name that setting in the next step of
-    /// a rate-limited failure. False for the Brave endpoint, a tier-variable account and the two
-    /// sign-in accounts. Never given to the planner.
-    pub retry_setting: bool,
+    /// a rate-limited failure. [`RetrySetting::None`] for the Brave endpoint, the Vertex service the
+    /// environment names and the two sign-in accounts. Never given to the planner.
+    pub retry_setting: RetrySetting,
+}
+
+/// Where a person states how many times a request is sent again for the backend that failed.
+///
+/// One of a closed set chosen from the backend variant and its configuration
+/// ([BACKEND-55](../../../docs/specs/backends.md#BACKEND-55)).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RetrySetting {
+    /// The backend has no such setting.
+    #[default]
+    None,
+    /// `options.maxRetries` of the `provider` entry that names the backend.
+    Entry,
+    /// `BRAVEBOT_BEDROCK_MAX_RETRIES`, for an AWS account reached through the tier variables.
+    Variable,
 }
 
 /// A wait a service asked for, in the minutes a person is told, rounded up so a limit that lifts in
@@ -163,7 +179,7 @@ impl Diagnosis {
             premium_key: false,
             conceded: Conceded::default(),
             backend: None,
-            retry_setting: false,
+            retry_setting: RetrySetting::None,
         }
     }
 
@@ -179,9 +195,10 @@ impl Diagnosis {
         self
     }
 
-    /// The same, marked as a failure of a request to a backend that has a `provider` entry.
-    pub fn with_retry_setting(mut self) -> Self {
-        self.retry_setting = true;
+    /// The same, marked with where the backend that sent the request lets a person state
+    /// `maxRetries`.
+    pub fn with_retry_setting(mut self, setting: RetrySetting) -> Self {
+        self.retry_setting = setting;
         self
     }
 

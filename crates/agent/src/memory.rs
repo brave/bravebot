@@ -271,7 +271,7 @@ pub(crate) fn vouch_for_named<S: Sink>(
         policy,
         workspace.memories(),
         &policy.file_authority().key(&named),
-        crate::workspace::volume_folds_case(workspace.root()),
+        crate::workspace::volume_case_folding(workspace.root()).restricts(),
     );
 }
 

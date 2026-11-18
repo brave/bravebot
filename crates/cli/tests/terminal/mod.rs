@@ -123,6 +123,14 @@ impl Terminal {
         writeln!(typed, "{line}").expect("a line typed");
     }
 
+    /// Type `keys` as they are, with no return after them, so a screen that reads one key alone
+    /// takes them as one key.
+    pub fn press(&mut self, keys: &str) {
+        let typed = self.typed.as_mut().expect("the input is still open");
+        typed.write_all(keys.as_bytes()).expect("keys pressed");
+        typed.flush().expect("keys pressed");
+    }
+
     /// The end of the input, which ends a session in lines.
     pub fn end_input(&mut self) {
         self.typed = None;

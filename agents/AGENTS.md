@@ -69,6 +69,11 @@ Before changing behaviour or adding, removing, or weakening test assertions, use
 [testing-preflight](agents/skills/testing-preflight/SKILL.md). Apply it before choosing the
 test approach, and use its evidence requirements when reporting the result.
 
+Before changing a gate, the label lattice, `Labelled`, or code that slices or does arithmetic on a
+length from outside, read [docs/development/verification.md](docs/development/verification.md).
+Such a change comes with a Verus contract and a mutation that shows the contract can fail, and runs
+`make check-verus` before it is pushed.
+
 Before adding or changing anything in `ui/` that a person sees or interacts with (components,
 layout, styles, icons, copy, dialogs, menus, cards), use
 [design](agents/skills/design/SKILL.md). It describes the current look of the application, and new
@@ -99,6 +104,10 @@ is true, what changed, what to do. Use the words you would use explaining it to 
 - No aphorisms, metaphors or personified abstractions. "Each advisory is a question about
   bravebot, and nothing in the tree asks it" should be "bravebot may have the same defects, so
   each advisory should be checked against it. Nothing checks them today."
+- No idioms or figures of speech. Say the action and who does it. Write "ask the author to add a
+  test" instead of "this goes back to the author", and "the description says why the project needs
+  the change" instead of "the description makes the case". An instruction names what to do, so
+  "look closer" is vague.
 - No rhetorical setups: no "not X but Y" contrast, no short punchline sentence after a long one,
   no colon placed to hold back the point for effect.
 - If a reader has to reread a sentence to find its claim, rewrite it as the claim.

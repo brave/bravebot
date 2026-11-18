@@ -463,6 +463,7 @@ const bridge: BravebotApi = {
   readRecents: async () => [DIRECTORY, '/Users/example/tide-tables', '/Users/example/a-very-long-project-name-that-needs-truncation'],
   readForks: async () => FORKS(),
   readBots: async () => bots,
+  readBotsProblem: async () => null,
   writeBotModel: async (slug, model) => { bots = bots.map((bot) => bot.slug === slug ? { ...bot, model } : bot); return bots.find((bot) => bot.slug === slug) ?? null },
   readBotServers: async () => ({ servers: null, tools: true, inline: false, kind: 'default', editable: true, every: true, everyPossible: true }),
   writeBotServers: async () => ({ servers: null, tools: true, inline: false, kind: 'default', editable: true, every: true, everyPossible: true }),
@@ -503,6 +504,8 @@ const bridge: BravebotApi = {
   selectSettings: async () => null,
   saveHooks: async () => undefined,
   chooseDirectory: async () => DIRECTORY,
+  // The playground has no picker, so a folder is never added.
+  addFolder: async () => null,
   exportSession: async () => ({ status: 'saved', where: '/Users/example/Desktop/conversation.md' }),
   composeBugReport: async () => ({ available: true, text: 'Bravebot playground report\n\nNothing here is real.', log: null }),
   saveBugReport: async () => ({ status: 'saved', where: '/Users/example/Desktop/report.txt' }),

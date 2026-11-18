@@ -7,7 +7,7 @@ description: Configure AWS Bedrock models and extra model names, sign in to AWS,
 # Reaching a model through AWS Bedrock
 
 Set these variables to reach models through your own AWS account. They are read from your own
-settings file, a `--settings` file outside the project and the environment, and from no project or
+settings file, the file `--settings` names and the environment, and from no project or
 local file: `bravebot doctor` reports a checkout's file that names one, and the name decides nothing.
 
 | Variable | What it sets |
@@ -98,14 +98,20 @@ same terms.
 `options.maxRetries`, `options.retryWindowMs` and `options.idleTimeoutMs` state how many times a
 request is sent again, for how long after its first failure a failed connection is sent again, and
 how long a reply may go quiet, as they do for a
-[gateway](openai-compatible.md#retries-and-a-reply-gone-quiet). The tier variables have no block to
-state them in, so models they alone name keep the defaults: two retries, five minutes for a failed
+[gateway](openai-compatible.md#retries-and-a-reply-gone-quiet). Models the tier variables alone name
+have no block to state them in, so `BRAVEBOT_BEDROCK_MAX_RETRIES` and `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`
+state the count and the gap for them, in your own `env` block or the environment and never in a
+project or local file. They are held to the bounds the entry is: a count of at most 7, where `0` sends
+each request once, and a gap of at most 600000 milliseconds, where `0` and a value that is not a whole
+number state nothing. There is no variable for the window, so where neither is stated they keep the
+defaults: two retries, five minutes for a failed
 connection and two minutes of quiet, or five retries after a throttle that carried no wait. A
 throttled request waits
 as long as the service asked for with a `Retry-After`, never less than the usual pause, and a wait
 longer than two minutes ends the request at once instead of being sat through. A throttled request
 that carried no wait is sent again up to five times where you state no count, after waits of 8, 16,
-32, 64 and 120 seconds. A `maxRetries` you state replaces that count as it replaces the other one.
+32, 64 and 120 seconds. A `maxRetries` or `BRAVEBOT_BEDROCK_MAX_RETRIES` you state replaces that count
+as it replaces the other one.
 
 **There is no credential to name here.** Bedrock takes a signature over the request rather than a
 bearer token, so this entry reads neither `env` nor `options.apiKey`. Which AWS credentials sign

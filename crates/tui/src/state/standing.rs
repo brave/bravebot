@@ -3,6 +3,16 @@
 use super::*;
 
 impl Session {
+    /// Whether something goes on in this session that no key will have started: a loop or a line
+    /// `/after` holds, a live file watch, or a background job still running.
+    ///
+    /// The row above the box and the frame the countdown is owed read this one answer, so the row
+    /// is drawn exactly while there is something for it to say. Counted from the driver's own
+    /// tables and never from what a job printed or a file held.
+    pub fn is_standing(&self) -> bool {
+        !self.looping.is_empty() || !self.watches.is_empty() || self.jobs_running() > 0
+    }
+
     /// Start looking again because the turn that just ended asked to, repeating the person's line.
     ///
     /// Nothing is sent now. The turn that asked has just taken the look it is reporting, so the

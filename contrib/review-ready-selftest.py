@@ -271,6 +271,18 @@ class ReviewReady(unittest.TestCase):
         self.log.unlink()
         self.assertEqual(self.run_script().out, "")
 
+    def test_every_read_asks_github_for_pull_requests_that_are_not_in_the_merge_queue(self):
+        """A queued pull request merges without a reviewer. gh has no field for queue membership, so each
+        read carries the search `-is:queued`. The stand-in `gh` ignores it, so the test pins the argument
+        sent. It is one argument with an `=` so that gh cannot read the leading `-` as a flag."""
+        self.serve([pr(1), pr(2, "UNKNOWN")], [pr(1), pr(2)])
+        result = self.run_script()
+        self.assertEqual(result.out.splitlines(), [line(1), line(2)])
+        self.assertEqual(len(result.calls), 2)
+        for call in result.calls:
+            self.assertEqual(call.count("--search=-is:queued"), 1)
+            self.assertNotIn("--search", call)
+
     def test_a_null_conclusion_falls_back_to_the_status_state(self):
         """A commit status has a state and no conclusion, and skipped and neutral checks pass."""
         self.serve([pr(1, checks=[{"conclusion": None, "state": "SUCCESS"}, {"conclusion": "SKIPPED"},

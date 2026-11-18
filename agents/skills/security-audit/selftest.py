@@ -2983,6 +2983,94 @@ def test_run_files_have_owners():
         "the tree's own workflows run only files with an owner",
         with_cwd(ROOT, lambda: list(audit.check_run_files_have_owners())) == [],
     )
+    # A script run by its shebang has no interpreter word before it. The workflow runs it first
+    # after `run:` on line 4, and after a quoted variable on a later line.
+    shebang = {
+        ".github/workflows/t.yml": (
+            "jobs:\n  j:\n    steps:\n"
+            "      - run: contrib/measure-flakes.py --selftest\n"
+            "      - name: measure\n"
+            "        run: |\n"
+            "          set -eu\n"
+            '          "$PYTHON" contrib/measure-flakes.py --runs 1\n'
+        ),
+        "contrib/measure-flakes.py": "",
+    }
+    found = owned("/.github/workflows/ @a\n/Makefile @a\n", shebang)
+    check(
+        "a script run by its shebang or after a quoted variable with no owner is an error",
+        kinds(found) == ["unowned-workflow-file"]
+        and found[0]["evidence"][0] == ".github/workflows/t.yml:4 runs contrib/measure-flakes.py",
+        str([one["evidence"] for one in found]),
+    )
+    check(
+        "a script run by its shebang is owned by its own entry",
+        owned("/.github/workflows/ @a\n/contrib/measure-flakes.py @a\n", shebang) == [],
+    )
+    for name, steps, line in (
+        ("first in a block", "      - run: |\n          set -eu\n          contrib/measure-flakes.py\n", 6),
+        (
+            "after a quoted variable in a block",
+            '      - run: |\n          set -eu\n          "$PYTHON" contrib/measure-flakes.py\n',
+            6,
+        ),
+        ("after a command separator", "      - run: cd x && contrib/measure-flakes.py\n", 4),
+        ("after a pipe", "      - run: echo x | contrib/measure-flakes.py\n", 4),
+        ("inside a substitution", "      - run: echo $(contrib/measure-flakes.py)\n", 4),
+        ("behind a variable assignment", "      - run: RUNS=1 ./contrib/measure-flakes.py\n", 4),
+        (
+            "on the line after `&&` and a backslash",
+            "      - run: |\n          cargo test && \\\n          contrib/measure-flakes.py\n",
+            6,
+        ),
+    ):
+        tree = {
+            ".github/workflows/t.yml": "jobs:\n  j:\n    steps:\n" + steps,
+            "contrib/measure-flakes.py": "",
+        }
+        found = owned("/.github/workflows/ @a\n", tree)
+        check(
+            f"a script run {name} with no owner is an error",
+            kinds(found) == ["unowned-workflow-file"]
+            and found[0]["evidence"][0] == f".github/workflows/t.yml:{line} runs contrib/measure-flakes.py",
+            str([one["evidence"] for one in found]),
+        )
+    # Words at a command position that are not files in the tree, and a file named only as an
+    # argument, are not scripts a step runs.
+    others = {
+        ".github/workflows/t.yml": (
+            "jobs:\n  j:\n    steps:\n"
+            "      - run: cargo test && echo done; docker build -f contrib/Dockerfile.cross .\n"
+            "      - run: scripts/not-in-this-tree.sh --flag\n"
+            '      - run: file "dist/x" /usr/bin/env ../contrib/measure-flakes.py\n'
+            "      - run: |\n"
+            "          corepack enable\n"
+            "          cargo test \\\n"
+            "            contrib/measure-flakes.py\n"
+            "          git show HEAD:contrib/measure-flakes.py > /dev/null\n"
+            "          echo contrib/measure-flakes.py\n"
+        ),
+        "contrib/measure-flakes.py": "",
+        "contrib/Dockerfile.cross": "",
+    }
+    check(
+        "a command word that is no tracked file, and a file named as an argument, are not read",
+        owned("/.github/workflows/ @a\n", others) == [],
+        str([one["evidence"] for one in owned("/.github/workflows/ @a\n", others)]),
+    )
+    check(
+        "a script behind an interpreter word is still read",
+        kinds(
+            owned(
+                "/.github/workflows/ @a\n",
+                {
+                    ".github/workflows/t.yml": "jobs:\n  j:\n    steps:\n      - run: bash contrib/x.sh\n",
+                    "contrib/x.sh": "",
+                },
+            )
+        )
+        == ["unowned-workflow-file"],
+    )
 
 
 # One job, named the way a check run is named, running a target the documentation makes a promise
@@ -3909,6 +3997,102 @@ def test_the_stop_hook_answers_on_standard_output():
     )
 
 
+def run_before_pr(base, touched, findings):
+    """Run `--before-pr BASE` through `main`, as it is run before opening a pull request.
+
+    The diff and the mechanical pass are replaced for the call, so what is measured is the mode's
+    own decisions: whether it checks, and what exit status it gives. Returns the exit status, what
+    it wrote to standard output, how many times the pass was run, and the lanes `changed_lanes`
+    picks for the same diff.
+    """
+    runs = []
+
+    def pass_over(specs, sources):
+        runs.append(1)
+        return findings
+
+    kept = (audit.mechanics.changed_files, audit.mechanical_findings, sys.argv)
+    audit.mechanics.changed_files = lambda asked: list(touched) if asked == base else []
+    audit.mechanical_findings = pass_over
+    sys.argv = ["security-audit.py", "--before-pr", base]
+    written = io.StringIO()
+    try:
+        with redirect_stdout(written), redirect_stderr(io.StringIO()):
+            status = with_cwd(ROOT, audit.main)
+        lanes = with_cwd(ROOT, lambda: audit.changed_lanes(base, audit.load_specs()))
+    finally:
+        audit.mechanics.changed_files, audit.mechanical_findings, sys.argv = kept
+    return status, written.getvalue(), len(runs), lanes
+
+
+def test_the_check_before_a_pull_request():
+    """`--before-pr` checks a branch whose diff reaches a path that keeps answers, and only that one.
+
+    A caller opens the pull request when this exits 0 and stops when it exits 1, so a mode
+    that always exits 0, one that checks every branch, and one that checks none each fail a case
+    below. The paths are the ones `touches_kept_answers` names, which the `Stop` hook checks too.
+    Where a case's diff picks some lanes, `changed_lanes` is asked as well, and it picks the
+    approval-binding lane for the same diffs.
+    """
+    broken = audit.finding(audit.ERROR, "answer-unregistered", "t", "a set nobody listed", "trust", "low")
+    only_warned = audit.finding(audit.WARNING, "kept-in-stale", "t", "an entry outliving its member", "trust", "low")
+
+    for touched in (["Makefile", "README.md"], ["crates/core/src/label.rs", "docs/specs/labels.md"]):
+        status, out, runs, lanes = run_before_pr("HEAD", touched, [broken])
+        check(
+            f"a branch that touched {touched} reaches no path that keeps answers, is not checked and exits 0",
+            status == 0
+            and runs == 0
+            and "approval-binding" not in lanes
+            and "reaches no path that keeps answers" in out,
+            f"{status} {runs} {out!r}",
+        )
+
+    # `changed_lanes` gives every lane to a diff that selects none of them, so for README.md alone it
+    # names approval-binding too. This mode follows the Stop hook and asks only whether the diff
+    # reaches a path that keeps an answer.
+    status, out, runs, _ = run_before_pr("HEAD", ["README.md"], [broken])
+    check(
+        "a branch that touched only README.md is not checked and exits 0, as the Stop hook lets it stop",
+        status == 0 and runs == 0,
+        f"{status} {runs} {out!r}",
+    )
+
+    touched = ["crates/agent/src/kept_answers.rs", "README.md"]
+    status, out, runs, lanes = run_before_pr("HEAD", touched, [only_warned])
+    check(
+        "a branch that reaches a path that keeps answers and passes the mechanical half exits 0",
+        status == 0
+        and runs == 1
+        and "approval-binding" in lanes
+        and "reaches a path that keeps answers: 0 findings" in out,
+        f"{status} {runs} {out!r}",
+    )
+
+    for path in ("crates/agent/src/kept_answers.rs", "docs/specs/prompting.md"):
+        status, out, runs, lanes = run_before_pr("HEAD", [path], [only_warned, broken])
+        check(
+            f"a branch that touched {path} is checked and exits 1 on a mechanical error",
+            status == 1 and runs == 1 and "approval-binding" in lanes,
+            f"{status} {runs} {out!r}",
+        )
+
+    status, out, runs, _ = run_before_pr("refs/heads/no-such-base-for-the-selftest", ["docs/specs/prompting.md"], [])
+    check(
+        "a base git cannot resolve is bad use, exit 2, with nothing checked",
+        status == 2 and runs == 0,
+        f"{status} {runs} {out!r}",
+    )
+
+    # An empty string is falsy, so a mode that tests the flag's truth runs the full audit instead.
+    status, out, runs, _ = run_before_pr("", ["docs/specs/prompting.md"], [])
+    check(
+        "an empty base is bad use, exit 2, with nothing checked",
+        status == 2 and runs == 0,
+        f"{status} {runs} {out!r}",
+    )
+
+
 def test_verifier_prompt_composes():
     candidate = {
         "summary": "a branch on a released value",
@@ -3965,6 +4149,13 @@ def test_labels():
         check(
             f"severity/{impact} is the only scale a run judges",
             not any(one.startswith(("importance/", "urgency/", "size/")) for one in labels),
+        )
+    for area in ("sandbox", "mcp", "browser", "connectors", "background", "plugins", "desktop", "acp", "remote", "release"):
+        labels = drafts.label_set({"kind": "violation", "impact": "low", "area": area})
+        check(f"area/{area} is a label a finding can carry", f"area/{area}" in labels, str(labels))
+        check(
+            f"a finding in {area} is titled by it rather than by its lane",
+            drafts.subsystem({"area": area, "lane": "tools"}) == area,
         )
     check(
         "an area the tracker does not have is left off rather than invented",
@@ -5016,7 +5207,7 @@ def test_the_checkout_lane_starts_from_the_layers():
     check(
         "the merge, the unread keys, the permission texts and the names a file set are on the lane's list",
         {
-            ("settings.rs", "layered_since"),
+            ("settings.rs", "layered"),
             ("settings.rs", "unread_keys"),
             ("settings.rs", "rule_texts"),
             ("settings.rs", "names"),
@@ -5373,7 +5564,10 @@ def test_a_new_program_lookup_is_not_unlisted():
     The faults rejected: a check that lists nothing and so lets a new lookup in a command with no
     session pass, one that counts files and not lookups, one that accepts a `main` which records the
     directory after it has matched the command, and one that drops the check for a listed file that
-    holds no lookup, which leaves the list admitting a lookup nobody wrote.
+    holds no lookup, which leaves the list admitting a lookup nobody wrote. A lookup made through
+    `programs::resolve`, which wraps `programs::find`, is a lookup: a check that reads only `find`
+    lets a new one in unread, and one that counts `resolve` apart from `find` lets a file hold one
+    more lookup than its count.
     """
     recorded = (
         "fn keep_out_where_this_ran() {}\nfn main() {\n    keep_out_where_this_ran();\n    match args.first() {}\n}\n"
@@ -5404,6 +5598,52 @@ def test_a_new_program_lookup_is_not_unlisted():
         str(kinds(found)),
     )
 
+    for prefix in ("crate::programs", "bravebot_agent::programs"):
+        resolved = f"fn a() {{\n    let r = {prefix}::resolve(\"gh\", root);\n}}\n"
+        found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": resolved})
+        check(
+            f"a `{prefix}::resolve` lookup in a file the list does not name is an error",
+            kinds(found) == ["program-lookup-unlisted"] and found[0]["severity"] == audit.ERROR,
+            str(kinds(found)),
+        )
+
+    resolve = "fn a() {\n    let r = crate::programs::resolve(\"gh\", root);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, listed: one + resolve})
+    check(
+        "a `resolve` beside a `find` in a file listed for one lookup is an error",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
+    editor = "crates/tui/src/editor.rs"
+    find = "fn a() {\n    let r = bravebot_sandbox::programs::find(name);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, editor: find + resolve})
+    check(
+        "the editor's `find` and `resolve` are the two lookups its count holds",
+        found == [],
+        str(kinds(found)),
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, editor: find})
+    check(
+        "the editor holding only its `find` is short of its count",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
+    preamble = "crates/agent/src/preamble.rs"
+    probes = (
+        "fn a() {\n    let g = crate::programs::resolve(\"gh\", root);\n"
+        "    let j = crate::programs::resolve(\"jk\", root);\n}\n"
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, preamble: probes})
+    check("the `gh` and `jk` probes are the two lookups the preamble's count holds", found == [], str(kinds(found)))
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, preamble: probes + resolve})
+    check(
+        "a third `resolve` in the preamble is an error",
+        kinds(found) == ["program-lookup-unlisted"],
+        str(kinds(found)),
+    )
+
     bare = (
         "use bravebot_sandbox::programs::find_in;\n"
         "fn a() {\n    let r = find_in(\"aws\", &path);\n}\n"
@@ -5415,10 +5655,60 @@ def test_a_new_program_lookup_is_not_unlisted():
         str(kinds(found)),
     )
 
-    quiet = "fn a() {\n    // Resolved::find(\"aws\")\n}\n#[cfg(test)]\nmod t {\n    fn b() { Resolved::find(\"a\"); }\n}\n"
+    for name, imported in {
+        "a single import": "use bravebot_agent::programs::resolve;\n",
+        "a grouped import": "use bravebot_agent::programs::{Resolved, resolve};\n",
+    }.items():
+        bare_resolve = imported + "fn a() {\n    let r = resolve(\"gh\", root);\n}\n"
+        found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": bare_resolve})
+        check(
+            f"a bare `resolve` in a file that imports it from `programs` ({name}) is found",
+            kinds(found) == ["program-lookup-unlisted"],
+            str(kinds(found)),
+        )
+
+    unrelated = "fn resolve(x: u8) -> u8 {\n    x\n}\nfn a() {\n    let r = resolve(1);\n}\n"
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": unrelated})
+    check(
+        "a bare `resolve` in a file with no `programs` import is not a lookup",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+    other_import = (
+        "use bravebot_sandbox::programs::find_in;\n"
+        "fn a() {\n    let r = resolve(\"x\");\n    let s = find_in(\"aws\", &path);\n}\n"
+    )
+    sites = audit.program_lookups({Path("crates/new/src/lib.rs"): other_import.splitlines()})
+    check(
+        "a file importing `find_in` has its own `resolve` left out of the lookups",
+        [site["line"] for site in sites] == [4],
+        str([site["line"] for site in sites]),
+    )
+    found = audit_lookups(
+        {
+            "crates/cli/src/main.rs": recorded,
+            "crates/new/src/lib.rs": "use bravebot_agent::programs::resolve_in_path;\nfn a() {\n    resolve(\"x\");\n}\n",
+        }
+    )
+    check(
+        "an import of a longer name that begins with `resolve` does not make a bare `resolve` a lookup",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+
+    quiet = (
+        "fn a() {\n    // Resolved::find(\"aws\")\n    // crate::programs::resolve(\"gh\", root)\n}\n"
+        "#[cfg(test)]\nmod t {\n    fn b() { Resolved::find(\"a\"); crate::programs::resolve(\"a\", root); }\n}\n"
+    )
     found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/src/lib.rs": quiet})
     check(
         "a comment and test-only code are not lookups",
+        "program-lookup-unlisted" not in kinds(found),
+        str(kinds(found)),
+    )
+    found = audit_lookups({"crates/cli/src/main.rs": recorded, "crates/new/tests/lookups.rs": resolve})
+    check(
+        "a `resolve` in a file under `tests` is not a lookup",
         "program-lookup-unlisted" not in kinds(found),
         str(kinds(found)),
     )
@@ -6110,6 +6400,7 @@ TESTS = (
     test_changes_under_a_yes,
     test_the_stop_hook,
     test_the_stop_hook_answers_on_standard_output,
+    test_the_check_before_a_pull_request,
     test_verifier_prompt_composes,
     test_impact_sets_severity,
     test_labels,

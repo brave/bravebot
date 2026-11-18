@@ -13,6 +13,9 @@ mod repository;
 #[path = "../test-support/aliases.rs"]
 mod aliases;
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 use bravebot_agent::SessionScratch;
 use bravebot_agent::workspace::{Match, Matches, Paging, Remedy, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -1171,8 +1174,7 @@ fn each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_look
         if recorded == spelled {
             continue;
         }
-        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("bravebot-alias-program-{index}"));
+        let root = scratch_root::scratch_dir(&format!("bravebot-alias-program-{index}"));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
         let _removed = Removed(root.clone());
@@ -1248,8 +1250,7 @@ fn each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_
         if recorded == spelled {
             continue;
         }
-        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("bravebot-alias-selector-{index}"));
+        let root = scratch_root::scratch_dir(&format!("bravebot-alias-selector-{index}"));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch");
         let _removed = Removed(root.clone());
@@ -14860,6 +14861,78 @@ fn a_path_a_request_would_be_refused_is_not_reached_under_bypass() {
     );
 }
 
+/// PATHREQ-7: the refusals hold for the file a reference stands for, read under the reach the call
+/// holds. Each path the direct read refuses is refused through `reading_under_the_reach`, for a
+/// call that reads and a call that writes, and so are the person's `denyRead` and the setting that
+/// keeps reads inside. A deferred read that was given the reach without its refusals, or one that
+/// judged the spelling and not where the path leads, would read a row.
+#[cfg(unix)]
+#[test]
+fn the_refusals_hold_for_a_file_a_reference_stands_for() {
+    let places = BypassPlaces::new("deferred-refused");
+    std::fs::write(places.home.join(".ssh/id_ed25519"), "KEY").unwrap();
+    std::fs::write(places.home.join(".bravebot/secret"), "SECRET").unwrap();
+    let link = places.beside.join("to-ssh");
+    std::os::unix::fs::symlink(places.home.join(".ssh"), &link).unwrap();
+    let spelled = |tail: &str| PathBuf::from(format!("{}{tail}", places.beside.display()));
+    let read_denied = places.beside.join("read-denied");
+    std::fs::create_dir_all(&read_denied).unwrap();
+    std::fs::write(read_denied.join("f.txt"), "F").unwrap();
+    let lists = || Lists {
+        deny_read: vec![Entry {
+            path: read_denied.display().to_string(),
+            by: None,
+            pinned: false,
+        }],
+        ..Lists::default()
+    };
+    let cases = [
+        ("root", PathBuf::from("/")),
+        ("home", places.home.clone()),
+        ("ssh key", places.home.join(".ssh/id_ed25519")),
+        ("state directory", places.home.join(".bravebot/secret")),
+        ("a link into ~/.ssh", link.join("id_ed25519")),
+        ("a wildcard", spelled("/*.txt")),
+        ("a control character", spelled("/no\ntes.txt")),
+        ("a denyRead path", read_denied.join("f.txt")),
+    ];
+    for (tool, write) in [("vet_content", false), ("write_file", true)] {
+        places.workspace.hold_bypass_reach(Some(places.reach_with(
+            tool,
+            write,
+            lists(),
+            Vec::new(),
+        )));
+        for (what, path) in &cases {
+            escapes_the_workspace(
+                places
+                    .workspace
+                    .reading_under_the_reach(|| places.read(path)),
+                &format!("{what} through {tool}"),
+            );
+        }
+        // The control: the same reach is held and a path beside is read.
+        assert_eq!(
+            places
+                .workspace
+                .reading_under_the_reach(|| places.read(&places.beside.join("notes.txt")))
+                .unwrap(),
+            "NOTES",
+            "{tool}"
+        );
+    }
+
+    let mut kept = BypassPlaces::new("deferred-kept-inside");
+    kept.workspace = kept.workspace.clone().with_reads_kept_inside(true);
+    kept.workspace
+        .hold_bypass_reach(Some(kept.reach("vet_content", false)));
+    escapes_the_workspace(
+        kept.workspace
+            .reading_under_the_reach(|| kept.read(&kept.beside.join("notes.txt"))),
+        "readsStayInWorkspace through a reference",
+    );
+}
+
 /// A write makes what it names, so a new entry is judged by the directory it lands in: directly
 /// in the home directory it is refused, and in a directory below it it is made. A persistence
 /// location is refused for a write and read as before.
@@ -14955,6 +15028,55 @@ fn the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass() {
     .expect("policy");
     let named = Labelled::trusted(kept.beside.join("notes.txt").display().to_string());
     escapes_the_workspace(workspace.read(&mut policy, &named), "readsStayInWorkspace");
+}
+
+/// A file a reference stands for is read under the reach the call holds, judged as a read, and the
+/// call's own reach is held again after. A call that writes (`write_file` with `contents_ref`) holds
+/// a reach judged as a write, so a path only `denyWrite` covers is read through it; where no reach
+/// is held nothing is added. A deferred read that kept the call's write judgment refuses the
+/// first, one that dropped the reach after would refuse the call's own write, and one that made a
+/// reach where none was held would read the last.
+#[test]
+fn reading_under_the_reach_judges_a_read_and_gives_the_call_its_own_reach_back() {
+    let places = BypassPlaces::new("deferred-read");
+    let write_denied = places.beside.join("write-denied");
+    std::fs::create_dir_all(&write_denied).unwrap();
+    std::fs::write(write_denied.join("f.txt"), "F").unwrap();
+    let denied = Entry {
+        path: write_denied.display().to_string(),
+        by: None,
+        pinned: false,
+    };
+    places.workspace.hold_bypass_reach(Some(places.reach_with(
+        "write_file",
+        true,
+        Lists {
+            deny_write: vec![denied],
+            ..Lists::default()
+        },
+        Vec::new(),
+    )));
+    escapes_the_workspace(
+        places.write(&write_denied.join("g.txt")),
+        "denyWrite for the call's write",
+    );
+    let read = places
+        .workspace
+        .reading_under_the_reach(|| places.read(&write_denied.join("f.txt")));
+    assert_eq!(read.expect("a read under a write call's reach"), "F");
+    escapes_the_workspace(
+        places.write(&write_denied.join("g.txt")),
+        "denyWrite after the deferred read",
+    );
+    places
+        .write(&places.beside.join("ok.txt"))
+        .expect("the call's own reach after the deferred read");
+
+    places.workspace.hold_bypass_reach(None);
+    let none_held = places
+        .workspace
+        .reading_under_the_reach(|| places.read(&places.beside.join("notes.txt")));
+    escapes_the_workspace(none_held, "no reach held");
 }
 
 /// A delegate in a checkout reaches neither the working directory nor another checkout, whatever

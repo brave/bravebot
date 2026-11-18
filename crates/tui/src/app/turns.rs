@@ -273,6 +273,7 @@ pub(super) fn manifest_animated(
     // reports whether a level is in force.
     let refused = refused_level_in_force(session, config, bravebot_agent::backend::refused_a_level);
     note_a_refused_level(session, refused);
+    note_breakpoints_given_up(session, config);
 
     let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
 
@@ -470,6 +471,8 @@ pub(super) fn run_turn_animated(
     exposed: bravebot_core::credentials::Exposed,
     permissions: &Permissions,
     run: &RunSettings,
+    // What `/mcp` typed during the turn reads of the servers the session requests.
+    settings: &bravebot_config::Settings,
     // The session's record. Its id travels with the task because a run prompt may be answered with
     // the key whose grant outlives the session, and the record of that says which session pressed
     // it so that `/status` can tell a person which answers they are still carrying. The record
@@ -603,7 +606,8 @@ pub(super) fn run_turn_animated(
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
     // sent and the files that came with it cannot disagree.
-    for file in files_named_in(
+    for file in files_named_by_the_person(
+        session,
         prompt,
         wrote,
         workspace.root(),
@@ -625,6 +629,7 @@ pub(super) fn run_turn_animated(
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
     task = with_session_style(task, session);
+    task = with_own_repository(task, session);
     task = with_session_skill_mode(task, session);
     task = with_session_limit(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
@@ -724,6 +729,7 @@ pub(super) fn run_turn_animated(
         workspace,
         scratch,
         config: &mut *config,
+        settings,
     };
 
     let replying = Replying {
@@ -841,7 +847,10 @@ pub(super) fn run_turn_animated(
     let mut whole = session.work();
     whole.then(finished.work);
     stored.set_work(whole);
+    keep_the_effort_of(stored, session);
     stored.set_written(&session.written());
+    // Kept whatever way the turn ended, since the worker reported each reference as it met it.
+    stored.set_references(session.references());
     keep_the_links_of(&finished, stored, session);
     Ok(finish_turn(
         session,
@@ -855,6 +864,16 @@ pub(super) fn run_turn_animated(
         finished,
         retained,
     ))
+}
+
+/// The level a turn was sent with, kept for the record the turn's save writes, so the Sessions
+/// screen can say how hard the model was asked to think. It is nothing for a model that reads no
+/// level, since none was sent, and it follows `/effort` from one turn to the next.
+pub(super) fn keep_the_effort_of(
+    stored: &mut bravebot_session::sessions::Handle,
+    session: &Session,
+) {
+    stored.set_effort(session.effort_in_force());
 }
 
 /// The links the turn recorded with `set_link`, read as links again by the one definition of one
@@ -925,6 +944,7 @@ pub(super) fn finish_turn(
     // and both describe the model the next turn is sent to (`Session::update_budget`).
     let refused = refused_level_in_force(session, config, bravebot_agent::backend::refused_a_level);
     note_a_refused_level(session, refused);
+    note_breakpoints_given_up(session, config);
 
     let carried = if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
         let typed = line.as_typed(session.standing_definition());
@@ -1003,6 +1023,19 @@ pub(super) fn with_firing_watch(task: Task, session: &Session) -> Task {
 /// The output style `/style` chose, carried on the turn so it opens the system prompt (CLI-19).
 pub(super) fn with_session_style(task: Task, session: &Session) -> Task {
     task.with_style(session.style().cloned())
+}
+
+/// The repository the session's own `/pr` or `/issue` link names, carried on the turn so a bare
+/// number in a command the planner writes is read as belonging to it (PANEL-16).
+pub(super) fn with_own_repository(task: Task, session: &Session) -> Task {
+    use bravebot_agent::links::LinkKind;
+    match session
+        .own_reference(LinkKind::PullRequest)
+        .or_else(|| session.own_reference(LinkKind::Issue))
+    {
+        Some(own) => task.with_default_repository(own.owner(), own.repo()),
+        None => task,
+    }
 }
 
 /// The skill `/mode` put in force, carried on the turn by name so it reads the skill again and puts
@@ -1357,6 +1390,20 @@ pub(super) fn will_look_again(session: &Session, wrote: Wrote) -> bool {
         && session.looping().is_none()
         && session.goal().is_none()
         && session.watches().is_empty()
+}
+
+/// The files a prompt vouches for, read with each folded paste put back behind its marker.
+///
+/// The words a person pasted are sent as text and name no file (NAME-12), so an `@` in them does
+/// not vouch for a path nobody typed. [`Session::folded`] puts the marker back where the words are.
+pub(super) fn files_named_by_the_person(
+    session: &Session,
+    prompt: &str,
+    wrote: Wrote,
+    root: &std::path::Path,
+    sources: &bravebot_mentions::Sources,
+) -> Vec<String> {
+    files_named_in(&session.folded(prompt), wrote, root, sources)
 }
 
 /// The files a prompt vouches for by naming them with `@`.

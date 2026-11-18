@@ -132,7 +132,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--accept-edits` | for a one-shot run, write files without asking; commands, fetches and a write that would create a credential are still refused ([below](#--accept-edits)) |
-| `--auto` | for a one-shot run, open it in the auto permission mode, where a classifier answers a confined command and the first fetch of a URL ([below](#--auto)) |
+| `--auto` | open a one-shot run or a session in the auto permission mode, where a classifier answers a confined command and the first fetch of a URL ([below](#--auto)) |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
 | `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked, a language server's start included, and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
 | `-h`, `--help` | show the help |
@@ -192,7 +192,8 @@ Opens a one-shot run in the accepting-edits mode, so a script that only needs to
 not have to take the larger grant. Writes go through unasked. A command, a fetch, vouching for a
 directory, a write the credential scan found a value in and a write to a
 [protected path](../security/permission-modes.md) are refused, because nobody can be asked.
-A `deny` rule still holds, and an allow rule still decides nothing in a one-shot run.
+A `deny` rule still holds, and an `allow` rule decides a command or a fetch here as it does in a
+one-shot run without the flag ([Non-interactive use](../using/headless.md#nothing-is-approved)).
 
 ```sh
 bravebot --accept-edits -p "apply the lint fixes"
@@ -203,17 +204,28 @@ one-shot run: a session has the mode key.
 
 ### `--auto`
 
-Opens a one-shot run in the [auto mode](../security/permission-modes.md#auto). Writes go through as
-they do under `--accept-edits`, and a command the sandbox confines and the first fetch of a URL are
-put to a classifier on the session's own model, which answers only by allowing. Where it does not
-allow, the question is refused, because nobody can be asked.
+Opens a one-shot run, or an interactive session, in the
+[auto mode](../security/permission-modes.md#auto). Writes go through as they do under
+`--accept-edits`, and a command the sandbox confines and the first fetch of a URL are put to a
+classifier on the session's own model, which answers only by allowing. Where it does not allow, a
+one-shot run refuses the question, because nobody can be asked, and a session puts it to you.
 
 ```sh
 bravebot --auto -p "run the tests and fix what fails"
+bravebot --auto
 ```
 
+A session takes it on a bare `bravebot`, `-i`, `--fork`, `--from-pr`, and `--resume` or `--continue`
+with no task, and draws the mode under the input box. Shift-Tab leaves it: the next press goes to
+bypassing where that is reachable and then to asking, and goes straight to asking where a settings
+file made bypassing unreachable. A session you resume or fork opens in auto only because the
+line or the setting says so.
+
 It is refused together with `--dangerously-skip-permissions` or `--accept-edits`, and refused where
-the line starts no one-shot run: a session has the mode key.
+the line starts neither a one-shot run nor a session, as on `--plain`, `--bg`, `--handle-uri` and
+`bravebot doctor`. To open every session in auto without the flag, set
+[`permissions.startInAuto`](../customize/configuration.md#permissionsstartinauto) in your own settings
+file. A flag typed on the line wins over that setting.
 
 ## `--mode <turn|manifest>`
 
@@ -245,11 +257,11 @@ bravebot --model opus "review the diff on this branch"
 
 Names the model for one run, and outranks every other way one is named. Where no flag names one, a
 run asks for the model a session opening in the same directory would: a
-[`model`](../customize/configuration.md#model) key in the checkout's settings or the file
-`--settings` names, then the choice [`/model`](../customize/model.md)
+[`model`](../customize/configuration.md#model) key in the file
+`--settings` names (a checkout's own settings files cannot name a model), then the choice [`/model`](../customize/model.md)
 recorded, then the key in `~/.bravebot/settings.json`, then an exported
 `BRAVEBOT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
-you picked without your having to write it down twice, a checkout that names its model gets it, and
+you picked without your having to write it down twice, and
 the flag names a different one for a single run.
 
 `opus`, `sonnet` and `haiku` name a **tier** here, exactly as they do in a settings file, and resolve
@@ -328,7 +340,8 @@ bravebot --trust-workspace -p "summarise what src/ does"
 
 Starts the run from what a yes to the startup question writes: the working directory and everything
 beneath it is trusted, so the planner can read project files. Nothing is written to
-`~/.bravebot/trusted`, and directories opened with `--add-dir` stay untrusted. A run carrying on an
+`~/.bravebot/trusted`. Directories opened with `--add-dir` are trusted with the working directory
+([below](#--add-dir-path)). A run carrying on an
 earlier session keeps that session's trust and adds the working directory to it.
 
 It is a flag and nothing else: no settings file, environment variable or file in the directory turns
@@ -345,13 +358,16 @@ Opens a directory outside the working one for the length of the run, and may be 
 An absolute path outside the working directory is otherwise refused whatever else is true, so without
 this a task pointed at one checkout cannot read another at all.
 
-**It makes the directory reachable and vouches for nothing.** A file read there is quarantined on the
-same terms as a file nobody vouched for, and a write there is refused as any write in an unattended
-run is. A run nobody is watching holds no answer about the directory it works in, so a flag that
-trusted the tree beside it would leave that tree better trusted than the project. The interactive
-[`/add-dir`](../security/trust.md#add-dir) grants both halves, because a person typed it.
+**It makes the directory reachable, and trusted where the run trusts its working directory.** With
+`--trust-workspace`, or a kept answer about the directory the run works in, each directory
+`--add-dir` opens is trusted for the run as [`/add-dir`](../security/trust.md#add-dir) trusts its
+directory in a session, and nothing is written to `~/.bravebot/trusted`. Without either, a file read
+there is quarantined on the same terms as a file nobody vouched for, since a tree beside the project
+must not end up better trusted than the project. The trust approves no effect: a write there is
+refused as any write in an unattended run is. A directory a settings file declares under
+`references` is reachable the same way and is never trusted with it.
 
-The path must be absolute, must exist, must be a directory, and must not already sit inside the
+The path may be relative, and is resolved against the working directory as [`/add-dir`](../security/trust.md#add-dir) resolves one, so `--add-dir ../notes` opens the directory beside the working one. A leading `~` is not expanded here; the shell ordinarily does that before bravebot sees the path. The resolved path must exist, must be a directory, and must not already sit inside the
 working one. Anything else is refused by name and the run stops before the turn, rather than failing
 further in over a file it was told it could open.
 
@@ -1476,6 +1492,7 @@ anything. An editor is always asked.
 | Ctrl-L | Watch what a delegate is doing, and read what an aside answered |
 | Alt-L | Read what a command printed, as `/outputs` does |
 | Alt-A | Print the whole plan, as `/todos` does |
+| Alt-V | With the caret on a `[Pasted text #1 +4 lines]` marker, read the whole paste in the info panel. Clicking the marker does the same |
 | Up / Down | Walk back through sent prompts |
 | Ctrl-R | Search every prompt you have sent |
 | Wheel, PageUp / PageDown | Scroll the transcript |
@@ -1517,6 +1534,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/goal [<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch [stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/panel` | Show or hide the info panel beside the transcript |
+| `/sidebar` | Turn each section of the info panel on or off |
 | `/pr [<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue [<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/manifest <task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |

@@ -61,7 +61,9 @@ class Clean(unittest.TestCase):
         git("init", "-q", "--bare", "-b", "main", str(self.origin), cwd=root)
         self.clone = root / "clone"
         git("clone", "-q", str(self.origin), str(self.clone), cwd=root)
-        git("commit", "-q", "--allow-empty", "-m", "base", cwd=self.clone)
+        (self.clone / ".gitignore").write_text("target/\nnode_modules/\ndist/\ncache/\n.env\n")
+        git("add", ".gitignore", cwd=self.clone)
+        git("commit", "-q", "-m", "base", cwd=self.clone)
         git("push", "-q", "origin", "main", cwd=self.clone)
         self.worktrees = self.clone / ".worktrees"
 
@@ -187,6 +189,34 @@ class Clean(unittest.TestCase):
         self.assertIn("Would delete 1 branch(es).", out)
         self.assertIn("pushed", self.branches())
 
+    def pr_head_only_on_pull_ref(self, name):
+        """A merged head that origin holds only under refs/pull/1/head, built on the local branch."""
+        other = self.root / "other"
+        git("clone", "-q", str(self.origin), str(other), cwd=self.root)
+        git("fetch", "-q", str(self.clone), f"{name}:{name}", cwd=other)
+        git("checkout", "-q", name, cwd=other)
+        git("commit", "-q", "--allow-empty", "-m", "pushed after a force-push", cwd=other)
+        git("push", "-q", "origin", "HEAD:refs/pull/1/head", cwd=other)
+        head = git("rev-parse", "HEAD", cwd=other)
+        self.merged(name, head)
+        self.assertNotEqual(subprocess.run(["git", "cat-file", "-e", head], cwd=self.clone, env=GIT_ENV).returncode, 0)
+
+    def test_deletes_a_branch_behind_a_merged_head_only_on_the_pull_ref(self):
+        self.branch("rewritten", merged=False)
+        self.pr_head_only_on_pull_ref("rewritten")
+        out = self.run_script()
+        self.assertNotIn("rewritten", self.branches(), out)
+
+    def test_keeps_a_branch_with_commits_past_a_merged_head_only_on_the_pull_ref(self):
+        self.branch("rewritten", merged=False)
+        self.pr_head_only_on_pull_ref("rewritten")
+        git("checkout", "-q", "rewritten", cwd=self.clone)
+        git("commit", "-q", "--allow-empty", "-m", "local only", cwd=self.clone)
+        git("checkout", "-q", "main", cwd=self.clone)
+        out = self.run_script()
+        self.assertIn("rewritten", self.branches())
+        self.assertIn("local branch has commits beyond the merged PR head", out)
+
     def test_keeps_the_current_branch_and_unmerged_work(self):
         self.branch("open", merged=False)
         out = self.run_script()
@@ -233,6 +263,104 @@ class Clean(unittest.TestCase):
         self.assertIn("held", self.branches())
         self.assertTrue(path.exists())
         self.assertIn("locked linked worktree(s)", out)
+
+
+    def build_output(self, path):
+        """Ignored build directories, including a nested one, under `path`."""
+        for rel in ("target/debug/app", "ui/node_modules/pkg/index.js", "dist/bundle.js"):
+            (path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (path / rel).write_bytes(b"x" * 8192)
+        return [path / "target", path / "ui" / "node_modules", path / "dist"]
+
+    def test_prunes_build_directories_in_a_worktree_it_keeps(self):
+        path = self.branch("dirty", worktree=True)
+        (path / "wip.txt").write_text("wip\n")
+        build_dirs = self.build_output(path)
+        out = self.run_script("--prune-build-dirs")
+        self.assertIn("dirty", self.branches())
+        self.assertTrue((path / "wip.txt").exists())
+        for build_dir in build_dirs:
+            self.assertFalse(build_dir.exists(), out)
+        self.assertIn("Deleted 3 build directories in kept worktrees", out)
+
+    def test_prunes_build_directories_in_a_detached_worktree(self):
+        path = self.worktrees / "detached"
+        git("worktree", "add", "-q", "--detach", str(path), "main", cwd=self.clone)
+        build_dirs = self.build_output(path)
+        out = self.run_script("--prune-build-dirs")
+        for build_dir in build_dirs:
+            self.assertFalse(build_dir.exists(), out)
+
+    def test_keeps_build_directories_without_the_flag(self):
+        path = self.branch("open", merged=False, worktree=True)
+        build_dirs = self.build_output(path)
+        out = self.run_script()
+        for build_dir in build_dirs:
+            self.assertTrue(build_dir.exists())
+        self.assertNotIn("build director", out)
+
+    def test_dry_run_reports_build_directories_and_deletes_none(self):
+        path = self.branch("open", merged=False, worktree=True)
+        build_dirs = self.build_output(path)
+        out = self.run_script("--dry-run", "--prune-build-dirs")
+        for build_dir in build_dirs:
+            self.assertTrue(build_dir.exists())
+            self.assertIn(f"- {build_dir} (", out)
+        self.assertIn("Would delete 3 build directories in kept worktrees", out)
+
+    def test_keeps_ignored_files_that_are_not_build_directories(self):
+        path = self.branch("open", merged=False, worktree=True)
+        (path / ".env").write_text("SECRET=1\n")
+        (path / "cache").mkdir()
+        (path / "cache" / "data").write_text("data\n")
+        self.run_script("--prune-build-dirs")
+        self.assertTrue((path / ".env").exists())
+        self.assertTrue((path / "cache" / "data").exists())
+
+    def test_keeps_a_build_directory_that_holds_a_tracked_file(self):
+        path = self.branch("open", merged=False, worktree=True)
+        (path / "dist").mkdir()
+        (path / "dist" / "tracked.txt").write_text("tracked\n")
+        git("add", "-f", "dist/tracked.txt", cwd=path)
+        git("commit", "-q", "-m", "track dist", cwd=path)
+        (path / "dist" / "built.js").write_text("built\n")
+        self.run_script("--prune-build-dirs")
+        self.assertTrue((path / "dist" / "tracked.txt").exists())
+        self.assertTrue((path / "dist" / "built.js").exists())
+
+    def test_keeps_what_a_build_directory_symlink_points_to(self):
+        path = self.branch("open", merged=False, worktree=True)
+        elsewhere = self.root / "shared-modules"
+        elsewhere.mkdir()
+        (elsewhere / "pkg.js").write_text("pkg\n")
+        (path / "node_modules").symlink_to(elsewhere)
+        self.run_script("--prune-build-dirs")
+        self.assertTrue((elsewhere / "pkg.js").exists())
+
+    def test_keeps_build_directories_of_the_main_checkout_and_the_running_worktree(self):
+        main_dirs = self.build_output(self.clone)
+        runner = self.branch("runner", merged=False, worktree=True)
+        runner_dirs = self.build_output(runner)
+        out = self.run_script("--prune-build-dirs", cwd=runner)
+        for build_dir in [*main_dirs, *runner_dirs]:
+            self.assertTrue(build_dir.exists(), out)
+        self.assertIn(f"- {runner}: the checkout this runs from", out)
+
+    def test_keeps_build_directories_of_a_locked_worktree(self):
+        path = self.branch("held", worktree=True)
+        build_dirs = self.build_output(path)
+        git("worktree", "lock", "--reason", "in use", str(path), cwd=self.clone)
+        out = self.run_script("--prune-build-dirs")
+        for build_dir in build_dirs:
+            self.assertTrue(build_dir.exists())
+        self.assertIn(f"- {path}: locked", out)
+
+    def test_does_not_count_build_directories_of_a_worktree_it_removes(self):
+        path = self.branch("done", worktree=True)
+        self.build_output(path)
+        out = self.run_script("--dry-run", "--prune-build-dirs")
+        self.assertIn("Would remove 1 linked worktree(s).", out)
+        self.assertIn("Would delete 0 build directories in kept worktrees", out)
 
 
 if __name__ == "__main__":

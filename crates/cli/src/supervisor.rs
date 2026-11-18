@@ -169,7 +169,7 @@ impl Supervisor {
 }
 
 /// The command that starts the process for `id` again, idle, in the directory it worked in and in
-/// the mode every session opens in (BG-8, BG-12).
+/// asking, which no setting changes (BG-8, BG-12).
 fn restart_command(program: &Path, id: &str, facts: &Facts) -> std::process::Command {
     let mut command =
         crate::background::host_command(program, id, Some(Path::new(&facts.directory)), Mode::Ask);
@@ -462,9 +462,9 @@ mod tests {
     }
 
     /// BG-12, BG-8: a process is started again as the hidden host in the directory it worked in, in
-    /// the mode every session opens in, whatever it ran in before, with its output going nowhere.
+    /// asking, whatever it ran in before, with its output going nowhere.
     #[test]
-    fn a_process_is_started_again_in_its_directory_in_the_mode_every_session_opens_in() {
+    fn a_process_is_started_again_in_its_directory_asking() {
         let mut accepting = an_entry(A, State::Idle, None);
         accepting.mode = Mode::AcceptEdits;
         let roster = a_roster();

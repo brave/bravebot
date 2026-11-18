@@ -2,8 +2,9 @@
 // macOS has a real display, so no xvfb: this drives the actual window.
 import { _electron as electron } from 'playwright-core'
 import { existsSync, mkdirSync } from 'node:fs'
+import { SHOTS_DIR } from './drive-support.mjs'
 
-const shots = '/tmp/bravebot-ui'
+const shots = SHOTS_DIR
 mkdirSync(shots, { recursive: true })
 
 const app = await electron.launch({

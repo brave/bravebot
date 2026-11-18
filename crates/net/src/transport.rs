@@ -369,7 +369,10 @@ impl Transport {
     /// requests, and it is the environment's. A proxy uri that cannot be parsed names no proxy,
     /// which is what an unusable one in the environment does.
     pub fn stated(roots: TrustRoots, proxy: Option<&str>, no_proxy: Option<&str>) -> Self {
-        let mut transport = Self::resolve(roots, proxy.and_then(|uri| Proxy::new(uri).ok()));
+        // Built as a settings file's proxy is, so the hosts `no_proxy` names bypass it here as they
+        // do for the transport the environment resolves.
+        let proxy = proxy.and_then(|uri| proxy_stated(&|_| Some(OsString::from(uri)), no_proxy));
+        let mut transport = Self::resolve(roots, proxy);
         transport.no_proxy = no_proxy.map(str::to_string);
         transport
     }

@@ -62,6 +62,7 @@ fn take_a_turn_at(
         download_cap: None,
         deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
         auto_vetting: false,
+        front_end: bravebot_agent::FrontEnd::Desktop,
         sandbox: bravebot_sandbox::SandboxMode::default(),
         permission_mode: PermissionMode::Ask.into(),
         mcp_requested: Vec::new(),

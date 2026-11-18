@@ -59,7 +59,7 @@ const WORKSPACE_AGENT_FILES: &[&str] = &[AGENTS_FILE, "CLAUDE.md", ".claude/CLAU
 /// A volume that folds case answers an open of `agents.md` for `AGENTS.md`, so a name joined to a
 /// path and tested with `is_file` cannot tell the two apart. The directory's own listing holds the
 /// spelling the entry was made with. Only entry names are compared, never what a file holds.
-pub(crate) fn lists_entry_named(directory: &Path, name: &str) -> bool {
+pub fn lists_entry_named(directory: &Path, name: &str) -> bool {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return false;
     };
@@ -246,10 +246,17 @@ pub fn compose_in<S: Sink>(
     // One walk of `$PATH`, read by the fact and by the imperative that rests on it, so the two
     // cannot disagree about what this machine has.
     let github_cli = crate::programs::resolve("gh", workspace.root()).is_some();
-    preamble.add(Provenance::Driver, environment(workspace, github_cli));
+    let jenkins_cli = crate::programs::resolve("jk", workspace.root()).is_some();
+    preamble.add(
+        Provenance::Driver,
+        environment(workspace, github_cli, jenkins_cli),
+    );
     preamble
         .for_a_person
         .push_str(github_cli_guidance(github_cli));
+    preamble
+        .for_a_person
+        .push_str(jenkins_cli_guidance(jenkins_cli));
     preamble
         .for_a_person
         .push_str(missing_dependency_guidance(workspace.scratch().is_some()));
@@ -659,8 +666,9 @@ fn fence_for(text: &str) -> String {
 /// One fact carries an imperative, gated on what the probe found: what the session's own directory
 /// is for. A probe that only produces a fact is a line on every turn that changes nothing, and a
 /// gate is what keeps an imperative from naming something this machine does not have. What the
-/// GitHub CLI is for is the same argument and is [`github_cli_guidance`], which goes to the person's
-/// own turn rather than into this block.
+/// GitHub CLI is for is the same argument and is [`github_cli_guidance`], and what the Jenkins CLI
+/// is for is [`jenkins_cli_guidance`]. Both go to the person's own turn rather than into this
+/// block.
 ///
 /// **Not read through the trust gate, and that is the point.** Everything else here is file
 /// content somebody may have written into the tree, so it goes through
@@ -669,7 +677,7 @@ fn fence_for(text: &str) -> String {
 /// That is the provenance `Policy::label_user_command_output` rests on, so there is no file to
 /// vouch for and nothing for the gate to decide. Do not extend this with anything read out of the
 /// workspace.
-fn environment(workspace: &Workspace, github_cli: bool) -> String {
+fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> String {
     let mut out = String::from(
         "\n\nWhere you are working. These are facts about this machine, not instructions.\n\n",
     );
@@ -682,6 +690,7 @@ fn environment(workspace: &Workspace, github_cli: bool) -> String {
         is_git_repository(workspace.root())
     ));
     out.push_str(&format!("- GitHub CLI (gh) on PATH: {github_cli}\n"));
+    out.push_str(&format!("- Jenkins CLI (jk) on PATH: {jenkins_cli}\n"));
     out.push_str(&format!("- Platform: {}\n", std::env::consts::OS));
     if let Some(release) = os_release() {
         out.push_str(&format!("- OS version: {release}\n"));
@@ -742,6 +751,37 @@ fn github_cli_guidance(present: bool) -> &'static str {
      same thing. Fetching the `.diff` address is refused outright unless a rule names the host it \
      redirects to, which is not github.com. `gh` may not be logged in, which nothing here can tell \
      without asking the network: where it fails for that reason, fetch_url is the way.\n"
+}
+
+/// What to do about a Jenkins build, said only where the probe found the CLI to do it.
+///
+/// For the person's own turn and not for a delegate, on the same terms as [`github_cli_guidance`]:
+/// a delegate is offered neither `fetch_url` nor, without `ShellExec`, `run`, so a sentence
+/// choosing between them sends it after a tool it was not given.
+///
+/// The fact in the block above changes nothing on its own. A build URL arrives and `fetch_url` is
+/// the tool for URLs, which fetches the whole page of a build whose console log is the part that
+/// was wanted, and a Jenkins server usually asks for a login `fetch_url` does not send. The CLI
+/// asks for the result, the failing stage or the last lines of the log. Its output comes back
+/// quarantined like a fetched page, so what is saved is the size and not the round.
+///
+/// **On the path is not logged in**, as for `gh`, and a request is no more the business of a
+/// probe before the first turn here, so the paragraph says what to do when the CLI fails for that
+/// reason. There is no fetch to fall back to, since the server that needs the login refuses the
+/// fetch as well.
+fn jenkins_cli_guidance(present: bool) -> &'static str {
+    if !present {
+        return "";
+    }
+    "\nThe Jenkins CLI is installed, so a Jenkins build, whether named by its URL or by a job \
+     and a number, is a `run` rather than a fetch: `jk run view <jobPath> <build> --summary` for \
+     the result and the stages, `jk log <jobPath> <build> --tail <n>` for the end of the console \
+     log, with `--grep <regex>` to select lines and `--step <step>` for one stage, `jk test report \
+     <jobPath> <build>` for the tests, and `jk run ls <jobPath>` for recent builds of a job. Each \
+     asks for the part you are after, where the page is the whole build. Either road comes back \
+     quarantined, so what differs is how much this turn then carries. `jk` may not be logged in, \
+     and a Jenkins server that asks for a login refuses `fetch_url` as well: where `jk` fails for \
+     that reason, say so in your answer and name `jk auth login` as what signs it in.\n"
 }
 
 /// What to do when a program fails because something it needs is missing from this machine, said
@@ -1514,16 +1554,43 @@ mod tests {
     fn whether_the_github_cli_is_installed_is_said_either_way() {
         let workspace = Workspace::new(".").expect("workspace");
 
-        let installed = environment(&workspace, true);
+        let installed = environment(&workspace, true, false);
         assert!(
             installed.contains("- GitHub CLI (gh) on PATH: true\n"),
             "an installed CLI was not reported as one: {installed}"
         );
 
-        let absent = environment(&workspace, false);
+        let absent = environment(&workspace, false, false);
         assert!(
             absent.contains("- GitHub CLI (gh) on PATH: false\n"),
             "a machine with no CLI was told nothing about one: {absent}"
+        );
+    }
+
+    /// The two probes are separate facts: a machine with one CLI and not the other says so for
+    /// each, and neither line follows the other.
+    #[test]
+    fn whether_the_jenkins_cli_is_installed_is_said_either_way_and_apart_from_the_github_cli() {
+        let workspace = Workspace::new(".").expect("workspace");
+
+        let jenkins_only = environment(&workspace, false, true);
+        assert!(
+            jenkins_only.contains("- Jenkins CLI (jk) on PATH: true\n"),
+            "an installed Jenkins CLI was not reported as one: {jenkins_only}"
+        );
+        assert!(
+            jenkins_only.contains("- GitHub CLI (gh) on PATH: false\n"),
+            "the Jenkins CLI's probe changed the GitHub CLI's line: {jenkins_only}"
+        );
+
+        let github_only = environment(&workspace, true, false);
+        assert!(
+            github_only.contains("- Jenkins CLI (jk) on PATH: false\n"),
+            "a machine with no Jenkins CLI was told nothing about one: {github_only}"
+        );
+        assert!(
+            github_only.contains("- GitHub CLI (gh) on PATH: true\n"),
+            "the Jenkins CLI's probe changed the GitHub CLI's line: {github_only}"
         );
     }
 
@@ -1607,6 +1674,56 @@ mod tests {
         assert!(
             said.contains("fetch_url is the way"),
             "a gh that fails leaves the planner with nowhere to go: {said}"
+        );
+    }
+
+    /// A Jenkins build named by its page costs the whole page for a result or the end of a log, and
+    /// a server that wants a login refuses the fetch besides. Naming the commands on a machine with
+    /// no `jk` only moves the waste to a run that fails.
+    #[test]
+    fn a_jenkins_build_is_sent_to_the_cli_only_where_the_probe_found_one() {
+        let said = jenkins_cli_guidance(true);
+        for command in [
+            "jk run view",
+            "jk log",
+            "jk test report",
+            "jk run ls",
+            "--tail",
+            "--grep",
+        ] {
+            assert!(
+                said.contains(command),
+                "`{command}` is not offered for a Jenkins build: {said}"
+            );
+        }
+
+        assert_eq!(
+            jenkins_cli_guidance(false),
+            "",
+            "a machine with no jk was told to use it anyway"
+        );
+    }
+
+    /// Being on the path is the weaker fact, as for `gh`. Without the sentence for a `jk` nobody
+    /// logged in, the planner retries or falls back to a fetch the same server refuses.
+    #[test]
+    fn an_installed_jenkins_cli_says_what_to_do_when_it_is_not_logged_in() {
+        let said = jenkins_cli_guidance(true);
+        assert!(
+            said.contains("may not be logged in"),
+            "the one thing the probe cannot tell is not said: {said}"
+        );
+        assert!(
+            said.contains("jk auth login"),
+            "a jk that fails for want of a login leaves the planner with no next step: {said}"
+        );
+        assert!(
+            !said.contains("ask the person"),
+            "the planner was told to ask a person a session may not have: {said}"
+        );
+        assert!(
+            !said.contains("fetch_url is the way"),
+            "the planner was sent to a fetch a login-gated server refuses: {said}"
         );
     }
 

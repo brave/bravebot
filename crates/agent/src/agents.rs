@@ -52,6 +52,44 @@ use std::path::Path;
 const AGENTS: &str = "agents";
 const WORKSPACE_AGENTS: &str = ".bravebot/agents";
 
+/// Every key [`read_definition`] reads. Any other key a file declares is carried out on the
+/// definition as unread (DELEGATE-19).
+const READ: [&str; 14] = [
+    "name",
+    "description",
+    "kind",
+    "tools",
+    "model",
+    "skills",
+    "effort",
+    "writes",
+    "mcpServers",
+    "spawns",
+    "rounds",
+    "budget",
+    "memory",
+    "isolation",
+];
+
+/// Whether an unread key is one another agent reads as a restriction on its subagent: the tools it
+/// may not call, or the permission mode it runs in.
+///
+/// Compared by letters alone, so `disallowed-tools` and `permission_mode` are found as well as the
+/// spelling other agents use. Only a key this matches is ever printed in a notice, and it holds
+/// nothing but letters, hyphens and underscores, so none of the file's own text reaches a screen
+/// through it.
+fn is_a_restriction_nothing_applies(key: &str) -> bool {
+    let letters: String = key
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    matches!(letters.as_str(), "disallowedtools" | "permissionmode")
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || matches!(c, '-' | '_'))
+}
+
 /// What a file turned out to be.
 enum Read {
     /// A definition, ready to go into the set, and whether its `mcpServers:` line declared a
@@ -253,6 +291,17 @@ fn read_definition(text: &str, origin: &str) -> Read {
         }
     }
 
+    // A key nothing above reads. The definition still loads, so one written for another agent
+    // works here, and the keys are carried so a report can name them rather than leave a line
+    // its author believes is in force a silent no-op (DELEGATE-19).
+    definition = definition.with_unread_keys(
+        declared
+            .keys()
+            .filter(|key| !READ.contains(&key.as_str()))
+            .cloned()
+            .collect(),
+    );
+
     Read::Definition {
         definition: Box::new(definition),
         declares_servers,
@@ -281,6 +330,31 @@ pub enum Refused {
     InlineServers,
     /// The definition's kind holds no server whatever its `mcpServers:` line says.
     KindHoldsNoServers,
+}
+
+/// The text of a definition as lines that keep their line endings, and the index of the line that
+/// closes its frontmatter. `lines[1..close]` is the frontmatter block.
+fn split_definition(text: &str) -> Result<(Vec<&str>, usize), Refused> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    if lines.first().map(|l| l.trim_end()) != Some("---") {
+        return Err(Refused::NotADefinition);
+    }
+    let close = lines[1..]
+        .iter()
+        .position(|l| l.trim_end() == "---")
+        .map(|at| at + 1)
+        .ok_or(Refused::NotADefinition)?;
+    Ok((lines, close))
+}
+
+/// Where the lines of a replaced key's value stop being the key's: `end` less the blank lines at
+/// its tail, which are the file's layout and stay. Never earlier than `at`.
+fn blank_tail(block: &[&str], at: usize, end: usize) -> usize {
+    let mut claimed = end;
+    while claimed > at && block[claimed - 1].trim().is_empty() {
+        claimed -= 1;
+    }
+    claimed
 }
 
 /// Rewrite the description, the model and the body of a definition's text, and leave every other
@@ -313,15 +387,7 @@ pub fn rewrite_definition(
         Some(m) => Some(m),
     };
 
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    if lines.first().map(|l| l.trim_end()) != Some("---") {
-        return Err(Refused::NotADefinition);
-    }
-    let close = lines[1..]
-        .iter()
-        .position(|l| l.trim_end() == "---")
-        .map(|at| at + 1)
-        .ok_or(Refused::NotADefinition)?;
+    let (lines, close) = split_definition(text)?;
     let block = &lines[1..close];
 
     let quoted = |value: &str| format!("'{}'", value.replace('\'', "''"));
@@ -333,15 +399,7 @@ pub fn rewrite_definition(
     while at < block.len() {
         let line = block[at];
         at += 1;
-        // The lines that belong to this key, by the rule `skills::declarations` reads them with.
-        let opened_at = crate::skills::indent_of(line);
-        let mut end = at;
-        while let Some(next) = block.get(end) {
-            if !next.trim().is_empty() && crate::skills::indent_of(next) <= opened_at {
-                break;
-            }
-            end += 1;
-        }
+        let end = crate::skills::continuation_end(block, at);
         let key = line.split_once(':').map(|(key, _)| key.trim());
         // A key written twice is read as its last line, so the first is replaced and the rest go.
         match key {
@@ -367,11 +425,7 @@ pub fn rewrite_definition(
             }
         }
         // Blank lines after the replaced value are the file's layout and stay.
-        let mut claimed = end;
-        while claimed > at && block[claimed - 1].trim().is_empty() {
-            claimed -= 1;
-        }
-        at = claimed;
+        at = blank_tail(block, at, end);
     }
     if !wrote_description {
         return Err(Refused::NotADefinition);
@@ -428,15 +482,7 @@ pub fn rewrite_servers(text: &str, servers: Option<&[String]>) -> Result<String,
         return Err(Refused::InlineServers);
     }
 
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    if lines.first().map(|l| l.trim_end()) != Some("---") {
-        return Err(Refused::NotADefinition);
-    }
-    let close = lines[1..]
-        .iter()
-        .position(|l| l.trim_end() == "---")
-        .map(|at| at + 1)
-        .ok_or(Refused::NotADefinition)?;
+    let (lines, close) = split_definition(text)?;
     let block = &lines[1..close];
 
     let line_for = |servers: &[String]| {
@@ -453,14 +499,7 @@ pub fn rewrite_servers(text: &str, servers: Option<&[String]>) -> Result<String,
     while at < block.len() {
         let line = block[at];
         at += 1;
-        let opened_at = crate::skills::indent_of(line);
-        let mut end = at;
-        while let Some(next) = block.get(end) {
-            if !next.trim().is_empty() && crate::skills::indent_of(next) <= opened_at {
-                break;
-            }
-            end += 1;
-        }
+        let end = crate::skills::continuation_end(block, at);
         if line.split_once(':').map(|(key, _)| key.trim()) != Some("mcpServers") {
             out.push_str(line);
             for kept in &block[at..end] {
@@ -473,11 +512,7 @@ pub fn rewrite_servers(text: &str, servers: Option<&[String]>) -> Result<String,
             out.push_str(&line_for(servers));
         }
         wrote = true;
-        let mut claimed = end;
-        while claimed > at && block[claimed - 1].trim().is_empty() {
-            claimed -= 1;
-        }
-        at = claimed;
+        at = blank_tail(block, at, end);
     }
     if let (false, Some(servers)) = (wrote, servers) {
         out.push_str(&line_for(servers));
@@ -617,11 +652,38 @@ pub fn discover<S: Sink>(
             policy,
             workspace,
             &home.join(AGENTS),
+            &format!("~/.bravebot/{AGENTS}"),
             &mut definitions,
             &mut notices,
         );
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
+    if let Some(home) = home {
+        // The least specific root (PLUGIN-12): a definition of a name any other source has is not
+        // taken, and is not merged with it either, since a merge narrows the one that replaces. Read
+        // last and added only where the name is still absent. Only the definitions part of an
+        // enabled plugin under the state directory, never a workspace one (PLUGIN-5).
+        let mut from_plugins = Definitions::default();
+        for roots in crate::plugins::enabled_roots(home) {
+            let Some(root) = roots.agents else {
+                continue;
+            };
+            let label = format!("~/.bravebot/plugins/{}/{AGENTS}", roots.plugin);
+            discover_home(
+                policy,
+                workspace,
+                &root,
+                &label,
+                &mut from_plugins,
+                &mut notices,
+            );
+        }
+        for definition in from_plugins.iter() {
+            if definitions.get(definition.name()).is_none() {
+                definitions.insert(definition.clone());
+            }
+        }
+    }
     notices.extend(rounds_held_to_their_kind(&definitions));
     notices.extend(checkouts_held_to_their_kind(&definitions));
     // Asked once every file is in, since a later definition of a name takes its key over. A
@@ -752,6 +814,7 @@ fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     root: &Path,
+    label: &str,
     definitions: &mut Definitions,
     notices: &mut Vec<Notice>,
 ) {
@@ -765,7 +828,7 @@ fn discover_home<S: Sink>(
             passed_over += 1;
             continue;
         }
-        let origin = format!("~/.bravebot/{AGENTS}/{file}");
+        let origin = format!("{label}/{file}");
 
         let Ok(text) = std::fs::read_to_string(root.join(&file)) else {
             continue;
@@ -873,6 +936,20 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
                 notices.push(Notice::from_message(t!(
                     delegate_servers_declared,
                     definition = origin
+                )));
+            }
+            let restrictions: Vec<&str> = definition
+                .unread_keys()
+                .iter()
+                .map(String::as_str)
+                .filter(|key| is_a_restriction_nothing_applies(key))
+                .collect();
+            if !restrictions.is_empty() {
+                notices.push(Notice::from_message(t!(
+                    delegate_restriction_not_applied,
+                    definition = origin,
+                    count = restrictions.len(),
+                    keys = restrictions.join(", ")
                 )));
             }
             match no_memory {
@@ -1191,6 +1268,17 @@ pub(crate) fn markdown_files(root: &Path) -> (Vec<String>, usize) {
     }
     names.sort();
     (names, not_text)
+}
+
+/// The name and kind a definition file declares, read by the same reader a session uses, or
+/// nothing where the file is not a definition. For a listing that only names what a plugin offers.
+pub(crate) fn declared_name_and_kind(text: &str, origin: &str) -> Option<(String, Kind)> {
+    match read_definition(text, origin) {
+        Read::Definition { definition, .. } => {
+            Some((definition.name().to_string(), definition.kind()))
+        }
+        _ => None,
+    }
 }
 
 /// What a definition made for a desktop bot came to.
@@ -1774,6 +1862,113 @@ mod tests {
 
         assert_eq!(definition.name(), "rule-reviewer");
         assert_eq!(definition.kind(), Kind::Reader);
+        assert_eq!(definition.unread_keys(), ["color", "temperature"]);
+    }
+
+    fn notices_for(text: &str) -> (Definitions, Vec<String>) {
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(text, "test"),
+            "test",
+            &mut definitions,
+            &mut notices,
+        );
+        let said = notices.into_iter().map(|notice| notice.message).collect();
+        (definitions, said)
+    }
+
+    /// A definition written for another agent to be read-only keeps its kind's tools here, and the
+    /// author is told which keys were not applied and which keys do the job.
+    #[test]
+    fn a_restriction_written_for_another_agent_is_named_as_not_applied() {
+        let (definitions, said) = notices_for(
+            "---\nname: auditor\ndescription: audits\nkind: worker\ndisallowedTools: run, \
+             write_file\npermissionMode: plan\n---\n\nbody\n",
+        );
+
+        let held = definitions.get("auditor").expect("loaded");
+        assert_eq!(held.kind(), Kind::Worker);
+        assert_eq!(held.tools(), None, "nothing narrowed what a worker holds");
+        assert_eq!(
+            said,
+            [
+                "test declares disallowedTools, permissionMode, none of which anything here applies, \
+              so its delegate is not restricted by them. A tools line names the tools the \
+              delegate may call, and its kind decides whether it may run programs or write files"
+            ]
+        );
+    }
+
+    /// One restriction alone is named alone, and in the singular.
+    #[test]
+    fn one_restriction_nothing_applies_is_named_alone() {
+        let (_, said) = notices_for(
+            "---\nname: auditor\ndescription: audits\nkind: checker\npermissionMode: \
+             plan\n---\n\nbody\n",
+        );
+
+        assert_eq!(
+            said,
+            [
+                "test declares permissionMode, which nothing here applies, so its delegate is not \
+              restricted by it. A tools line names the tools the delegate may call, and its \
+              kind decides whether it may run programs or write files"
+            ]
+        );
+    }
+
+    /// Another spelling of the same key is the same restriction, and a key that only resembles one
+    /// is not reported as one.
+    #[test]
+    fn a_respelt_restriction_is_found_and_an_unrelated_key_is_not() {
+        for key in [
+            "disallowed-tools",
+            "disallowed_tools",
+            "DisallowedTools",
+            "permission-mode",
+        ] {
+            let (_, said) = notices_for(&format!(
+                "---\nname: auditor\ndescription: d\nkind: worker\n{key}: run\n---\n\nbody\n"
+            ));
+            assert_eq!(said.len(), 1, "{key} was not reported: {said:?}");
+            assert!(said[0].contains(key), "{key}: {said:?}");
+        }
+
+        let (_, said) = notices_for(
+            "---\nname: auditor\ndescription: d\nkind: worker\ntemperature: 0.5\ncolor: \
+             blue\n---\n\nbody\n",
+        );
+        assert!(said.is_empty(), "a harmless key was reported: {said:?}");
+    }
+
+    /// A value written after the key is text from a checked-in file, so it is never repeated. Only
+    /// the key, which `is_a_restriction_nothing_applies` holds to letters, hyphens and
+    /// underscores, may reach the screen.
+    #[test]
+    fn the_notice_repeats_a_key_and_never_its_value() {
+        let (_, said) = notices_for(
+            "---\nname: auditor\ndescription: d\nkind: worker\ndisallowedTools: SECRET_VALUE\n\
+             ---\n\nbody\n",
+        );
+        assert_eq!(said.len(), 1);
+        assert!(!said[0].contains("SECRET_VALUE"), "{said:?}");
+    }
+
+    /// The keys this reads are not reported as unread, whatever the definition names.
+    #[test]
+    fn every_key_this_reads_is_read() {
+        let definition = definition_of(
+            "---\nname: full\ndescription: d\nkind: worker\ntools: read_file\nmodel: m\nskills: \
+             s\neffort: high\nwrites: docs/**\nmcpServers: a\nspawns: reader\nrounds: 5\nbudget: \
+             500k\nmemory: project\nisolation: worktree\n---\n\nbody\n",
+        );
+
+        assert!(
+            definition.unread_keys().is_empty(),
+            "{:?}",
+            definition.unread_keys()
+        );
     }
 
     /// A definition can name a model to run on.

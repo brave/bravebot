@@ -67,6 +67,7 @@ pub fn session(
     agent: Option<String>,
     prompts: bravebot_agent::turn::SystemPrompts,
 ) -> ExitCode {
+    crate::say_usage_ping_notice();
     run(skip_permissions, agent, prompts, None)
 }
 
@@ -133,6 +134,33 @@ fn mode_of(hosting: Option<&crate::host::Hosting>, skip_permissions: bool) -> Pe
     }
 }
 
+/// What ends a start whose model the machine-level layer refuses, naming the file that refused it
+/// (BACKEND-48). `model` is the recorded pick that is in force, and the configured default where
+/// there is none: a pick the layer refuses was set aside for the default, or was left in force
+/// because the default is refused as well, and either way this is the model a turn would ask for.
+fn refused_model(config: &Config, model: Option<&str>) -> Option<String> {
+    let model = model.unwrap_or(&config.default_model);
+    let (file, why) = config.model_refused(model)?;
+    Some(crate::model::managed_refusal(model, file, why))
+}
+
+/// Ends a background process whose model the machine-level layer refuses, and says why to the
+/// session's own output (BACKEND-48). A process that is not hosted is checked where it starts, in
+/// [`crate::import::before_the_session`], so this ends nothing for it.
+fn end_a_hosted_start_on_a_refused_model<R: BufRead, W: Write>(
+    hosted: bool,
+    config: &Config,
+    model: Option<&str>,
+    asking: &mut Prompting<R, W>,
+) -> Option<ExitCode> {
+    if !hosted {
+        return None;
+    }
+    let refusal = refused_model(config, model)?;
+    asking.say(&refusal);
+    Some(fail(Ending::Configuration, refusal))
+}
+
 /// Whether the vetting prompts are answered from a safe verdict, given what the three routes
 /// resolved to (`bravebot_session::store::auto_vetting`). Never in a background session, where only
 /// the mode the person chose answers in their absence (BG-8): the flag is refused there and the
@@ -150,30 +178,42 @@ type Streams = (
     Option<crate::host::Broadcast>,
 );
 
-fn run(
-    skip_permissions: bool,
-    agent: Option<String>,
-    prompts: bravebot_agent::turn::SystemPrompts,
-    hosting: Option<crate::host::Hosting>,
-) -> ExitCode {
-    let hosted_as = hosting.as_ref().map(|hosting| hosting.id.clone());
-    let hosted_in = hosting.as_ref().map(|hosting| hosting.mode);
-    let inbox = hosting
-        .as_ref()
-        .map(|hosting| std::sync::Arc::clone(&hosting.inbox));
-    let courier = hosting
-        .as_ref()
-        .map(|hosting| std::sync::Arc::clone(&hosting.courier));
-    let interrupted = hosting
-        .as_ref()
-        .is_some_and(|hosting| hosting.after_an_interruption);
+/// What a background start carries beside its streams, read before the streams take `hosting`.
+struct HostedStart {
+    /// The session's id, which names its record (SESSION-38).
+    id: Option<String>,
+    /// The mode every turn of the process runs under (BG-8).
+    mode: Option<bravebot_session::jobs::Mode>,
+    /// Where messages from other sessions wait for the planner's next request (MSG-6).
+    inbox: Option<std::sync::Arc<dyn bravebot_agent::messages::Inbox>>,
+    /// How the session's planner reaches the other background sessions (MSG-1, MSG-5).
+    courier: Option<std::sync::Arc<dyn bravebot_agent::messages::Courier>>,
+    /// The process that ran this session before ended in the middle of a turn (BG-12).
+    interrupted: bool,
+}
+
+impl HostedStart {
+    fn of(hosting: Option<&crate::host::Hosting>) -> Self {
+        Self {
+            id: hosting.map(|hosting| hosting.id.clone()),
+            mode: hosting.map(|hosting| hosting.mode),
+            inbox: hosting.map(|hosting| std::sync::Arc::clone(&hosting.inbox)),
+            courier: hosting.map(|hosting| std::sync::Arc::clone(&hosting.courier)),
+            interrupted: hosting.is_some_and(|hosting| hosting.after_an_interruption),
+        }
+    }
+}
+
+/// The configuration the session starts from, or what ends a start that cannot have one.
+/// `hosted` is whether a background process runs it.
+fn starting_configuration(hosted: bool) -> Result<Config, ExitCode> {
     // Refused rather than read. The lines this reads are the person's own prompts, and a pipe has
     // nothing vouching for what it carries: CLI-3 quarantines piped bytes for exactly that reason,
     // so a session taking its prompts from one would be taking instruction from whatever fed it,
     // and answering its own approval questions out of the same bytes. `-p` is the invocation that
     // reads a pipe, and it reads it as the untrusted context it is.
-    if hosting.is_none() && !std::io::stdin().is_terminal() {
-        return fail(Ending::Argument, t!(cli_plain_needs_a_terminal));
+    if !hosted && !std::io::stdin().is_terminal() {
+        return Err(fail(Ending::Argument, t!(cli_plain_needs_a_terminal)));
     }
 
     let mut config = match Config::from_env() {
@@ -181,10 +221,10 @@ fn run(
         Err(err) => {
             // Drawn: the problem can quote an endpoint value an environment variable or a
             // settings file chose (LAYER-3).
-            return fail(
+            return Err(fail(
                 Ending::Configuration,
                 crate::progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
-            );
+            ));
         }
     };
 
@@ -199,49 +239,43 @@ fn run(
     //
     // Where nothing is configured at all, what Claude Code or opencode configured is offered first,
     // in lines, the way this session asks everything (IMPORT-1).
-    if hosting.is_none()
-        && let Some(ended) = crate::import::before_the_session(&mut config, None)
-    {
-        return ended;
+    if !hosted && let Some(ended) = crate::import::before_the_session(&mut config, None) {
+        return Err(ended);
     }
+    Ok(config)
+}
 
-    let settings = bravebot_config::Settings::load();
-    let mut workspace =
-        match crate::workspace::current_workspace(&settings, &bravebot_config::Managed::load()) {
-            Ok(workspace) => workspace,
-            Err(err) => return crate::workspace::workspace_problem(&err),
-        };
+/// The workspace the session works in, or what ends a start that has none.
+fn opening_workspace(settings: &bravebot_config::Settings) -> Result<Workspace, ExitCode> {
+    match crate::workspace::current_workspace(settings, &bravebot_config::Managed::load()) {
+        Ok(workspace) => Ok(workspace),
+        Err(err) => Err(crate::workspace::workspace_problem(&err)),
+    }
+}
 
-    // Somewhere of its own to write what is not part of the project, for the length of the
-    // session. Held in a binding because dropping it is what removes it.
-    let _scratch = crate::workspace::scratch_for_this_run(&mut workspace);
+/// The rules the session holds and the entries of a settings file that could not be read as rules.
+/// `hosted` is whether a background process runs it.
+fn permissions_for_a_start(
+    hosted: bool,
+    settings: &bravebot_config::Settings,
+    profile: Option<&std::path::Path>,
+    root: &std::path::Path,
+) -> (Permissions, Vec<bravebot_core::permissions::Rejected>) {
+    match hosted {
+        true => bravebot_agent::permissions::for_an_unattended_run(settings, profile, root),
+        false => bravebot_agent::permissions::from_settings(settings, profile, root),
+    }
+}
 
-    // There is somebody here, so the rules a settings file wrote hold as they do in a session: an
-    // allow rule says which prompts to stop raising, and this is a surface that raises them. The
-    // unattended reading, which drops every allow rule, is `-p`'s and belongs to a run nobody is
-    // watching (CLI-1).
-    let home = bravebot_agent::home::directory();
-    // The home directory rather than the state directory inside it, which is what a `~/` rule in
-    // the file is anchored at (PERM-3).
-    let profile = bravebot_agent::home::profile();
-    let (permissions, rejected) = match hosting {
-        Some(_) => bravebot_agent::permissions::for_an_unattended_run(
-            &settings,
-            profile.as_deref(),
-            workspace.root(),
-        ),
-        None => bravebot_agent::permissions::from_settings(
-            &settings,
-            profile.as_deref(),
-            workspace.root(),
-        ),
-    };
-
-    let mode = mode_of(hosting.as_ref(), skip_permissions);
-
+/// The model this session asks for, where one was recorded, and the recorded pick that was set
+/// aside or refused with the reason it was refused, where it was.
+fn model_in_force(
+    config: &Config,
+    settings: &bravebot_config::Settings,
+) -> (Option<String>, Option<(String, Option<String>)>) {
     let pick = bravebot_agent::backend::pick(
-        &config,
-        bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
+        config,
+        bravebot_session::store::model(bravebot_session::store::load_model(), settings),
     );
     let set_aside = match &pick {
         bravebot_agent::backend::Pick::SetAside(recorded) => Some((recorded.clone(), None)),
@@ -250,8 +284,12 @@ fn run(
         }
         bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => None,
     };
-    let model = pick.into_model();
-    let (mut asking, mut reply, mut beside, beside_turns): Streams = match hosting {
+    (pick.into_model(), set_aside)
+}
+
+/// The streams the session reads and writes: a background process's own, or the terminal's.
+fn open_streams(hosting: Option<crate::host::Hosting>) -> Streams {
+    match hosting {
         Some(hosting) => (
             Prompting::watched(
                 Box::new(hosting.input),
@@ -271,164 +309,133 @@ fn run(
             Box::new(std::io::stderr()),
             None,
         ),
-    };
-    let hosted = beside_turns.is_some();
+    }
+}
 
-    say_the_opening(
-        &mut asking,
-        &model
-            .clone()
-            .unwrap_or_else(|| config.default_model.clone()),
-    );
+/// What the session says before anything is asked: the opening line naming `model`, the mode of a
+/// background process, a recorded model pick that was set aside, the rules that were ignored.
+fn say_startup_notes<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    model: &str,
+    hosted_in: Option<bravebot_session::jobs::Mode>,
+    set_aside: Option<(String, Option<String>)>,
+    rejected: &[bravebot_core::permissions::Rejected],
+    settings: &bravebot_config::Settings,
+    profile: Option<&std::path::Path>,
+) {
+    say_the_opening(asking, model);
     if let Some(mode) = hosted_in {
         asking.say(&crate::background::mode_line(mode));
     }
     if let Some((recorded, refused)) = set_aside {
-        say_the_set_aside_pick(&mut asking, &recorded, refused.as_deref());
+        say_the_set_aside_pick(asking, &recorded, refused.as_deref());
     }
-    for problem in &rejected {
-        asking.say(&t!(
-            session_permission_rule_ignored,
-            problem = crate::progress::described(problem)
+    for problem in rejected {
+        asking.say(&bravebot_agent::permissions::said_in_a_session(
+            problem,
+            crate::progress::described(problem),
         ));
+    }
+    // The file `--settings` named, where this platform cannot hold it back from a directory a
+    // stage may write and so it grants nothing (#2599). Said for the reason the rejects above are.
+    if let Some(said) = bravebot_agent::permissions::named_withheld_said(settings) {
+        asking.say(&said);
     }
     // And the `allow` entries a checkout wrote, which are dropped wherever the file is read
     // (PERM-14) and which this session grants none of: it puts no question, so there is nowhere
     // an answer to one could have been collected (PERM-15). Said for the reason the rejects above
     // are: the prompt the entry was written to answer still appears, and somebody told nothing
     // reads that as a second fault rather than as the rule not being in force.
-    for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
+    for rule in bravebot_agent::permissions::proposed(settings, profile) {
         asking.say(&t!(
             session_permission_allow_ignored,
             rule = bravebot_agent::confirm::shown_text(&rule.rule),
             path = bravebot_agent::confirm::shown_path(&rule.path)
         ));
     }
+}
 
-    // The startup question (TRUST-7), put as a line. The map a yes writes is the one the panel's
-    // yes writes, because both go through the same function; the end of the input is the third
-    // answer the panel has, and it starts no session.
-    //
-    // Not put again to a session that is started again: the map in its record is the answer it was
-    // given, as it is for a resumed foreground session.
-    let resumed = hosted_as
-        .as_deref()
-        .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
-    // The names the file tools had reached, so the nested instructions and path-scoped rules they
-    // loaded are in force from the first prompt (INSTR-14, INSTR-16).
-    if let Some(record) = resumed.as_ref() {
-        workspace.restore_touched(&record.touched);
-    }
-    // The record is held from here for as long as the session runs, before anything is asked or
-    // any server is reached: a session started again for a record a terminal holds is refused,
-    // since two processes would write one record (SESSION-38).
-    let mut kept = match hosted_as.as_deref() {
-        Some(id) => match Kept::opening(workspace.root(), id, resumed.as_ref()) {
-            Ok(mut kept) => {
-                kept.answered_by_mode = mode == PermissionMode::Bypass;
-                Some(kept)
-            }
-            Err(held) => return fail(Ending::Failed, held.refusal()),
-        },
-        None => None,
-    };
-    // A session started again, and the index of its workspace, are what the sweep of what has
-    // outlived the retention period must leave whatever their age (STATE-4).
-    bravebot_session::retention::at_startup(
-        settings.retention(),
-        bravebot_session::retention::InUse {
-            session: hosted_as.as_deref(),
-            workspace: Some(workspace.root()),
-        },
-    );
-    let Some(trust) = resumed
-        .as_ref()
-        .and_then(|record| record.trust_map(workspace.root()))
-        .or_else(|| {
-            opening_trust(
-                &mut asking,
-                mode,
-                workspace.root(),
-                |root| bravebot_agent::trusted::honoured(home.as_deref(), profile.as_deref(), root),
-                |root| {
-                    bravebot_agent::trusted::record_to_keep(
-                        home.as_deref(),
-                        profile.as_deref(),
-                        root,
-                    )
-                },
-                hosted_as.as_deref().unwrap_or_default(),
-            )
-        })
-    else {
-        return ExitCode::SUCCESS;
-    };
-    if let Some(record) = resumed.as_ref().filter(|record| record.turns > 0) {
-        asking.say(&t!(
-            cli_plain_resumed,
-            count = t!(count_turns, count = record.turns)
-        ));
-    }
-
-    // Matched after that question, because its answer decides whether the checkout's definitions
-    // are in the set, and before any server is reached, so a name matching nothing starts nothing
-    // (ADDRESS-5).
-    // The `agent` setting stands in where `--agent` named nothing, and a name it gives that matches
-    // nothing is said and the session goes on without one (ADDRESS-13).
-    // A session resumed from a record that names a definition works under it unless this command
-    // line named one, as a foreground resume does: a background process is started with the
-    // session's id alone, so the record is the only place its name survives (ADDRESS-3). The
-    // record outranks the setting, as it does for a foreground session.
-    let recorded = recorded_definition(resumed.as_ref());
+/// The definition the session works under, if any, and what is said about it.
+///
+/// Matched after the startup trust question, because its answer decides whether the checkout's
+/// definitions are in the set, and before any server is reached, so a name matching nothing starts
+/// nothing (ADDRESS-5).
+/// The `agent` setting stands in where `--agent` (`typed`) named nothing, and a name it gives that
+/// matches nothing is said and the session goes on without one (ADDRESS-13).
+/// A session resumed from a record that names a definition works under it unless this command
+/// line named one, as a foreground resume does: a background process is started with the
+/// session's id alone, so the record is the only place its name survives (ADDRESS-3). The
+/// record outranks the setting, as it does for a foreground session.
+///
+/// What ends the start is the refusal of a definition whose model is refused.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the match reads what the caller already holds, and a struct would only rename the arguments"
+)]
+fn settle_agent<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    config: &Config,
+    workspace: &Workspace,
+    home: Option<&std::path::Path>,
+    trust: &TrustStore,
+    permissions: &Permissions,
+    typed: Option<&str>,
+    resumed: Option<&bravebot_session::sessions::Record>,
+    settings: &bravebot_config::Settings,
+) -> Result<Option<bravebot_tui::state::Addressed>, ExitCode> {
+    let recorded = recorded_definition(resumed);
     let configured = settings.agent();
-    let definitions = (agent.is_some() || recorded.is_some() || configured.is_some()).then(|| {
+    let definitions = (typed.is_some() || recorded.is_some() || configured.is_some()).then(|| {
         bravebot_agent::agents::resolved(
-            &workspace,
-            home.as_deref(),
+            workspace,
+            home,
             trust.clone(),
             permissions.clone(),
             &mut RecordingSink::new(),
         )
     });
     let mut by_setting = false;
-    let agent =
-        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, configured, |name| {
-            bravebot_tui::app::definition_named(
-                &config,
-                definitions.as_ref().expect("a name was given"),
-                name,
-            )
-        }) {
-            Ok(bravebot_tui::app::Settled::Under {
-                found,
-                by_setting: setting,
-                ..
-            }) => {
-                by_setting = setting;
-                Some(found)
-            }
-            Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
-                asking.say(&t!(
-                    cli_agent_setting_gone,
-                    definition = crate::progress::printable(&name)
-                ));
-                asking.say(&crate::progress::printable_lines(&why));
-                None
-            }
-            Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
-                asking.say(&t!(
-                    session_recorded_definition_gone,
-                    definition = crate::progress::printable(&name)
-                ));
-                asking.say(&crate::progress::printable_lines(&why));
-                None
-            }
-            Ok(bravebot_tui::app::Settled::Nothing) => None,
-            // Names the definition and the model it writes, which a checkout chose (LAYER-3).
-            Err(refused) => {
-                return fail(Ending::Argument, crate::progress::printable_lines(&refused));
-            }
-        };
+    let agent = match bravebot_tui::app::settle_definition(typed, recorded, configured, |name| {
+        bravebot_tui::app::definition_named(
+            config,
+            // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
+            definitions.as_ref().expect("a name was given"),
+            name,
+        )
+    }) {
+        Ok(bravebot_tui::app::Settled::Under {
+            found,
+            by_setting: setting,
+            ..
+        }) => {
+            by_setting = setting;
+            Some(found)
+        }
+        Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
+            asking.say(&t!(
+                cli_agent_setting_gone,
+                definition = crate::progress::printable(&name)
+            ));
+            asking.say(&crate::progress::printable_lines(&why));
+            None
+        }
+        Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
+            asking.say(&t!(
+                session_recorded_definition_gone,
+                definition = crate::progress::printable(&name)
+            ));
+            asking.say(&crate::progress::printable_lines(&why));
+            None
+        }
+        Ok(bravebot_tui::app::Settled::Nothing) => None,
+        // Names the definition and the model it writes, which a checkout chose (LAYER-3).
+        Err(refused) => {
+            return Err(fail(
+                Ending::Argument,
+                crate::progress::printable_lines(&refused),
+            ));
+        }
+    };
     // With the definition's model, because the opening line named the session's before the name
     // was matched, and every prompt asks for the definition's.
     if let Some(agent) = &agent {
@@ -449,14 +456,22 @@ fn run(
             ));
         }
     }
+    Ok(agent)
+}
 
-    // After that question, and put on the same two streams every other question here is. Held for
-    // the length of the session, since dropping one stops its server.
-    let mut attached = Attached(&mut asking);
+/// The tool servers the session reaches, after the startup question and put on the same two
+/// streams every other question here is. What was said about reaching them is said.
+fn reach_servers<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    settings: &bravebot_config::Settings,
+    root: &std::path::Path,
+    skip_permissions: bool,
+) -> bravebot_agent::servers::Reached {
+    let mut attached = Attached(&mut *asking);
     let asker: &mut dyn bravebot_agent::servers::Asker = &mut attached;
     let mut reached = bravebot_agent::servers::for_this_session(
-        &settings,
-        workspace.root(),
+        settings,
+        root,
         match skip_permissions {
             true => bravebot_agent::servers::Asking::Bypass,
             false => bravebot_agent::servers::Asking::Person,
@@ -469,6 +484,265 @@ fn run(
     for note in std::mem::take(&mut reached.notes) {
         asking.say(&crate::progress::printable_lines(&note));
     }
+    reached
+}
+
+/// Says that the model in force reads no effort level where one was chosen, then signs in where the
+/// model in force needs it. `beside_turns` is where a background process's lines go.
+fn say_effort_and_sign_in<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    config: &Config,
+    named: &str,
+    reads_effort: bool,
+    effort_chosen: bool,
+    beside_turns: Option<&crate::host::Broadcast>,
+) {
+    // Said where a level was chosen and the model in force reads none, because a level charged for
+    // and discarded at the far end answers exactly like one that was honoured, so silence would
+    // leave somebody believing every turn of the session thought harder than it did. Said once,
+    // here, since neither the model nor the roster's answer about it can change while this runs.
+    //
+    // Nothing is said where no level was chosen: nothing was withheld from somebody who asked for
+    // none. What is recorded stays recorded either way, so the choice applies again the moment a
+    // model that reads one is in force (BACKEND-22).
+    if !reads_effort && effort_chosen {
+        asking.say(&t!(cli_notice, notice = t!(session_effort_not_read)));
+    }
+
+    // Before the first prompt, so a browser opening and a code to type are not interleaved with a
+    // turn. Not fatal: the turn goes ahead and fails with the backend's own account, which says
+    // more than this could guess.
+    let signed_in =
+        bravebot_agent::backend::Backend::sign_in_if_needed(
+            config,
+            named,
+            |line| match beside_turns {
+                Some(hosted) => hosted
+                    .clone()
+                    .line(&crate::progress::printable_lines(&line)),
+                None => eprintln!("{}", crate::progress::printable_lines(&line)),
+            },
+        );
+    if let Err(failure) = signed_in {
+        asking.say(&t!(
+            cli_notice,
+            notice = crate::progress::printable_lines(&failure.to_string())
+        ));
+    }
+}
+
+/// The conversation the session starts with: the one a resumed record holds, or an empty one, and
+/// a note that the turn before was cut off where the process ended in the middle of one.
+fn starting_conversation(
+    resumed: Option<&bravebot_session::sessions::Record>,
+    interrupted: bool,
+) -> bravebot_agent::conversation::Conversation {
+    let mut conversation = match resumed {
+        Some(record) => {
+            bravebot_agent::conversation::Conversation::restored(record.conversation.clone())
+        }
+        None => bravebot_agent::conversation::Conversation::new(),
+    };
+    if interrupted {
+        conversation.note_unfinished_turn();
+    }
+    conversation
+}
+
+/// The answers the session starts with: the trust map the person vouched for (TRUST-7) and the
+/// programs a resumed record holds as approved, or none.
+fn starting_answers(
+    trust: TrustStore,
+    resumed: Option<&bravebot_session::sessions::Record>,
+    root: &std::path::Path,
+) -> Answers {
+    Answers::opening(
+        trust,
+        match resumed {
+            Some(record) => record.trusted_programs(root),
+            None => TrustedPrograms::new(),
+        },
+        (),
+    )
+}
+
+/// The record a session resumes, the hold on it, and the trust map the session works under, or
+/// what ends the start before any of that is settled. A start with no map ends with success, as the
+/// panel does when the input ends.
+fn resume_and_vouch<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    workspace: &mut Workspace,
+    id: Option<&str>,
+    mode: PermissionMode,
+    home: Option<&std::path::Path>,
+    profile: Option<&std::path::Path>,
+    settings: &bravebot_config::Settings,
+) -> Result<
+    (
+        Option<bravebot_session::sessions::Record>,
+        Option<Kept>,
+        TrustStore,
+    ),
+    ExitCode,
+> {
+    // The startup question (TRUST-7), put as a line. The map a yes writes is the one the panel's
+    // yes writes, because both go through the same function; the end of the input is the third
+    // answer the panel has, and it starts no session.
+    //
+    // Not put again to a session that is started again: the map in its record is the answer it was
+    // given, as it is for a resumed foreground session.
+    let resumed = id.and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    // The names the file tools had reached, so the nested instructions and path-scoped rules they
+    // loaded are in force from the first prompt (INSTR-14, INSTR-16).
+    if let Some(record) = resumed.as_ref() {
+        workspace.restore_touched(&record.touched);
+    }
+    // The record is held from here for as long as the session runs, before anything is asked or
+    // any server is reached: a session started again for a record a terminal holds is refused,
+    // since two processes would write one record (SESSION-38).
+    let kept = match id {
+        Some(id) => match Kept::opening(workspace.root(), id, resumed.as_ref()) {
+            Ok(mut kept) => {
+                kept.answered_by_mode = mode == PermissionMode::Bypass;
+                Some(kept)
+            }
+            Err(held) => return Err(fail(Ending::Failed, held.refusal())),
+        },
+        None => None,
+    };
+    // A session started again, and the index of its workspace, are what the sweep of what has
+    // outlived the retention period must leave whatever their age (STATE-4).
+    bravebot_session::retention::at_startup(
+        settings.retention(),
+        bravebot_session::retention::InUse {
+            session: id,
+            workspace: Some(workspace.root()),
+        },
+    );
+    let Some(trust) = resumed
+        .as_ref()
+        .and_then(|record| record.trust_map(workspace.root()))
+        .or_else(|| {
+            opening_trust(
+                asking,
+                mode,
+                workspace.root(),
+                |root| bravebot_agent::trusted::honoured(home, profile, root),
+                |root| bravebot_agent::trusted::record_to_keep(home, profile, root),
+                id.unwrap_or_default(),
+            )
+        })
+    else {
+        return Err(ExitCode::SUCCESS);
+    };
+    if let Some(record) = resumed.as_ref().filter(|record| record.turns > 0) {
+        asking.say(&t!(
+            cli_plain_resumed,
+            count = t!(count_turns, count = record.turns)
+        ));
+    }
+    Ok((resumed, kept, trust))
+}
+
+fn run(
+    skip_permissions: bool,
+    agent: Option<String>,
+    prompts: bravebot_agent::turn::SystemPrompts,
+    hosting: Option<crate::host::Hosting>,
+) -> ExitCode {
+    let hosted_start = HostedStart::of(hosting.as_ref());
+    let mut config = match starting_configuration(hosting.is_some()) {
+        Ok(config) => config,
+        Err(ended) => return ended,
+    };
+
+    let settings = bravebot_config::Settings::load();
+    let mut workspace = match opening_workspace(&settings) {
+        Ok(workspace) => workspace,
+        Err(ended) => return ended,
+    };
+
+    // Somewhere of its own to write what is not part of the project, for the length of the
+    // session. Held in a binding because dropping it is what removes it.
+    let _scratch = crate::workspace::scratch_for_this_run(&mut workspace);
+
+    // There is somebody here, so the rules a settings file wrote hold as they do in a session: an
+    // allow rule says which prompts to stop raising, and this is a surface that raises them. The
+    // unattended reading, which drops every allow rule, is `-p`'s and belongs to a run nobody is
+    // watching (CLI-1).
+    let home = bravebot_agent::home::directory();
+    // The home directory rather than the state directory inside it, which is what a `~/` rule in
+    // the file is anchored at (PERM-3).
+    let profile = bravebot_agent::home::profile();
+    let (permissions, rejected) = permissions_for_a_start(
+        hosting.is_some(),
+        &settings,
+        profile.as_deref(),
+        workspace.root(),
+    );
+
+    let mode = mode_of(hosting.as_ref(), skip_permissions);
+
+    let (model, set_aside) = model_in_force(&config, &settings);
+    // A hosted session is a background process, which no person started as a launch.
+    if hosting.is_none() {
+        crate::usage_ping(&config, model.as_deref());
+    }
+    let (mut asking, mut reply, mut beside, beside_turns) = open_streams(hosting);
+    let hosted = beside_turns.is_some();
+
+    // A background process is started again by `reply`, `attach` and the supervisor without the
+    // check `bravebot bg` makes once in the terminal (BACKEND-39, BACKEND-48), so the model it
+    // settled on is checked here, before anything is asked of it. It cannot offer an import, so
+    // it ends. Said to the session's own output as well, since that is what a terminal that
+    // attaches is shown: the process has no stderr.
+    if let Some(ended) =
+        end_a_hosted_start_on_a_refused_model(hosted, &config, model.as_deref(), &mut asking)
+    {
+        return ended;
+    }
+
+    say_startup_notes(
+        &mut asking,
+        model.as_deref().unwrap_or(&config.default_model),
+        hosted_start.mode,
+        set_aside,
+        &rejected,
+        &settings,
+        profile.as_deref(),
+    );
+
+    let (resumed, mut kept, trust) = match resume_and_vouch(
+        &mut asking,
+        &mut workspace,
+        hosted_start.id.as_deref(),
+        mode,
+        home.as_deref(),
+        profile.as_deref(),
+        &settings,
+    ) {
+        Ok(opened) => opened,
+        Err(ended) => return ended,
+    };
+
+    let agent = match settle_agent(
+        &mut asking,
+        &config,
+        &workspace,
+        home.as_deref(),
+        &trust,
+        &permissions,
+        agent.as_deref(),
+        resumed.as_ref(),
+        &settings,
+    ) {
+        Ok(agent) => agent,
+        Err(ended) => return ended,
+    };
+
+    // Put on the same two streams every other question here is, after the startup question. Held
+    // for the length of the session, since dropping one stops its server.
+    let reached = reach_servers(&mut asking, &settings, workspace.root(), skip_permissions);
 
     // What compaction measures the conversation against, and whether the model in force reads an
     // effort level. A session in lines opens no picker, so the model in force here is the stored
@@ -493,36 +767,14 @@ fn run(
     // of a file, because a file edited mid-session describes the next one and this mode has no
     // command that changes the level.
     let effort = bravebot_session::store::effort(bravebot_session::store::load_effort(), &settings);
-
-    // Said where a level was chosen and the model in force reads none, because a level charged for
-    // and discarded at the far end answers exactly like one that was honoured, so silence would
-    // leave somebody believing every turn of the session thought harder than it did. Said once,
-    // here, since neither the model nor the roster's answer about it can change while this runs.
-    //
-    // Nothing is said where no level was chosen: nothing was withheld from somebody who asked for
-    // none. What is recorded stays recorded either way, so the choice applies again the moment a
-    // model that reads one is in force (BACKEND-22).
-    if !reads_effort && effort.is_some() {
-        asking.say(&t!(cli_notice, notice = t!(session_effort_not_read)));
-    }
-
-    // Before the first prompt, so a browser opening and a code to type are not interleaved with a
-    // turn. Not fatal: the turn goes ahead and fails with the backend's own account, which says
-    // more than this could guess.
-    let signed_in = bravebot_agent::backend::Backend::sign_in_if_needed(&config, &named, |line| {
-        match &beside_turns {
-            Some(hosted) => hosted
-                .clone()
-                .line(&crate::progress::printable_lines(&line)),
-            None => eprintln!("{}", crate::progress::printable_lines(&line)),
-        }
-    });
-    if let Err(failure) = signed_in {
-        asking.say(&t!(
-            cli_notice,
-            notice = crate::progress::printable_lines(&failure.to_string())
-        ));
-    }
+    say_effort_and_sign_in(
+        &mut asking,
+        &config,
+        &named,
+        reads_effort,
+        effort.is_some(),
+        beside_turns.as_ref(),
+    );
     // Resolved once, here, where the first line about it is said, and handed to the session below.
     let standing_vetting =
         standing_vetting(hosted, bravebot_session::store::auto_vetting(&settings));
@@ -544,7 +796,7 @@ fn run(
         prompts,
         output_cap: settings.run_output_cap(),
         download_cap: settings.download_max_bytes(),
-        deadlines: bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
+        deadlines: bravebot_agent::exec::Deadlines::from_settings(&settings),
         model,
         in_force: named,
         agent,
@@ -556,26 +808,8 @@ fn run(
         complained: None,
         home,
         profile,
-        conversation: {
-            let mut conversation = match &resumed {
-                Some(record) => bravebot_agent::conversation::Conversation::restored(
-                    record.conversation.clone(),
-                ),
-                None => bravebot_agent::conversation::Conversation::new(),
-            };
-            if interrupted {
-                conversation.note_unfinished_turn();
-            }
-            conversation
-        },
-        answers: Answers::opening(
-            trust,
-            match &resumed {
-                Some(record) => record.trusted_programs(workspace.root()),
-                None => TrustedPrograms::new(),
-            },
-            (),
-        ),
+        conversation: starting_conversation(resumed.as_ref(), hosted_start.interrupted),
+        answers: starting_answers(trust, resumed.as_ref(), workspace.root()),
         injected_facts: resumed
             .as_ref()
             .map(|record| record.injected_facts.clone())
@@ -583,8 +817,8 @@ fn run(
         kept,
         mcp: reached.session(),
         beside: beside_turns,
-        inbox,
-        courier,
+        inbox: hosted_start.inbox,
+        courier: hosted_start.courier,
         // Not a standing answer in a session nobody is watching: only the mode the person chose
         // answers there, so the prompts a safe verdict would have answered are held (BG-8).
         auto_vetting: standing_vetting,
@@ -974,6 +1208,9 @@ impl Running<'_> {
             .with_output_cap(self.output_cap)
             .with_download_cap(self.download_cap)
             .with_deadlines(self.deadlines)
+            // A person is watching this session, so the planner is told it is at a terminal
+            // (INSTR-9). A one-shot or goal run is not given the line: nobody may be at it.
+            .in_front_end(bravebot_agent::FrontEnd::Terminal)
             .with_confined_runs(true)
             .asking_about_unconfined(true)
             .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
@@ -1953,6 +2190,102 @@ mod tests {
         }
     }
 
+    /// BACKEND-48: a background process started again settles on a model and ends where the
+    /// machine-level layer refuses it, naming the file that refused, for each way the model is
+    /// settled: the configured default, and a recorded pick that is in force. A model the layer
+    /// allows ends nothing, and a start that is not hosted is left to the check made where it
+    /// starts.
+    ///
+    /// The faults it rejects are checking the configured default whatever the pick is (a refused
+    /// pick would be requested), checking the pick and not the default (a refused default would be
+    /// requested), ending a start whose model the layer allows, not ending a hosted start at all or
+    /// ending it without saying why to the session's output, and ending a start that is not hosted.
+    #[test]
+    fn a_hosted_start_on_a_model_the_managed_layer_refuses_is_ended() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("plain-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("a scratch directory");
+        let layered = |name: &str, text: &str| {
+            let file = root.join(name);
+            std::fs::write(&file, text).expect("a managed file");
+            let mut config = Config::from_lookup(|name| match name {
+                bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+                bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+                _ => None,
+            })
+            .expect("a configured gateway");
+            config.models = bravebot_config::Managed::at(&file).models().clone();
+            (config, file)
+        };
+        let default_model = |config: &Config| config.default_model.clone();
+
+        let (config, _) = layered("silent.json", "{}");
+        assert_eq!(refused_model(&config, None), None, "no layer refuses");
+        assert_eq!(refused_model(&config, Some("a-pick")), None, "no layer");
+
+        let (config, _) = layered("silent-again.json", "{}");
+        let denied = format!(
+            r#"{{"models": {{"deny": ["{}"]}}}}"#,
+            default_model(&config)
+        );
+        let (config, file) = layered("deny-default.json", &denied);
+        let said = refused_model(&config, None).expect("the refused default ended the start");
+        assert!(said.contains(&file.display().to_string()), "{said}");
+        assert!(said.contains(&default_model(&config)), "{said}");
+        assert_eq!(
+            refused_model(&config, Some("an-allowed-pick")),
+            None,
+            "a pick the layer allows was refused because the default is not"
+        );
+
+        let (config, file) = layered("deny-pick.json", r#"{"models": {"deny": ["a-pick"]}}"#);
+        let said =
+            refused_model(&config, Some("a-pick")).expect("the refused pick ended the start");
+        assert!(said.contains(&file.display().to_string()), "{said}");
+        assert!(said.contains("a-pick"), "{said}");
+        assert_eq!(
+            refused_model(&config, None),
+            None,
+            "the default was refused because a pick is"
+        );
+
+        let (config, _) = layered("allow-none.json", r#"{"models": {"allow": []}}"#);
+        assert!(refused_model(&config, None).is_some());
+        assert!(refused_model(&config, Some("a-pick")).is_some());
+
+        // What `run` does with that: a hosted start ends with the configuration ending and says the
+        // refusal to the session's own output, and a start that is not hosted ends nothing here.
+        let (config, file) = layered("hosted-deny.json", r#"{"models": {"deny": ["a-pick"]}}"#);
+        let mut hosted = Prompting::new(std::io::empty(), Vec::new());
+        let ended =
+            end_a_hosted_start_on_a_refused_model(true, &config, Some("a-pick"), &mut hosted);
+        assert_eq!(ended, Some(Ending::Configuration.code()));
+        let said = String::from_utf8(hosted.output).expect("what was written is text");
+        assert!(said.contains(&file.display().to_string()), "{said}");
+        assert!(said.contains("a-pick"), "{said}");
+
+        let mut foreground = Prompting::new(std::io::empty(), Vec::new());
+        let ended =
+            end_a_hosted_start_on_a_refused_model(false, &config, Some("a-pick"), &mut foreground);
+        assert_eq!(ended, None, "a start that is not hosted was ended here");
+        assert!(
+            foreground.output.is_empty(),
+            "a start that is not hosted said a refusal"
+        );
+
+        let mut allowed = Prompting::new(std::io::empty(), Vec::new());
+        let ended = end_a_hosted_start_on_a_refused_model(
+            true,
+            &config,
+            Some("an-allowed-pick"),
+            &mut allowed,
+        );
+        assert_eq!(ended, None, "a hosted start on an allowed model was ended");
+        assert!(allowed.output.is_empty());
+    }
+
     /// BG-8: a recorded choice or a settings key for automatic vetting answers a foreground session's
     /// prompts and none of a background session's.
     #[test]
@@ -2617,6 +2950,45 @@ mod tests {
                 "{surface} dropped the name: {text:?}"
             );
         }
+    }
+
+    /// #2599: the opening of a session in lines says why a file `--settings` named grants nothing
+    /// where the platform cannot hold it back from a directory a stage may write, naming the file,
+    /// and says nothing where it can. Rejects a start that leaves the withholding unsaid, or says
+    /// it for a file that grants.
+    #[test]
+    fn the_opening_says_why_a_named_file_in_a_writable_directory_grants_nothing() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/plain-named-withheld");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create the scratch directory");
+        let project = base.canonicalize().expect("canonical directory");
+        let file = project.join("override.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "off"}}"#).expect("write the named file");
+        let roots = [project.clone()];
+        let opening = |can_hold_one_file_back: bool| {
+            let settings = bravebot_config::Settings::layered_reaching(
+                None,
+                Some(&project),
+                Some(&file),
+                &roots,
+                can_hold_one_file_back,
+            );
+            let mut asking = Prompting::new(std::io::empty(), Vec::new());
+            say_startup_notes(&mut asking, "a-model", None, None, &[], &settings, None);
+            String::from_utf8(asking.output).expect("utf-8")
+        };
+        let withheld = opening(false);
+        let held_back = opening(true);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(withheld.contains("override.json"), "{withheld}");
+        assert!(withheld.contains("--settings"), "{withheld}");
+        assert!(
+            withheld.contains("read as a checkout's file is"),
+            "{withheld}"
+        );
+        assert!(!held_back.contains("override.json"), "{held_back}");
     }
 
     /// LAYER-3: the line a kept answer opens a session with names the directory and the file the

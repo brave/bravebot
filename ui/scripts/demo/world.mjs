@@ -25,7 +25,7 @@ import { _electron as electron } from 'playwright-core'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, approveTrust, trustQuestion } from '../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, BOT_GREETING, COMPOSER_SEND, APPROVE_BUTTON, approveTrust, trustQuestion } from '../drive-support.mjs'
 import { exactly } from './bots.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -166,15 +166,15 @@ export async function ensureWorld(world, opts) {
 
 /**
  * What the residents still lack: the ones not defined yet, and the ones owed a turn that have no
- * session. A read of this app's own state file, which is ours, not the agent's record format.
+ * session. A read of the bots file the world's agent keeps under its own `HOME`.
  */
 function residentsWanting(world) {
   let bots = []
   try {
-    const state = JSON.parse(readFileSync(join(world, 'userData', 'bravebot-ui.json'), 'utf8'))
+    const state = JSON.parse(readFileSync(join(world, '.bravebot', 'bots.json'), 'utf8'))
     bots = state.bots ?? []
   } catch {
-    // No state yet, or none that parses: everything is wanting, which is the right answer.
+    // No bots yet, or none that parse: everything is wanting, which is the right answer.
   }
   const missing = RESIDENT_BOTS.filter((bot) => !bots.some((have) => have.name === bot.name))
   const unspoken = RESIDENT_BOTS.filter(
@@ -240,7 +240,7 @@ async function ensureResidents(world) {
         // Opening the bot opens its conversation in its home folder, which asks the trust question
         // a new folder asks.
         await row.locator(BOT_OPEN_BUTTON).click()
-        await page.locator('[data-test="bot-greeting"]').waitFor()
+        await page.locator(BOT_GREETING).waitFor()
         if (await page.locator('.trust').isVisible().catch(() => false)) {
           await approveTrust(trustQuestion(page))
           await page.waitForTimeout(800)
@@ -294,8 +294,8 @@ async function settle(page, seconds = 180) {
         if (await choice.count()) await choice.click()
         else await block.locator('.typed').first().fill('whatever you think best')
       }
-      const approve = card.locator('.confirm-actions .approve:not(.always)').first()
-      await (await approve.count() ? approve : card.locator('.confirm-actions .approve').first()).click()
+      const approve = card.locator(`${APPROVE_BUTTON}:not(.always)`).first()
+      await (await approve.count() ? approve : card.locator(APPROVE_BUTTON).first()).click()
       await page.waitForTimeout(800)
       continue
     }

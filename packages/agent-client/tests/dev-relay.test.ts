@@ -318,6 +318,73 @@ test('the host being killed before any app connects ends the relay, which then t
   await assert.rejects(connect(launch, sockets().open), (error: unknown) => error instanceof RelayRefusedError && !error.wrongCode)
 })
 
+interface LoneRelay {
+  child: ChildProcessWithoutNullStreams
+  stderr(): string
+  exited: Promise<number | null>
+}
+
+const lone: LoneRelay[] = []
+after(() => {
+  for (const started of lone) if (started.child.exitCode === null) started.child.kill('SIGKILL')
+})
+
+/** A relay started without a host, its standard input left open, with the wait for the code set to `wait`. */
+function startRelay(wait: string): LoneRelay {
+  const child = spawn(process.execPath, [relay, '--workspace', realpathSync(tmpdir())], { env: { ...process.env, BRAVEBOT_DEV_RELAY_CODE_WAIT_MS: wait } })
+  let text = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk: string) => (text += chunk))
+  const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)))
+  const started = { child, stderr: () => text, exited }
+  lone.push(started)
+  return started
+}
+
+async function listening(started: LoneRelay): Promise<Launch> {
+  for (let waited = 0; waited < 10_000; waited += 20) {
+    const found = [...started.stderr().matchAll(LISTENING)][0]
+    if (found !== undefined) return { port: Number(found[1]), code: found[2]! }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  assert.fail(`the relay did not start listening: ${started.stderr()}`)
+}
+
+test('a connection that gives no code within the wait is closed, and the relay ends', async () => {
+  const started = startRelay('300')
+  const launch = await listening(started)
+  const socket = new WebSocket(`ws://127.0.0.1:${launch.port}`)
+  const closed = new Promise<{ code: number; reason: string }>((resolve) => socket.addEventListener('close', (event) => resolve({ code: event.code, reason: event.reason })))
+  assert.deepEqual(await within(closed, 'the relay to close the connection'), { code: 1002, reason: 'no code arrived' })
+  assert.equal(await within(started.exited, 'the relay to exit'), 1)
+  assert.match(started.stderr(), /dev-relay: no code arrived; the relay is ending\n/)
+})
+
+test('a connection that gives the code within the wait stays open after the wait has passed', async () => {
+  const started = startRelay('300')
+  const launch = await listening(started)
+  const socket = new WebSocket(`ws://127.0.0.1:${launch.port}`)
+  const greeted = new Promise<string>((resolve) => socket.addEventListener('message', (event) => resolve(String(event.data)), { once: true }))
+  let closed = false
+  socket.addEventListener('close', () => (closed = true))
+  await within(new Promise((resolve) => socket.addEventListener('open', resolve, { once: true })), 'the connection to open')
+  socket.send(launch.code)
+  assert.match(await within(greeted, 'the workspaces'), /"workspaces"/)
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  assert.equal(closed, false, 'the connection is still open')
+  assert.equal(started.child.exitCode, null, 'the relay is still running')
+  socket.close(1000, 'done')
+  assert.equal(await within(started.exited, 'the relay to exit'), 0)
+})
+
+test('a wait for the code that is not a whole number of milliseconds above 0 is refused at start', async () => {
+  for (const wait of ['0', '-5', '1.5', 'soon', '']) {
+    const started = startRelay(wait)
+    assert.equal(await within(started.exited, 'the relay to exit'), 2, `the wait ${JSON.stringify(wait)} was accepted`)
+    assert.match(started.stderr(), /BRAVEBOT_DEV_RELAY_CODE_WAIT_MS is a whole number of milliseconds above 0/)
+  }
+})
+
 test('a port or code that cannot be right is refused before anything is opened', async () => {
   const made = sockets()
   await assert.rejects(connect({ port: 0, code: '123456' }, made.open), RangeError)

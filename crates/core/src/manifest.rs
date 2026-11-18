@@ -1577,6 +1577,44 @@ mod tests {
         }
     }
 
+    /// A step that lists or searches a directory is checked as a step that reads a file is, so no
+    /// slot of a plan can stand for a path outside the workspace and the plan's deferred reads
+    /// need no reach. A plan whose listing named a directory beside the session is refused whole
+    /// before anything runs. The regression it rejects: a listing or search step whose
+    /// `directory` is not checked, which would let a bypass-reached path into a plan.
+    #[test]
+    fn a_listing_or_search_of_a_directory_outside_the_workspace_is_refused() {
+        for directory in ["/tmp/side", "../side", "~/side", "a/../../side"] {
+            for step in [
+                DraftStep::new("list_files")
+                    .with_text("directory", directory)
+                    .with_text("out_slot", "found"),
+                DraftStep::new("search")
+                    .with_text("pattern", "x")
+                    .with_text("directory", directory)
+                    .with_text("out_slot", "found"),
+            ] {
+                let err = validate(&Draft::new(vec![
+                    step,
+                    process(&["found"], "summary"),
+                    answer("summary"),
+                ]))
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        err,
+                        ManifestError::EscapingPath {
+                            step: 0,
+                            field: "directory",
+                            ..
+                        }
+                    ),
+                    "{directory} was allowed: {err:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn ordinary_relative_paths_are_accepted() {
         for path in ["README.md", "src/main.rs", "..hidden", "a..b/c"] {

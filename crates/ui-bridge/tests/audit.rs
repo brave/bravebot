@@ -84,9 +84,9 @@ fn the_live_audit_event_names_the_delegate_that_took_the_decision() {
 }
 
 /// TRACE-11: a name from a checkout can hold an escape, and the window's text node drops those
-/// without a trace. The bridge sends the words drawn by `printable` beside the event, so the
-/// window and the terminal picture a control character with one definition, and the event itself
-/// stays as the audit file holds it.
+/// without a trace. The bridge sends the words drawn by `printable_spelled` beside the event, so
+/// the window and the terminal picture a control character with one definition, and the event
+/// itself stays as the audit file holds it.
 #[test]
 fn the_live_audit_event_carries_each_string_field_drawn_by_printable() {
     let (mut sink, events) = harness();
@@ -116,8 +116,11 @@ fn the_live_audit_event_carries_each_string_field_drawn_by_printable() {
     for field in strings {
         assert_eq!(
             pictured[field].as_str(),
-            Some(bravebot_agent::confirm::printable(record[field].as_str().unwrap()).as_str()),
-            "{field} was not drawn by printable"
+            Some(
+                bravebot_agent::confirm::printable_spelled(record[field].as_str().unwrap())
+                    .as_str()
+            ),
+            "{field} was not drawn by printable_spelled"
         );
     }
     let detail = pictured["detail"].as_str().unwrap();
@@ -132,6 +135,32 @@ fn the_live_audit_event_carries_each_string_field_drawn_by_printable() {
     );
     assert!(
         record["detail"].as_str().unwrap().contains('\u{1b}'),
+        "the recorded event was changed, and the audit file holds it as it was"
+    );
+}
+
+/// TRACE-11: a bidirectional control is not a control character, so picturing control characters
+/// alone leaves it in the words, and the window would reorder the sentence around it. The bridge
+/// writes it out as `‹U+202E›`, as the terminal's trail does.
+#[test]
+fn the_live_audit_event_writes_out_a_bidirectional_control_in_a_field() {
+    let (mut sink, events) = harness();
+
+    sink.emit(gate("read_file: invoice\u{202e}fdp.exe will be read"));
+
+    let events = events.lock().expect("not poisoned");
+    let sent: Vec<&Event> = events.iter().filter(|e| e.name == "audit").collect();
+    assert_eq!(sent.len(), 1);
+    let detail = sent[0].data["pictured"]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("invoice\u{2039}U+202E\u{203a}fdp.exe") && !detail.contains('\u{202e}'),
+        "the bidirectional control was not written out: {detail:?}"
+    );
+    assert!(
+        sent[0].data["event"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains('\u{202e}'),
         "the recorded event was changed, and the audit file holds it as it was"
     );
 }

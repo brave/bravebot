@@ -86,6 +86,9 @@ pub enum ToMain {
     Ask(Asking),
     /// The task list changed. No reply.
     Todos(Vec<Row>),
+    /// Issues and pull requests the turn named, in the arguments of one call or in a result whose
+    /// label is trusted, that it had not reported before. No reply.
+    References(Vec<bravebot_agent::links::Reference>),
     /// The model has written this many output tokens so far. No reply.
     Written(u64),
     /// Cumulative usage from completed requests.
@@ -400,6 +403,14 @@ impl Reporter for RemoteReporter {
         // Deliberately ignored. Unlike a write, there is no decision resting on this arriving,
         // so a closed channel means the display is gone, not that the turn should stop.
         let _ = self.outbound.send(ToMain::Todos(rows));
+    }
+
+    fn references(&mut self, found: &[bravebot_agent::links::Reference]) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a closed channel means the display is gone, and nothing rests on the references arriving"
+        )]
+        let _ = self.outbound.send(ToMain::References(found.to_vec()));
     }
 
     fn output_tokens(&mut self, written: u64) {
@@ -1125,6 +1136,26 @@ mod tests {
         }
     }
 
+    /// What a turn found reaches the terminal as it is found, without an answer, so `/issues` and
+    /// the panel are current while the turn runs (PANEL-16).
+    ///
+    /// The fault it rejects: a reporter that keeps the references for the end of the turn, which
+    /// leaves nothing to show mid-turn and nothing at all for a turn that fails.
+    #[test]
+    fn references_a_turn_found_travel_when_found_without_an_answer() {
+        use bravebot_agent::links::{LinkKind, Reference};
+        let (outbound, inbound) = channel::<ToMain>();
+        let found = Reference::new("brave", "bravebot", 4223, LinkKind::Issue).expect("valid");
+
+        let mut reporter = RemoteReporter::new(outbound);
+        reporter.references(std::slice::from_ref(&found));
+
+        match inbound.try_recv().expect("sent at once") {
+            ToMain::References(held) => assert_eq!(held, vec![found]),
+            other => panic!("expected references, got {other:?}"),
+        }
+    }
+
     /// The worker hands the request across as it was built, for the thread that draws it.
     #[test]
     fn the_request_a_turn_built_travels_to_the_thread_that_draws_it() {
@@ -1193,6 +1224,7 @@ mod tests {
                     ToMain::Path(_) => seen.push("path"),
                     ToMain::Host(_) => seen.push("host"),
                     ToMain::Todos(_) => seen.push("todos"),
+                    ToMain::References(_) => seen.push("references"),
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),
                     ToMain::RequestBuilt(_) => seen.push("request"),

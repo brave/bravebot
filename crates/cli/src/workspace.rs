@@ -38,6 +38,7 @@ pub(crate) fn current_workspace(
         .map(|workspace| {
             workspace.with_shared_skill_directories(settings.shared_skill_directories())
         })
+        .map(|workspace| workspace.with_named_settings_file(settings.named_settings_file()))
 }
 
 /// The exit for a workspace that could not be opened, with the problem drawn: it can name a
@@ -134,13 +135,22 @@ pub(crate) fn unattended_trust_with(
     }
 }
 
+/// What opening the directories the command line named leaves the run with.
+#[derive(Debug)]
+pub(crate) struct Opened {
+    /// What the person is to be told about the ones that opened: a directory holding the working
+    /// directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is watching
+    /// to find that out.
+    pub(crate) notices: Vec<String>,
+    /// Each directory as the workspace opened it, in the order the command line named them: the
+    /// canonical path, which is what a rule about it is recorded under (TRUST-9).
+    pub(crate) directories: Vec<std::path::PathBuf>,
+}
+
 /// Open every directory the command line named, or say which one could not be opened.
 ///
-/// Reachability and nothing else. `/add-dir` grants a second thing, recording that the person
-/// vouched for the directory, and this deliberately does not: a run nobody is watching holds an
-/// empty trust map, the directory it was started in included, so a rule trusting a sibling
-/// checkout would leave the tree the run was pointed at more trusted than the one it works in.
-/// Reads there are on the same footing as reads of the project's own files.
+/// Reachability only. Whether the run trusts what it opened is decided from the map the run
+/// starts with, by [`trusting_the_added_directories`], once that map exists.
 ///
 /// A relative name, such as `--add-dir ../notes`, is resolved against the working directory
 /// first (CLI-11), through the one implementation `/cd` and `/add-dir` resolve a name against it
@@ -153,15 +163,12 @@ pub(crate) fn unattended_trust_with(
 ///
 /// A path that is not absolute once resolved, does not exist, is not a directory, or lies inside
 /// the working one is refused by the workspace, and the refusal names which.
-///
-/// Returns what the person is to be told about the ones that opened: a directory holding the
-/// working directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is
-/// watching to find that out.
 pub(crate) fn open_directories(
     workspace: &mut Workspace,
     directories: &[String],
-) -> Result<Vec<String>, String> {
+) -> Result<Opened, String> {
     let mut notices = Vec::new();
+    let mut opened = Vec::new();
     for directory in directories {
         let named = bravebot_agent::workspace::named_directory(workspace.root(), directory)
             .map_err(|problem| {
@@ -184,32 +191,109 @@ pub(crate) fn open_directories(
                 directory = added.display().to_string()
             ));
         }
+        bravebot_config::add_writable_directory(added.clone());
+        opened.push(added);
     }
-    Ok(notices)
+    Ok(Opened {
+        notices,
+        directories: opened,
+    })
 }
 
-/// The rules a one-shot run works under.
+/// The paths `--add-dir` names in `args`, read as the invocation reads them and left in place.
+pub(crate) fn add_dir_values(args: &[String]) -> Vec<String> {
+    args.windows(2)
+        .filter(|pair| pair[0] == "--add-dir")
+        .map(|pair| pair[1].trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Record the directories the command line names as ones a stage may write, before the settings
+/// are layered: on a platform that cannot hold one file back, whether the file `--settings` named
+/// may grant depends on them (#2599), and [`open_directories`] runs after the settings load.
 ///
-/// Nobody is watching one, so the allow list is left out: an allow rule answers a prompt in
-/// advance, and where there is nobody to ask it would instead be a line in a settings file letting
-/// the run write, execute or fetch unwatched, beside the flag that is meant to be the only way
-/// that happens. The deny and ask lists carry over, and both still decide something here.
+/// `expand_home` is set for a `--sandbox-allow-write` path, which the sandbox reads `~/` in, and
+/// not for `--add-dir`, which leaves `~` to the shell. A relative name is beneath the working
+/// directory, and one that does not exist is skipped, since opening it fails the run anyway.
+/// Nothing is opened or refused here.
+pub(crate) fn count_written_roots(names: &[String], expand_home: bool) {
+    let Ok(here) = std::env::current_dir() else {
+        return;
+    };
+    for name in names {
+        let typed = match name.strip_prefix("~/").filter(|_| expand_home) {
+            Some(rest) => match bravebot_agent::home::profile() {
+                Some(home) => home.join(rest),
+                None => continue,
+            },
+            None => std::path::PathBuf::from(name),
+        };
+        let path = here.join(typed);
+        if let Ok(canonical) = path.canonicalize() {
+            bravebot_config::add_writable_directory(canonical);
+        }
+    }
+}
+
+/// `trust` with each directory the command line opened vouched for, where `trust` vouches for the
+/// working directory (CLI-11, TRUST-26).
 ///
-/// With the flag, the person answered every one of those prompts themselves when they typed it, so
-/// their file is read whole.
+/// The rule `/add-dir` records in a session (TRUST-9), under the canonical path the directory was
+/// opened at, so it covers that directory and what is beneath it and nothing beside or above it.
+/// The person who trusted the directory the run works in, with `--trust-workspace`, a kept answer
+/// or the session the run carries on, also named these directories on the same command line, which
+/// is the gesture `/add-dir` is in a session whose map trusts its directory. A map that does not
+/// trust the working directory is returned as it is: a rule trusting a directory beside it would
+/// leave that directory more trusted than the tree the run works in.
+///
+/// Only `opened` is vouched for. A directory a settings file declares as a reference is opened the
+/// same way and records no trust (REFER-3), so the directories the workspace holds are not read
+/// here. Nothing is written to the store of kept answers.
+pub(crate) fn trusting_the_added_directories(
+    mut trust: bravebot_core::TrustStore,
+    opened: &[std::path::PathBuf],
+) -> bravebot_core::TrustStore {
+    if trust.is_trusted(".") {
+        for directory in opened {
+            trust.trust(&bravebot_agent::workspace::key_of(directory));
+        }
+    }
+    trust
+}
+
+/// The rules a one-shot run works under, which are the rules a session in `workspace` works under
+/// (CLI-1).
+///
+/// All three lists are read from the same layers a session reads. An allow rule states what the
+/// person wants done with an effect before it comes up, and that does not depend on whether
+/// anybody is watching. An `allow` rule a checkout's file proposed is in force only where this
+/// workspace's record already holds the person's grant of it (PERM-15): nobody is here to be asked
+/// for one, so a rule nobody granted stays out of force, as it does in a session that declines.
+///
+/// `state` is the state directory the record of grants is kept in ([`bravebot_agent::home::directory`]),
+/// taken as an argument so a test reads a record of its own; `None` reads no grant.
 pub(crate) fn rules_for_a_one_shot_run(
     settings: &bravebot_config::Settings,
+    state: Option<&Path>,
     profile: Option<&Path>,
     workspace: &Path,
-    skip_permissions: bool,
 ) -> (
     bravebot_core::permissions::Permissions,
     Vec<bravebot_core::permissions::Rejected>,
 ) {
-    match skip_permissions {
-        true => bravebot_agent::permissions::from_settings(settings, profile, workspace),
-        false => bravebot_agent::permissions::for_an_unattended_run(settings, profile, workspace),
-    }
+    let proposed = bravebot_agent::permissions::proposed(settings, profile);
+    let granted: Vec<String> = state
+        .map(|state| {
+            bravebot_agent::granted::Store::new(state, workspace)
+                .granted(&proposed)
+                .into_iter()
+                .map(|rule| rule.rule.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    bravebot_agent::permissions::with_granted(settings, &granted, profile, workspace)
 }
 
 /// The model the definition `--agent` named will ask for, where it names one the command line did
@@ -268,4 +352,56 @@ pub(crate) fn confinement_name(level: bravebot_sandbox::policy::ConfinementLevel
         ConfinementLevel::None => t!(confinement_none),
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The directories a command line names are recorded as ones a stage may write, under the path
+    /// they resolve to, and a name that does not exist is not. Rejects a count that records
+    /// nothing, records the spelling instead of the resolved path, or records a missing directory.
+    #[test]
+    fn the_directories_a_command_line_names_are_counted_as_written_roots() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/workspace-written-roots");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("real")).expect("create the scratch directory");
+        let base = base.canonicalize().expect("canonical directory");
+        let real = base.join("real");
+        let spelled = base.join("real").join("..").join("real");
+        let missing = base.join("missing");
+
+        count_written_roots(
+            &[spelled.display().to_string(), missing.display().to_string()],
+            false,
+        );
+        let counted = bravebot_config::added_writable_directories();
+        bravebot_config::close_writable_directory(&real);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(counted.contains(&real), "{counted:?}");
+        assert!(!counted.contains(&spelled), "{counted:?}");
+        assert!(!counted.contains(&missing), "{counted:?}");
+    }
+
+    /// `--add-dir` values are read from the line without taking them out of it, so the roots can
+    /// be counted before the first settings load and the invocation still parses them.
+    #[test]
+    fn add_dir_values_are_read_from_the_line_and_left_in_it() {
+        let line: Vec<String> = [
+            "--add-dir",
+            "/one",
+            "do it",
+            "--add-dir",
+            " /two ",
+            "--add-dir",
+            "  ",
+        ]
+        .iter()
+        .map(|word| word.to_string())
+        .collect();
+        assert_eq!(add_dir_values(&line), vec!["/one", "/two"]);
+        assert_eq!(line.len(), 7);
+    }
 }

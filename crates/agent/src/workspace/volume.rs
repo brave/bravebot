@@ -3,6 +3,7 @@
 //! The probes ask the file system about names and read no file's bytes.
 
 use super::destination;
+use bravebot_core::CaseFolding;
 use bravebot_core::spelling::to_key;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -68,33 +69,56 @@ pub(crate) fn one_file(one: &str, other: &str) -> bool {
 /// [`key_of`] separately: the map cannot ask the volume, since `bravebot-core` performs no I/O.
 #[must_use]
 pub fn trust_store(root: &Path) -> bravebot_core::TrustStore {
-    bravebot_core::TrustStore::new(key_of(root)).folding_case(volume_folds_case(root))
+    bravebot_core::TrustStore::new(key_of(root)).with_case_folding(volume_case_folding(root))
 }
 
-/// Whether the volume `root` is on holds two spellings differing only in case as one file.
+/// Whether the names looked up directly inside `root` are held two spellings differing only in
+/// case as one file.
 ///
-/// `false` whenever that cannot be told, because the answer only widens what a rule reaches: a
-/// rule about `Docs` covers `docs` where they are one file and would cover a different file where
-/// they are two. A volume that folds and is read as one that does not costs a missed distrust
-/// rule, which is why the answer is asked of the volume instead of being read from the platform.
+/// A filesystem can decide this per directory: ext4 and f2fs fold case in a directory carrying the
+/// casefold flag, so the workspace can fold where its parent does not and the reverse. The answer
+/// is therefore about the names inside `root`, and a name that is only looked up in `root`'s
+/// parent is not evidence for them. On Linux the flag of `root` itself is read. Where the flag is
+/// clear and the nearest lettered name folds in a directory that carries the flag, the folding
+/// belongs to that directory and `root` does not fold. In every other case the name of `root` is
+/// looked up in the other case, which is how a volume that folds as a whole answers.
+///
+/// `false` whenever that cannot be told, which is right for what a rule grants: a rule about `Docs`
+/// covers `docs` where they are one file and would cover a different file where they are two. A rule
+/// that withholds trust, a reservation of a path for a writer and a record of an untrusted file
+/// are not served by that answer, since a volume that folds and is read as one that does not costs
+/// a refused file read as trusted under another case. They ask [`volume_case_folding`], which says
+/// when the volume could not be asked.
 ///
 /// The question is put with the working directory's own name, a path the person chose, and only
 /// the answer of the filesystem is used. No file is created and no name in the tree is read.
 #[must_use]
 pub fn volume_folds_case(root: &Path) -> bool {
+    volume_case_folding(root).folds()
+}
+
+/// What the volume under `root` says about case folding: that it holds two spellings differing only
+/// in case as one file, that it holds them apart, or that it could not be asked (TRUST-2).
+///
+/// [`volume_folds_case`] with the failure kept. The trust map, the writer reservation and the memory
+/// record read it, so a volume that cannot be asked is compared as one that might fold wherever
+/// that only refuses, and as one that does not wherever it would grant. A failed probe is not
+/// remembered, so the next call asks again.
+#[must_use]
+pub fn volume_case_folding(root: &Path) -> CaseFolding {
     static ANSWERS: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> =
         std::sync::OnceLock::new();
     let answers = ANSWERS.get_or_init(Default::default);
     if let Some(known) = answers.lock().ok().and_then(|held| held.get(root).copied()) {
-        return known;
+        return known.into();
     }
-    let Some(answer) = folds_case_by(root, &file_id) else {
-        return false;
+    let Some(answer) = folds_case_by(root, &file_id, &casefold_flag) else {
+        return CaseFolding::Unknown;
     };
     if let Ok(mut held) = answers.lock() {
         held.insert(root.to_path_buf(), answer);
     }
-    answer
+    answer.into()
 }
 
 /// What the filesystem says a path is: the volume it is on and which file it names there.
@@ -144,8 +168,38 @@ pub(super) fn swapped_case(name: &str) -> String {
         .collect()
 }
 
-/// Ask `id` whether the name of `root`, or of the nearest directory above it with a letter in its
-/// name, is also the file named by the same name in the other case.
+/// The casefold flag of the directory `directory`, which decides the names looked up inside it:
+/// `Some(true)` where it is set and `Some(false)` where the filesystem reports flags and it is not.
+/// `None` where the directory cannot be opened or the filesystem reports no flags.
+#[cfg(target_os = "linux")]
+fn casefold_flag(directory: &Path) -> Option<bool> {
+    /// `FS_CASEFOLD_FL`, which `rustix::fs::IFlags` has no name for.
+    const FS_CASEFOLD_FL: u32 = 0x4000_0000;
+    use rustix::fs::{Mode, OFlags};
+    let held = rustix::fs::open(
+        directory,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .ok()?;
+    let flags = rustix::fs::ioctl_getflags(&held).ok()?;
+    Some(flags.bits() & FS_CASEFOLD_FL != 0)
+}
+
+/// Only Linux keeps the flag per directory in a way a process can read.
+#[cfg(not(target_os = "linux"))]
+fn casefold_flag(_directory: &Path) -> Option<bool> {
+    None
+}
+
+/// Whether the names looked up inside `root` fold case, from `flag`, the casefold flag of a
+/// directory, and `id`, which the name of `root` or of the nearest directory above it with a letter
+/// in its name is looked up through in the other case.
+///
+/// A set flag on `root` is the answer. Where it is clear, a name that folds in a directory with the
+/// flag set is the folding of that directory, which `root` is not part of, so the answer is no.
+/// Otherwise the lookup of the name is the answer, which is how a volume that folds as a whole
+/// (APFS, NTFS, FAT) says so whether or not it reports a flag.
 ///
 /// `None` where nothing could be asked or the filesystem gave no answer: an error, a name with no
 /// letter anywhere on the path, or a directory that is a mount point, whose name lives on the
@@ -154,7 +208,28 @@ pub(super) fn swapped_case(name: &str) -> String {
 pub(super) fn folds_case_by(
     root: &Path,
     id: &dyn Fn(&Path) -> std::io::Result<FileId>,
+    flag: &dyn Fn(&Path) -> Option<bool>,
 ) -> Option<bool> {
+    let own = flag(root);
+    if own == Some(true) {
+        return Some(true);
+    }
+    let (answer, looked_up_in) = lookup_by(root, id)?;
+    if own == Some(false) && answer && flag(looked_up_in) == Some(true) {
+        return Some(false);
+    }
+    Some(answer)
+}
+
+/// Ask `id` whether the name of `root`, or of the nearest directory above it with a letter in its
+/// name, is also the file named by the same name in the other case, and the directory the name was
+/// looked up in.
+///
+/// `None` for the reasons [`folds_case_by`] gives.
+fn lookup_by<'a>(
+    root: &'a Path,
+    id: &dyn Fn(&Path) -> std::io::Result<FileId>,
+) -> Option<(bool, &'a Path)> {
     let volume = id(root).ok()?.volume;
     let mut dir = root;
     while let Some(parent) = dir.parent() {
@@ -168,8 +243,8 @@ pub(super) fn folds_case_by(
                 // A miss is the volume saying they are two names; another file under the other
                 // spelling is the volume saying the same. Only the same file is one name.
                 return match id(&parent.join(flipped)) {
-                    Ok(other) => Some(other == here),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+                    Ok(other) => Some((other == here, parent)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some((false, parent)),
                     Err(_) => None,
                 };
             }

@@ -71,8 +71,14 @@ static PICKER: OnceLock<Option<Picker>> = OnceLock::new();
 /// Called after the colour query has finished and before any event is read. That order is not
 /// incidental: the picker writes its questions to the terminal and reads the answers straight
 /// off the tty, so it must not overlap the background-colour query (which does the same) and it
-/// must not run once the event loop is reading, which would take the replies as keystrokes. Both
-/// give up after a timeout, so a terminal that answers neither costs a short pause and no more.
+/// must not run once the event loop is reading, which would take the replies as keystrokes. A
+/// terminal that answered no earlier question is not asked, so its timeout is not spent
+/// ([`picker_for`]). What the picker reads that is not a reply is a key typed meanwhile, and it is
+/// handed to the event reader in the order it was typed; the picker reads on this thread and stops
+/// at its timeout, so no reader of the terminal is left behind it. On Windows it reads the
+/// console's input records on this thread too, taking only those the console already holds and
+/// stopping at the timeout, and hands the records that are not part of a reply to crossterm's
+/// event queue in the order they were read, so keys typed there are kept as they are on Unix.
 ///
 /// No `tmux` is started, whatever `TERM` and `TERM_PROGRAM` hold. ratatui-image 11.1.0 ran
 /// `tmux set -p allow-passthrough on` here when either named tmux, found through the `PATH` and with
@@ -81,16 +87,35 @@ static PICKER: OnceLock<Option<Picker>> = OnceLock::new();
 /// tmux and wraps its queries and pictures for it, so inside tmux a picture is drawn only where the
 /// person has set `allow-passthrough` themselves; tmux drops the sequences otherwise and the screen
 /// is what it was without pictures.
-pub fn sense() {
+pub fn sense(terminal_answers: bool) {
     PICKER.get_or_init(|| {
-        // The same request that stills the colours stills the pictures: a person who asked for a
-        // plain terminal has not asked for graphics.
-        if theme::no_color() {
-            return None;
-        }
-        let term_program = std::env::var_os("TERM_PROGRAM");
-        Picker::from_query_stdio_with_options(query_options(term_program.as_deref())).ok()
+        picker_for(terminal_answers, || {
+            let term_program = std::env::var_os("TERM_PROGRAM");
+            let mut typed = Vec::new();
+            let picker = Picker::from_query_stdio_keeping_input(
+                query_options(term_program.as_deref()),
+                &mut typed,
+            );
+            crate::input::hand_back(&typed);
+            picker.ok()
+        })
     });
+}
+
+/// The picker for this terminal, asking it with `query` only where asking can be answered.
+///
+/// A terminal that answered no earlier query is given what the query would fall back to after
+/// waiting out its timeout, without the wait, which would come before the first frame (#3846).
+fn picker_for(terminal_answers: bool, query: impl FnOnce() -> Option<Picker>) -> Option<Picker> {
+    // The same request that stills the colours stills the pictures: a person who asked for a
+    // plain terminal has not asked for graphics.
+    if theme::no_color() {
+        return None;
+    }
+    if !terminal_answers {
+        return Some(Picker::without_query());
+    }
+    query()
 }
 
 /// What the terminal is asked, given the `TERM_PROGRAM` it set.
@@ -98,13 +123,27 @@ pub fn sense() {
 /// Apple's Terminal prints the text of the Kitty graphics query at the top of the screen instead
 /// of ignoring it, and it draws no protocol that query could find, so it is not sent there. The
 /// rest of the exchange is, because the last question in it is what ends the wait for a reply.
+///
+/// The wait is [`GRAPHICS_QUERY_BOUND`] rather than the picker's two seconds. On Windows the
+/// keyboard query reads nothing from the console and always reports an answer, so the graphics
+/// query is asked there even where the console answers nothing, and its wait is all the time
+/// before the first frame (#3846).
 fn query_options(term_program: Option<&OsStr>) -> QueryStdioOptions {
-    let mut options = QueryStdioOptions::default();
+    let mut options = QueryStdioOptions {
+        timeout: GRAPHICS_QUERY_BOUND,
+        ..QueryStdioOptions::default()
+    };
     if crate::apple_terminal(term_program) {
         options.blacklist_protocols.push(ProtocolType::Kitty);
     }
     options
 }
+
+/// How long the graphics query waits for a terminal that answers nothing: the bound the keyboard
+/// query has (`app::terminal::KEYBOARD_QUERY_BOUND`). The query ends with the device status
+/// request, which a terminal answers whatever it draws, so the bound is spent only where nothing
+/// answers.
+const GRAPHICS_QUERY_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn picker() -> Option<&'static Picker> {
     PICKER.get()?.as_ref()
@@ -344,6 +383,116 @@ pub fn protocol() -> Option<ProtocolType> {
 pub(crate) mod tests {
     use super::*;
 
+    /// A terminal that answered no earlier query is not asked the graphics question, whose
+    /// unanswered wait was two of the seconds before the first frame (#3846). One that answered is.
+    #[test]
+    fn a_terminal_that_answered_nothing_is_not_asked_about_graphics() {
+        if theme::no_color() {
+            return;
+        }
+        let mut asked = false;
+        assert!(
+            picker_for(false, || {
+                asked = true;
+                None
+            })
+            .is_some()
+        );
+        assert!(
+            !asked,
+            "the graphics query was asked of a terminal that answers nothing"
+        );
+        assert!(
+            picker_for(true, || {
+                asked = true;
+                None
+            })
+            .is_none()
+        );
+        assert!(asked, "a terminal that answers was not asked");
+    }
+
+    /// Keys typed while the capability query waits are read with its replies. They are kept in
+    /// the order typed, the replies are still read, and what is read after the last reply is all
+    /// keys. The reading is ratatui-image's, in `third_party`, tested here since that crate runs no
+    /// tests of its own in this workspace.
+    #[test]
+    fn keys_read_around_the_picker_replies_are_kept_in_order() {
+        use ratatui_image::picker::{Replies, cap_parser::Response};
+        let mut replies = Replies::default();
+        replies.take(b"ab\x1b[?62;4c");
+        replies.take(b"x\x1b[");
+        replies.take(b"0nyz");
+        assert!(replies.done());
+        let (responses, typed) = replies.finish();
+        assert_eq!(responses, vec![Response::Sixel]);
+        assert_eq!(typed, b"abxyz");
+    }
+
+    /// A terminal that answers nothing: every byte the picker read is a key.
+    #[test]
+    fn keys_read_when_no_picker_reply_comes_are_all_kept() {
+        use ratatui_image::picker::Replies;
+        let mut replies = Replies::default();
+        replies.take(b"hello\r");
+        assert!(!replies.done());
+        let (responses, typed) = replies.finish();
+        assert!(responses.is_empty());
+        assert_eq!(typed, b"hello\r");
+    }
+
+    /// The Windows reader reads console records: a reply arrives as key events carrying its
+    /// characters, typed keys around and among them. The records that are no part of a reply are
+    /// kept in the order read, the release of a reply's character goes with the reply, and a key
+    /// that carries no character or a record that is no key event is kept. Rejects a reader that
+    /// keeps the releases of a reply's characters, hands back a key whose release came after a
+    /// reply character's, drops records that carry no character, or reorders what it keeps.
+    #[test]
+    fn console_records_read_around_the_picker_replies_are_kept_in_order() {
+        use ratatui_image::picker::{ConsoleReplies, cap_parser::Response};
+        let mut replies = ConsoleReplies::default();
+        let reply = |replies: &mut ConsoleReplies, text: &str| {
+            for unit in text.encode_utf16() {
+                replies.key(true, 0, unit);
+                replies.key(false, 0, unit);
+            }
+        };
+        let a = u16::from(b'a');
+        replies.key(true, 0x41, a); // 0
+        replies.key(false, 0x41, a); // 1
+        reply(&mut replies, "\x1b[?62;4"); // 2..=15
+        let c = u16::from(b'c');
+        let x = u16::from(b'x');
+        replies.key(true, 0, c); // 16, the reply's last character
+        replies.key(true, 0x58, x); // 17, typed before that character's release
+        replies.key(false, 0, c); // 18
+        replies.key(false, 0x58, x); // 19
+        reply(&mut replies, "\x1b[0n"); // 20..=27
+        replies.key(true, 0x26, 0); // 28, the up arrow
+        replies.key(false, 0x26, 0); // 29
+        replies.other(); // 30, say a focus event
+        replies.key(true, 0x59, u16::from(b'y')); // 31
+        assert!(replies.done());
+        let (responses, kept) = replies.finish();
+        assert_eq!(responses, vec![Response::Sixel]);
+        assert_eq!(kept, vec![0, 1, 17, 19, 28, 29, 30, 31]);
+    }
+
+    /// A console that answers nothing: every record the picker read is kept.
+    #[test]
+    fn console_records_read_when_no_picker_reply_comes_are_all_kept() {
+        use ratatui_image::picker::ConsoleReplies;
+        let mut replies = ConsoleReplies::default();
+        for unit in "hi\r".encode_utf16() {
+            replies.key(true, 0, unit);
+            replies.key(false, 0, unit);
+        }
+        assert!(!replies.done());
+        let (responses, kept) = replies.finish();
+        assert!(responses.is_empty());
+        assert_eq!(kept, (0..6).collect::<Vec<_>>());
+    }
+
     /// A solid-colour PNG, built here so no fixture file is needed.
     pub(crate) fn png(width: u32, height: u32) -> Vec<u8> {
         let mut out = Vec::new();
@@ -488,6 +637,22 @@ pub(crate) mod tests {
             let query = query_for(other);
             assert!(query.contains("\x1b_Gi=31,"), "{other:?}: {query:?}");
             assert!(query.ends_with("\x1b[5n"), "{other:?}: {query:?}");
+        }
+    }
+
+    /// INPUT-52: the graphics query waits at most 500 ms for a terminal that answers nothing, as the
+    /// keyboard query does. Rejects the picker's default two seconds, which on Windows, where the
+    /// graphics query is always asked, came before every first frame on a console that answers
+    /// nothing.
+    #[test]
+    fn the_graphics_query_waits_no_longer_than_the_keyboard_query() {
+        for term_program in [Some("Apple_Terminal"), Some("iTerm.app"), None] {
+            let options = query_options(term_program.map(OsStr::new));
+            assert_eq!(
+                options.timeout,
+                std::time::Duration::from_millis(500),
+                "{term_program:?}"
+            );
         }
     }
 

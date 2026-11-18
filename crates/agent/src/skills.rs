@@ -253,15 +253,9 @@ pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, Str
         // Taken whether or not this line declares anything we want. A continuation belongs to
         // the key above it however that key is spelled, and leaving one unconsumed is how a
         // wrapped sentence holding a colon becomes a key of its own.
-        let opened_at = indent_of(line);
-        let mut wrapped = Vec::new();
-        while let Some(next) = block.get(at) {
-            if !next.trim().is_empty() && indent_of(next) <= opened_at {
-                break;
-            }
-            wrapped.push(*next);
-            at += 1;
-        }
+        let end = continuation_end(&block, at);
+        let wrapped = block[at..end].to_vec();
+        at = end;
 
         let Some((key, first)) = line.split_once(':') else {
             continue;
@@ -306,6 +300,24 @@ pub(crate) fn frontmatter_lines(text: &str) -> Block<'_> {
 /// How many columns a line is indented by, which is what says whether it continues the one above.
 pub(crate) fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+/// The index one past the lines of `block` that continue the key on `block[at - 1]`.
+///
+/// A line continues the key above it when it is blank or indented deeper than the key's own line.
+/// `declarations` and the definition rewriters in `agents` all read a key's lines by this one rule.
+/// It looks only at whether a line is blank and how far it is indented, so it is the same for
+/// lines that keep their line ending and lines that do not.
+pub(crate) fn continuation_end(block: &[&str], at: usize) -> usize {
+    let opened_at = indent_of(block[at - 1]);
+    let mut end = at;
+    while let Some(next) = block.get(end) {
+        if !next.trim().is_empty() && indent_of(next) <= opened_at {
+            break;
+        }
+        end += 1;
+    }
+    end
 }
 
 /// One value, from what followed the colon and the lines indented under it.
@@ -442,11 +454,14 @@ pub struct Skill {
     body: Labelled<String>,
 }
 
-/// The three places a skill can come from, least specific first.
+/// The places a skill can come from, least specific first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     /// Written into this program.
     BuiltIn,
+    /// The skills part of an installed, enabled plugin, `~/.bravebot/plugins/<name>/skills`. The
+    /// least specific file source: any other source of the same name shadows it (PLUGIN-12).
+    Plugin,
     /// The user's own directory, `~/.bravebot/skills`.
     Home,
     /// The project's own skill directories, which the trust map vouched for.
@@ -1128,6 +1143,34 @@ fn discover_listing<S: Sink>(
     }
 
     let home_skills = home.map(|home| home.join(SKILLS));
+    // The least specific file source, so read before every other one and shadowed by any of them
+    // (PLUGIN-12). Only the skills part of an enabled plugin under the state directory, never a
+    // plugin directory of the workspace (PLUGIN-5). Trusted as `~/.bravebot/skills` is, and no more.
+    if let Some(home) = home {
+        let mut from_plugins = Catalogue::default();
+        for roots in crate::plugins::enabled_roots(home) {
+            let Some(root) = roots.skills else {
+                continue;
+            };
+            let label = format!("~/.bravebot/plugins/{}/skills", roots.plugin);
+            discover_home(
+                policy,
+                workspace,
+                &root,
+                (&label, Source::Plugin),
+                list_files,
+                &mut from_plugins,
+                &mut notices,
+            );
+        }
+        // A name another source already has is not replaced: the built-ins are in the catalogue
+        // already, and insertion replaces, so only the names still absent are taken.
+        for skill in from_plugins.entries {
+            if catalogue.get(&skill.name).is_none() {
+                catalogue.insert(skill);
+            }
+        }
+    }
     // Below `~/.bravebot/skills` in precedence, so read first, and only the ones the person named.
     // Not in a session without a home directory, which has nowhere for `~` to stand for.
     let mut passed: Vec<(&str, PathBuf, usize)> = Vec::new();
@@ -1144,7 +1187,7 @@ fn discover_listing<S: Sink>(
                 policy,
                 workspace,
                 &root,
-                label,
+                (label, Source::Home),
                 list_files,
                 &mut catalogue,
                 &mut notices,
@@ -1157,7 +1200,7 @@ fn discover_listing<S: Sink>(
             policy,
             workspace,
             root,
-            "~/.bravebot/skills",
+            ("~/.bravebot/skills", Source::Home),
             list_files,
             &mut catalogue,
             &mut notices,
@@ -1281,7 +1324,7 @@ pub fn read_beside<S: Sink>(
     }
     let mut policy = reading_policy(workspace, trust, permissions, sink)?;
     match (skill.source, &skill.reach, &skill.directory) {
-        (Source::Home, Some(reach), _) => {
+        (Source::Home | Source::Plugin, Some(reach), _) => {
             let file = reach.join(relative);
             if workspace.rule_denies_reading(&policy, &file.to_string_lossy()) {
                 return None;
@@ -1313,7 +1356,7 @@ pub fn read_beside<S: Sink>(
 /// nobody vouched for and is never held (SKILL-6).
 pub fn unlisted_beside(skill: &Skill, workspace: &Workspace) -> usize {
     let directory = match (skill.source, &skill.reach, &skill.directory) {
-        (Source::Home, Some(reach), _) => reach.clone(),
+        (Source::Home | Source::Plugin, Some(reach), _) => reach.clone(),
         (Source::Workspace, _, Some(directory)) => workspace.root().join(directory),
         _ => return 0,
     };
@@ -1336,7 +1379,7 @@ fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     root: &Path,
-    label: &str,
+    (label, source): (&str, Source),
     list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
@@ -1394,7 +1437,7 @@ fn discover_home<S: Sink>(
                     files,
                     landed: None,
                     reach: Some(directory),
-                    source: Source::Home,
+                    source,
                     runs_as,
                     unread: front.unread,
                     person_only,
@@ -1792,7 +1835,7 @@ fn counted(n: usize) -> (String, &'static str) {
 ///
 /// Sorted so a turn offers the same skills in the same order every time. An order that came from
 /// the filesystem would vary by machine, which would make the prompt vary with it.
-fn skill_directories(root: &Path) -> Vec<String> {
+pub(crate) fn skill_directories(root: &Path) -> Vec<String> {
     let mut names: Vec<String> = skill_entries(root)
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
@@ -2099,6 +2142,21 @@ mod tests {
         assert_eq!(literal.expect("parses").description, "one\n\ntwo");
         let folded = parse_frontmatter("---\nname: n\ndescription: >\n  one\n\n  two\n---\n");
         assert_eq!(folded.expect("parses").description, "one two");
+    }
+
+    /// The rule the reader and the rewriters share: blank lines and lines indented deeper than the
+    /// key continue it, a line at the key's own indent or shallower ends it, and so does the end of
+    /// the block. Lines that keep their line ending give the same answer.
+    #[test]
+    fn a_key_continues_over_blank_and_deeper_lines_and_stops_at_the_next_key() {
+        let block = ["a: >", "  one", "", "    two", "b: x", "  c", "d: y"];
+        assert_eq!(continuation_end(&block, 1), 4);
+        assert_eq!(continuation_end(&block, 5), 6);
+        assert_eq!(continuation_end(&block, 7), 7);
+        let kept = ["a:\n", "  one\n", "\n", "b:\n"];
+        assert_eq!(continuation_end(&kept, 1), 3);
+        let indented = ["  a: x\n", "  b: y\n", "    c\n"];
+        assert_eq!(continuation_end(&indented, 1), 1);
     }
 
     /// The planner already has the name and the description. Sending them again spends context

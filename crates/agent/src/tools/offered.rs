@@ -443,7 +443,11 @@ fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
          waits for the job to end or for wait_seconds to run out and returns what it printed \
          since your last look in one answer. It is still a wait inside this turn, so it cannot \
          tell you about anything that happens after the turn ends, and the account of the job's \
-         start says whether it is killed then or kept."
+         start says whether it is killed then or kept. Repeated waits on a job that is still \
+         running are not held. The same job_output call without wait_seconds, or on a job that \
+         has ended, is held at the third in a row. A wait longer than the prompt cache lifetime \
+         makes the next request write the whole conversation to the cache again, so wait_seconds \
+         is bounded under that lifetime: call again to keep watching."
     )
 }
 
@@ -1768,8 +1772,10 @@ fn table(
              browser only after that probe is refused. \
              \
              A program meant to keep running, such as a server or a watcher, needs \
-             background: true. Without it the line is waited on and stopped at its deadline \
-             ("
+             background: true. A build or test gate that may take longer than the ceiling \
+             also starts with background: true, because a foreground run is stopped at \
+             its deadline and has to be run again from the start. Without it the line is \
+             waited on and stopped at its deadline ("
                 + &format!(
                     "{deadline_default} seconds by default; set deadline_seconds to allow up to \
                      {deadline_ceiling}"
@@ -1872,7 +1878,10 @@ fn table(
                              seconds, so anything outside that becomes the nearest of the two. A \
                              command that outlasts its deadline is stopped and what it printed \
                              comes back. Has no effect with background: true, which is not waited \
-                             for at all.",
+                             for at all. A deadline longer than the prompt cache lifetime makes the \
+                             next request write the whole conversation to the cache again, so a \
+                             command expected to take that long is better started with background: \
+                             true and watched with job_output in shorter waits.",
                             crate::exec::FLOOR.as_secs()
                         )
                     },
@@ -1906,17 +1915,23 @@ fn table(
                     },
                     "wait_seconds": {
                         "type": "integer",
-                        "description": "Wait up to this many seconds instead of answering at \
-                                        once. Returns as soon as the job prints something you \
+                        "description": format!("Wait up to this many seconds instead of answering \
+                                        at once. Returns as soon as the job prints something you \
                                         have not been shown, the job ends or the user types \
-                                        a line, and at the bound if it stays silent, so a \
-                                        long wait costs nothing when the \
-                                        thing you are waiting for happens early. Between 1 and \
-                                        600. A value outside that is refused rather than \
+                                        a line, and at the bound if it stays silent. A wait \
+                                        longer than the prompt cache lifetime makes the next \
+                                        request write the whole conversation to the cache again \
+                                        and read none of it, so the bound is held under that \
+                                        lifetime: to watch longer, call again. Between {} and \
+                                        {}. A value outside that is refused rather than \
                                         adjusted, so the wait you get is the wait you asked for. \
                                         Omit it to look and answer straight away. With \
                                         until_exit it returns only when the job ends, the user \
-                                        types a line or the bound is reached."
+                                        types a line or the bound is reached. The same wait \
+                                        repeated while the job is running is not held.",
+                            crate::exec::WAIT_FLOOR.as_secs(),
+                            deadlines.wait_ceiling.as_secs().max(crate::exec::WAIT_FLOOR.as_secs())
+                        )
                     },
                     "until_exit": {
                         "type": "boolean",
@@ -2798,11 +2813,13 @@ pub fn state_confinement(
         .iter()
         .any(|tool| tool.function.name == "request_path");
     let Some(stated) = crate::confine::stated_in_the_description_for(
-        confine_runs,
         sandbox,
-        requests_offered,
-        request_path_listed,
-        crate::confine::Askable::nobody_when(nobody_to_ask),
+        crate::confine::RunStatement {
+            confine_runs,
+            requests_offered,
+            request_path_listed,
+            askable: crate::confine::Askable::nobody_when(nobody_to_ask),
+        },
     ) else {
         return;
     };
@@ -2821,7 +2838,7 @@ pub fn state_confinement(
 /// Only the names fixed in the source are listed, from [`bravebot_config::scrub::builtin_credentials`].
 /// A name a settings file wrote is removed from the program and never said here: an entry in a
 /// provider's `env` is a free-form string that may be a key pasted into the wrong field, and
-/// `run.scrubEnv` takes names from a checkout's layer as well. The statement says such variables
+/// `run.scrubEnv` is read from the person's own file alone. The statement says such variables
 /// exist, which is what lets a planner read an unset report from one of them correctly.
 ///
 /// A fact about this machine and what follows from it, with no instruction. Without the fact a

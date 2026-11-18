@@ -294,6 +294,8 @@ struct Drawn {
     lines: Vec<Line<'static>>,
     /// The line each entry begins at, in the order of the entries.
     entries: Vec<usize>,
+    /// The line after the entries' last, where what is drawn from the session's live state begins.
+    tail: usize,
     prompts: Vec<usize>,
     calls: Vec<(usize, usize, usize)>,
     pins: Vec<LinePin>,
@@ -797,6 +799,7 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Drawn {
     {
         let (lines, prompts) = request_lines(view);
         return Drawn {
+            tail: lines.len(),
             lines,
             entries: Vec::new(),
             prompts,
@@ -829,6 +832,17 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Drawn {
             width,
             height,
         ));
+        // The cells of the face are a target on each row it is drawn in, so a click on it is found
+        // where it was drawn (MOUSE-56).
+        if let Some((first, column, across)) = logo::face_at(width, height) {
+            pins.extend((0..crate::avatar::ROWS).map(|row| LinePin {
+                line: first + row,
+                column,
+                width: across,
+                padding: 0,
+                hit: Hit::Face,
+            }));
+        }
         lines.push(Line::raw(""));
     }
 
@@ -852,11 +866,13 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> Drawn {
         )
     };
 
+    let tail = lines.len();
     let closing = push_tail(session, width, opening, &mut lines);
 
     Drawn {
         lines,
         entries,
+        tail,
         prompts,
         calls,
         pins,
@@ -1281,7 +1297,10 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
         let measured = measure_kept(session, text.width);
         if measured.total > usize::from(area.height) {
             let (mut laid, offset) = draw_measured(frame, text, session, measured);
-            let track = Rect::new(area.right() - 1, area.y, 1, area.height);
+            // Beside the rows the transcript is drawn in, which are the pane's but for the row of a
+            // prompt drawn above them (VIEW-44).
+            let rows = laid.window.map_or(area, |window| window.area);
+            let track = Rect::new(area.right() - 1, rows.y, 1, rows.height);
             let bar = Bar {
                 track,
                 rows: laid.rows,
@@ -1329,20 +1348,8 @@ fn draw_measured(
         total,
     } = measured;
     let starts = entries.starts();
-
+    let (area, offset, pinned, jump) = kept_view(frame, area, session, &entries, total);
     let height = usize::from(area.height);
-    let max_offset = total.saturating_sub(height);
-    let offset = if session.scroll > 0 {
-        // The words a scroller was closed on are put at the top, where they were: the row they were
-        // on is a row of another layout (SCROLL-1).
-        session
-            .words_held()
-            .and_then(|top| row_of_words(top, starts, &entries.entries, total))
-            .unwrap_or_else(|| usize::from(session.top_row()))
-            .min(max_offset)
-    } else {
-        max_offset
-    };
 
     // The line holding the first row on the screen, and how far into it the screen starts. Lines
     // wrap alone, so wrapping from that line gives the rows a wrap of everything would.
@@ -1419,7 +1426,306 @@ fn draw_measured(
     place_pins(&mut laid, &entries.pins, row_of);
     laid.chrome = chrome_on_screen(&laid.targets, offset, area);
     place_links(&mut laid, links);
+    if let Some((row, prompt)) = pinned {
+        place_pinned(&mut laid, row, row_of(entries.entries[prompt]));
+    }
+    place_jump(&mut laid, jump);
     (laid, offset)
+}
+
+/// Where [`draw_measured`] draws the transcript in `pane`, the row of it at the top, the row a prompt
+/// was drawn in above it with the entry that prompt is, where one was (VIEW-44), and the row at the
+/// bottom of the pane the button that returns to the tail was drawn in, where one was (VIEW-45).
+fn kept_view(
+    frame: &mut Frame,
+    pane: Rect,
+    session: &Session,
+    entries: &EntryLines,
+    total: usize,
+) -> KeptView {
+    let starts = entries.starts();
+    let held = (session.scroll > 0).then(|| {
+        // The words a scroller was closed on are put at the top, where they were: the row they were
+        // on is a row of another layout (SCROLL-1).
+        session
+            .words_held()
+            .and_then(|top| row_of_words(top, starts, &entries.entries, total))
+            .unwrap_or_else(|| usize::from(session.top_row()))
+    });
+    let offset_at = |rows: u16| {
+        let max_offset = total.saturating_sub(usize::from(rows));
+        held.map_or(max_offset, |top| top.min(max_offset))
+    };
+    let head_rows = starts.last().copied().unwrap_or(0);
+    let prompt_above = |top: usize| {
+        let holding = entries
+            .entries
+            .partition_point(|&line| starts[line] <= top)
+            .checked_sub(1)?;
+        pinned_prompt(&session.transcript, holding, top >= head_rows)
+    };
+    // The view is off the tail where rows lie below it as it would be drawn without the button. Read
+    // from the rows and not from the last frame's, so that the frame that leaves the tail is the one
+    // that draws the button, and so is the frame of a view one row off the tail, whose last row a
+    // prompt drawn above the view has taken (VIEW-45).
+    let (area, offset, pinned) = pin_a_prompt(pane, offset_at, prompt_above);
+    let off_the_tail = total > offset + usize::from(area.height);
+    let (area, offset, pinned, jump) = match room_for_the_jump(pane, off_the_tail) {
+        (rest, Some(row)) => {
+            let (area, offset, pinned) = pin_a_prompt(rest, offset_at, prompt_above);
+            (area, offset, pinned, Some(row))
+        }
+        (_, None) => (area, offset, pinned, None),
+    };
+    if let Some((row, prompt)) = pinned {
+        draw_pinned(frame, row, &session.transcript[prompt]);
+    }
+    let below = total.saturating_sub(offset + usize::from(area.height));
+    (
+        area,
+        offset,
+        pinned,
+        jump.map(|row| draw_jump(frame, row, below)),
+    )
+}
+
+/// What [`kept_view`] settles: the rows the transcript is drawn in, the row of it at the top, the
+/// prompt drawn above them (VIEW-44) and the button drawn under them (VIEW-45).
+type KeptView = (Rect, usize, Option<(Rect, usize)>, Option<Jump>);
+
+/// Where the long way draws the transcript in `pane`, the row of it at the top, and the row a prompt
+/// was drawn in above it with the entry that prompt is, where one was (VIEW-44). `total` is the rows
+/// the transcript came to, and `entry_rows` where its entries begin, which only the scroller over the
+/// session's own transcript has.
+///
+/// Any view scrolled away from the tail is drawn from the row it is holding, counted from the top,
+/// and not from the offset the last frame left behind. The end of the transcript moves with every
+/// token a turn writes, so a frame drawn by counting back from it puts the view wherever the rows
+/// that arrived since the last frame have pushed it: the anchor is correct and the arithmetic
+/// reaching it is a frame out of date. Read from the top, nothing a turn appends below can move what
+/// is above it.
+fn laid_out_view(
+    frame: &mut Frame,
+    pane: Rect,
+    session: &Session,
+    total: u16,
+    entry_rows: Option<&EntryRows>,
+) -> (Rect, u16, Option<(Rect, usize)>) {
+    // A scroller at the last row, with nothing arrived since the frame that left it there, keeps the
+    // last row when the row of a prompt is taken from its view, as `G` asks. Holding the row at the
+    // top would put the last row under the screen. Rows that have arrived are below the view and stay
+    // there (SCROLL-8).
+    let at_the_end = session.scrolling() && session.scroll == 0 && total <= session.laid.rows;
+    let offset_at = |rows: u16| {
+        let max_offset = total.saturating_sub(rows);
+        usize::from(if at_the_end && rows < pane.height {
+            max_offset
+        } else if session.scrolling() || session.scroll > 0 {
+            session.top_row().min(max_offset)
+        } else {
+            max_offset
+        })
+    };
+    let prompt_above = |top: usize| {
+        let rows = entry_rows?;
+        let holding = rows
+            .begins
+            .partition_point(|&row| row <= top)
+            .checked_sub(1)?;
+        pinned_prompt(&session.transcript, holding, top >= rows.tail)
+    };
+    let (area, offset, pinned) = pin_a_prompt(pane, offset_at, prompt_above);
+    if let Some((row, prompt)) = pinned {
+        draw_pinned(frame, row, &session.transcript[prompt]);
+    }
+    (area, u16::try_from(offset).unwrap_or(u16::MAX), pinned)
+}
+
+/// The fewest rows a pane has for a prompt to be drawn above the view (VIEW-44). A shorter one keeps
+/// every row for the transcript.
+const PINNED_ROWS: u16 = 4;
+
+/// The fewest rows a pane has for the button that returns to the tail (VIEW-45): its own row and
+/// three of the transcript above it. A shorter pane keeps every row for the transcript.
+const JUMP_ROWS: u16 = 4;
+
+/// The button drawn at the bottom of the transcript: the row it is in, and the cells of the row the
+/// words of the button are drawn in, which are what a click on it is (MOUSE-55).
+#[derive(Clone, Copy)]
+struct Jump {
+    row: Rect,
+    button: Rect,
+}
+
+/// The rows of `pane` left to the transcript and the row at the bottom for the button, where the
+/// view is `off_the_tail` and the pane has room for one and the words of the button fit its width
+/// (VIEW-45).
+fn room_for_the_jump(pane: Rect, off_the_tail: bool) -> (Rect, Option<Rect>) {
+    let fits = pane.height >= JUMP_ROWS && jump_label(pane.width, 0).is_some();
+    if !(off_the_tail && fits) {
+        return (pane, None);
+    }
+    let row = Rect {
+        y: pane.bottom() - 1,
+        height: 1,
+        ..pane
+    };
+    let rest = Rect {
+        height: pane.height - 1,
+        ..pane
+    };
+    (rest, Some(row))
+}
+
+/// The words of the button in `width` columns, a blank on each side of them: with the count of the
+/// rows below where they fit, and without it where only the words do. `None` where not even the
+/// words fit (VIEW-45). Only a sentence of the catalog and a number from the layout's row geometry
+/// are in it, so it holds no bytes of what the rows contain (SCROLL-5).
+fn jump_label(width: u16, below: usize) -> Option<String> {
+    let count = u32::try_from(below).unwrap_or(u32::MAX);
+    let with_the_count = (below > 0).then(|| t!(jump_to_bottom_rows, count = count).to_string());
+    [with_the_count, Some(t!(jump_to_bottom).to_string())]
+        .into_iter()
+        .flatten()
+        .map(|words| format!(" {words} "))
+        .find(|label| wrap::display_width(label) <= usize::from(width))
+}
+
+/// Draw the button in `row`, in the middle of it, in reverse video on the brand colour so that it is
+/// told from the text around it and from the fill a selection is drawn in (VIEW-45).
+fn draw_jump(frame: &mut Frame, row: Rect, below: usize) -> Jump {
+    let label = jump_label(row.width, below).unwrap_or_default();
+    let wide = u16::try_from(wrap::display_width(&label)).unwrap_or(row.width);
+    let button = Rect {
+        x: row.x + (row.width - wide) / 2,
+        width: wide,
+        ..row
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            label,
+            Style::default()
+                .fg(theme::brand_primary())
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        ))),
+        button,
+    );
+    Jump { row, button }
+}
+
+/// Record the row the button was drawn in and the click on its words, which returns the view to the
+/// tail (MOUSE-55).
+fn place_jump(laid: &mut Laid, jump: Option<Jump>) {
+    let Some(Jump { row, button }) = jump else {
+        return;
+    };
+    laid.jump = Some(row);
+    laid.targets.push(Target::on_screen(button, Hit::ToTail));
+}
+
+/// The fewest columns a pane has for a prompt to be drawn above the view, which leave the marker
+/// room for a few words of the prompt.
+const PINNED_COLUMNS: u16 = 16;
+
+/// Where the transcript is drawn in `pane`, the row of it at the top, and the row of the pane a
+/// prompt is drawn in above it with the entry that prompt is, where one is (VIEW-44).
+///
+/// `offset_at` says the row at the top of a view of so many rows, and `prompt_above` the prompt to
+/// draw above a view whose first row is the one given. A prompt is drawn where one is to be drawn
+/// above the view the whole pane would show and above the view a row shorter shows, which at the
+/// tail is a row further down. Where the second has none, because that row is the next prompt, the
+/// whole pane is the transcript's.
+fn pin_a_prompt(
+    pane: Rect,
+    offset_at: impl Fn(u16) -> usize,
+    prompt_above: impl Fn(usize) -> Option<usize>,
+) -> (Rect, usize, Option<(Rect, usize)>) {
+    let whole = offset_at(pane.height);
+    if pane.height < PINNED_ROWS || pane.width < PINNED_COLUMNS || prompt_above(whole).is_none() {
+        return (pane, whole, None);
+    }
+    let shorter = offset_at(pane.height - 1);
+    match prompt_above(shorter) {
+        Some(prompt) => (
+            Rect {
+                y: pane.y + 1,
+                height: pane.height - 1,
+                ..pane
+            },
+            shorter,
+            Some((Rect { height: 1, ..pane }, prompt)),
+        ),
+        None => (pane, whole, None),
+    }
+}
+
+/// The prompt to draw above a view whose first row is in the entry at `holding`, or in what is drawn
+/// below the entries from the session's live state where `in_the_tail` (VIEW-44): the latest prompt
+/// at or above that entry.
+///
+/// None where that row is one of the prompt's own, since the prompt is then on the screen, where a
+/// shell command is later than the prompt, since what follows the command is not the prompt's, and
+/// where the prompt has no words to draw. Which entry is a prompt is the session's record of who
+/// spoke, and nothing in the words of any entry decides it.
+fn pinned_prompt(viewed: &[Entry], holding: usize, in_the_tail: bool) -> Option<usize> {
+    if viewed.get(holding)?.speaker == Speaker::User && !in_the_tail {
+        return None;
+    }
+    let at = viewed[..=holding]
+        .iter()
+        .rposition(|entry| matches!(entry.speaker, Speaker::User | Speaker::Shell))?;
+    let prompt = &viewed[at];
+    (prompt.speaker == Speaker::User && !prompt.text.trim().is_empty()).then_some(at)
+}
+
+/// Draw the prompt in `row`: behind the marker and in the ink a prompt is drawn in, with its words on
+/// one row (VIEW-44).
+fn draw_pinned(frame: &mut Frame, row: Rect, prompt: &Entry) {
+    let words = on_one_row(&prompt.text, usize::from(row.width).saturating_sub(2));
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("> {words}"),
+            Style::default().fg(theme::brand_primary()),
+        ))),
+        row,
+    );
+}
+
+/// The words of a prompt on one row of `room` columns: each run of blanks and line breaks is one
+/// space, and a prompt longer than the row is cut with an ellipsis.
+///
+/// No more of it is read than one character past what the row holds, so a long paste costs a row of
+/// it and not the whole of it on every frame.
+fn on_one_row(text: &str, room: usize) -> String {
+    let mut words = String::new();
+    let (mut count, mut blank) = (0usize, false);
+    for character in text.trim().chars() {
+        if character.is_whitespace() {
+            blank = true;
+            continue;
+        }
+        if blank {
+            words.push(' ');
+            count += 1;
+            blank = false;
+        }
+        words.push(character);
+        count += 1;
+        if count > room {
+            // A line after the first is what tells [`super::head_of`] that more was left out, where
+            // what was kept still fits.
+            words.push('\n');
+            break;
+        }
+    }
+    super::head_of(&words, room)
+}
+
+/// Record the row a prompt was drawn in above the view, and the click on it, which puts that prompt,
+/// beginning at row `at` of the transcript, at the top of the view (MOUSE-54).
+fn place_pinned(laid: &mut Laid, row: Rect, at: u16) {
+    laid.pinned = Some(row);
+    laid.targets.push(Target::on_screen(row, Hit::Pinned(at)));
 }
 
 /// The transcript's rows drawn on their own, for a copy to read rows that are not on the screen.
@@ -1867,13 +2173,33 @@ fn row_of_words(top: TopOfView, starts: &[usize], entries: &[usize], end: usize)
 /// line, and at rest nothing asks the question: the wheel moves by rows and never has to know
 /// which row is which.
 pub(super) fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'static>>, Laid) {
+    let (lines, laid, _) = lay_out_with_entries(session, width, height);
+    (lines, laid)
+}
+
+/// Where each entry of the session's transcript begins as the scroller lays it out, and the row its
+/// entries end at, which is where what is drawn from the session's live state begins: what decides
+/// the prompt drawn above the scroller's view (VIEW-44).
+struct EntryRows {
+    begins: Vec<usize>,
+    tail: usize,
+}
+
+/// [`lay_out`], and the [`EntryRows`] of the session's transcript where the scroller is open on it.
+/// The scroller's lay-out already measures every line, so they cost no more measuring.
+fn lay_out_with_entries(
+    session: &Session,
+    width: u16,
+    height: u16,
+) -> (Vec<Line<'static>>, Laid, Option<EntryRows>) {
     let Drawn {
         mut lines,
+        entries,
+        tail,
         prompts,
         calls,
         pins,
         closing,
-        ..
     } = with_prompts(session, width, height);
     let held = highlight(&mut lines, session.needle(), &pins);
 
@@ -1889,7 +2215,18 @@ pub(super) fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'
     };
     // A delegate's view is measured too, since the sentence that closes it is a place to click.
     if !session.scrolling() && !session.watching_a_delegate() {
-        return (lines, laid);
+        // At rest nothing is measured, but the face is a place to click on the opening screen. The
+        // lines above and on it are one row each, since the face is drawn only where the mark fits
+        // beside it, so the row of a line is its index (MOUSE-56).
+        let face: Vec<LinePin> = pins
+            .iter()
+            .filter(|pin| pin.hit == Hit::Face)
+            .copied()
+            .collect();
+        place_pins(&mut laid, &face, |line| {
+            u16::try_from(line).unwrap_or(u16::MAX)
+        });
+        return (lines, laid, None);
     }
 
     let mut prompts = prompts.into_iter().peekable();
@@ -1927,7 +2264,18 @@ pub(super) fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'
         ));
     }
     laid.rows = at;
-    (lines, laid)
+    // The scroller over the session's own transcript, and not over a delegate's view, which holds
+    // the delegate's lines and no prompt the person typed. A request's lines are drawn with no
+    // entries, so no entry holds a row of one and nothing is pinned above it.
+    let rows =
+        (session.scrolling() && is_the_transcript(session, session.viewed())).then(|| EntryRows {
+            begins: entries
+                .iter()
+                .map(|&line| usize::from(starts[line]))
+                .collect(),
+            tail: usize::from(starts[tail]),
+        });
+    (lines, laid, rows)
 }
 
 /// The transcript as the text of its lines, one to a line, as the frame draws them but without the
@@ -2024,7 +2372,7 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
     if let Some(laid) = draw_kept(frame, area, session) {
         return laid;
     }
-    let (lines, mut laid) = lay_out(session, area.width, area.height);
+    let (lines, mut laid, entry_rows) = lay_out_with_entries(session, area.width, area.height);
     let line_rows: Vec<(usize, Line<'static>)> = lines
         .iter()
         .map(|line| {
@@ -2082,19 +2430,8 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
     // many rows below the screen. The end of a wrapped reply was therefore never shown, and
     // appeared only once the next message pushed it up.
     let total = paragraph.line_count(area.width) as u16;
-    let max_offset = total.saturating_sub(area.height);
-
-    // Any view scrolled away from the tail is drawn from the row it is holding, counted from the
-    // top, and not from the offset the last frame left behind. The end of the transcript moves
-    // with every token a turn writes, so a frame drawn by counting back from it puts the view
-    // wherever the rows that arrived since the last frame have pushed it: the anchor is correct
-    // and the arithmetic reaching it is a frame out of date. Read from the top, nothing a turn
-    // appends below can move what is above it.
-    let offset = if session.scrolling() || session.scroll > 0 {
-        session.top_row().min(max_offset)
-    } else {
-        max_offset
-    };
+    let (area, offset, pinned) = laid_out_view(frame, area, session, total, entry_rows.as_ref());
+    laid.height = area.height;
 
     let (mut at, height) = (0usize, usize::from(area.height));
     for (rows, line) in line_rows {
@@ -2128,6 +2465,10 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
     });
     laid.chrome = chrome_on_screen(&laid.targets, usize::from(offset), area);
     place_links(&mut laid, links);
+    if let (Some((row, prompt)), Some(entry_rows)) = (pinned, &entry_rows) {
+        let at = entry_rows.begins[prompt];
+        place_pinned(&mut laid, row, u16::try_from(at).unwrap_or(u16::MAX));
+    }
     laid
 }
 
@@ -2330,6 +2671,39 @@ mod tests {
         );
     }
 
+    /// LAYER-3, NAME-12: a bidirectional control in a quoted name is not a control character, so
+    /// picturing controls alone leaves it in the row, where it reorders the text after it. Each one,
+    /// the override and the four isolates, is written out as its code point. Rejects a `printable`
+    /// that pictures control characters only.
+    #[test]
+    fn a_refusal_note_quoting_a_name_with_a_bidirectional_control_is_drawn_with_it_written_out() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::refused(
+                "@a\u{202e}b\u{2066}c\u{2067}d\u{2068}e\u{2069}f.txt is not a file in this project.",
+            ),
+            120,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(
+            rows,
+            [
+                "  @a\u{2039}U+202E\u{203a}b\u{2039}U+2066\u{203a}c\u{2039}U+2067\u{203a}d\
+              \u{2039}U+2068\u{203a}e\u{2039}U+2069\u{203a}f.txt is not a file in this project."
+            ]
+        );
+        for row in &rows {
+            assert!(
+                !row.chars().any(bravebot_core::invisible::draws_as_nothing),
+                "{row:?}"
+            );
+        }
+    }
+
     /// LAYER-3: a note that quotes an alias with an escape in it, as `/mcp disable` does, is drawn
     /// with the escape made visible, so no rendered row holds a control character. Rejects a note
     /// row that wraps the entry's text as it stands.
@@ -2361,6 +2735,41 @@ mod tests {
         );
     }
 
+    /// LAYER-3: a note quoting an alias with a right-to-left override in it, as `/mcp disable`
+    /// does, is drawn with the override written out, so it cannot reorder the rest of the row.
+    /// Rejects a `printable` that pictures control characters only, which leaves U+202E raw.
+    #[test]
+    fn a_mcp_note_quoting_an_alias_with_a_bidirectional_control_is_drawn_with_it_written_out() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        let settings = bravebot_config::Settings::default();
+        crate::mcp_command::run(
+            &mut session,
+            &settings,
+            std::path::Path::new("."),
+            "disable a\u{202e}bc",
+            bravebot_agent::servers::Asking::Person,
+            &mut crate::mcp_command::tests::Never,
+        );
+        let rows: Vec<String> = transcript_lines(&session, 90, 40)
+            .iter()
+            .map(text)
+            .filter(|row| !row.trim().is_empty())
+            .collect();
+        assert!(!rows.is_empty(), "no note was drawn");
+        for row in &rows {
+            assert!(
+                !row.chars().any(bravebot_core::invisible::draws_as_nothing),
+                "{row:?}"
+            );
+        }
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("a\u{2039}U+202E\u{203a}bc")),
+            "{rows:?}"
+        );
+    }
+
     /// NAME-13: a failure line can quote a name the person typed or pasted, so an escape in it is
     /// drawn as its picture and the line holds no control character. The fault this rejects is
     /// wrapping the recorded text as it is, which leaves the escape in the row.
@@ -2377,6 +2786,28 @@ mod tests {
         .map(text)
         .collect();
         assert_eq!(rows, ["  'a\u{241b}[2Jb.txt' is not text\u{2407}"]);
+    }
+
+    /// LAYER-3, NAME-13: a zero-width space and a tag character in a quoted name draw as nothing,
+    /// so a name holding them reads as another. Each is written out, the tag with the letter a
+    /// model reads it as. Rejects a `printable` that pictures control characters only.
+    #[test]
+    fn a_failure_line_quoting_a_name_with_a_zero_width_or_tag_character_is_drawn_with_it_written_out()
+     {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::failure("'a\u{200b}b\u{e0041}.txt' is not text"),
+            90,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(
+            rows,
+            ["  'a\u{2039}U+200B\u{203a}b\u{2039}U+E0041 A\u{203a}.txt' is not text"]
+        );
     }
 
     /// Who an entry is from decides how it reads: the person's words behind the marker they were
@@ -2566,6 +2997,31 @@ mod tests {
             "the name is not drawn as pictures: {text:?}"
         );
         assert!(!text.chars().any(char::is_control), "{text:?}");
+    }
+
+    /// TRACE-11, LAYER-3: a checkout's name in the trail can hold a bidirectional control, a
+    /// zero-width or a tag character, none of which is a control character. Each is written out,
+    /// so the trail line cannot be reordered or hide part of a name. Rejects a `printable` that
+    /// pictures control characters only.
+    #[test]
+    fn the_trail_a_person_opens_writes_out_a_checkouts_bidirectional_and_hidden_characters() {
+        let drawn = trail_line(&TrailLine {
+            text: "slot ref:1 holds report\u{202e}fdp.exe and a\u{200b}b\u{e0041}.txt, unread"
+                .to_string(),
+            blocked: false,
+        });
+        let text: String = drawn.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains(
+                "holds report\u{2039}U+202E\u{203a}fdp.exe and \
+                 a\u{2039}U+200B\u{203a}b\u{2039}U+E0041 A\u{203a}.txt, unread"
+            ),
+            "the name is not written out: {text:?}"
+        );
+        assert!(
+            !text.chars().any(bravebot_core::invisible::draws_as_nothing),
+            "{text:?}"
+        );
     }
 
     /// The rows of a reply as text, each with the ink of its first span after the lead.
@@ -3086,5 +3542,91 @@ mod tests {
             dim(),
             "the text kept the bold a row being worked on is drawn with: {row:?}"
         );
+    }
+
+    /// VIEW-44. Rejects: a prompt drawn above the view in a pane of fewer than four rows or sixteen
+    /// columns, and one drawn where the view a row shorter begins at the next prompt, which at the
+    /// tail is the row the prompt's own row would be taken from.
+    #[test]
+    fn a_prompt_is_pinned_only_in_a_pane_with_room_and_where_the_shorter_view_has_one_too() {
+        let above_all = |_: usize| Some(0);
+        for (width, height, pinned) in [(16, 4, true), (15, 4, false), (16, 3, false)] {
+            let pane = Rect::new(2, 5, width, height);
+            let (area, _, row) = pin_a_prompt(pane, |_| 10, above_all);
+            assert_eq!(row.is_some(), pinned, "{width} by {height}");
+            let expected = if pinned {
+                Rect::new(2, 6, width, height - 1)
+            } else {
+                pane
+            };
+            assert_eq!(area, expected, "{width} by {height}");
+        }
+
+        // At the tail a view a row shorter begins a row further down, here on the next prompt.
+        let at_the_tail = |rows: u16| 30 - usize::from(rows);
+        let not_on_row_ten = |top: usize| (top != 10).then_some(0);
+        let pane = Rect::new(0, 0, 40, 20);
+        assert_eq!(
+            pin_a_prompt(pane, at_the_tail, not_on_row_ten),
+            (pane, 10, None)
+        );
+        assert_eq!(
+            pin_a_prompt(pane, at_the_tail, |_| Some(3)),
+            (
+                Rect::new(0, 1, 40, 19),
+                11,
+                Some((Rect::new(0, 0, 40, 1), 3))
+            )
+        );
+    }
+
+    /// VIEW-44. Rejects: a prompt pinned above its own rows, a prompt pinned above what a later shell
+    /// command printed, the reply still arriving read as the prompt's own rows, and a prompt with no
+    /// words pinned as an empty row. Which entry is the prompt is the speaker the session recorded.
+    #[test]
+    fn the_prompt_pinned_is_the_latest_one_above_the_first_row_and_not_past_a_shell_command() {
+        let viewed = vec![
+            Entry::user("first"),
+            Entry::assistant("an answer", Vec::new()),
+            Entry::user("second"),
+            Entry::system("a note"),
+            Entry::shell("ls"),
+            Entry::output("a.rs"),
+            Entry::system("another note"),
+        ];
+        assert_eq!(pinned_prompt(&viewed, 1, false), Some(0));
+        assert_eq!(pinned_prompt(&viewed, 2, false), None);
+        assert_eq!(pinned_prompt(&viewed, 2, true), Some(2));
+        assert_eq!(pinned_prompt(&viewed, 3, false), Some(2));
+        assert_eq!(pinned_prompt(&viewed, 4, false), None);
+        assert_eq!(pinned_prompt(&viewed, 5, false), None);
+        assert_eq!(pinned_prompt(&viewed, 6, true), None);
+
+        let wordless = vec![
+            Entry::user(" \n "),
+            Entry::assistant("an answer", Vec::new()),
+        ];
+        assert_eq!(pinned_prompt(&wordless, 1, false), None);
+    }
+
+    /// VIEW-44. Rejects: a prompt's line breaks and runs of blanks drawn as they are, which cuts a
+    /// prompt of several lines at its first, a row wider than the room, a cut prompt with no
+    /// ellipsis, an ellipsis on a prompt that fits, and a control character handed to the terminal.
+    #[test]
+    fn a_prompt_on_one_row_joins_its_lines_and_is_cut_to_the_room() {
+        assert_eq!(
+            on_one_row("  fix the\n\n  parser\tbug  ", 40),
+            "fix the parser bug"
+        );
+        assert_eq!(on_one_row("abcdefghij", 10), "abcdefghij");
+        assert_eq!(on_one_row("abcdefghijk", 10), "abcdefghi\u{2026}");
+        assert_eq!(on_one_row("abcde fghij", 10), "abcde fgh\u{2026}");
+        let long = on_one_row(&"word ".repeat(100_000), 30);
+        assert_eq!(wrap::display_width(&long), 30);
+        assert!(long.ends_with('\u{2026}'), "{long}");
+        let wide = on_one_row(&"\u{754c}".repeat(20), 9);
+        assert!(wrap::display_width(&wide) <= 9, "{wide}");
+        assert!(wide.ends_with('\u{2026}'), "{wide}");
+        assert_eq!(on_one_row("a\u{1b}[31mb", 20), printable("a\u{1b}[31mb"));
     }
 }

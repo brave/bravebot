@@ -12,13 +12,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inheritedEnv, launchWorld } from './drive-world.mjs'
-import { TRUST_APPROVE, approveTrust, readTrust } from './drive-support.mjs'
+import { TRUST_APPROVE, approveTrust, readTrust, SHOTS_DIR } from './drive-support.mjs'
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-remembered-')))
 const home = join(root, 'home'), project = join(root, 'project '), profile = join(root, 'profile')
 const spelledProject = `"${project.slice(0, -1)}\u2423"`
 for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
-const shots = '/tmp/bravebot-ui'
+const shots = SHOTS_DIR
 mkdirSync(shots, { recursive: true })
 
 async function launch(drive, directory = project, viewport = undefined) {

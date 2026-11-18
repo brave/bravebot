@@ -13,7 +13,10 @@ on the window, or pipe it in.
 
 Type `@` and a picker opens over the workspace. Directories come first, a prefix narrows the list, a
 slash descends into a directory, and Tab completes without disturbing the rest of the sentence.
-Version-control and build directories are not offered.
+Version-control and build directories are not offered. A name that holds a tab, a zero-width
+character or another character that draws as nothing or as a space is drawn in quotes with that
+character written as `\u{..}`, so two such names cannot look like the same row. Picking one still
+writes the name itself.
 
 A fragment of a name finds it in any directory below, so `@mainrs` offers `crates/cli/src/main.rs`
 without a walk through `crates` and `cli`. The letters have to appear in the name in that order and
@@ -126,6 +129,19 @@ Compare the count with what you copied. Letters, emoji and the spellings that ne
 joiner, such as Persian and Hindi, are left as they were, and a paste that held none of them says
 nothing. Only a paste is cleaned: text you type, a path in a dropped file's name and a prompt given
 with `-p` are not. A drop onto a line armed with `!` where a name holds such a character writes nothing.
+
+### Reading a folded paste
+
+To read a folded paste whole before you send it, click its marker, or put the caret on it and press
+Alt-V (the `peek` action, which a [`keybindings`](../customize/configuration.md#keybindings) entry can
+move). The info panel opens on the pasted text under a heading such as `Pasted text #2` with its line
+count. Long lines wrap, and a control character is drawn as a visible one, so the text cannot move the
+cursor. Up, Down, PageUp, PageDown, `g`, `G` and the wheel over the panel scroll it. `q`, Escape, Ctrl-C
+and the `x` at the top right close it and put the panel back as it was.
+
+The line, the caret and the paste are not changed, and nothing is sent to a model or written to the
+session record. It works while a turn runs. A terminal too narrow for the info panel says so and opens
+nothing. Alt-V with the caret on no marker does nothing.
 
 ### Pictures
 

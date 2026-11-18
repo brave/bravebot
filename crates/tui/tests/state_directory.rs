@@ -115,8 +115,16 @@ fn a_recorded_choice_is_readable_only_by_its_owner() {
     store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
     store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
     assert!(store::save_language(Some("fr")));
+    store::save_sidebar(&["plan"]);
 
-    for file in ["model", "theme", "effort", "editor-mode", "language"] {
+    for file in [
+        "model",
+        "theme",
+        "effort",
+        "editor-mode",
+        "language",
+        "sidebar",
+    ] {
         assert_eq!(scratch.mode_of(file), 0o600, "{file}");
     }
     assert_eq!(scratch.mode_of(""), 0o700, "the directory holding them");
@@ -139,6 +147,7 @@ fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
         "vetting",
         "panel",
         "panel-width",
+        "sidebar",
         "caffeinate",
     ] {
         std::fs::create_dir_all(dir.join(file).join("held")).expect("block the name");
@@ -153,6 +162,7 @@ fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
     store::save_vetting(true);
     store::save_panel(true);
     store::save_panel_width(40);
+    store::save_sidebar(&["plan"]);
     store::save_caffeinate_confirmed();
 
     let mut left: Vec<String> = std::fs::read_dir(&dir)
@@ -178,6 +188,7 @@ fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
             "model",
             "panel",
             "panel-width",
+            "sidebar",
             "theme",
             "vetting"
         ]

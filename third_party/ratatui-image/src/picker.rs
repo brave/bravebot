@@ -2,8 +2,7 @@
 
 use std::{
     env,
-    io::{self, Read, Write},
-    sync::mpsc::Sender,
+    io::{self, Write},
 };
 
 use crate::{
@@ -113,6 +112,22 @@ impl Picker {
     ///
     /// [Text Sizing Protocol] <https://sw.kovidgoyal.net/kitty/text-sizing-protocol//>
     pub fn from_query_stdio_with_options(options: QueryStdioOptions) -> Result<Self> {
+        Self::from_query_stdio_keeping_input(options, &mut Vec::new())
+    }
+
+    /// [`Picker::from_query_stdio_with_options`], with every byte read off stdin that was not part
+    /// of a reply appended to `typed`, in the order it was read.
+    ///
+    /// Those are keys typed while the query waited. A caller that reads the terminal afterwards
+    /// hands them on rather than losing them. The query reads on the calling thread and starts no
+    /// reader that outlives it, and it reads the terminal itself rather than `Stdin`, so nothing is
+    /// left in the standard library's buffer. On Unix that is the file descriptor. On Windows it is
+    /// the console's input records, and `typed` holds each record that is not part of a reply as
+    /// the 20 bytes the record occupies in memory, which crossterm's `event::push_input` takes.
+    pub fn from_query_stdio_keeping_input(
+        options: QueryStdioOptions,
+        typed: &mut Vec<u8>,
+    ) -> Result<Self> {
         // Detect tmux, and only if positive then take some risky guess for iTerm2 support.
         let (is_tmux, tmux_proto) = detect_tmux_and_outer_protocol_from_env();
 
@@ -128,7 +143,7 @@ impl Picker {
         }
 
         // Write and read to stdin to query protocol capabilities and font-size.
-        match query_with_timeout(is_tmux, options_with_blacklist) {
+        match query_with_timeout(is_tmux, options_with_blacklist, typed) {
             Ok((capability_proto, font_size, caps)) => {
                 let iterm2_proto = iterm2_from_env();
 
@@ -166,6 +181,17 @@ impl Picker {
             }
             Err(err) => Err(err),
         }
+    }
+
+    /// The picker [`Picker::from_query_stdio_with_options`] falls back to when the terminal does not
+    /// answer, built without asking: what the environment and the font-size ioctl say.
+    pub fn without_query() -> Self {
+        let (is_tmux, tmux_proto) = detect_tmux_and_outer_protocol_from_env();
+        fallback_picker(
+            is_tmux,
+            tmux_proto.or_else(iterm2_from_env),
+            font_size_fallback(),
+        )
     }
 
     /// Create a picker that is guaranteed to only work with Halfblocks.
@@ -396,6 +422,10 @@ fn enable_raw_mode() -> Result<impl FnOnce() -> Result<()>> {
     // Disable canonical mode to read without waiting for Enter, disable echoing.
     termios.local_modes &= !LocalModes::ICANON;
     termios.local_modes &= !LocalModes::ECHO;
+    // A read returns after a tenth of a second with nothing, so the query can stop at its timeout
+    // on the thread that asked rather than leave a read blocked behind it.
+    termios.special_codes[termios::SpecialCodeIndex::VMIN] = 0;
+    termios.special_codes[termios::SpecialCodeIndex::VTIME] = 1;
     termios::tcsetattr(&stdin, OptionalActions::Drain, &termios)?;
 
     Ok(move || {
@@ -407,11 +437,16 @@ fn enable_raw_mode() -> Result<impl FnOnce() -> Result<()>> {
     })
 }
 
+/// The console's input handle, set so a read waits for no line and echoes nothing, and what puts
+/// its mode back and closes the handle. The handle is closed on every path that returns an error.
 #[cfg(windows)]
-fn enable_raw_mode() -> Result<impl FnOnce() -> Result<()>> {
+fn enable_raw_mode() -> Result<(
+    windows::Win32::Foundation::HANDLE,
+    impl FnOnce() -> Result<()>,
+)> {
     use windows::{
         Win32::{
-            Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE},
+            Foundation::{self, GENERIC_READ, GENERIC_WRITE, HANDLE},
             Storage::FileSystem::{
                 self, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
             },
@@ -438,16 +473,40 @@ fn enable_raw_mode() -> Result<impl FnOnce() -> Result<()>> {
     }?;
 
     let mut original_in_mode = CONSOLE_MODE::default();
-    unsafe { Console::GetConsoleMode(in_handle, &mut original_in_mode) }?;
+    // SAFETY: `in_handle` is the console input handle opened above, still open, and
+    // `original_in_mode` is a local the call writes and that outlives it.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let set = unsafe { Console::GetConsoleMode(in_handle, &mut original_in_mode) }.and_then(|()| {
+        let requested_in_modes =
+            !ENABLE_ECHO_INPUT & !ENABLE_LINE_INPUT & !ENABLE_PROCESSED_INPUT;
+        let in_mode = original_in_mode & requested_in_modes;
+        // SAFETY: `in_handle` is still open, and the call takes it and a mode by value and reads
+        // no memory.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        unsafe { Console::SetConsoleMode(in_handle, in_mode) }
+    });
+    if let Err(err) = set {
+        // The mode is unchanged, so closing the handle is all there is to undo.
+        // SAFETY: `in_handle` was opened above and is owned here. It is closed once, and this
+        // path returns without using it again or handing it out.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let _ = unsafe { Foundation::CloseHandle(in_handle) };
+        return Err(err.into());
+    }
 
-    let requested_in_modes = !ENABLE_ECHO_INPUT & !ENABLE_LINE_INPUT & !ENABLE_PROCESSED_INPUT;
-    let in_mode = original_in_mode & requested_in_modes;
-    unsafe { Console::SetConsoleMode(in_handle, in_mode) }?;
-
-    Ok(move || {
-        unsafe { Console::SetConsoleMode(in_handle, original_in_mode) }?;
+    Ok((in_handle, move || {
+        // SAFETY: the handle stays open until the call below closes it, and the call takes it and
+        // a mode by value and reads no memory.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let restored = unsafe { Console::SetConsoleMode(in_handle, original_in_mode) };
+        // SAFETY: the handle is the one opened above, and this closure is `FnOnce`, so it is closed
+        // once. The caller uses the copy it was handed only before calling this closure.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let closed = unsafe { Foundation::CloseHandle(in_handle) };
+        restored?;
+        closed?;
         Ok(())
-    })
+    }))
 }
 
 #[cfg(not(windows))]
@@ -473,53 +532,113 @@ fn font_size_fallback() -> Option<FontSize> {
     None
 }
 
-/// Query the terminal, by writing and reading to stdin and stdout.
-/// The terminal must be in "raw mode" and should probably be reset to "cooked mode" when this
-/// operation has completed.
+/// Query the terminal on this thread, giving up at the timeout.
 ///
-/// The returned [ProtocolType] and [FontSize] may be included in the list of [Capability]s,
-/// but the burden of picking out the right one or a font-size fallback is already resolved here.
+/// Reads the console's input records rather than `Stdin`, whose buffer would keep what it read
+/// past the replies, and reads only records the console already holds, so no read waits and none
+/// outlives the timeout. While the console holds none it sleeps for a few milliseconds and asks
+/// again, which needs no wait function from a part of the `windows` crate this one does not
+/// enable. A reply arrives as key events carrying its characters. `enable_raw_mode` clears the
+/// bits crossterm's raw mode clears (line input, echo, processed input) and keeps the rest, so the
+/// replies are read a key at a time and none is echoed, under crossterm's raw mode or without it.
+/// Every record that is not part of a reply is appended to `typed`, in the order read.
+#[cfg(windows)]
 fn query_stdio_capabilities(
     is_tmux: bool,
     options: QueryStdioOptions,
-    tx: &Sender<QueryResult>,
-) -> Result<()> {
-    // Send several control sequences at once:
-    // `_Gi=...`: Kitty graphics support.
-    // `[c`: Capabilities including sixels.
-    // `[16t`: Cell-size (perhaps we should also do `[14t`).
-    // `[1337n`: iTerm2 (some terminals implement the protocol but sadly not this custom CSI)
-    // `[5n`: Device Status Report, implemented by all terminals, ensure that there is some
-    // response and we don't hang reading forever.
+    input: windows::Win32::Foundation::HANDLE,
+    typed: &mut Vec<u8>,
+) -> Result<(Option<ProtocolType>, Option<FontSize>, Vec<Capability>)> {
+    use std::time::{Duration, Instant};
+    use windows::Win32::System::Console::{self, INPUT_RECORD, KEY_EVENT};
+
+    /// How long to sleep while the console holds no record before asking again.
+    const IDLE: Duration = Duration::from_millis(10);
+
+    let timeout = options.timeout;
     let query = Parser::query(is_tmux, options);
     io::stdout().write_all(query.as_bytes())?;
     io::stdout().flush()?;
 
-    let mut parser = Parser::new();
-    let mut responses = vec![];
-    'out: loop {
-        let mut charbuf: [u8; 50] = [0; 50];
-
-        let read = io::stdin().read(&mut charbuf)?;
-        // A read blocks a bit, keep receiver busy now.
-        tx.send(QueryResult::Busy)
-            .map_err(|_senderr| Errors::NoStdinResponse)?;
-
-        for ch in charbuf.iter().take(read) {
-            let mut more_caps = parser.push(char::from(*ch));
-            match more_caps[..] {
-                [Response::Status] => {
-                    break 'out;
-                }
-                _ => responses.append(&mut more_caps),
-            }
+    let mut replies = ConsoleReplies::default();
+    let mut records = Vec::new();
+    // From the question rather than from the last record read, so a person typing while it waits
+    // does not keep it waiting.
+    let asked = Instant::now();
+    let read = loop {
+        if replies.done() {
+            break Ok(());
         }
+        let left = timeout.saturating_sub(asked.elapsed());
+        if left.is_zero() {
+            break Err(Errors::NoStdinResponse);
+        }
+        // Asked first because a read of an empty console waits for a record with no bound.
+        let mut waiting = 0;
+        // SAFETY: `input` is the handle `enable_raw_mode` opened, which stays open until the
+        // caller restores the mode after this function returns, and `waiting` is a local the
+        // call writes.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        if let Err(err) = unsafe { Console::GetNumberOfConsoleInputEvents(input, &mut waiting) } {
+            break Err(err.into());
+        }
+        if waiting == 0 {
+            std::thread::sleep(left.min(IDLE));
+            continue;
+        }
+        let mut chunk = [INPUT_RECORD::default(); 32];
+        let mut count = 0;
+        // SAFETY: `input` is open as above. The call is given the slice `chunk` with its own
+        // length, so it writes at most that many records, and `count` is a local it writes.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        if let Err(err) = unsafe { Console::ReadConsoleInputW(input, &mut chunk, &mut count) } {
+            break Err(err.into());
+        }
+        for record in chunk.iter().take(count as usize) {
+            if u32::from(record.EventType) == KEY_EVENT {
+                // A record of this type holds a key event, and the character of one that
+                // ReadConsoleInputW read is its UTF-16 unit.
+                // SAFETY: `KEY_EVENT_RECORD` is integers only, so any bytes are a valid value, and
+                // all sixteen bytes of the union are initialised: `chunk` was zeroed and the record
+                // is one of the first `count`, which the call wrote.
+                // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+                let key = unsafe { record.Event.KeyEvent };
+                // SAFETY: both fields of `uChar` are integers over the same initialised bytes, so
+                // reading either is valid.
+                // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+                let unit = unsafe { key.uChar.UnicodeChar };
+                replies.key(key.bKeyDown.as_bool(), key.wVirtualKeyCode, unit);
+            } else {
+                replies.other();
+            }
+            records.push(console_record_bytes(record));
+        }
+    };
+    let (responses, kept) = replies.finish();
+    for at in kept {
+        typed.extend_from_slice(&records[at]);
     }
+    read?;
+    interpret_parser_responses(responses)
+}
 
-    let result = interpret_parser_responses(responses)?;
-    tx.send(QueryResult::Done(result))
-        .map_err(|_senderr| Errors::NoStdinResponse)?;
-    Ok(())
+/// A console input record as the 20 bytes it occupies in memory: its type, two bytes of padding
+/// written as zero, and its event. crossterm's `event::push_input` reads them back on Windows.
+#[cfg(windows)]
+fn console_record_bytes(record: &windows::Win32::System::Console::INPUT_RECORD) -> [u8; 20] {
+    use windows::Win32::System::Console::INPUT_RECORD_0;
+
+    let mut bytes = [0u8; 20];
+    bytes[..2].copy_from_slice(&record.EventType.to_le_bytes());
+    // The event is sixteen bytes of integers, all of them written: the buffer it was read into was
+    // zeroed and a union is copied whole.
+    // SAFETY: the sizes match, which `transmute` checks when it compiles, and `[u8; 16]` accepts
+    // any initialised bytes. Every byte is initialised: the key and mouse variants each cover all
+    // sixteen with no padding, and the record was read into a zeroed buffer.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    let event = unsafe { std::mem::transmute::<INPUT_RECORD_0, [u8; 16]>(record.Event) };
+    bytes[4..].copy_from_slice(&event);
+    bytes
 }
 
 fn interpret_parser_responses(
@@ -594,49 +713,204 @@ fn interpret_parser_responses(
     Ok((proto, font_size, capabilities))
 }
 
-enum QueryResult {
-    Done((Option<ProtocolType>, Option<FontSize>, Vec<Capability>)),
-    Err(Errors),
-    Busy,
+/// What was read in answer to the query: the replies, and the bytes that were not part of one.
+///
+/// Public, and hidden from the documentation, only so `crates/tui/src/preview.rs` can test it:
+/// this crate declares no test targets and its unit tests do not build in this workspace.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct Replies {
+    parser: Parser,
+    responses: Vec<Response>,
+    /// Every byte taken, in order.
+    taken: Vec<u8>,
+    /// Where in `taken` the bytes start that were pushed since the parser last held nothing, not
+    /// yet known to be a reply or not.
+    unclaimed: usize,
+    /// The places in `taken` of the bytes that were not part of a reply.
+    typed: Vec<usize>,
+    /// The Device Status reply, the last question's, has been read.
+    done: bool,
 }
-fn query_with_timeout(
-    is_tmux: bool,
-    options: QueryStdioOptions,
-) -> Result<(Option<ProtocolType>, Option<FontSize>, Vec<Capability>)> {
-    use std::{sync::mpsc, thread};
-    let (tx, rx) = mpsc::channel();
 
-    let timeout = options.timeout;
-    thread::spawn(move || {
-        if let Err(err) = tx
-            .send(QueryResult::Busy)
-            .map_err(|_senderr| Errors::NoStdinResponse)
-            .and_then(|_| enable_raw_mode())
-            .and_then(|disable_raw_mode| {
-                tx.send(QueryResult::Busy)
-                    .map_err(|_senderr| Errors::NoStdinResponse)?;
-                let result = query_stdio_capabilities(is_tmux, options, &tx);
-                disable_raw_mode()?;
-                result
-            })
-        {
-            // Last chance, fire and forget now.
-            let _ = tx.send(QueryResult::Err(err));
-        }
-    });
+impl Replies {
+    /// Whether the last question's reply has been read.
+    pub fn done(&self) -> bool {
+        self.done
+    }
 
-    loop {
-        match rx.recv_timeout(timeout) {
-            Ok(qresult) => match qresult {
-                QueryResult::Done(result) => return Ok(result),
-                QueryResult::Err(err) => return Err(err),
-                QueryResult::Busy => continue, // restarts the timeout
-            },
-            Err(_recverr) => {
-                return Err(Errors::NoStdinResponse);
+    pub fn take(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            let at = self.taken.len();
+            self.taken.push(*byte);
+            if self.done {
+                self.typed.push(at);
+                self.unclaimed = self.taken.len();
+                continue;
+            }
+            let mut more = self.parser.push(char::from(*byte));
+            if !more.is_empty() {
+                self.unclaimed = self.taken.len();
+                if more[..] == [Response::Status] {
+                    self.done = true;
+                } else {
+                    self.responses.append(&mut more);
+                }
+            } else if self.parser.is_idle() {
+                // An escape that ends what came before starts the next sequence, and the parser
+                // drops it on the way, so it stays with what follows it.
+                let end = self.taken.len() - usize::from(*byte == 0x1b);
+                self.typed.extend(self.unclaimed..end);
+                self.unclaimed = end;
             }
         }
     }
+
+    pub fn finish(self) -> (Vec<Response>, Vec<u8>) {
+        let taken = self.taken.clone();
+        let (responses, typed) = self.finish_at();
+        (responses, typed.into_iter().map(|at| taken[at]).collect())
+    }
+
+    /// The replies, and the places among the bytes taken of those that were not part of one.
+    pub fn finish_at(mut self) -> (Vec<Response>, Vec<usize>) {
+        self.typed.extend(self.unclaimed..self.taken.len());
+        (self.responses, self.typed)
+    }
+}
+
+/// What the Windows reader read in answer to the query, record by record: [`Replies`] over the
+/// characters key events carry, and which records are not part of a reply.
+///
+/// A console delivers a reply as key events carrying its characters, a press for each and perhaps a
+/// release. The character of each press goes to [`Replies`], and a release goes with the press of
+/// the same key and character before it, so the release of a reply's character is the reply's too.
+/// Any other record is not part of a reply. Platform-independent, and public and hidden from the
+/// documentation for the same reason as [`Replies`].
+#[doc(hidden)]
+#[derive(Default)]
+pub struct ConsoleReplies {
+    replies: Replies,
+    /// For each record taken, the press it is or is the release of, by its place in `presses`.
+    records: Vec<Option<usize>>,
+    /// For each character given to `replies`: the virtual key and the unit of its press, and
+    /// whether its release has been taken.
+    presses: Vec<(u16, u16, bool)>,
+}
+
+impl ConsoleReplies {
+    /// Whether the last question's reply has been read.
+    pub fn done(&self) -> bool {
+        self.replies.done()
+    }
+
+    /// A key event: pressed or released, its virtual key, and the UTF-16 unit it carries, or zero
+    /// where it carries none.
+    pub fn key(&mut self, down: bool, virtual_key: u16, unit: u16) {
+        if unit == 0 {
+            self.records.push(None);
+        } else if down {
+            self.records.push(Some(self.presses.len()));
+            self.presses.push((virtual_key, unit, false));
+            // No reply holds a character outside ASCII. NUL stands for one, being in no reply
+            // either, where a printable stand-in could complete one.
+            let byte = u8::try_from(unit).ok().filter(u8::is_ascii).unwrap_or(0);
+            self.replies.take(&[byte]);
+        } else {
+            let press = self.presses.iter().rposition(|&(key, carried, released)| {
+                !released && key == virtual_key && carried == unit
+            });
+            if let Some(press) = press {
+                self.presses[press].2 = true;
+            }
+            self.records.push(press);
+        }
+    }
+
+    /// A record that is not a key event.
+    pub fn other(&mut self) {
+        self.records.push(None);
+    }
+
+    /// The replies, and the places among the records taken of those that are not part of one, in
+    /// the order taken.
+    pub fn finish(self) -> (Vec<Response>, Vec<usize>) {
+        let (responses, typed) = self.replies.finish_at();
+        let mut in_reply = vec![true; self.presses.len()];
+        for press in typed {
+            in_reply[press] = false;
+        }
+        let kept = (0..self.records.len())
+            .filter(|&at| !matches!(self.records[at], Some(press) if in_reply[press]))
+            .collect();
+        (responses, kept)
+    }
+}
+
+/// Query the terminal on this thread, giving up at the timeout.
+#[cfg(not(windows))]
+fn query_stdio_capabilities(
+    is_tmux: bool,
+    options: QueryStdioOptions,
+    typed: &mut Vec<u8>,
+) -> Result<(Option<ProtocolType>, Option<FontSize>, Vec<Capability>)> {
+    use std::time::Instant;
+
+    let timeout = options.timeout;
+    let query = Parser::query(is_tmux, options);
+    io::stdout().write_all(query.as_bytes())?;
+    io::stdout().flush()?;
+
+    let stdin = io::stdin();
+    let mut replies = Replies::default();
+    // From the question rather than from the last byte read, so a person typing while it waits
+    // does not keep it waiting.
+    let asked = Instant::now();
+    let read = loop {
+        if replies.done {
+            break Ok(());
+        }
+        if asked.elapsed() >= timeout {
+            break Err(Errors::NoStdinResponse);
+        }
+        let mut chunk = [0u8; 50];
+        // The descriptor rather than `Stdin`, whose buffer would keep what it read past the reply
+        // where no later reader of the terminal looks. Returns with nothing after a tenth of a
+        // second, as `enable_raw_mode` set it to.
+        match rustix::io::read(&stdin, &mut chunk) {
+            Ok(0) | Err(rustix::io::Errno::INTR) => {}
+            Ok(n) => replies.take(&chunk[..n]),
+            Err(errno) => break Err(errno.into()),
+        }
+    };
+    let (responses, mut rest) = replies.finish();
+    typed.append(&mut rest);
+    read?;
+    interpret_parser_responses(responses)
+}
+
+#[cfg(not(windows))]
+fn query_with_timeout(
+    is_tmux: bool,
+    options: QueryStdioOptions,
+    typed: &mut Vec<u8>,
+) -> Result<(Option<ProtocolType>, Option<FontSize>, Vec<Capability>)> {
+    let disable_raw_mode = enable_raw_mode()?;
+    let result = query_stdio_capabilities(is_tmux, options, typed);
+    disable_raw_mode()?;
+    result
+}
+
+#[cfg(windows)]
+fn query_with_timeout(
+    is_tmux: bool,
+    options: QueryStdioOptions,
+    typed: &mut Vec<u8>,
+) -> Result<(Option<ProtocolType>, Option<FontSize>, Vec<Capability>)> {
+    let (input, disable_raw_mode) = enable_raw_mode()?;
+    let result = query_stdio_capabilities(is_tmux, options, input, typed);
+    disable_raw_mode()?;
+    result
 }
 
 #[cfg(test)]

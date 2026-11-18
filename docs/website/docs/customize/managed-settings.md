@@ -80,9 +80,19 @@ answered by this file and nothing else is consulted for it; these two take the s
 file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
 where it did.
 
+`"permissions": { "startInAuto": true }` is not read here. The key opens sessions in the auto mode, so
+only the file in a person's own directory and the file `--settings` names can write it, and a copy in
+this file opens nothing. `bravebot doctor` says so where this file names it. The key that would let an
+administrator remove the mode for a machine is not built yet
+([#3568](https://github.com/brave/bravebot/issues/3568)).
+
 `"crashReports": false` turns crash reports off on the machine, whatever the user's own
 `~/.bravebot/settings.json` says. It can only turn them off: `true` is not read, and a value that is
 not a boolean is ignored. See [`crashReports`](configuration.md#crashreports).
+
+`"usagePing": false` turns the daily usage ping off on the machine, whatever the user's own settings or
+the switch in `/config` say, and the switch is shown as turned off by an administrator. It can only
+turn the ping off: `true` is not read. See [`usagePing`](configuration.md#usageping).
 
 `"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
 they are added to the rules every other file wrote. A deny rule here refuses on every session on the
@@ -99,6 +109,12 @@ machine in every mode, and nothing in a checkout or in a person's own file remov
 
 A refusal names this file. A line that is not a rule is reported by `doctor` and in the session, and the
 rest of the list still applies. `allow` is never read from here, because a grant is the person's own.
+
+A key written twice in one object of this file, at any depth, is read so that the second copy erases
+nothing the first one refused. Two blocks under one key are combined, and a `deny` or `ask` list written
+twice keeps the entries of both, as do `models.deny`, `mcp.deny` and the other lists that only refuse. A
+repeated `models.allow` or `mcp.allow` keeps the entries both lists name. `doctor` names each repeated
+key with this file's path, and never what it was set to.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes, whose account pays for it, and what a session on the machine

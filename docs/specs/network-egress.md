@@ -25,6 +25,11 @@ The listener of `bravebot trigger serve` ([TRIGGER-6](triggers.md#TRIGGER-6)) ma
 so no clause here applies to it. It binds `127.0.0.1`, and each answer is a fixed status and a fixed
 page that repeats nothing from the request. What it accepts is the trigger spec's.
 
+The daily usage ping ([PING-9](usage-ping.md#PING-9)) is a request this process makes on its own
+behalf, not on a turn's. It goes through the one call like any other, with only its own address
+routed and no credential, and its reply's body is never read. What it holds and when it goes is the
+usage ping spec's.
+
 A crate that drives a turn for a surface elsewhere is under these clauses without being named by
 them. It builds no client of its own, so it is not a second egress and needs no clause here; what it
 does instead is [layering.md](layering.md)'s, and it is narrower than "reaches the network through

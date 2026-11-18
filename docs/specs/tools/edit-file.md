@@ -79,7 +79,7 @@ is offered `write_file`, that `write_file` creates or replaces a whole file.
 `verified-by: bravebot_agent::turn::under_bypass_one_read_makes_an_unread_file_editable_without_asking`
 `verified-by: bravebot_agent::turn::the_refusal_to_edit_a_file_already_asked_about_does_not_name_the_read`
 `verified-by: bravebot_core::policy::whether_a_read_would_offer_the_vouch_is_asked_without_marking_the_path`
-`verified-by: bravebot_agent::tools::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::editing::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 
 <a id="EDIT-3"></a>

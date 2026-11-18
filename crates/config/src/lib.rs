@@ -39,7 +39,9 @@ pub mod limit;
 pub mod lsp;
 mod managed;
 pub mod mcp;
+mod named_reach;
 mod obfuscate;
+pub mod plugin;
 mod run_network;
 pub mod sandbox;
 mod sandbox_filesystem;
@@ -49,8 +51,13 @@ mod settings;
 #[cfg(test)]
 mod testutil;
 pub mod time;
+pub mod usage_ping;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
+pub use named_reach::{
+    add_writable_directory, added_writable_directories, close_writable_directory, lies_inside,
+    withholds as named_file_withheld,
+};
 pub use run_network::{
     Decided, RunNetwork, resolve as resolve_run_network, run_network, settle_run_network,
     settle_run_network_in, settled_run_network,
@@ -85,12 +92,11 @@ pub const DEFAULT_MODEL: &str = "automatic-bravebot";
 ///
 /// Compiled in rather than configured: the key a person types with `bravebot auth login brave` goes
 /// to this host, so no variable or settings file is what decides where it goes. The two constants
-/// below are one value while the premium service is live only in development, and are two so that
-/// production can move without touching how the choice is made.
+/// below are two so that each environment has its own host.
 pub const DEV_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
 
 /// Where Brave's premium service is, for every other build.
-pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
+pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.com";
 
 /// The premium host compiled in for a build whose free endpoint is `free`.
 ///
@@ -1416,9 +1422,9 @@ fn resolve(
 /// Which model to request, from the three places that may name one.
 ///
 /// Ranked differently from every other value, which is why it is written out rather than going
-/// through [`resolve`]. The settings file sits *above* the baked-in value here: every release bakes
-/// in a default model, so a `model` key ranked below it would lose on every binary anybody was
-/// given, leaving a key that parses, is reported by `doctor`, and changes nothing outside a source
+/// through [`resolve`]. The settings file sits *above* the baked-in value here: a build made with a
+/// default model bakes it in, so a `model` key ranked below it would lose on every binary made that
+/// way, leaving a key that parses, is reported by `doctor`, and changes nothing outside a source
 /// build.
 ///
 /// It sits above an exported variable too, the one place a person's settings file outranks one. The
@@ -1426,7 +1432,8 @@ fn resolve(
 /// it, and a file that names a model is somebody choosing one. A variable ranked above the file
 /// would also rank above a saved `/model` pick, which answers as the person's own file does.
 /// `env.BRAVEBOT_DEFAULT_MODEL` is read last, below the baked-in value, because that block is
-/// variables and is ranked like them.
+/// variables and is ranked like them. It is read from the person's own layers alone, so a checkout's
+/// files name no model through it (BACKEND-33).
 fn resolve_model(
     from_env: Option<String>,
     settings: &Settings,
@@ -1546,8 +1553,8 @@ impl Config {
     /// [`Managed`]'s to decide.
     ///
     /// The `model` key is the other exception, and sits above the baked-in value rather than below
-    /// it. Every release bakes in a default model, so a `model` key ranked like the `env` block
-    /// would lose to it on every binary anybody was given: the key would parse, be reported by
+    /// it. A build made with a default model bakes it in, so a `model` key ranked like the `env`
+    /// block would lose to it on every binary made that way: the key would parse, be reported by
     /// `doctor`, and change nothing outside a source build. It outranks an exported variable too,
     /// for the reason [`resolve_model`] gives.
     ///
@@ -2254,9 +2261,13 @@ impl Config {
     pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
         let name = self.model_named(name);
         // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
-        // an entry may name either whichever the model was asked for as.
+        // an entry may name either whichever the model was asked for as. So does an account model,
+        // `chatgpt/gpt-5` being sent to the account as `gpt-5`.
         let Some((provider, wire)) = self.provider_for(&name) else {
-            return self.models.refuses(&name);
+            return match self.chatgpt_model(&name).or_else(|| self.xai_model(&name)) {
+                Some(wire) => self.models.refuses_any(&[&name, wire]),
+                None => self.models.refuses(&name),
+            };
         };
         let qualified = format!("{}/{wire}", provider.id);
         self.models.refuses_any(&[&name, wire, &qualified])
@@ -4976,6 +4987,51 @@ mod tests {
         }
     }
 
+    /// BACKEND-48: an account model is asked for as `chatgpt/gpt-5` or `xai/grok-4.5` and sent to the
+    /// account as `gpt-5` or `grok-4.5`, and a list entry written either way answers for the one model.
+    ///
+    /// Both accounts, each list and each spelling of the entry. A build that compared only the
+    /// qualified name requests a model whose deny entry is written as the account is sent it, and one
+    /// that handled a single account leaves the other open. A second model of the same account that no
+    /// entry names shows that an allow entry permits one model and not the whole account.
+    #[test]
+    fn an_account_model_is_matched_by_either_of_its_spellings() {
+        let resolved = |name: &str, list: &str| {
+            let managed = managed::scratch(name, &format!(r#"{{"models": {{{list}}}}}"#));
+            let config = resolved_under(&managed, &Settings::parse("{}"), |_| None, complete_env)
+                .expect("configured");
+            (config, managed)
+        };
+        for (account, model) in [("chatgpt", "gpt-5"), ("xai", "grok-4.5")] {
+            let qualified = format!("{account}/{model}");
+            let other = format!("{account}/other-model");
+            for entry in [model, qualified.as_str()] {
+                let (config, _) =
+                    resolved("account-spelling-deny", &format!(r#""deny": ["{entry}"]"#));
+                assert_eq!(
+                    config.model_refused(&qualified).map(|(_, why)| why),
+                    Some(ModelRefusal::Denied),
+                    "deny {entry}, asked {qualified}"
+                );
+                assert_eq!(config.model_refused(&other), None, "deny {entry}");
+                let (config, _) = resolved(
+                    "account-spelling-allow",
+                    &format!(r#""allow": ["{entry}"]"#),
+                );
+                assert_eq!(
+                    config.model_refused(&qualified),
+                    None,
+                    "allow {entry}, asked {qualified}"
+                );
+                assert_eq!(
+                    config.model_refused(&other).map(|(_, why)| why),
+                    Some(ModelRefusal::NotAllowed),
+                    "allow {entry}"
+                );
+            }
+        }
+    }
+
     /// BACKEND-48, and the whole reason the check is placed after tier resolution: `opus` is not a
     /// name any service knows, so a list matched against what a settings file wrote would let
     /// `{"model": "opus"}` reach the pinned account whatever either list said.
@@ -5590,6 +5646,41 @@ mod tests {
         assert_eq!(config.endpoint, "https://baked.invalid");
     }
 
+    /// BACKEND-33 through the composition: the model a checkout's `env` block names does not reach
+    /// the configuration, so the checkout does not choose which of the person's services receives
+    /// the conversation. The person's own file still does, and where it names none the compiled-in
+    /// default stands. Read through [`Settings::layered`], because [`Settings::parse`] is one root
+    /// and never withholds a name from a checkout.
+    #[test]
+    fn a_checkouts_default_model_does_not_reach_the_configuration() {
+        let root = testutil::scratch_dir("default-model-through-the-composition");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = settings::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        std::fs::write(
+            &project_file,
+            r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "checkout/model"}}"#,
+        )
+        .expect("project file");
+        let keys_only = complete_env;
+
+        let checkout = Settings::layered(Some(home.clone()), Some(&cwd), None);
+        let config = resolved(&checkout, |_| None, keys_only).expect("configured");
+        assert_eq!(config.default_model, DEFAULT_MODEL);
+
+        std::fs::write(
+            settings::user_settings_file(&home),
+            r#"{"env": {"BRAVEBOT_DEFAULT_MODEL": "person/model"}}"#,
+        )
+        .expect("user file");
+        let own = Settings::layered(Some(home), Some(&cwd), None);
+        let config = resolved(&own, |_| None, keys_only).expect("configured");
+        assert_eq!(config.default_model, "person/model");
+    }
+
     /// BACKEND-35: where the build carries nothing, a name exported blank is what the configuration
     /// holds, so the file under it is hidden and the credential is reported empty rather than
     /// answered from a file the person did not export. A composition that treated blank as absent
@@ -5648,9 +5739,9 @@ mod tests {
         assert_eq!(config.default_model, "llama-3-8b-instruct");
     }
 
-    /// The whole reason this value is ranked differently. Every release bakes a default model in, so
-    /// a `model` key ranked below it would lose on every binary anybody was given: the key would
-    /// parse, `doctor` would report it, and nothing outside a source build would change.
+    /// The whole reason this value is ranked differently. A build made with a default model bakes
+    /// it in, so a `model` key ranked below it would lose on every binary made that way: the key
+    /// would parse, `doctor` would report it, and nothing outside a source build would change.
     #[test]
     fn a_model_in_the_settings_file_outranks_the_baked_in_one() {
         let settings = Settings::parse(r#"{"model": "opus"}"#);
@@ -6224,11 +6315,10 @@ mod tests {
     /// refused while the assertions above, which compare against the constants, still held.
     #[test]
     fn the_compiled_in_premium_host_is_the_one_that_accepts_a_key() {
-        let gateway = "https://ai-gateway-api.bsg.brave.software/v1/chat/completions";
         let production = Config::from_lookup(complete_env).unwrap();
         assert_eq!(
             production.premium_chat_completions_url().as_deref(),
-            Some(gateway)
+            Some("https://ai-gateway-api.bsg.brave.com/v1/chat/completions")
         );
 
         let development = Config::from_lookup(|k| match k {
@@ -6238,7 +6328,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             development.premium_chat_completions_url().as_deref(),
-            Some(gateway)
+            Some("https://ai-gateway-api.bsg.brave.software/v1/chat/completions")
         );
     }
 
@@ -6622,5 +6712,66 @@ mod tests {
         let unchosen = Settings::parse(&format!("{{{block}}}"));
         let config = resolved(&unchosen, exported, complete_env).expect("configured");
         assert_eq!(ttls(&config), (None, None, vec![None]));
+    }
+
+    /// A checkout's `1h` over the person's `5m` or over nothing never reaches a request: the layers
+    /// are read as a session reads them and the lifetime reaches the gateway client's configuration,
+    /// the account the environment names and one a provider block names. A checkout's `5m` does.
+    #[test]
+    fn a_checkouts_long_cache_lifetime_reaches_no_account() {
+        let exported = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            other => complete_env(other),
+        };
+        let block = r#""provider": {"amazon-bedrock": {"options": {"region": "us-west-2"},
+            "models": {"anthropic.claude-sonnet-4-5": {}}}}"#;
+        let root = testutil::scratch_dir("checkout-cache-lifetime");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch cwd");
+        std::fs::create_dir_all(cwd.join(".git")).expect("scratch checkout");
+        std::fs::write(
+            home.join("settings.json"),
+            format!(r#"{{"promptCacheTtl": "5m", {block}}}"#),
+        )
+        .expect("home layer");
+        let project = cwd.join(".bravebot/settings.json");
+        let seen = |text: &str| {
+            std::fs::write(&project, text).expect("project layer");
+            let settings = Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let config = resolved(&settings, exported, complete_env).expect("configured");
+            (
+                config.prompt_cache_ttl,
+                config
+                    .bedrock
+                    .as_ref()
+                    .and_then(|account| account.cache_ttl()),
+                config
+                    .providers
+                    .iter()
+                    .filter_map(|entry| entry.bedrock.as_ref())
+                    .map(|account| account.cache_ttl())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let short = (
+            Some(CacheTtl::FiveMinutes),
+            Some(CacheTtl::FiveMinutes),
+            vec![Some(CacheTtl::FiveMinutes)],
+        );
+        assert_eq!(seen(r#"{"promptCacheTtl": "1h"}"#), short);
+        assert_eq!(seen(r#"{"promptCacheTtl": "5m"}"#), short);
+
+        // Without the person's choice, the checkout's hour leaves the service's own default.
+        std::fs::write(home.join("settings.json"), format!("{{{block}}}")).expect("home layer");
+        assert_eq!(
+            seen(r#"{"promptCacheTtl": "1h"}"#),
+            (None, None, vec![None])
+        );
+        assert_eq!(seen(r#"{"promptCacheTtl": "5m"}"#), short);
     }
 }

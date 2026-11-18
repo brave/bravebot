@@ -78,6 +78,22 @@ pub const BEDROCK_OPUS_MODEL: &str = "ANTHROPIC_DEFAULT_OPUS_MODEL";
 pub const BEDROCK_SONNET_MODEL: &str = "ANTHROPIC_DEFAULT_SONNET_MODEL";
 pub const BEDROCK_HAIKU_MODEL: &str = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
 
+/// How many times a request to the account the tier variables configure is sent again after a
+/// failure worth another attempt: `options.maxRetries` of a `provider` entry, for the account that
+/// has no entry (BACKEND-33, BACKEND-55).
+///
+/// Prefixed for this program and for Bedrock, since it moves a count for that account alone and
+/// leaves the Brave endpoint and every other service as they were. Read from the person's own
+/// layers alone: a count raised by a checkout multiplies requests billed to the person's account.
+/// Absent from ALL, along with the rest of the Bedrock names.
+pub const BEDROCK_MAX_RETRIES: &str = "BRAVEBOT_BEDROCK_MAX_RETRIES";
+
+/// The longest gap, in milliseconds, between two pieces of a reply from the account the tier
+/// variables configure before it is given up on: `options.idleTimeoutMs` of a `provider` entry, for
+/// the account that has no entry (BACKEND-33, BACKEND-55). Held to the same bounds, and read from
+/// the person's own layers alone for the same reason as [`BEDROCK_MAX_RETRIES`].
+pub const BEDROCK_IDLE_TIMEOUT_MS: &str = "BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS";
+
 /// The key a request to Google Vertex AI is sent with.
 ///
 /// A name other Google clients read, which is why it is only ever sent to the one host compiled in
@@ -122,6 +138,13 @@ pub const BEDROCK: [&str; 6] = [
     BEDROCK_HAIKU_MODEL,
 ];
 
+/// The two names that state how often a request to the tier-variable account is sent again and
+/// how long a reply from it may go quiet (BACKEND-33, BACKEND-55), read from the person's own layers
+/// alone as [`NETWORK`] is: a checkout that named them would raise the requests billed to the
+/// person's account and hold their turn on a connection that has died. Each is a count or a timer
+/// and decides nothing else.
+pub const BEDROCK_PATIENCE: [&str; 2] = [BEDROCK_MAX_RETRIES, BEDROCK_IDLE_TIMEOUT_MS];
+
 /// The two names that choose which host receives a conversation and which host the premium
 /// credential is presented to (BACKEND-33), read from the person's own layers alone as [`NETWORK`]
 /// is: a checkout that named them would choose where the conversation and the credential go. On a
@@ -129,19 +152,23 @@ pub const BEDROCK: [&str; 6] = [
 /// build from source, which bakes nothing.
 pub const ENDPOINTS: [&str; 2] = [ENDPOINT, PREMIUM_ENDPOINT];
 
-/// Every name a checkout's files decide nothing for: the network, Google, Bedrock and endpoint
-/// names. The one list the settings reader and [`is_person_only`] both use, so a set added here is
-/// withheld, reported and kept out of the merged `env` block everywhere at once.
+/// Every name a checkout's files decide nothing for: the network, Google, Bedrock, Bedrock
+/// patience and endpoint names, and [`DEFAULT_MODEL`], which chooses which of the person's
+/// configured services receives a conversation (BACKEND-33). The one list the settings reader and
+/// [`is_person_only`] both use, so a name added here is withheld, reported and kept out of the
+/// merged `env` block everywhere at once.
 pub fn person_only() -> impl Iterator<Item = &'static str> {
     NETWORK
         .into_iter()
         .chain(GOOGLE)
         .chain(BEDROCK)
+        .chain(BEDROCK_PATIENCE)
         .chain(ENDPOINTS)
+        .chain(std::iter::once(DEFAULT_MODEL))
 }
 
-/// Whether `name` is one of the network, Google, Bedrock or endpoint names, which a checkout's
-/// files decide nothing for.
+/// Whether `name` is one of the network, Google, Bedrock, Bedrock patience or endpoint names or
+/// [`DEFAULT_MODEL`], which a checkout's files decide nothing for.
 pub fn is_person_only(name: &str) -> bool {
     person_only().any(|listed| listed == name)
 }
@@ -234,6 +261,33 @@ pub const CRASH_REPORT_URL: &str = "BACKTRACE_SUBMIT_URL";
 ///
 /// Absent from ALL: it describes one person's machine rather than the build.
 pub const CRASH_REPORTS: &str = "BRAVEBOT_CRASH_REPORTS";
+
+/// Set to `0` to stop the daily usage ping.
+///
+/// With it set, no record is read, no request is made and no record is written. The `usagePing`
+/// settings key, the managed file and the switch in `/config` and the desktop settings turn the
+/// same ping off, and any one of them does. Nothing set here can turn it back on against them. Any
+/// value other than `0`, or none, leaves the ping as the others say.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const USAGE_PING: &str = "BRAVEBOT_USAGE_PING";
+
+/// The cross-program convention for asking command-line tools not to report usage.
+///
+/// Any value other than an empty one, `0` or `false` stops the daily usage ping, as
+/// [`USAGE_PING`] set to `0` does. Read only for the ping: nothing else this program sends is
+/// usage reporting.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const DO_NOT_TRACK: &str = "DO_NOT_TRACK";
+
+/// A base URL to send the daily usage ping to in place of Brave's, such as a local server that
+/// records what it was sent.
+///
+/// The path is appended to it. It changes where the ping goes and nothing about whether it goes.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const USAGE_PING_URL: &str = "BRAVEBOT_USAGE_PING_URL";
 
 /// Where the directory this session has to itself is, set on every program the agent runs.
 ///

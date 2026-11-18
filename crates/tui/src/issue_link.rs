@@ -16,9 +16,6 @@ use std::path::Path;
 /// The host the only links are made for.
 const HOST: &str = "github.com";
 
-/// The most digits a number may have, which is more than a repository's issues have reached.
-pub const MAX_DIGITS: usize = 9;
-
 /// How the matcher marks a number it found, for [`link_references`] to find on the screen.
 ///
 /// The transcript is wrapped by the widget that draws it, so where a number lands is known only
@@ -81,13 +78,7 @@ impl Repository {
     }
 }
 
-/// Whether `text` is an issue or pull request number: one to [`MAX_DIGITS`] digits, the first not
-/// a zero, since neither `#0` nor `#007` is the number of anything.
-pub fn is_number(text: &str) -> bool {
-    (1..=MAX_DIGITS).contains(&text.len())
-        && text.bytes().all(|byte| byte.is_ascii_digit())
-        && !text.starts_with('0')
-}
+pub use bravebot_agent::links::is_number;
 
 /// The schemes a remote's address may begin with.
 const SCHEMES: [&str; 6] = ["https", "http", "ssh", "git", "git+ssh", "ssh+git"];

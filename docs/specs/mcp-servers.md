@@ -347,8 +347,12 @@ somebody wrote there; a `request` that is `null` holds nothing to lose, and is r
 reads every file before it writes any, so one it cannot read leaves the alias in all of them rather
 than gone from some, and reads a file two scopes name once: run from the directory the state
 directory is in, the checkout's `.bravebot/settings.json` is the user's own. In a checkout, a link at
-`.bravebot` or at the file is refused and not followed: it arrived with the clone, so where it leads
-is the choice of whoever wrote the checkout. A file in the state directory is written through a link,
+`.bravebot` or at the file is refused and not followed where it leads outside the checkout: it
+arrived with the clone, so where it leads is the choice of whoever wrote the checkout, and it can
+name any file of the person's. A link that ends at a file inside the checkout is written through and
+stays a link, as the repository's own `.bravebot/settings.json` that points at `agents/settings.json`
+does. A link that ends in the checkout's `.git`, in the state directory where the checkout holds it,
+or at nothing is refused. A file in the state directory is written through a link,
 as an import writes it, whichever scope named it. The links are looked at again just before the
 write, so one made while the question waited is refused too.
 
@@ -360,6 +364,7 @@ write, so one made while the question waited is refused too.
 `verified-by: bravebot_cli::mcp::enable_adds_the_alias_once_and_keeps_the_rest_of_the_file`
 `verified-by: bravebot_cli::mcp::enable_leaves_a_settings_file_it_cannot_add_to_as_it_is`
 `verified-by: bravebot_cli::mcp::enable_writes_through_no_link_in_a_checkout`
+`verified-by: bravebot_cli::mcp::a_link_that_stays_in_the_checkout_is_written_through_and_one_that_leaves_it_is_not`
 `verified-by: bravebot_cli::mcp::disable_takes_the_request_out_of_each_file_that_holds_it`
 `verified-by: bravebot_cli::mcp::disable_writes_no_file_where_one_cannot_be_read`
 `verified-by: bravebot_cli::mcp::disable_where_the_state_directory_is_writes_its_file_once`
@@ -789,11 +794,10 @@ or `mcp-approved`, is left as it is rather than written over with the one answer
 
 The plain interface asks the question as a line answered yes or no, and its yes is answer 1: a line
 has room for one answer, and the one that stops asking outlives the session. A one-shot run has
-nobody to ask, so a call there that would ask is refused. An `allow` rule decides nothing there, as
-it decides nothing for any tool in a one-shot run, and answer 2 still does: it was given at this
-question and names one tool in one project, where an `allow` rule is a line of a file that can name
-every server. For a server declared to ask every call answer 2 decides nothing there either, and
-the call is refused ([SERVERS-21](#SERVERS-21)). A delegate's call is put to the person as the
+nobody to ask, so a call there that would ask is refused. An `allow` rule decides a call there as it
+does in a session, as it decides every tool in a one-shot run ([CLI-1](cli.md#CLI-1)), and answer 2
+still does too. For a server declared to ask every call neither decides anything there, and the call
+is refused ([SERVERS-21](#SERVERS-21)). A delegate's call is put to the person as the
 turn's own is, after the same rules and standing answers
 ([DELEGATE-10](delegation.md#DELEGATE-10)), except a call to a server declared to ask every call,
 which is refused with nobody asked, since a delegate's task came from a planner and not from the
@@ -1487,8 +1491,14 @@ Without an `allow` list, every server not denied starts as it did. With one, a s
 is refused, and `"allow": []` refuses every server. A deny entry wins over an allow entry naming the
 same server. Only a list counts: a string, an object, `null` or anything else under either key
 decides nothing, and an empty `deny` denies nothing, which `doctor` does not report either. An entry
-in neither form, an alias among them, is skipped. In a deny list it denies nothing; in an allow list
-it allows nothing, so an allow list of nothing else still refuses every server. The layer has no
+in neither form, an alias among them, matches no server: in a deny list it denies nothing and in an
+allow list it allows nothing, so an allow list of nothing else still refuses every server. It is not
+skipped in silence. `doctor` and the session's opening lines name the file, the list and the entry as
+the file spelled it, as [PERM-11](permissions.md#PERM-11) names a permission rule it cannot read,
+and a deny list holding one is named among what the layer pins even where no entry in it was usable.
+An IPv6 address written without brackets is read as the bracketed one, since a url spells it no other
+way. A port, a scheme, a path and a name with a character outside ASCII letters, digits, `-` and `_`
+are not part of a host entry, so an entry written with one is such an entry. The layer has no
 field that could hold a declaration, an approval or a request, so an `mcp.request`, an
 `mcp.approve`, a server block or an `mcpServers` object in that file is read as nothing at all.
 
@@ -1527,7 +1537,10 @@ not to request it.
 `verified-by: bravebot_config::managed::without_an_allow_list_only_what_is_denied_is_refused`
 `verified-by: bravebot_config::managed::a_host_two_parsers_could_read_apart_matches_no_entry`
 `verified-by: bravebot_config::managed::a_list_that_is_not_a_list_decides_nothing`
-`verified-by: bravebot_config::managed::an_entry_in_neither_form_is_skipped`
+`verified-by: bravebot_config::managed::an_entry_in_neither_form_is_skipped_and_named`
+`verified-by: bravebot_config::managed::an_ipv6_address_without_brackets_names_the_bracketed_host`
+`verified-by: bravebot_agent::servers::a_managed_entry_that_cannot_be_used_is_named_as_a_session_opens`
+`verified-by: bravebot_cli::doctor::doctor_names_a_deny_list_whose_every_entry_was_unusable_as_pinned`
 `verified-by: bravebot_config::managed::a_server_declared_or_requested_here_is_read_as_nothing`
 `verified-by: bravebot_config::settings::a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration`
 `verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
@@ -1768,6 +1781,11 @@ line and no `mcpServers:` line, a delegate whose `mcp_servers` leaves it none an
 ([TOOL-6](tools/tool-surface.md#TOOL-6)). A turn below the size, and every turn without the
 setting, is offered every tool in full and no `load_tool`.
 
+The size is read through the layers of [BACKEND-24](backends.md#BACKEND-24). A project or local
+settings file may lower it, or state one where the person's own settings and the file `--settings`
+names state none, and may not raise it or remove it. Its larger figure, or a value that reads as no
+size, is dropped over the person's size, and `doctor` names the file.
+
 **Why.** Every tool of every approved server is otherwise sent in full on every turn, so a person
 who connects several pays that context on turns that use none of them. Deferral moves when vouched
 text is shown and decides nothing from it.
@@ -1782,6 +1800,8 @@ text is shown and decides nothing from it.
 `verified-by: bravebot_agent::mcp::an_addressed_worker_with_a_tools_line_is_offered_no_loader_unless_it_names_the_server`
 `verified-by: bravebot_cli::running::a_tools_list_offers_no_loader_for_deferred_server_tools`
 `verified-by: bravebot_config::settings::only_a_positive_size_sets_the_mcp_deferral_threshold`
+`verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
+`verified-by: bravebot_agent::mcp::a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for`
 
 <a id="SERVERS-17"></a>
 ### SERVERS-17: a declaration may name tool allow and deny lists that filter what is offered
@@ -1953,7 +1973,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [mcp.md](mcp.md) | front matter, `documented-by: none (internal: no settings key wires up a server yet, so there is nothing a reader can configure)` | Replaced. There is now something a reader configures, so the spec names the reference page and stops describing itself as internal. **Applied** with the declaration. |
 | [mcp.md](mcp.md) | [MCP-9](mcp.md#MCP-9)'s known cost, that a server needing a variable does not work, "left to whatever names variables for a server when servers are reachable from something (issue #83)" | Discharged by [SERVERS-10](#SERVERS-10). The cost paragraph becomes a pointer rather than an open cost. **Applied** with the launch that hands the named variables over, and the clause now also says the launch hands over those and no others. |
 | [mcp.md](mcp.md) | [MCP-1](mcp.md#MCP-1), what a server returns is untrusted | Extended, not amended. A description and an input schema join a result as content from outside, which is [SERVERS-8](#SERVERS-8). The clause's reasoning already covers them; the wording says "a tool result". |
-| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface, and `bravebot-cli` is the crate that reaches the client, so its row lists `mcp` and says it starts a server only on a person's answer, a recorded one, or the mode that answers for them. `bravebot-agent` reaches it too, to offer a started server's tools and call them, so its row lists `mcp` as well, and `bravebot-mcp` lists `config` for the one rule of what a tool's word may be. |
+| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface. `bravebot-agent` is the crate that reaches the client, to start a server, offer its tools and call them, so its row lists `mcp`. `bravebot-cli` starts the servers through `bravebot-agent` and names no part of `bravebot-mcp`, so its row does not list `mcp` and says it starts a server only on a person's answer, a recorded one, or the mode that answers for them. `bravebot-tui` and `bravebot-ui-bridge` list `mcp` for their tests only, and `bravebot-mcp` lists `config` for the one rule of what a tool's word may be. |
 | [backends.md](backends.md) | [BACKEND-1](backends.md#BACKEND-1), a settings file may name a destination and never a permission, and none of them names a command to run | **Unchanged and reaffirmed.** [SERVERS-1](#SERVERS-1) exists so this clause does not have to move. A reviewer should read any future proposal to put a declaration in a settings layer as a proposal to amend this. |
 | [backends.md](backends.md) | [BACKEND-38](backends.md#BACKEND-38), the managed file pins the names that decide where a request goes, and "every other name in the file decides nothing" | Extended by two names that are not destinations, `mcp.allow` and `mcp.deny`, which keep a server from starting and add none, for [SERVERS-12](#SERVERS-12)'s reason. **Applied**. |
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |
@@ -2012,9 +2032,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **A settings file `mcp` writes is rewritten whole.** `enable`, `disable` and an `add` that requests
   keep every value, and not the file's spacing or key order, for the reason
   [import.md](import.md)'s known cost gives.
-- **A checkout's link is not written through.** Where `.bravebot` in a checkout, or its settings
-  file, is a link, `enable` and `disable` refuse it, and the request is written by hand in the file
-  it leads to.
+- **A checkout's link that leaves the checkout is not written through.** Where `.bravebot` in a
+  checkout, or its settings file, is a link that ends outside the checkout, in its `.git` or at
+  nothing, `enable` and `disable` refuse it, and the request is written by hand in the file it
+  leads to.
 - **A file `mcp` writes in a checkout is the person's own.** On Unix it is written readable by its
   owner alone, as the state directory's files are, an existing one included, and a `.bravebot` it
   creates there is too, so a file other accounts on the machine read is set readable again by hand.
@@ -2160,6 +2181,16 @@ nothing, so the next session starts the server as before. The list ends with a l
 `remove <alias>`, which is how a person who declined a server's tools finds the way to stop being
 asked about it.
 
+Where `disable` or `remove` takes an alias, it also takes a pattern: a word of the characters an
+alias has and at least one `*`, which stands for any run of characters, including none, so
+`/mcp remove brave-tabs*` names `brave-tabs-manage` and `brave-tabs-read`. The pattern is matched
+against the aliases the session runs, the settings request and, for `remove`, the state directory
+declares, so it names no more than the person's own files and session hold. Each alias it names is
+taken as if it had been typed alone, in alphabetical order, and a failure for one is said and does
+not stop the others. A pattern that names no alias says so and changes nothing. A word with a `*`
+and any other character is not a pattern, and is refused as a word that is no alias is. The pattern
+is never given to the program: each alias is, after the alias check.
+
 `remove <alias>` runs `bravebot mcp disable <alias>` and then `bravebot mcp remove <alias>`, the
 program run as itself in the directory the session works in, and says what each printed. The first
 takes the request out of each settings file that asks for the server, the second deletes its
@@ -2173,9 +2204,12 @@ cannot know the session is incognito. The command line stays the one writer of a
 the settings files that request one ([layering](layering.md)).
 
 An alias the settings do not request is not started and not turned off by being named. Nothing a
-server sent decides what `/mcp` does: the person names the alias. Typed during a turn, `/mcp` waits
-for the turn to end, as the other commands that touch the network or the terminal do
-([CMD-8](commands.md#CMD-8)).
+server sent decides what `/mcp` does: the person names the alias. Typed during a turn, the bare word
+and `list` are carried out as they are typed, since they only read the servers the session holds, and
+answer under the turn as `/status` does. Every other form waits for the turn to end, as the other
+commands that touch the network or the terminal do: `reconnect` puts questions to the person and
+takes the terminal, and `disable` and `remove` change the tools the turn offers. The words the person
+typed decide which form it is, and nothing a server sent does ([CMD-8](commands.md#CMD-8)).
 
 **Why.** A server that failed its handshake or timed out is otherwise absent until the session
 ends, and a person who has fixed its install or sign-in would have to lose the conversation to try
@@ -2197,8 +2231,16 @@ callable that the person turned off.
 `verified-by: bravebot_tui::mcp_command::removing_a_server_withdraws_the_request_then_deletes_the_declaration_and_stops_it`
 `verified-by: bravebot_tui::mcp_command::a_removal_that_fails_leaves_the_server_running_and_says_why`
 `verified-by: bravebot_tui::mcp_command::a_removal_runs_no_program_for_a_word_that_is_no_alias_or_where_nothing_may_be_written`
+`verified-by: bravebot_tui::mcp_command::removing_by_a_pattern_removes_each_server_it_names_and_no_other`
+`verified-by: bravebot_tui::mcp_command::a_pattern_removal_that_fails_for_one_server_still_removes_the_others`
+`verified-by: bravebot_tui::mcp_command::a_pattern_that_names_nothing_or_is_typed_where_nothing_may_be_written_runs_no_program`
+`verified-by: bravebot_tui::mcp_command::disabling_by_a_pattern_turns_off_each_server_it_names_and_no_other`
+`verified-by: bravebot_config::mcp::a_pattern_names_the_aliases_whose_spelling_fits_around_its_stars`
+`verified-by: bravebot_config::mcp::a_pattern_has_a_star_and_only_the_characters_of_an_alias`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
-`verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
+`verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
 
 <a id="SERVERS-20"></a>
 ### SERVERS-20: `/status` lists what the confinement of each started local server grants

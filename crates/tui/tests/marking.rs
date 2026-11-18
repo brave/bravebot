@@ -237,21 +237,60 @@ fn wrapped_content_cannot_paint_a_bar_in_the_margin_column() {
     assert_marked_on_every_row(&drawn, "PADDING");
 }
 
-/// A cluster the paragraph draws wider than its characters sum to. U+2764 U+FE0F is one column by
-/// character and two by cluster, so a row measured by character fitted the block and was then
-/// broken by the paragraph, which put the rest of the line at column 0 with no margin.
+/// A line of clusters that wraps is marked in the same margin column on every row it reaches.
+/// U+FF76 U+FF9E is one column by character and two by cluster, so it checks that rows are
+/// measured by cluster.
+///
+/// U+2764 U+FE0F and U+2714 U+FE0F are drawn as `❤‹U+FE0F›` and `✔‹U+FE0F›` (LAYER-3), so they test
+/// a drawn row much longer than the raw text. A row can break inside `‹U+FE0F›` or inside `TAIL`,
+/// so rows are not found by what they hold: every non-blank row from the first row holding the
+/// cluster's first character to the one where `TAIL` ends is checked.
 #[test]
 fn a_row_of_emoji_sequences_is_marked_on_every_row_it_reaches() {
     for cluster in ["\u{2764}\u{fe0f}", "\u{2714}\u{fe0f}", "\u{ff76}\u{ff9e}"] {
         let session = quarantining(vec![format!("{}TAIL", cluster.repeat(20))]);
         let drawn = rows(&session, 30, 24);
 
-        assert_marked_on_every_row(&drawn, cluster);
+        let first: String = cluster.chars().take(1).collect();
+        let start = drawn
+            .iter()
+            .position(|row| row.contains(&first))
+            .expect("the line was not drawn");
+        let end = (start..drawn.len())
+            .find(|&last| {
+                let read: String = drawn[start..=last]
+                    .concat()
+                    .chars()
+                    .filter(|c| !c.is_whitespace() && *c != BAR)
+                    .collect();
+                read.contains("TAIL")
+            })
+            .unwrap_or_else(|| panic!("the tail of the line was dropped:\n{}", drawn.join("\n")));
+        let body: Vec<&String> = drawn[start..=end]
+            .iter()
+            .filter(|row| !row.trim().is_empty())
+            .collect();
         assert!(
-            drawn.iter().any(|row| row.contains("TAIL")),
-            "the tail of the line was dropped:\n{}",
+            body.len() > 1,
+            "the content did not wrap, so the case is not exercised:\n{}",
             drawn.join("\n")
         );
+        let margin = body[0]
+            .chars()
+            .position(|c| c == BAR)
+            .expect("the first row of the line was not marked");
+        for row in body {
+            assert_eq!(
+                row.chars().position(|c| !c.is_whitespace()),
+                Some(margin),
+                "a row of the block begins with content rather than the margin: {row:?}"
+            );
+            assert_eq!(
+                row.chars().nth(margin),
+                Some(BAR),
+                "the margin column holds something other than the bar: {row:?}"
+            );
+        }
     }
 }
 

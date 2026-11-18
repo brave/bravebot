@@ -676,6 +676,8 @@ one is given no definition memory. The answer to the spawn says so.
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`
 `verified-by: bravebot_core::permissions::a_rule_is_copied_across_the_pair_the_simple_fold_joins`
 `verified-by: bravebot_core::permissions::a_copy_of_a_refusal_and_a_grant_that_share_a_destination_is_refused`
+`verified-by: bravebot_core::permissions::a_refusal_is_copied_from_the_other_unicode_form_of_the_working_directory`
+`verified-by: bravebot_core::permissions::a_rule_is_not_copied_from_another_name_or_a_grant_from_another_unicode_form`
 
 <a id="CHECKOUT-10"></a>
 ### CHECKOUT-10: a command vouched for in the working directory is asked about again in a checkout

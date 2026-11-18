@@ -55,6 +55,11 @@ source file under `crates/` as text, so a missing reason fails `make check` on a
 the i18n build script writes is not source, and a test in `crates/i18n/src/generate.rs` holds it to
 the same rule.
 
+`crates/cli/tests/layering.rs` compares each member's manifest with its row in the
+[LAYER-1](../specs/layering.md#LAYER-1) table, and fails a member that declares a `bravebot-*`
+dependency its code never names, so an edge a change stops using is removed with it. Third-party
+dependencies are not checked.
+
 Clippy is run for one target per operating system the project ships for: the Linux job, the macOS job
 and `cargo clippy --target x86_64-pc-windows-gnu`. Those cover the other shipped architectures
 (`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-pc-windows-gnullvm`) as long as no
@@ -65,6 +70,12 @@ any condition listed in its `BEYOND_THE_OPERATING_SYSTEM` constant (`target_arch
 `linux` or `windows`, in a source file or manifest under `crates/`.
 Adding one means adding a clippy target for it to CI and to this page, then listing it in that test.
 `fuzz/` is a package of its own and is linted by `make check-fuzz`.
+
+`make check` and `make check-scripts` also fail when a Verus contract or assumption in `crates/`
+differs from `verify/contracts.txt`.
+`make check-verus` runs Verus, which brings its own toolchain, so `make check` leaves it to CI's
+`Verus` job, as it leaves `make check-fuzz` to the fuzz job. [verification.md](verification.md)
+says when that job runs and how to run it here.
 
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
@@ -81,7 +92,7 @@ reason, a mark that covers more than one start, and a mark in a production file,
 a file, that `START_MARKS_ALLOWED` in `agents/skills/security-audit/security-audit.py` does not
 list.
 
-`make check-security` also fails a lookup of a program by name (`find`, `find_on`, `find_in`) in a
+`make check-security` also fails a lookup of a program by name (`find`, `find_on`, `find_in`, `resolve`) in a
 production file that `LOOKUPS_LISTED` in the same script does not count, and a `main` that does not
 call `keep_out_where_this_ran()` before it matches the command. A command that opens no
 session has recorded only that directory, so a new lookup is read for what is recorded when it runs
@@ -98,6 +109,22 @@ directory, so a fixed name is deleted by another run of the same test, which is 
 same binary started again, and each fails for a reason that is not in the code under test.
 `crates/cli/tests/temp_names.rs` fails a name that has none of these. A name that has to be fixed is
 marked `// shared-temp-name: <why>` on its line or the line above.
+
+The search for programs always leaves the system temporary directory (`std::env::temp_dir()`,
+which is `$TMPDIR` or `/tmp`) out ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), so a test
+that plants a program must not plant it there. The tests of `bravebot-sandbox` and
+`bravebot-agent` take their scratch directories from
+`crates/sandbox/test-support/scratch_root.rs`. The root is `target/test-scratch` when the
+checkout is not under the temporary directory. When the checkout is under it, as a clone into
+`$TMPDIR` is, the root is `bravebot-test-scratch/<checkout name>-<hash of its path>` in
+`$XDG_CACHE_HOME` or `$HOME/.cache` (`%LOCALAPPDATA%` on Windows), so the tests pass from there
+too. The directories in the cache are not removed after a run, so delete
+`bravebot-test-scratch` there when the clone is gone. When the cache directory is also under the
+temporary directory, the root stays `target/test-scratch`, and the tests that plant a program
+fail from that checkout with the planted program not found. Run them from a checkout outside the
+temporary directory in that case. `crates/ui-bridge/tests/language_server.rs` and
+`crates/cli/tests/running.rs` give the programs they start a `TMPDIR` of their own and pass from
+either.
 
 ## Before pushing
 
@@ -148,7 +175,8 @@ stops on one that is in neither that list nor `NAMED_NOT_READ`. A file outside `
 The changes job runs the classifier from the pull request's base commit, not from the pull request,
 so a change to the classifier is judged by the copy it replaces. The classifier and the Makefile are
 in `.github/CODEOWNERS`, and `make check-security` fails when a file a workflow step runs by path
-(`python3 <path>`, or the Makefile behind `make`) matches no entry there.
+(`python3 <path>`, `<path>` at a command position such as the first word after `run:`, `"$PYTHON"
+<path>`, or the Makefile behind `make`) matches no entry there.
 
 `make check-affected` makes that choice locally, against the merge base with `upstream/main`, or
 `origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
@@ -165,6 +193,9 @@ For the full run on macOS, start Docker Desktop and run `make check-all` from th
 you plan to submit. The Linux checks run inside Docker, and Windows Clippy cross-compiles there;
 neither needs a separate Linux or Windows machine. Host Rust tests use four threads by
 default; override this with `RUST_TEST_THREADS=8 make check-all` if needed.
+`make test` and `make check` run the tests with `cargo nextest` when `cargo-nextest` is installed,
+as CI does (`cargo install cargo-nextest --locked`), and with `cargo test` otherwise. nextest runs
+the test binaries side by side, where `cargo test` runs them one after another.
 The test binaries that start a mock server per test (`browser_group_servers` and `mcp` in
 `crates/agent/tests`, and `running` in `crates/cli/tests`) raise their own soft open-file limit to
 8192, or to the hard limit where that is lower, through `crates/agent/test-support/open_files.rs`,
@@ -346,8 +377,9 @@ literals repeated across files, files and functions past a length, functions nes
 several booleans, files that use many other modules, public functions no test names, files holding
 a lot of shared mutable state, commented-out code, and functions returning string errors. rustc
 warns about none of the first kind in a library crate, and no check compares one file with another.
-The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It is the
-deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
+The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It leaves out
+`third_party/`, whose crates are kept close to their release
+([third_party/README.md](../../third_party/README.md)). It is the deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
 reviewers read each candidate and draft an issue for the ones worth fixing. The skill also runs
 clippy's opinionated lints over the code that ships, which `make check-maintenance` does not, since
 it compiles. `docs/maintenance-reviewed` holds what reviewers decided, so a later run reaches
@@ -402,8 +434,8 @@ opener's, the `powershell` starts' or the usability suite's file has no `CODE_SE
 as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
 `ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
 does, except `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application leaves set because it and the agent it starts
-read them and Electron reaches the session bus through the last two, and the ten Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
-`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`),
+read them and Electron reaches the session bus through the last two, and the eleven Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
+`SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, `PSModulePath`),
 which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). Without `HOME`, `gio` reads the account's
 passwd home, which is a further reason for `HOME`
 ([SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)). An options variable needs only the second. `make check` runs it and so does CI. It
@@ -426,7 +458,7 @@ for a name in it that no test starts a stage with and asserts removed; a loop ov
 counts for no name. It does not apply the loader prefixes to other starts, so a start that should
 remove `DYLD_` and `LD_` names and does not is still found by a reviewer. The tests
 `the_loader_prefixes_are_removed_by_name_and_not_by_a_checked_start` and the two loader tests in
-`crates/agent/tests/usability.rs` fail when a prefix is dropped.
+`crates/agent/tests/usability_loader.rs` fail when a prefix is dropped.
 
 `make check-narration` fails a pull request whose commit messages, title, body or added lines
 contain a first-person phrase from a fixed list, which is the rule in [commits.md](commits.md)
@@ -455,7 +487,18 @@ on its own ([fuzzing.md](fuzzing.md#the-lockfile)). It also fails an exception i
 [../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
 cargo-deny is built. CI runs this same target on a pull request that touches a manifest, the
 lockfile or `.config/deny.toml`, on main, and once a day, since an advisory arrives without a commit.
-`make check-reviewdog` is the [security scan](security-scan.md).
+`make check-reviewdog` is the [security scan](security-scan.md). It does not count findings in a
+file under `third_party/`, in either mode, and prints how many it left out. Those crates are
+upstream code kept close to the published release ([third_party/README.md](../../third_party/README.md)),
+so a finding in them is not a change the branch can make without diverging from upstream, and
+counting them failed `check-reviewdog`, and with it `check-affected` and `check-all-local`, on every
+branch whose diff touched one. Opengrep scans the whole checkout whatever file list it is given, so
+the script drops the findings by path after the runners return. A finding anywhere else, including
+a directory named `third_party` deeper in the tree, still fails the scan. A change that alters a
+vendored crate's source is read for security by its reviewer. The exclusion is in
+`contrib/check-reviewdog.sh` only. The organization's required `security` check runs
+brave/security-action, which nothing in this tree configures, so it scans `third_party/` as
+before; on #3865, which added `third_party/crossterm`, that check passed.
 
 `make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package
 of its own with its own lockfile. It needs a nightly toolchain, whose date is `FUZZ_TOOLCHAIN` in the

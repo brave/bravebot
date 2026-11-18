@@ -102,6 +102,7 @@ mod bypass;
 mod carry;
 mod checkouts;
 mod error;
+mod named_settings;
 #[path = "../../ui-files/src/names.rs"]
 mod names;
 mod other_names;
@@ -114,6 +115,9 @@ mod volume;
 
 use error::{ENDS_CHECKOUTS, io_detail, read_failure};
 pub use error::{Remedy, WorkspaceError};
+use named_settings::{
+    landed_path, lexically_clean, named_settings_names, names_one_path, same_file,
+};
 pub(crate) use other_names::OtherKeys;
 #[cfg(unix)]
 use other_names::directory_identity;
@@ -139,7 +143,9 @@ pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
-pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
+pub use volume::{
+    BACKSLASH_SEPARATES, key_of, trust_store, volume_case_folding, volume_folds_case,
+};
 pub(crate) use volume::{on_disk, one_file};
 
 pub use bypass::{BypassReach, Reached};
@@ -386,6 +392,11 @@ pub struct Workspace {
     /// The directories the person's settings named in `sharedSkillDirectories`, as written
     /// (INSTR-17). Empty until a front end supplies them, which reads none.
     shared_skills: Vec<String>,
+    /// The settings file the person named with `--settings`, as typed made absolute and as it lands
+    /// after links are followed. Empty where none was named. A write that reaches it asks and is
+    /// refused where nobody can be asked, as `.bravebot` is (PERM-9), because the next launch reads
+    /// its allow rules and sandbox settings.
+    named_settings: Vec<PathBuf>,
 }
 
 /// A session's checkouts, with the numbers and the write log they are judged by, for a front end
@@ -555,6 +566,72 @@ impl Workspace {
             references: Vec::new(),
             reference_problems: Vec::new(),
             shared_skills: Vec::new(),
+            named_settings: Vec::new(),
+        })
+    }
+
+    /// Hold the settings file named on the command line as a protected path, or stop holding one.
+    ///
+    /// The path is what the person typed, so a relative one is read against the working directory
+    /// of the process. It need not exist: a file created there later is the named one.
+    #[must_use]
+    pub fn with_named_settings_file(mut self, named: Option<&Path>) -> Self {
+        self.named_settings = named.map(named_settings_names).unwrap_or_default();
+        self
+    }
+
+    /// The names the named settings file is held under: the spelling typed made absolute, then the
+    /// path it lands on. The one list the file tools and the sandbox policy both read, so a row
+    /// that denies writes to these is the same question as [`Workspace::is_the_named_settings_file`].
+    #[must_use]
+    pub fn named_settings_paths(&self) -> &[PathBuf] {
+        &self.named_settings
+    }
+
+    /// Whether `path`, spelled as the file tools take it, is the named settings file: by its
+    /// spelling, by where it lands after links, or by being the same file under another hard link.
+    pub(crate) fn is_the_named_settings_file(&self, path: &str) -> bool {
+        if self.named_settings.is_empty() {
+            return false;
+        }
+        let expanded = self.expanded(path);
+        self.reaches_the_named_settings_file(Path::new(&expanded))
+    }
+
+    /// [`Workspace::is_the_named_settings_file`] for a path that is not text.
+    pub(crate) fn reaches_the_named_settings_file(&self, path: &Path) -> bool {
+        self.reaches_the_named_settings_file_where(path, &volume_folds_case)
+    }
+
+    /// [`Workspace::reaches_the_named_settings_file`] with the answer to whether the volume holding
+    /// a directory folds case given, so a test states it on any host.
+    pub(crate) fn reaches_the_named_settings_file_where(
+        &self,
+        path: &Path,
+        volume_folds: &dyn Fn(&Path) -> bool,
+    ) -> bool {
+        if self.named_settings.is_empty() {
+            return false;
+        }
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let cleaned = lexically_clean(&absolute);
+        let landed = landed_path(&absolute);
+        let cleaned_landed = landed_path(&cleaned);
+        let spellings = [&absolute, &cleaned, &landed, &cleaned_landed];
+        self.named_settings.iter().any(|named| {
+            // A volume that folds case holds `Grant.json` and `grant.json` as one file, which a
+            // write to a file not made yet reaches by either spelling, and `same_file` cannot
+            // tell for a file that is not there.
+            let folds = named.parent().is_some_and(volume_folds);
+            spellings
+                .iter()
+                .any(|spelled| names_one_path(spelled, named, folds))
+                || same_file(named, &absolute)
+                || same_file(named, &cleaned)
         })
     }
 
@@ -572,14 +649,6 @@ impl Workspace {
     /// The directories the person agreed to have skills read from, as written (INSTR-17).
     pub(crate) fn shared_skill_directories(&self) -> &[String] {
         &self.shared_skills
-    }
-
-    /// Stand in for the environment's profile directory, which a `~` in a shared skill directory
-    /// (INSTR-17) stands for, so a test does not depend on whose machine it runs on.
-    #[must_use]
-    pub fn with_profile_directory(mut self, profile: Option<PathBuf>) -> Self {
-        self.home = profile;
-        self
     }
 
     /// The home directory a leading `~` stands for in this workspace.
@@ -1638,7 +1707,7 @@ impl Workspace {
         let bytes = self
             .resolve(relative)
             .ok()
-            .and_then(|resolved| std::fs::read(resolved).ok());
+            .and_then(|resolved| read_regular(&resolved, usize::MAX));
         let other_encoding = bytes.as_deref().is_some_and(|bytes| {
             std::str::from_utf8(bytes).is_err() && decode_text(bytes.to_vec()).is_some()
         });
@@ -1916,7 +1985,7 @@ impl Workspace {
     ) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve(&relative)?;
         let written = policy.file_authority().key(&self.trust_key(&relative));
-        let folds = volume_folds_case(&self.root);
+        let folds = volume_case_folding(&self.root).restricts();
         // Every other name of the file is recorded and reserved with this one (TRUST-4). The walk
         // for them runs before the boundary is taken, since it reads directories.
         let others = self.other_trust_keys(&relative);
@@ -2096,6 +2165,23 @@ impl Workspace {
             self.mark_rewind_gap(CoverageGap::Scratch);
             return;
         }
+        // The guard is held to look and to push, and not across the read: a read that waits
+        // would keep `take_backups` waiting with it.
+        let room = {
+            let Ok(backups) = self.backups.lock() else {
+                self.mark_rewind_gap(CoverageGap::BackupUnavailable);
+                return;
+            };
+            if backups.iter().any(|backup| backup.path == resolved) {
+                return;
+            }
+            MAX_REWIND_BYTES.saturating_sub(bytes_held(&backups))
+        };
+
+        #[cfg(test)]
+        self.hold_while_backing_up(resolved);
+        let mut was = kept(resolved, room);
+
         let Ok(mut backups) = self.backups.lock() else {
             self.mark_rewind_gap(CoverageGap::BackupUnavailable);
             return;
@@ -2103,22 +2189,16 @@ impl Workspace {
         if backups.iter().any(|backup| backup.path == resolved) {
             return;
         }
-
-        let held: usize = backups
-            .iter()
-            .map(|backup| match &backup.was {
-                Before::Bytes(bytes) => bytes.len(),
-                Before::Nothing | Before::NotKept => 0,
-            })
-            .sum();
-        let room = MAX_REWIND_BYTES.saturating_sub(held);
-
-        #[cfg(test)]
-        self.hold_while_backing_up(resolved);
+        // Another backup may have been taken while this one was read, so the room it was read
+        // for may be gone.
+        let room = MAX_REWIND_BYTES.saturating_sub(bytes_held(&backups));
+        if matches!(&was, Before::Bytes(bytes) if bytes.len() > room) {
+            was = Before::NotKept;
+        }
         backups.push(Backup {
             captured_trust,
             path: resolved.to_path_buf(),
-            was: kept(resolved, room),
+            was,
             kept: kept_store,
         });
     }
@@ -2359,11 +2439,39 @@ pub(crate) fn kept(resolved: &Path, room: usize) -> Before {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Before::Nothing,
         Err(_) => Before::NotKept,
         Ok(found) if found.len() as usize > room => Before::NotKept,
-        Ok(_) => match std::fs::read(resolved) {
-            Ok(bytes) if bytes.len() <= room => Before::Bytes(bytes),
-            _ => Before::NotKept,
+        Ok(_) => match read_regular(resolved, room) {
+            Some(bytes) => Before::Bytes(bytes),
+            None => Before::NotKept,
         },
     }
+}
+
+/// What a regular file holds, or `None` where the path is not one, cannot be read, or holds more
+/// than `most` bytes.
+///
+/// Opened by [`crate::recall::store::open_regular`], so a pipe at the path, or one put there since
+/// the name was resolved, is refused and never waited on for a writer. The writer would be this
+/// process, which opens a destination only after its pre-image has been read. The kind is the
+/// file system's answer about the open file and no byte decides it.
+fn read_regular(path: &Path, most: usize) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = crate::recall::store::open_regular(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(most).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= most).then_some(bytes)
+}
+
+/// The bytes the backups taken so far hold, which is what the budget is spent on.
+fn bytes_held(backups: &[Backup]) -> usize {
+    backups
+        .iter()
+        .map(|backup| match &backup.was {
+            Before::Bytes(bytes) => bytes.len(),
+            Before::Nothing | Before::NotKept => 0,
+        })
+        .sum()
 }
 
 /// What a line left at a destination it opened, as text, up to `room` bytes.
@@ -2378,8 +2486,8 @@ pub(crate) fn left_at(resolved: &Path, room: usize) -> Option<String> {
     if found.len() as usize > room {
         return None;
     }
-    let bytes = std::fs::read(resolved).ok()?;
-    (bytes.len() <= room).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    let bytes = read_regular(resolved, room)?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The label a workspace read produces, exposed for callers that need to reason about
@@ -5165,11 +5273,339 @@ mod tests {
 
     const TREE: &[&str] = &["/", "/Users", "/Users/me", "/Users/me/Proj"];
 
+    /// A probe of a filesystem that reports no casefold flags, such as a volume that folds as a
+    /// whole or a host with no way of reading one.
+    fn no_flags(_: &Path) -> Option<bool> {
+        None
+    }
+
+    /// A filesystem that holds the paths it is given, each its own file on volume 1, where only the
+    /// directories in `folding` answer to the other spelling of a name inside them, as ext4 does
+    /// for a directory with the casefold flag. The second function is the flag of each directory.
+    #[allow(
+        clippy::type_complexity,
+        reason = "a pair of closures a test names once"
+    )]
+    fn per_directory(
+        paths: &'static [&'static str],
+        folding: &'static [&'static str],
+    ) -> (
+        impl Fn(&Path) -> io::Result<FileId>,
+        impl Fn(&Path) -> Option<bool>,
+    ) {
+        let folds_in = move |directory: Option<&Path>| {
+            directory.is_some_and(|directory| folding.contains(&directory.to_str().unwrap_or("")))
+        };
+        let id = move |path: &Path| {
+            let spelled = path.to_string_lossy().into_owned();
+            let folds = folds_in(path.parent());
+            paths
+                .iter()
+                .position(|held| {
+                    *held == spelled || (folds && held.to_lowercase() == spelled.to_lowercase())
+                })
+                .map(|n| FileId {
+                    volume: 1,
+                    file: n.to_string(),
+                })
+                .ok_or_else(|| io::ErrorKind::NotFound.into())
+        };
+        let flag = move |directory: &Path| Some(folds_in(Some(directory)));
+        (id, flag)
+    }
+
+    const MIXED: &[&str] = &["/", "/home", "/home/me", "/home/me/Workspace"];
+    const WORKSPACE: &str = "/home/me/Workspace";
+
+    /// Whether a deny rule for `.env` refuses `.ENV` when the rules are read with `answer` as the
+    /// case answer, the way a session reads them.
+    fn deny_env_covers_upper_case(answer: bool) -> bool {
+        use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
+        let anchors = Anchors {
+            folds_case: answer,
+            ..Anchors::none()
+        };
+        let (permissions, rejected) =
+            Permissions::parse(&["Read(.env)".to_string()], &[], &[], &anchors);
+        assert!(rejected.is_empty());
+        assert_eq!(
+            permissions.for_path(Subject::Read, ".env"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        permissions.for_path(Subject::Read, ".ENV") == Decision::Ruled(Ruling::Deny)
+    }
+
+    /// ext4 sets case folding per directory. A workspace carrying the flag inside an ordinary
+    /// parent opens `.ENV` as `.env`, so the answer is that it folds, and a deny rule for `.env`
+    /// refuses `.ENV`. The name of the workspace is looked up in the parent, which keeps the
+    /// spellings apart, and is not evidence for the names inside the workspace.
+    #[test]
+    fn a_workspace_that_folds_inside_a_parent_that_does_not_folds_case() {
+        let (id, flag) = per_directory(MIXED, &[WORKSPACE]);
+        let answer = folds_case_by(Path::new(WORKSPACE), &id, &flag);
+        assert_eq!(answer, Some(true));
+        assert!(deny_env_covers_upper_case(answer.unwrap()));
+    }
+
+    /// The other two layouts keep their answers: both directories folding folds, and neither
+    /// folding does not.
+    #[test]
+    fn the_other_layouts_of_the_casefold_flag_keep_their_answers() {
+        let (id, flag) = per_directory(MIXED, &["/home/me", WORKSPACE]);
+        assert_eq!(folds_case_by(Path::new(WORKSPACE), &id, &flag), Some(true));
+
+        let (id, flag) = per_directory(MIXED, &[]);
+        let answer = folds_case_by(Path::new(WORKSPACE), &id, &flag);
+        assert_eq!(answer, Some(false));
+        assert!(!deny_env_covers_upper_case(answer.unwrap()));
+    }
+
+    /// The opposite direction. A parent carrying the flag and an ordinary workspace inside it: the
+    /// name of the workspace folds in the parent, and the names inside the workspace do not, so a
+    /// rule about `Docs` decides nothing about `docs`.
+    #[test]
+    fn a_workspace_that_does_not_fold_inside_a_parent_that_does_does_not_fold_case() {
+        let (id, flag) = per_directory(MIXED, &["/home/me"]);
+        assert_eq!(folds_case_by(Path::new(WORKSPACE), &id, &flag), Some(false));
+    }
+
+    /// A filesystem that reports no flag for the workspace is read by the lookup of its name, as a
+    /// volume that folds as a whole answers.
+    #[test]
+    fn a_filesystem_with_no_flags_is_read_by_the_lookup_of_the_name() {
+        let (id, _) = per_directory(MIXED, &["/home/me"]);
+        assert_eq!(
+            folds_case_by(Path::new(WORKSPACE), &id, &no_flags),
+            Some(true)
+        );
+    }
+
+    /// TRUST-2 and TRUST-4: the trust map, the writer reservation and the memory record all take
+    /// the one answer for the workspace, so on each layout of the casefold flag a file untrusted as
+    /// `.env` is untrusted as `.ENV` exactly where the workspace opens them as one file. The
+    /// expected answer is written from the layout (does the workspace carry the flag), and not read
+    /// from the code under test. A workspace without the flag inside a parent with it is the
+    /// layout where folding would widen a trust of `Docs` to a different file called `docs`.
+    #[test]
+    fn the_trust_map_the_writer_reservation_and_the_memory_record_follow_the_workspace_s_own_casefold_flag()
+     {
+        use bravebot_core::Integrity;
+        use bravebot_core::file_authority::FileAuthority;
+
+        let layouts: [(&str, &'static [&'static str], bool); 4] = [
+            (
+                "ordinary parent, workspace with the flag",
+                &[WORKSPACE],
+                true,
+            ),
+            (
+                "parent and workspace with the flag",
+                &["/home/me", WORKSPACE],
+                true,
+            ),
+            (
+                "parent with the flag, ordinary workspace",
+                &["/home/me"],
+                false,
+            ),
+            ("ordinary parent, ordinary workspace", &[], false),
+        ];
+        for (number, (layout, folding, folds)) in layouts.into_iter().enumerate() {
+            let (id, flag) = per_directory(MIXED, folding);
+            let answer = folds_case_by(Path::new(WORKSPACE), &id, &flag);
+            assert_eq!(answer, Some(folds), "{layout}");
+
+            let mut store = bravebot_core::TrustStore::new(key_of(Path::new(WORKSPACE)))
+                .folding_case(folds_case_by(Path::new(WORKSPACE), &id, &flag).unwrap_or(false));
+            store.distrust(".env");
+            store.trust("Docs");
+            assert_eq!(
+                store.integrity_of(".ENV"),
+                folds.then_some(Integrity::Untrusted),
+                "the map reads .ENV as the file distrusted as .env: {layout}"
+            );
+            assert_eq!(
+                store.integrity_of("docs"),
+                folds.then_some(Integrity::Trusted),
+                "the map trusts docs on the strength of Docs only where they are one file: {layout}"
+            );
+
+            let authority = FileAuthority::new(store);
+            let capture = authority.capture();
+            let first = capture.begin(".env");
+            assert!(first.is_some(), "{layout}");
+            assert_eq!(
+                capture.begin(".ENV").is_none(),
+                folds,
+                "a second writer under the other spelling is refused only where they are one file: {layout}"
+            );
+            drop(first);
+            drop(capture);
+
+            let home = crate::testutil::scratch_dir(&format!("trust-case-answer-memory-{number}"));
+            let _ = std::fs::remove_dir_all(&home);
+            std::fs::create_dir_all(&home).unwrap();
+            let key = format!("{WORKSPACE}/.Bravebot/memory/NOTES.md");
+            crate::memory::record_before_write(Some(&home), &key, folds).unwrap();
+            // The record is kept under the directory as the volume spells it through every link,
+            // which differs from the literal path where a parent is a link, as `/home` is on macOS.
+            let spelled =
+                crate::workspace::on_disk(WORKSPACE).unwrap_or_else(|| WORKSPACE.to_string());
+            let recorded = crate::memory::Record::new(&home, &spelled).paths();
+            let _ = std::fs::remove_dir_all(&home);
+            assert_eq!(
+                recorded,
+                if folds {
+                    vec![format!("{spelled}/.bravebot/memory/notes.md")]
+                } else {
+                    Vec::new()
+                },
+                "a memory is recorded under another case only where they are one file: {layout}"
+            );
+        }
+    }
+
+    /// TRUST-2: where the filesystem cannot be asked, the trust map, the writer reservation and the
+    /// memory record read the workspace as one that might fold. A file untrusted as `.env` is then
+    /// untrusted as `.ENV`, a second writer under the other case is refused, and a memory written
+    /// under one case is recorded under the other, while a trust of `Docs` stays about `Docs`. The
+    /// expected values are written from what a refusal may cost and a grant may widen, and not read
+    /// from the code under test.
+    #[test]
+    fn a_workspace_whose_volume_cannot_be_asked_distrusts_folds_and_grants_none() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CaseFolding, Integrity};
+
+        let nothing =
+            |_: &Path| -> io::Result<FileId> { Err(io::ErrorKind::PermissionDenied.into()) };
+        let answer = folds_case_by(Path::new(WORKSPACE), &nothing, &no_flags);
+        assert_eq!(answer, None);
+        let case = CaseFolding::from_answer(answer);
+        assert_eq!(case, CaseFolding::Unknown);
+
+        let mut store =
+            bravebot_core::TrustStore::new(key_of(Path::new(WORKSPACE))).with_case_folding(case);
+        store.distrust(".env");
+        store.trust("Docs");
+        assert_eq!(
+            store.integrity_of(".ENV"),
+            Some(Integrity::Untrusted),
+            "a file untrusted as .env was read as trusted as .ENV"
+        );
+        assert_eq!(
+            store.integrity_of("docs"),
+            None,
+            "a trust of Docs reached docs where the volume could not be asked"
+        );
+
+        let authority = FileAuthority::new(store);
+        let capture = authority.capture();
+        let first = capture.begin(".env");
+        assert!(first.is_some());
+        assert!(
+            capture.begin(".ENV").is_none(),
+            "a second writer under the other case entered"
+        );
+        drop(first);
+        drop(capture);
+
+        let home = crate::testutil::scratch_dir("trust-case-unaskable-memory");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let key = format!("{WORKSPACE}/.Bravebot/memory/NOTES.md");
+        crate::memory::record_before_write(Some(&home), &key, case.restricts()).unwrap();
+        let spelled = crate::workspace::on_disk(WORKSPACE).unwrap_or_else(|| WORKSPACE.to_string());
+        let recorded = crate::memory::Record::new(&home, &spelled).paths();
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(
+            recorded,
+            vec![format!("{spelled}/.bravebot/memory/notes.md")],
+            "a memory written under one case was not recorded under the other"
+        );
+    }
+
+    /// A directory that does not exist cannot be asked, and the map made for it says so.
+    #[test]
+    fn a_trust_store_for_a_directory_that_cannot_be_asked_says_so() {
+        let root = crate::testutil::scratch_dir("Volume-Case-Unaskable");
+        let _ = std::fs::remove_dir_all(&root);
+        let missing = root.join("does-not-exist");
+        assert_eq!(
+            volume_case_folding(&missing),
+            bravebot_core::CaseFolding::Unknown
+        );
+        let store = trust_store(&missing);
+        assert!(!store.folds_case());
+        assert!(store.case_folding().restricts());
+    }
+
+    /// A real directory carrying the casefold flag inside an ordinary parent, which no stand-in for
+    /// the filesystem replaces: `.env` and `.ENV` are one file there, and the map, the writer
+    /// reservation and the answer all say so. The directory is the test's own, and the test returns
+    /// where the host cannot set the flag (it needs ext4 or f2fs with casefold, an empty directory
+    /// and the privilege `chattr +F` takes), as no host is assumed to have it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_directory_with_the_casefold_flag_folds_case_for_the_map() {
+        use bravebot_core::Integrity;
+        use bravebot_core::file_authority::FileAuthority;
+        use rustix::fs::{IFlags, Mode, OFlags};
+
+        let parent = crate::testutil::scratch_dir("casefold-parent");
+        let _ = std::fs::remove_dir_all(&parent);
+        let workspace = parent.join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let held = rustix::fs::open(
+            &workspace,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+        // FS_CASEFOLD_FL, which `IFlags` has no name for.
+        let flags = IFlags::from_bits_retain(0x4000_0000);
+        if rustix::fs::ioctl_setflags(&held, flags).is_err() {
+            eprintln!("skipped: this filesystem cannot set the casefold flag on a directory");
+            let _ = std::fs::remove_dir_all(&parent);
+            return;
+        }
+        drop(held);
+        let root = workspace.canonicalize().unwrap();
+
+        // The oracle is the filesystem, asked with a file of the test's own.
+        std::fs::write(root.join(".env"), b"").unwrap();
+        assert!(
+            root.join(".ENV").exists(),
+            "the directory carries the flag and does not fold"
+        );
+        // The parent is ordinary, so its answer for the name of the workspace is the opposite one.
+        assert!(!root.parent().unwrap().join("wORKSPACE").exists());
+
+        assert_eq!(
+            volume_case_folding(&root),
+            bravebot_core::CaseFolding::Folds
+        );
+        let mut store = trust_store(&root);
+        store.distrust(".env");
+        assert_eq!(store.integrity_of(".ENV"), Some(Integrity::Untrusted));
+
+        let authority = FileAuthority::new(store);
+        let capture = authority.capture();
+        let first = capture.begin(".env");
+        assert!(first.is_some());
+        assert!(capture.begin(".ENV").is_none());
+        drop(first);
+        drop(capture);
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
     /// A volume answering to either spelling of `Proj` is one whose rules have to fold.
     #[test]
     fn a_volume_answering_to_either_spelling_folds_case() {
         let id = volume(TREE, true);
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &id), Some(true));
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &id, &no_flags),
+            Some(true)
+        );
     }
 
     /// A volume holding `Proj` and `pROJ` apart is one where a rule about `Docs` must not cover
@@ -5177,7 +5613,10 @@ mod tests {
     #[test]
     fn a_volume_holding_the_spellings_apart_does_not_fold_case() {
         let id = volume(TREE, false);
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &id), Some(false));
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &id, &no_flags),
+            Some(false)
+        );
 
         let both = volume(
             &[
@@ -5190,7 +5629,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj"), &both),
+            folds_case_by(Path::new("/Users/me/Proj"), &both, &no_flags),
             Some(false)
         );
     }
@@ -5206,11 +5645,17 @@ mod tests {
                 volume(TREE, true)(path)
             }
         };
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &denied), None);
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &denied, &no_flags),
+            None
+        );
 
         let nothing =
             |_: &Path| -> io::Result<FileId> { Err(io::ErrorKind::PermissionDenied.into()) };
-        assert_eq!(folds_case_by(Path::new("/Users/me/Proj"), &nothing), None);
+        assert_eq!(
+            folds_case_by(Path::new("/Users/me/Proj"), &nothing, &no_flags),
+            None
+        );
 
         let mixed = |path: &Path| -> io::Result<FileId> {
             let mut id = volume(TREE, true)(path)?;
@@ -5220,7 +5665,7 @@ mod tests {
             Ok(id)
         };
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj"), &mixed),
+            folds_case_by(Path::new("/Users/me/Proj"), &mixed, &no_flags),
             None,
             "a name held on the volume above was read as the answer for a mount point"
         );
@@ -5238,11 +5683,19 @@ mod tests {
             "/Users/me/Proj/2024",
         ];
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj/2024"), &volume(tree, true)),
+            folds_case_by(
+                Path::new("/Users/me/Proj/2024"),
+                &volume(tree, true),
+                &no_flags
+            ),
             Some(true)
         );
         assert_eq!(
-            folds_case_by(Path::new("/Users/me/Proj/2024"), &volume(tree, false)),
+            folds_case_by(
+                Path::new("/Users/me/Proj/2024"),
+                &volume(tree, false),
+                &no_flags
+            ),
             Some(false)
         );
     }
@@ -6103,6 +6556,24 @@ mod tests {
         let (path, workspace) = tree("file");
         assert_eq!(workspace.landing("alias.txt").as_deref(), Some(".env"));
         assert_eq!(workspace.landing("./alias.txt").as_deref(), Some(".env"));
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A link that leads into a directory whose name is not text lands on no name a rule is about
+    /// (PATH-003). The regression it rejects: the landing spelled with a lossy rendering, which is
+    /// the name of a different directory. Linux only, because the name has to exist on disk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_link_into_a_directory_whose_name_is_not_text_has_no_landing() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("not-text");
+        let invalid = path.join(std::ffi::OsStr::from_bytes(b"lint-\xff"));
+        std::fs::create_dir(&invalid).unwrap();
+        std::fs::write(invalid.join("a.md"), "a").unwrap();
+        std::os::unix::fs::symlink(&invalid, path.join("shared")).unwrap();
+        assert_eq!(workspace.landing("shared/a.md"), None);
+        assert_eq!(workspace.landing("shared"), None);
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -7895,6 +8366,164 @@ mod tests {
         let path = directory.join("left");
         std::fs::write(&path, bytes).expect("destination");
         path
+    }
+
+    /// A named pipe at `path`, and a reader holding it open without waiting, so that a writer's open
+    /// returns at once. `None` where `mkfifo` is not installed. The reader gives a read of the
+    /// pipe nothing to wait for either: an open for reading waits for a writer, and none comes.
+    #[cfg(unix)]
+    fn a_pipe_at(path: &Path) -> Option<std::fs::File> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let made = std::process::Command::new("mkfifo").arg(path).status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo is not installed, so a pipe is not tried");
+            return None;
+        }
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+            .open(path)
+            .ok()
+    }
+
+    /// A pipe where a write or a redirection is about to land has no pre-image to keep or to scan,
+    /// and reading for one does not wait for a writer. Opened for reading a pipe blocks until one
+    /// comes, and the writer would be this process, which opens the destination after the read.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_at_a_destination_has_no_pre_image_and_is_not_waited_on() {
+        let root = crate::testutil::scratch_dir("pipe-pre-image");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let path = root.join("out");
+        let Some(_reader) = a_pipe_at(&path) else {
+            return;
+        };
+        let (sender, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send((kept(&path, 1024), left_at(&path, 1024)));
+        });
+
+        let (before, after) = answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a pre-image read waited on a pipe for a writer");
+
+        assert_eq!(before, Before::NotKept);
+        assert_eq!(after, None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The list of backups is not held while the file a write replaces is read, so the end of the
+    /// turn, which takes the list, never waits on a read. A read that waits, such as one of a
+    /// pipe, would otherwise keep the turn from ending.
+    #[test]
+    fn the_backup_list_is_not_held_while_the_replaced_file_is_read() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let root = crate::testutil::scratch_dir("bravebot-backup-list-free");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let entered = Arc::new(Mutex::new(Vec::new()));
+        {
+            let backups = Arc::clone(&workspace.backups);
+            let entered = entered.clone();
+            workspace.hold_backup_reads(move |_| {
+                entered.lock().unwrap().push(backups.try_lock().is_ok());
+            });
+        }
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(authority);
+
+        let written = workspace.write(
+            &mut policy,
+            &Labelled::trusted("shared.txt".to_string()),
+            &Labelled::new("replacement".to_string(), Label::trusted_public()),
+        );
+
+        assert!(written.is_ok(), "{written:?}");
+        assert_eq!(
+            *entered.lock().unwrap(),
+            [true],
+            "the backup list was held while the file was read, or the file was not read"
+        );
+        assert_eq!(workspace.take_backups().len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write over a pipe returns, keeps nothing of what the pipe held, and leaves the
+    /// file-authority boundary free for the next capture. The reader the test holds is what lets
+    /// the write itself open the pipe, so a wait that is left can only be the pre-image's.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_over_a_pipe_keeps_no_backup_and_leaves_the_boundary_free() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let root = crate::testutil::scratch_dir("bravebot-write-over-pipe");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        let Some(_reader) = a_pipe_at(&root.join("out")) else {
+            return;
+        };
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let (sender, answer) = std::sync::mpsc::channel();
+        {
+            let (workspace, authority) = (workspace.clone(), authority.clone());
+            std::thread::spawn(move || {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "write");
+                let mut policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                    &mut sink,
+                )
+                .unwrap()
+                .with_file_authority(authority);
+                let written = workspace.write(
+                    &mut policy,
+                    &Labelled::trusted("out".to_string()),
+                    &Labelled::new("replacement".to_string(), Label::trusted_public()),
+                );
+                let _ = sender.send(written.is_ok());
+            });
+        }
+
+        let written = answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a write over a pipe waited for a writer to read what it replaced");
+
+        assert!(written, "the write over the pipe failed");
+        let backups = workspace.take_backups();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(backups[0].was, Before::NotKept);
+        let (entered, can_enter) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(authority.capture());
+            let _ = entered.send(());
+        });
+        assert!(
+            can_enter.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the boundary was still held after the write returned"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// CRED-11: a destination the line removed or never created has nothing to scan, and the scan

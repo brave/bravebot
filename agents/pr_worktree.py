@@ -87,11 +87,11 @@ def hooks_note(main):
     return f"hooks: none run, {directory} does not exist; `make hooks` in {main} creates it"
 
 
-def run(*args, cwd=None, check=True, env=None):
+def run(*args, cwd=None, check=True, env=None, timeout=None):
     # A `-c` reaches the commands git starts itself, such as the commits a rebase makes, and outranks
     # whatever `core.hooksPath` the repository's config holds.
     command = ("git", "-c", f"core.hooksPath={hooks_dir(cwd) or os.devnull}", *args[1:]) if args[0] == "git" else args
-    done = subprocess.run(command, cwd=cwd, capture_output=True, text=True, env=env)
+    done = subprocess.run(command, cwd=cwd, capture_output=True, text=True, env=env, timeout=timeout)
     if check and done.returncode:
         die(f"{' '.join(map(str, args))} failed:\n{printed(done)}")
     return done
@@ -321,10 +321,15 @@ def refuse_held_worktree(pr, script, words, allowed):
     die("\n".join(lines))
 
 
-def pull(number, view, here, remotes, create, script):
-    """What every step needs, from the pull request and this clone's remotes."""
+def refuse_unless_open(view):
+    """Stop with the pull request's state when it is merged or closed, since nothing about it is left to do."""
     if view["state"] != "OPEN":
         die(f"{view['url']} is {view['state'].lower()}")
+
+
+def pull(number, view, here, remotes, create, script):
+    """What every step needs, from the pull request and this clone's remotes."""
+    refuse_unless_open(view)
     if not view.get("headRepository"):
         die(f"{view['url']} has no head repository any more")
     if BASE_REPO not in remotes:

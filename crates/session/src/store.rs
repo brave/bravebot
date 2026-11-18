@@ -134,12 +134,27 @@ const LANGUAGE_FILE: &str = "language";
 /// looking at the file and at `vetting.auto` in a settings file sees one name.
 const VETTING_FILE: &str = "vetting";
 
+/// What the person last chose with the usage-ping switch, one word, inside the global state
+/// directory.
+///
+/// Named for the setting rather than the type, as the vetting file is, so somebody looking at the
+/// file and at `usagePing` in a settings file sees one name.
+const USAGE_PING_FILE: &str = "usage-ping";
+
+/// Present once a front end has told the person what the usage ping sends, inside the global state
+/// directory.
+const USAGE_PING_NOTICE_FILE: &str = "usage-ping-notice";
+
 /// Whether the info panel was last left open, one word, inside the global state directory.
 const PANEL_FILE: &str = "panel";
 
 /// How many columns the info panel was last dragged to, a number, inside the global state
 /// directory.
 const PANEL_WIDTH_FILE: &str = "panel-width";
+
+/// The sections of the info panel the person turned off, one word on each line, inside the global
+/// state directory. Named for the command that chooses them, as the panel's file is.
+const SIDEBAR_FILE: &str = "sidebar";
 
 /// Whether the person has read what `/caffeinate` does and turned it on, one word, inside the
 /// global state directory.
@@ -166,6 +181,12 @@ const MAX_THEME_BYTES: usize = 128;
 /// The tag is only matched against the catalogs that shipped, so what is bounded here is a file
 /// anybody with the account can edit being handed on at any length.
 const MAX_LANGUAGE_BYTES: usize = 128;
+
+/// The longest sidebar file worth reading back.
+///
+/// The file holds at most the ten section ids, about 150 bytes, so one past this is not a file the
+/// program wrote and is read as absent rather than split into lines.
+const MAX_SIDEBAR_BYTES: usize = 1024;
 
 /// The longest style of editing worth reading back.
 ///
@@ -215,6 +236,40 @@ pub fn directory() -> Option<PathBuf> {
 /// recalls the model and theme the user chose, it simply adds nothing to them.
 fn writable() -> Option<PathBuf> {
     bravebot_agent::home::writable()
+}
+
+/// The global state directory once it exists and is readable only by its owner, or `None` where it
+/// may not be written or could not be made so.
+///
+/// Resolved through [`writable`], so an incognito session gets `None` here and every choice below
+/// writes nothing. The directory is created, or an existing one narrowed, before anything is
+/// written into it ([STATE-1](../../../docs/specs/state-directory.md#STATE-1)).
+fn ready() -> Option<PathBuf> {
+    let dir = writable()?;
+    bravebot_agent::home::create_directory(&dir).ok()?;
+    Some(dir)
+}
+
+/// Write `contents` as `file` in the global state directory, and say whether it was kept.
+///
+/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
+/// rather than half of the new one. Most callers drop the answer: a choice that could not be saved
+/// still applies to the session that made it.
+fn keep(file: &str, contents: &[u8]) -> bool {
+    ready().is_some_and(|dir| bravebot_agent::home::replace(&dir.join(file), contents).is_ok())
+}
+
+/// Remove `file` from the global state directory, and say whether it is gone.
+///
+/// A file that was not there is already gone, so that counts as done.
+fn forget(file: &str) -> bool {
+    let Some(dir) = ready() else {
+        return false;
+    };
+    match std::fs::remove_file(dir.join(file)) {
+        Ok(()) => true,
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
 /// Read stored prompts, oldest first.
@@ -411,18 +466,10 @@ fn normalize_saved_model(name: &str) -> String {
 
 /// Record the model the user chose.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than a half-written name. Best-effort like everything else here: a choice that could not
-/// be saved still applies to the session that made it.
+/// Best-effort like everything else here: a choice that could not be saved still applies to the
+/// session that made it.
 pub fn save_model(model: &str) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ = bravebot_agent::home::replace(&dir.join(MODEL_FILE), format!("{model}\n").as_bytes());
+    keep(MODEL_FILE, format!("{model}\n").as_bytes());
 }
 
 /// Record the model the user chose, as `config` says it is to be recorded: the tier word where a tier
@@ -457,17 +504,9 @@ pub fn parse_theme(contents: &str) -> Option<String> {
 
 /// Record the theme the user chose.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than a half-written name. Best-effort like everything else here.
+/// Best-effort like everything else here.
 pub fn save_theme(theme: &str) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ = bravebot_agent::home::replace(&dir.join(THEME_FILE), format!("{theme}\n").as_bytes());
+    keep(THEME_FILE, format!("{theme}\n").as_bytes());
 }
 
 /// The effort level the user chose, or `None` if they never have.
@@ -523,27 +562,15 @@ pub fn effort(recorded: Option<Effort>, settings: &bravebot_config::Settings) ->
 
 /// Record the effort level the user chose, or forget the choice where they asked for none.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than a half-written word. Best-effort like everything else here.
+/// Best-effort like everything else here.
 pub fn save_effort(effort: Option<Effort>) {
-    let Some(dir) = writable() else {
-        return;
+    match effort {
+        // Removed rather than written empty. A person asking for no level is asking for the state
+        // they were in before they ever chose, and an empty file read back is the same answer
+        // either way.
+        None => forget(EFFORT_FILE),
+        Some(effort) => keep(EFFORT_FILE, format!("{}\n", effort.as_str()).as_bytes()),
     };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    // Removed rather than written empty. A person asking for no level is asking for the state they
-    // were in before they ever chose, and an empty file read back is the same answer either way.
-    let Some(effort) = effort else {
-        let _ = std::fs::remove_file(dir.join(EFFORT_FILE));
-        return;
-    };
-
-    let _ = bravebot_agent::home::replace(
-        &dir.join(EFFORT_FILE),
-        format!("{}\n", effort.as_str()).as_bytes(),
-    );
 }
 
 /// The word naming the style of editing the user chose, or `None` if they never chose one.
@@ -574,22 +601,14 @@ pub fn parse_editing(contents: &str) -> Option<String> {
 
 /// Record the style of editing the user chose.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice rather
-/// than a half-written word. Best-effort like everything else here.
+/// Best-effort like everything else here.
 ///
 /// The ordinary style is written rather than removing the file, unlike the effort level: there the
 /// absent file and the chosen absence are the same request, and here they are not. Somebody who turns
 /// vi editing off has made a choice that has to outlast the session, and removing the file would let a
 /// settings file turn it back on for them tomorrow.
 pub fn save_editing(word: &str) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ = bravebot_agent::home::replace(&dir.join(EDITING_FILE), format!("{word}\n").as_bytes());
+    keep(EDITING_FILE, format!("{word}\n").as_bytes());
 }
 
 /// The language tag the person chose with `/language`, or `None` if they never have.
@@ -633,28 +652,16 @@ pub fn parse_language(contents: &str) -> Option<String> {
 /// Record the language tag the person chose, or forget the choice where they asked for none, and
 /// say whether that was done.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
-/// rather than half a tag. Unlike its neighbours this answers whether the write happened, because
-/// a language applies from the next start and nothing in this session changes with it: a choice
-/// that could not be kept has no other effect for the person to notice.
+/// Unlike its neighbours this answers whether the write happened, because a language applies from
+/// the next start and nothing in this session changes with it: a choice that could not be kept has
+/// no other effect for the person to notice.
 pub fn save_language(tag: Option<&str>) -> bool {
-    let Some(dir) = writable() else {
-        return false;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return false;
+    match tag {
+        // Removed rather than written empty, as the effort level is: asking for no choice is asking
+        // for the state before there was one. A file that is not there is already that state.
+        None => forget(LANGUAGE_FILE),
+        Some(tag) => keep(LANGUAGE_FILE, format!("{tag}\n").as_bytes()),
     }
-
-    // Removed rather than written empty, as the effort level is: asking for no choice is asking for
-    // the state before there was one. A file that is not there is already that state.
-    let Some(tag) = tag else {
-        return match std::fs::remove_file(dir.join(LANGUAGE_FILE)) {
-            Ok(()) => true,
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-        };
-    };
-
-    bravebot_agent::home::replace(&dir.join(LANGUAGE_FILE), format!("{tag}\n").as_bytes()).is_ok()
 }
 
 /// The standing answer about auto-vetting, or `None` where nobody has recorded one.
@@ -700,14 +707,98 @@ pub fn parse_vetting(contents: &str) -> Option<bool> {
 
 /// Record the answer about auto-vetting the person gave.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous answer
-/// rather than half a word. Best-effort like everything else here.
+/// Best-effort like everything else here.
 ///
 /// Off is written rather than the file removed, for the reason the editing style is: the absent
 /// file and the chosen absence are not the same request here. Somebody who turned auto-vetting off
 /// has made a decision that has to outlast the session, and removing the file would let a settings
 /// file turn it back on for them tomorrow.
 pub fn save_vetting(auto: bool) {
+    let word = match auto {
+        true => "on",
+        false => "off",
+    };
+    keep(VETTING_FILE, format!("{word}\n").as_bytes());
+}
+
+/// The lines of the file naming the info panel sections turned off, or `None` where there is no
+/// file, it is not a regular file, it is longer than [`MAX_SIDEBAR_BYTES`] or it cannot be read
+/// (PANEL-17).
+///
+/// Global as the open/closed choice is: it is about their screen and not about a checkout. The
+/// lines are text the store only splits; the interface reads each against its own fixed list of
+/// section names and never draws one.
+pub fn load_sidebar() -> Option<Vec<String>> {
+    use std::io::Read;
+    let path = directory()?.join(SIDEBAR_FILE);
+    // Asked before the open, which a pipe would block.
+    if !std::fs::metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_SIDEBAR_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_SIDEBAR_BYTES {
+        return None;
+    }
+    Some(parse_sidebar(&String::from_utf8(bytes).ok()?))
+}
+
+/// The lines of the file's contents, each trimmed, with the blank ones skipped.
+///
+/// A file with no line is an empty list, which the interface reads as every section drawn.
+pub fn parse_sidebar(contents: &str) -> Vec<String> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Record the sections of the info panel that are turned off, one on each line.
+///
+/// With none, the file is written empty rather than removed, so a choice made earlier is replaced.
+/// Best-effort, as [`save_panel`] is.
+pub fn save_sidebar(hidden: &[&str]) {
+    let mut contents = String::new();
+    for id in hidden {
+        contents.push_str(id);
+        contents.push('\n');
+    }
+    keep(SIDEBAR_FILE, contents.as_bytes());
+}
+
+/// What the person last chose with the usage-ping switch, or `None` where they never used it.
+///
+/// Resolved through [`writable`], as [`load_vetting`] is. An incognito session pings nothing, so
+/// what the switch says there decides nothing either.
+pub fn load_usage_ping() -> Option<bool> {
+    let path = writable()?.join(USAGE_PING_FILE);
+    parse_usage_ping(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Read the choice out of the file's contents.
+///
+/// Exactly the two words, after trimming, as [`parse_vetting`] reads its own. A file holding
+/// anything else is no choice, which leaves the ping as the other switches say.
+pub fn parse_usage_ping(contents: &str) -> Option<bool> {
+    match contents.lines().next()?.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Record what the person chose with the usage-ping switch.
+///
+/// Off is written rather than the file removed, for the reason [`save_vetting`] gives. Written by
+/// rename, so an interrupted write leaves the previous choice. Nothing is written in an incognito
+/// session.
+pub fn save_usage_ping(on: bool) {
     let Some(dir) = writable() else {
         return;
     };
@@ -715,11 +806,89 @@ pub fn save_vetting(auto: bool) {
         return;
     }
 
-    let word = match auto {
+    let word = match on {
         true => "on",
         false => "off",
     };
-    let _ = bravebot_agent::home::replace(&dir.join(VETTING_FILE), format!("{word}\n").as_bytes());
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a switch that cannot be written stays as it was, which the toggle reads back"
+    )]
+    let _ =
+        bravebot_agent::home::replace(&dir.join(USAGE_PING_FILE), format!("{word}\n").as_bytes());
+}
+
+/// Whether the daily usage ping is on, and what turned it off if it is not.
+///
+/// The one place every caller gathers the switches: the managed file, the two variables, the
+/// person's own settings file and the switch's file, plus whether the session records anything.
+/// The rule over them is [`bravebot_config::usage_ping::resolve`]. Read fresh on every call, so a
+/// switch changed in one window is seen by the next ask in another.
+pub fn usage_ping() -> bravebot_config::usage_ping::UsagePing {
+    use bravebot_config::env_var;
+    // Lossy rather than dropped, so a value that is not text is still set: for `DO_NOT_TRACK` that
+    // is off, and for the other it is not `0`, which is all PING-2 reads it for.
+    let usage_ping_variable =
+        std::env::var_os(env_var::USAGE_PING).map(|value| value.to_string_lossy().into_owned());
+    let do_not_track =
+        std::env::var_os(env_var::DO_NOT_TRACK).map(|value| value.to_string_lossy().into_owned());
+    bravebot_config::usage_ping::resolve(bravebot_config::usage_ping::Inputs {
+        incognito: writable().is_none(),
+        managed_off: bravebot_config::Managed::load().usage_ping_off(),
+        usage_ping_variable: usage_ping_variable.as_deref(),
+        do_not_track: do_not_track.as_deref(),
+        setting: bravebot_config::Settings::written_usage_ping(),
+        switch: load_usage_ping(),
+    })
+}
+
+/// Whether a front end has told the person what the usage ping sends.
+///
+/// One marker for every front end, so somebody told in the terminal is not told again by the
+/// desktop. The ping is not sent before this is true. Resolved through [`writable`], so an
+/// incognito session reads it as not shown and writes nothing.
+pub fn usage_ping_notice_shown() -> bool {
+    writable().is_some_and(|dir| dir.join(USAGE_PING_NOTICE_FILE).exists())
+}
+
+/// Record that the person was told what the usage ping sends.
+///
+/// Nothing is written in an incognito session.
+pub fn mark_usage_ping_notice_shown() {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a marker that cannot be written leaves the notice due, so it is shown again"
+    )]
+    let _ = bravebot_agent::home::replace(&dir.join(USAGE_PING_NOTICE_FILE), b"shown\n");
+}
+
+/// Whether a front end should show the usage-ping notice now: the ping is on and nobody has
+/// shown the notice yet.
+///
+/// A person who turned the ping off is not told about a ping that will not be sent. If they
+/// turn it on later, the next start tells them before the first ping.
+pub fn usage_ping_notice_due() -> bool {
+    usage_ping().is_on() && !usage_ping_notice_shown()
+}
+
+/// The line that says what the usage ping sends, where it is due, recorded as shown before it is
+/// returned.
+///
+/// The terminal's startup screen and the runs without one (`-p`, `--plain`, ACP) all take the line
+/// here, so each says it once and the first to say it stops the others. Recorded first, so a
+/// front end that fails to show it does not say it on every launch.
+pub fn take_usage_ping_notice() -> Option<String> {
+    if !usage_ping_notice_due() {
+        return None;
+    }
+    mark_usage_ping_notice_shown();
+    Some(bravebot_i18n::t!(usage_ping_notice).to_string())
 }
 
 /// Whether the person last left the info panel open, or `None` where they never pressed its key.
@@ -745,21 +914,13 @@ pub fn parse_panel(contents: &str) -> Option<bool> {
 
 /// Record whether the person left the info panel open.
 ///
-/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice.
 /// Best-effort like everything else here.
 pub fn save_panel(open: bool) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
     let word = match open {
         true => "open",
         false => "closed",
     };
-    let _ = bravebot_agent::home::replace(&dir.join(PANEL_FILE), format!("{word}\n").as_bytes());
+    keep(PANEL_FILE, format!("{word}\n").as_bytes());
 }
 
 /// The width the person last dragged the info panel to, or `None` where they never did.
@@ -787,17 +948,9 @@ pub fn parse_panel_width(contents: &str) -> Option<u16> {
 
 /// Record the width the person dragged the info panel to.
 ///
-/// Written as [`save_panel`] is: to a temporary file and renamed, best-effort.
+/// Best-effort, as [`save_panel`] is.
 pub fn save_panel_width(width: u16) {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-
-    let _ =
-        bravebot_agent::home::replace(&dir.join(PANEL_WIDTH_FILE), format!("{width}\n").as_bytes());
+    keep(PANEL_WIDTH_FILE, format!("{width}\n").as_bytes());
 }
 
 /// Whether the person has agreed to `/caffeinate` before, so it turns on without the explanation.
@@ -820,15 +973,9 @@ pub fn parse_caffeinate(contents: &str) -> bool {
 
 /// Record that the person read what `/caffeinate` does and turned it on.
 ///
-/// Written to a temporary file and renamed, as the panel's choice is.
+/// Best-effort, as the panel's choice is.
 pub fn save_caffeinate_confirmed() {
-    let Some(dir) = writable() else {
-        return;
-    };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
-        return;
-    }
-    let _ = bravebot_agent::home::replace(&dir.join(CAFFEINATE_FILE), b"confirmed\n");
+    keep(CAFFEINATE_FILE, b"confirmed\n");
 }
 
 /// The embeddings endpoint the person was told about before turning retrieval on, if they were.
@@ -848,15 +995,10 @@ pub fn parse_retrieval_disclosed(contents: &str) -> Option<String> {
 
 /// Record that the person was told retrieval sends to `endpoint`, and say whether it was kept.
 pub fn save_retrieval_disclosed(endpoint: &str) -> bool {
-    let Some(dir) = writable() else {
-        return false;
-    };
-    bravebot_agent::home::create_directory(&dir).is_ok()
-        && bravebot_agent::home::replace(
-            &dir.join(RETRIEVAL_DISCLOSED_FILE),
-            format!("{}\n", endpoint.trim()).as_bytes(),
-        )
-        .is_ok()
+    keep(
+        RETRIEVAL_DISCLOSED_FILE,
+        format!("{}\n", endpoint.trim()).as_bytes(),
+    )
 }
 
 /// Encode a prompt as one line.
@@ -1129,7 +1271,10 @@ and this?
             "the merged settings do not hold the home file's key"
         );
         assert_eq!(
-            checkout.model_ignored().count(),
+            checkout
+                .not_obeyed_all()
+                .filter(|(key, _)| *key == "model")
+                .count(),
             1,
             "the checkout's key is not what is reported as ignored"
         );
@@ -1244,6 +1389,74 @@ and this?
         }
     }
 
+    /// The file is one section name on each line. Surrounding space and blank lines are dropped,
+    /// and nothing is looked up here: a line that names no section is the interface's to refuse.
+    #[test]
+    fn the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else() {
+        assert_eq!(
+            parse_sidebar("plan\n  files \n\n\t\nmcp-servers"),
+            ["plan", "files", "mcp-servers"]
+        );
+        assert_eq!(parse_sidebar("a b\r\n"), ["a b"]);
+        for contents in ["", "\n", "  \n\n"] {
+            assert!(parse_sidebar(contents).is_empty(), "{contents:?}");
+        }
+    }
+
+    /// A sidebar file grown past what the program writes is no choice, which leaves every section
+    /// on, and one at the bound or an ordinary one still answers with its lines.
+    ///
+    /// The fault it rejects: a read that takes a file of any size into lines.
+    #[test]
+    fn an_oversize_sidebar_file_is_no_choice_and_one_at_the_bound_is_read() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        save_sidebar(&["plan", "files"]);
+        assert_eq!(load_sidebar(), Some(vec!["plan".into(), "files".into()]));
+        let path = directory().expect("a state directory").join(SIDEBAR_FILE);
+
+        let exact = "x\n".repeat(MAX_SIDEBAR_BYTES / 2);
+        assert_eq!(exact.len(), MAX_SIDEBAR_BYTES);
+        std::fs::write(&path, &exact).expect("a file at the bound");
+        assert_eq!(load_sidebar().map(|lines| lines.len()), Some(512));
+        std::fs::write(&path, format!("{exact}x")).expect("a file past the bound");
+        assert_eq!(load_sidebar(), None);
+        std::fs::write(&path, "plan\n".repeat(1 << 20)).expect("a large file");
+        assert_eq!(load_sidebar(), None);
+    }
+
+    /// The sidebar is read at every start, so a pipe where the file should be must not block the
+    /// open: it is no choice, which leaves every section on.
+    ///
+    /// The fault it rejects: a read that opens before asking what the path is, which holds up
+    /// every start of the program.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_where_the_sidebar_file_should_be_is_no_choice_and_holds_nothing_up() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        save_sidebar(&["plan"]);
+        let path = directory().expect("a state directory").join(SIDEBAR_FILE);
+        std::fs::remove_file(&path).expect("the saved file");
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo is not installed, so a pipe is not tried");
+            return;
+        }
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(load_sidebar());
+        });
+        assert_eq!(
+            received
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the read waited on the pipe"),
+            None
+        );
+    }
+
     /// A file that does not hold a plain positive number is no width, so the panel keeps its 36
     /// columns rather than taking whatever a half-written or hand-edited file made of it.
     #[test]
@@ -1295,6 +1508,19 @@ and this?
                 !parse_caffeinate(contents),
                 "{contents:?} became an agreement"
             );
+        }
+    }
+
+    /// Off has to read back as off rather than as no answer, or a person who turned the ping off
+    /// would have it turned back on by the default.
+    #[test]
+    fn the_usage_ping_switch_is_read_back_both_ways_and_nothing_else_is_a_choice() {
+        assert_eq!(parse_usage_ping("on\n"), Some(true));
+        assert_eq!(parse_usage_ping("off\n"), Some(false));
+        assert_eq!(parse_usage_ping("  off  \n"), Some(false));
+        assert_eq!(parse_usage_ping("off\non\n"), Some(false));
+        for contents in ["", "\n", "true\n", "0\n", "On\n", "of\n"] {
+            assert_eq!(parse_usage_ping(contents), None, "{contents:?}");
         }
     }
 

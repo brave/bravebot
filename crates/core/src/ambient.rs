@@ -160,6 +160,14 @@ const REACHING: &[Reaching] = &[
         authority: Authority::LoggedInTool,
         spends: &[],
     },
+    // The Jenkins CLI reads its stored login from the system keychain or its own file store, or a
+    // token from `JK_TOKEN`, and acts as the person on the controller it is logged in to with
+    // `run start`, `job configure` and `cred`, as well as with the reads.
+    Reaching {
+        program: "jk",
+        authority: Authority::LoggedInTool,
+        spends: &[],
+    },
     Reaching {
         program: "aws",
         authority: Authority::LoggedInTool,
@@ -622,6 +630,39 @@ mod tests {
                 authority: Authority::ContainerDaemon,
                 named: "docker",
             }]
+        );
+    }
+
+    /// The Jenkins CLI acts as the person on the controller it holds a login for, so a line that
+    /// starts it names it as `gh` is named, whichever command it runs and under a wrapper too.
+    #[test]
+    fn a_line_that_starts_the_jenkins_cli_names_it() {
+        for args in [
+            &["run", "view", "team/app", "12"][..],
+            &["log", "team/app", "12", "--tail", "50"],
+            &["run", "start", "team/app"],
+        ] {
+            assert_eq!(
+                spent_by(&plan(vec![step("jk", args)])),
+                vec![Spent {
+                    authority: Authority::LoggedInTool,
+                    named: "jk",
+                }],
+                "{args:?}"
+            );
+        }
+        let mut under_a_wrapper = vec!["30", "jk", "run", "ls", "team/app"];
+        assert_eq!(
+            spent_by(&plan(vec![step("timeout", &under_a_wrapper)])),
+            vec![Spent {
+                authority: Authority::LoggedInTool,
+                named: "jk",
+            }]
+        );
+        under_a_wrapper.remove(1);
+        assert!(
+            spent_by(&plan(vec![step("timeout", &under_a_wrapper)])).is_empty(),
+            "a word that merely follows the wrapper was read as the Jenkins CLI"
         );
     }
 

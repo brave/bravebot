@@ -614,6 +614,8 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             typed: &[],
             messaging: None,
             keeping_links: false,
+            default_repository: None,
+            found: Vec::new(),
             delegated: false,
             confined_to: None,
             offered: None,
@@ -1328,6 +1330,14 @@ impl Worked {
         self.work.count(changed_a_file, ran_a_program, failed);
     }
 
+    /// Count a background job's write, learned at its end in `round`: one write and no command,
+    /// since the command was counted when its line started (GROUND-1). A program made the change,
+    /// so TURN-4 does not say none ran, even in a later turn than the one that started the job.
+    fn count_job_write(&mut self, round: usize) {
+        self.count(round, true, false, false);
+        self.ran_a_program = true;
+    }
+
     /// Count what a delegate did in this run's workspace as this run's own, from the round it was
     /// taken back in, since that is when this run learns a file changed.
     fn adopt(&mut self, round: usize, delegate: Worked) {
@@ -1921,9 +1931,20 @@ fn collect_jobs<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
+    worked: &mut Worked,
+    round: usize,
     release: &mut ReleaseEnded<'_, S, R>,
 ) -> Result<(), TurnError> {
     let finished = jobs.ended(output_cap);
+    // Each job that left the tree different from how its line found it is a write in this round,
+    // and no command: that was counted when its line started (GROUND-1). From the driver's own
+    // marks, not from any output. Counted before anything below can fail or a check on an account
+    // can be stopped, since these jobs are reported now and no later route compares them again.
+    for ended in &finished {
+        if ended.changed_a_file {
+            worked.count_job_write(round);
+        }
+    }
     // Every finish is told before any is presented. A presentation that fails ends the turn, and a
     // job it never reached is marked reported already, so it would read as stopped with the turn.
     for ended in &finished {
@@ -1955,18 +1976,23 @@ fn collect_jobs<S: Sink, R: Reporter>(
             .printed
             .as_ref()
             .map(|_| conversation.next_reference());
+        // What was taken out of the text the planner may read, said after it. Empty where nothing
+        // was and where the output stays quarantined (RUN-21).
+        let mut colours = String::new();
         let presented = match (&ended.printed, &reserved) {
-            (Some(printed), Some(slot)) => Some(
-                policy
-                    .present(
+            (Some(printed), Some(slot)) => {
+                let (shown, note) = policy
+                    .present_output(
                         "job_output",
                         slot.clone(),
                         &origin,
                         printed,
                         conversation.quarantine(),
                     )
-                    .map_err(|d| TurnError::Precommit(d.to_string()))?,
-            ),
+                    .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                colours = note;
+                Some(shown)
+            }
             _ => None,
         };
 
@@ -1996,8 +2022,8 @@ fn collect_jobs<S: Sink, R: Reporter>(
             {
                 match release(policy, conversation.quarantine(), reporter, &reference.slot) {
                     Some(text) => {
-                        let shown = policy
-                            .present(
+                        let (shown, note) = policy
+                            .present_output(
                                 "job_output",
                                 reference.slot.clone(),
                                 &origin,
@@ -2005,6 +2031,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
                                 conversation.quarantine(),
                             )
                             .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                        colours = note;
                         released_from = Some(reference.slot.to_string());
                         Some(shown)
                     }
@@ -2083,7 +2110,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     _ => String::new(),
                 };
                 format!(
-                    "{told} What it printed {}:\n\n{text}{rest}",
+                    "{told} What it printed {}:\n\n{text}{rest}{colours}",
                     tools::Look::SINCE
                 )
             }
@@ -2200,7 +2227,7 @@ fn tell_of_kept_jobs(
 ///
 /// A call joins the run when it is a read that asks no one anything and the person has no hook for
 /// its finishing, which could change a file the next read is about to look at. A call that would
-/// be held as a third repeat ends the run, because holding it asks a question. Held-ness is taken
+/// be held as a third repeat ends the run, because a held call is refused and not read. Held-ness is taken
 /// from a copy of the count advanced over the run, as the loop will advance the real one.
 fn reads_that_run_together(
     calls: &[ToolCall],
@@ -2212,6 +2239,8 @@ fn reads_that_run_together(
     let mut counting = repeats.clone();
     let mut together = 0;
     for call in calls {
+        // A `job_output` wait that the hold lets through (TURN-9) is never a read-ahead call, so
+        // the loop has already stopped at it before `is_held` is asked, and the two agree.
         if !tools::can_read_ahead(call, confined_to, offered)
             || hooks
                 .firing(
@@ -2491,6 +2520,15 @@ struct Reported<'a> {
     links: &'a mut Vec<crate::links::LinkSet>,
 }
 
+/// Whether a tool's result is text a program printed, which is shown to the planner with its
+/// complete colour codes taken out and counted (RUN-21).
+///
+/// From the tool's name, which the planner chose from the list it was offered, and never from
+/// what the tool returned.
+fn prints_a_program_output(tool: &str) -> bool {
+    matches!(tool, "run" | "job_output" | "read_output")
+}
+
 /// What `answer_the_turn` settles before the first round and `run_rounds` only reads.
 #[expect(
     clippy::struct_excessive_bools,
@@ -2541,6 +2579,9 @@ struct State<'s> {
     wakeup: Option<Wakeup>,
     watches: Vec<crate::watch::Armed>,
     links: Vec<crate::links::LinkSet>,
+    /// The issues and pull requests this turn has named, which each is reported once from
+    /// (PANEL-16).
+    references: Vec<crate::links::Reference>,
     armed: usize,
     advice_asked: usize,
     // What the planner has put to other sessions this turn, which the bound on them and a
@@ -2625,7 +2666,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Lent rather than held, because the turn is not the only run that will want them. There is
     // one trail to record into, one screen to report to and one person to ask, however many
     // delegates this turn goes on to start, so each takes the lock for one call at a time.
-    let confirming = crate::shared::Lent::new(confirmer);
+    let confirming = crate::shared::Lent::confirming(confirmer);
     let reporting = crate::shared::Lent::new(reporter);
     let recording = crate::shared::Lent::new(sink);
     let confirmer = confirming.turn();
@@ -3046,6 +3087,9 @@ where
     }
     if !offered_names(&offered, "read_file") {
         policy.without_reading_files();
+    }
+    if task.permission_mode.nobody_to_ask() {
+        policy.without_anybody_to_ask();
     }
     if !offers_read_output {
         policy.without_reading();
@@ -3570,6 +3614,7 @@ where
         // about several files.
         watches: Vec::new(),
         links: Vec::new(),
+        references: Vec::new(),
         armed: 0,
         // How many questions the planner has put to its advisor this turn, which the bound on them
         // is read against.
@@ -4147,33 +4192,31 @@ where
             let mut asking = crate::confirm::Timed::new(confirmer);
             let ran_at = Instant::now();
             let wait_mark = policy.file_authority().wait_mark();
-            let refused = if state.repeats.is_held(call) {
-                match crate::repeated_call::hold(
+            // A bounded wait on a job that is still running is a different call from the ones
+            // around it and is never held (TURN-9). It is decided from the planner's own name and
+            // arguments and from whether the job's process is running, never from what it printed.
+            let refused = if state
+                .jobs
+                .is_waited_on_while_running(policy, call, task.deadlines)
+            {
+                state.repeats.passed_without_counting();
+                None
+            } else if state.repeats.is_held(call) {
+                crate::repeated_call::hold(
                     call,
                     state.repeats.count(),
                     state.steps,
-                    task.delegate.is_none(),
                     policy,
-                    &mut asking,
                     reporter,
-                ) {
-                    crate::repeated_call::Held::Run => {
-                        state.repeats.clear();
-                        None
-                    }
-                    crate::repeated_call::Held::Refuse => Some(tools::refused_without_running(
-                        policy,
-                        reporter,
-                        state.mcp.as_ref().map(|(offer, _)| offer),
-                        &*conversation.quarantine(),
-                        call,
-                        crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
-                    )),
-                    crate::repeated_call::Held::Stop => {
-                        attach_vetted_pictures(policy, conversation, &mut attached);
-                        return Err(TurnError::Cancelled { attempts: Some(0) });
-                    }
-                }
+                );
+                Some(tools::refused_without_running(
+                    policy,
+                    reporter,
+                    state.mcp.as_ref().map(|(offer, _)| offer),
+                    &*conversation.quarantine(),
+                    call,
+                    crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
+                ))
             } else {
                 None
             };
@@ -4394,10 +4437,18 @@ where
                     .as_deref()
                     .map(|note| format!(" {note}"))
                     .unwrap_or_default();
+                // A listing that did not ask to read, where `read: true` would have handed it
+                // over in one result in place of these references.
+                let read_instead = sentences::read_would_release(
+                    &output.tool,
+                    output.read_asked,
+                    setup::vet_content_is(task, plan.offers_vet_content),
+                    true,
+                );
                 let listed = |described: &str| {
                     format!(
                         "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}{linked}{unmatched}\n\n{described}",
+             quarantined, one reference each.{capped}{linked}{unmatched}{read_instead}\n\n{described}",
                         output.tool,
                         references.len(),
                     )
@@ -4491,6 +4542,9 @@ where
                 // what the processor answered. The number is stored apart from text.
                 let a_choice = output.chosen.is_some();
                 let chosen = output.chosen.take();
+                // What the planner is told about the colour codes taken out of what a program
+                // printed: empty where none were and for every other tool.
+                let mut colours = String::new();
                 let presented = match &output.deferred {
                     Some(deferral) => policy
                         .defer(
@@ -4528,6 +4582,18 @@ where
                                 conversation.quarantine(),
                             )
                             .map(Presentation::Quarantined),
+                        None if prints_a_program_output(&output.tool) => policy
+                            .present_output(
+                                "tool_result",
+                                slot.clone(),
+                                &origin,
+                                &output.text,
+                                conversation.quarantine(),
+                            )
+                            .map(|(shown, note)| {
+                                colours = note;
+                                shown
+                            }),
                         None => policy.present(
                             "tool_result",
                             slot.clone(),
@@ -4660,15 +4726,32 @@ where
                         released
                             .text
                             .map(|released| {
-                                policy
-                                    .present(
-                                        "tool_result",
-                                        reference.slot.clone(),
-                                        &origin,
-                                        &released,
-                                        conversation.quarantine(),
-                                    )
-                                    .map(|shown| (shown, reference.slot.clone()))
+                                // Only what a program printed has its colour codes taken out.
+                                // What a server or a fetched page returned is released as it is.
+                                if a_run {
+                                    policy
+                                        .present_output(
+                                            "tool_result",
+                                            reference.slot.clone(),
+                                            &origin,
+                                            &released,
+                                            conversation.quarantine(),
+                                        )
+                                        .map(|(shown, note)| {
+                                            colours = note;
+                                            (shown, reference.slot.clone())
+                                        })
+                                } else {
+                                    policy
+                                        .present(
+                                            "tool_result",
+                                            reference.slot.clone(),
+                                            &origin,
+                                            &released,
+                                            conversation.quarantine(),
+                                        )
+                                        .map(|shown| (shown, reference.slot.clone()))
+                                }
                             })
                             .transpose()
                             .map_err(|d| TurnError::Precommit(d.to_string()))?
@@ -4870,7 +4953,7 @@ where
                         let respelled = sentences::respelled_note(output.respelled);
                         let composed = |rest: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
+                                "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}{colours}",
                                 output.tool
                             )
                         };
@@ -5033,9 +5116,21 @@ where
                             }
                             _ => String::new(),
                         };
+                        // A search that did not ask to read, where `read: true` would have
+                        // returned it: said so the planner does not spend a `vet_content` call
+                        // and a round on a result one repeated call releases. Decided from the
+                        // argument, the mode and the size the reference states.
+                        let read_instead = sentences::read_would_release(
+                            &output.tool,
+                            output.read_asked,
+                            setup::vet_content_is(task, plan.offers_vet_content),
+                            reference
+                                .bytes
+                                .is_some_and(|bytes| bytes != 0 && bytes <= output_cap),
+                        );
                         let composed = |described: &str, advice: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{history}",
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{history}",
                                 output.tool,
                             )
                         };
@@ -6705,6 +6800,123 @@ mod tests {
         );
     }
 
+    /// SESSION-40: a delegate whose thread has ended when a round starts is taken back without a
+    /// wait, and its requests, cache figures and written tokens are added to the turn's account
+    /// there, once.
+    ///
+    /// Rejects a collection that counts a delegate's requests only where it waited for the
+    /// delegate, which would charge a turn whose delegate was back before the next round for fewer
+    /// requests than were made (#3841).
+    #[test]
+    fn a_delegate_taken_back_at_the_start_of_a_round_is_counted_once() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
+        );
+        const LIMIT: Duration = Duration::from_secs(5);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "take back a delegate that has already ended");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let report = policy.label_piped_input("REPORTED BACK".to_string());
+        // The planner's two requests, made before the round that takes the delegate back.
+        let mut account = crate::outcome::Spent {
+            requests: 2,
+            ..Default::default()
+        };
+        let collected = std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let answered = scope.spawn(move || -> Joined {
+                (
+                    crate::delegate::Ended {
+                        delegated: Ok(crate::delegate::Delegated {
+                            report,
+                            kind: "one-round".to_string(),
+                            usage: bravebot_aichat::protocol::Usage {
+                                prompt_tokens: 1200,
+                                completion_tokens: 30,
+                                cached: bravebot_aichat::protocol::Cached {
+                                    read_tokens: 1100,
+                                    ..Default::default()
+                                },
+                            },
+                            requests: 1,
+                        }),
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 1,
+                        took: Duration::from_millis(5),
+                        worked: Default::default(),
+                    },
+                    Default::default(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            });
+            let began = std::time::Instant::now();
+            while !answered.is_finished() {
+                assert!(began.elapsed() < LIMIT, "the delegate's thread never ended");
+                std::thread::yield_now();
+            }
+            let mut delegates = vec![Working {
+                join_started: None,
+                id: DelegateId::nth(1),
+                seeded: seeded.clone(),
+                checkout: None,
+                rounds: 1,
+                budget: None,
+                stop: Default::default(),
+                batch: super::Batch::alone(DelegateId::nth(1)),
+                handle: answered,
+            }];
+            // As the start of a round collects: waiting for none of them.
+            let collected = collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+                &mut account,
+                false,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+                &mut Worked::default(),
+                1,
+            )
+            .unwrap();
+            assert!(
+                delegates.is_empty(),
+                "a delegate whose thread had ended was left uncollected"
+            );
+            collected
+        });
+
+        assert_eq!(collected, 1, "the ended delegate was not collected once");
+        assert_eq!(
+            account.requests, 3,
+            "the planner's two requests and the delegate's one were not all counted"
+        );
+        assert_eq!(
+            account.cached.read_tokens, 1100,
+            "what the delegate read out of the cache was not counted"
+        );
+        assert_eq!(
+            account.output_tokens, 30,
+            "what the delegate wrote was not counted"
+        );
+    }
+
     /// RUN-26. Every finish found between rounds is reported, and a stop the person asked for is
     /// recorded in the trail, before any job's output is handed to the planner. A turn that fails
     /// part way through the handing therefore still says how each job ended, including the one it
@@ -6758,6 +6970,8 @@ mod tests {
                 &mut policy,
                 &mut conversation,
                 &mut reporter,
+                &mut Worked::default(),
+                0,
                 &mut |_, _, _, _| None,
             )
         };
@@ -10214,7 +10428,7 @@ mod tests {
             );
             assert_eq!(run(&["search", "search", "search"], &hooked), 3);
 
-            // The same call three times running is held at the third, which asks the person.
+            // The same call three times running is held at the third, which is refused and not read.
             let same = |count: usize| -> Vec<ToolCall> {
                 (0..count)
                     .map(|_| {

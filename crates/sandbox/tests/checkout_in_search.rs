@@ -11,13 +11,15 @@ use bravebot_sandbox::programs::{
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-/// An empty directory under this repository's `target/test-scratch`, which is outside the system
-/// temporary directory: the lookup leaves that directory out whatever a test records,
-/// so a fixture there could not show a directory being left out for the reason under test.
+#[path = "../test-support/scratch_root.rs"]
+mod scratch_root;
+
+/// An empty directory under the shared scratch root, which is outside the system temporary
+/// directory (`test-support/scratch_root.rs`): the lookup leaves that directory out whatever a
+/// test records, so a fixture there could not show a directory being left out for the reason under
+/// test.
 fn fresh(name: &str) -> PathBuf {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch")
-        .join(format!("checkout-in-search-{name}"));
+    let directory = scratch_root::scratch_dir(&format!("checkout-in-search-{name}"));
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).unwrap();
     directory.canonicalize().unwrap()

@@ -327,8 +327,12 @@ fn the_target_under_the_pointer_is_drawn_underlined_and_bold_and_nothing_else_ch
                 fixture.name
             );
         }
-        if matches!(hovered.hit, Hit::Scrollbar) {
-            assert!(changed.is_empty(), "{}: the track was marked", fixture.name);
+        if matches!(hovered.hit, Hit::Scrollbar | Hit::Face) {
+            assert!(
+                changed.is_empty(),
+                "{}: a picture or a track was marked",
+                fixture.name
+            );
             continue;
         }
         assert!(
@@ -414,6 +418,9 @@ fn said_of(name: &str) -> Option<&'static str> {
         "the hint that leaves shell mode" => t!(hover_footer_cancel_shell),
         "the hint that pastes a picture" => t!(hover_footer_paste),
         "the scrollbar beside the transcript" => t!(hover_scrollbar),
+        "the prompt drawn above the view" => t!(hover_pinned),
+        "the button that returns a held view to its tail" => t!(hover_to_tail),
+        "the face on the opening screen" => t!(hover_face),
         "a place in the text of the box" => return None,
         "a call at rest" => t!(hover_call_open),
         "the marker that leads a reply" => t!(hover_reply),
@@ -687,7 +694,7 @@ fn the_line_gives_way_to_a_note_a_banner_the_files_line_and_a_search_being_typed
 #[test]
 fn the_line_for_a_link_of_the_panel_shows_the_address_that_opens_and_not_the_shorthand() {
     let (mut session, buffer) = super::popups::with_a_pull_request_and_an_issue();
-    let cell = super::popups::shown_at(&buffer, "Pull request");
+    let cell = super::popups::shown_at(&buffer, "brave/bravebot#3200");
     handle_mouse(&mut session, moved(cell.0, cell.1));
     let hovered = drawn_again(&mut session);
     let (row, _) = the_hint_row(&session, &hovered);

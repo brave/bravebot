@@ -48,7 +48,16 @@ impl Editor {
         settings["provider"] = json!({"acp-test": {
             "options": {"baseURL": endpoint}, "models": {"test": {}}
         }});
-        let settings_file = project.join("test-settings.json");
+        // Beside the project and not in it: a file inside a directory a stage may write is read as
+        // a checkout's file where the sandbox cannot hold one file back (PERM-14), which would
+        // drop the model and the gateway this file names.
+        let settings_file = project.with_file_name(format!(
+            "{}-test-settings.json",
+            project
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project")
+        ));
         std::fs::write(&settings_file, settings.to_string()).unwrap();
         let settings = settings_file;
         let (sent, written) = mpsc::channel();
@@ -483,6 +492,36 @@ fn an_editor_selects_three_modes_and_bypass_is_refused() {
     }
 }
 
+/// AUTO-1, MODE-1: a session an editor opens asks where the person's settings open a window's in
+/// auto. The editor is offered asking, accepting edits and planning, and is the person who answers
+/// its questions, so the session is reported as asking and a write in it is put to the editor. The
+/// fault it rejects is an editor's session left in the mode a window's opens in, which the editor
+/// has no way to leave and no way to show.
+#[test]
+fn a_session_an_editor_opens_asks_where_the_setting_opens_a_windows_in_auto() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("start-in-auto");
+    let (config, _requests, _server) = endpoint::endpoint(writing(), None);
+    let mut editor = Editor::on_settings(
+        json!({"model": "acp-test/test", "permissions": {"startInAuto": true}}),
+        &config.endpoint,
+        &project,
+    );
+    let id = editor.request("session/new", json!({"cwd": project, "mcpServers": []}));
+    let made = editor.response(id)["result"].clone();
+    assert_eq!(made["modes"]["currentModeId"], "ask", "{made}");
+    let session = made["sessionId"].as_str().unwrap().to_string();
+    let prompt = editor.prompt(&session, text("write it"));
+    // Untrusted, so that a write in asking is a question: see `run_write`.
+    editor.answer_next(selected("reject-once"));
+    let asked = editor.answer_next(selected("reject-once"));
+    assert_eq!(asked["params"]["toolCall"]["kind"], "edit", "{asked}");
+    editor.response(prompt);
+    assert!(!project.join("output.txt").exists());
+}
+
 /// No turn starts, and so no model is asked, until the trust question is answered.
 #[test]
 fn no_turn_starts_before_the_trust_question_is_answered() {
@@ -659,6 +698,36 @@ fn a_slash_word_in_a_prompt_is_text() {
     editor.response(prompt);
     server.join().unwrap();
     assert!(requests.recv().unwrap().contains("/clear"));
+}
+
+/// INSTR-9: a session an editor hosts is told so, in the system prompt of the request its first
+/// prompt makes, and is not told it is in the desktop app or the terminal.
+///
+/// Rejects: an adapter that leaves the bridge's default front end in place, which says the desktop
+/// app, and one that says nothing.
+#[test]
+fn the_planner_is_told_an_editor_hosts_the_session() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("front-end-sentence");
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+    editor.response(prompt);
+    server.join().unwrap();
+    let sent: Value = serde_json::from_str(&requests.recv().unwrap()).unwrap();
+    let system = sent["messages"][0].to_string();
+    assert!(
+        system.contains(
+            "The person is using an editor that hosts this session over the Agent Client Protocol."
+        ),
+        "{system}"
+    );
+    assert!(!system.contains("desktop app"), "{system}");
+    assert!(!system.contains("terminal client"), "{system}");
 }
 
 /// What a model says is a string in a notification. A reply shaped like a protocol message is not

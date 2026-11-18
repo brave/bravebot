@@ -404,6 +404,12 @@ impl Workspace {
         within_stores(&self.stores, resolved)
     }
 
+    /// The stores [`Self::in_the_stores`] asks about, for a mark of the tree taken after this
+    /// borrow of the workspace has ended (a background job's, GROUND-1).
+    pub(crate) fn stores(&self) -> &[std::path::PathBuf] {
+        &self.stores
+    }
+
     /// Stand in for the state directory, so a test does not depend on whose machine it runs on.
     #[cfg(test)]
     #[must_use]
@@ -453,10 +459,12 @@ impl Workspace {
     }
 
     /// Stand in for the environment's home directory, so a test does not depend on whose machine
-    /// it runs on.
-    #[cfg(test)]
+    /// it runs on. The directory set is what every leading `~` stands for, what a `~` in a shared
+    /// skill directory resolves against (INSTR-17), and what the refusal of a credential location
+    /// in `/add-dir` reads (SANDBOX-18).
+    #[doc(hidden)]
     #[must_use]
-    pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
+    pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
         self
     }
@@ -518,8 +526,9 @@ impl Workspace {
     ///
     /// A permission rule is written about a file (PERM-7), and a name reaches the file it lands on
     /// by more routes than its own spelling: a symbolic link, a case variant on a volume that
-    /// ignores case, an 8.3 short name. `None` where the name lands on itself, and where
-    /// [`Workspace::resolve`] refuses it. A file tool resolves the name and so refuses it on its
+    /// ignores case, an 8.3 short name. `None` where the name lands on itself, where it lands on a
+    /// name that is not text, which a lossy spelling would give the rules of its lookalike
+    /// (PATH-003), and where [`Workspace::resolve`] refuses it. A file tool resolves the name and so refuses it on its
     /// own; a path something else opens has to be held to [`Workspace::confines`] and
     /// [`Workspace::refuse_misleading`] instead.
     ///
@@ -527,7 +536,9 @@ impl Workspace {
     /// rules a second question, so the answer can add a refusal or an approval and can never
     /// remove one.
     pub(crate) fn landing(&self, named: &str) -> Option<String> {
-        let landed = self.relative_display(&self.resolve(named).ok()?);
+        let resolved = self.resolve(named).ok()?;
+        resolved.to_str()?;
+        let landed = self.relative_display(&resolved);
         let typed = Path::new(named)
             .components()
             .filter(|component| !matches!(component, Component::CurDir));

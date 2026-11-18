@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld } from './drive-world.mjs'
+import { SHOTS_DIR } from './drive-support.mjs'
 
 const { root, home, profile, env } = makeWorld('bravebot-connectors-', { baseURL: 'http://127.0.0.1:9/v1', project: false, dirs: ['home/github-mcp-server'] })
 delete env.NO_PROXY
@@ -18,7 +19,7 @@ writeFileSync(program, '#!/bin/sh\n')
 chmodSync(program, 0o755)
 const file = (name) => { try { return readFileSync(join(home, '.bravebot', name), 'utf8') } catch { return '' } }
 
-const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
+const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? SHOTS_DIR
 mkdirSync(output, { recursive: true })
 let app, page, errors
 try {

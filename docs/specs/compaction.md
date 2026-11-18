@@ -510,7 +510,10 @@ request, so the figure compared is lowered by the bytes dropped at four to a tok
 estimate used elsewhere in this file and errs towards summarising.
 
 The stub is a fixed sentence with the tool's name and the size dropped, and nothing of the result:
-no prefix, no excerpt. The decision uses the role, the tag, the position and the length of the
+no prefix, no excerpt. The sentence says the result is no longer in the request, that calling the
+tool again returns it (for a read, only the lines needed), and that a call which changes something
+is not to be repeated. It is the same for every tool and does not say the planner still has the
+result. The decision uses the role, the tag, the position and the length of the
 message, so the driver branches on nothing a result says. The name is the planner's own call or the
 driver's own prefix, and is repeated only if it is made of the characters a tool name is made of. A
 result shorter than about 500 tokens stays, which keeps every reference to quarantined content
@@ -532,6 +535,10 @@ call.
 stubs.
 
 `verified-by: bravebot_agent::conversation::an_old_tool_result_is_a_stub_in_the_request_and_whole_in_the_record`
+`verified-by: bravebot_agent::conversation::a_dropped_result_says_it_is_no_longer_in_the_request_and_can_be_had_again`
+`verified-by: bravebot_agent::conversation::a_delegates_dropped_result_says_it_can_be_had_again`
+`verified-by: bravebot_agent::conversation::the_stub_is_shorter_than_a_result_that_is_dropped`
+`verified-by: bravebot_agent::turn::a_read_repeated_after_its_result_was_dropped_sends_the_lines_again`
 `verified-by: bravebot_agent::conversation::a_tool_result_in_the_recent_exchanges_is_left_alone`
 `verified-by: bravebot_agent::conversation::dropping_results_that_free_too_little_is_not_done`
 `verified-by: bravebot_agent::conversation::a_short_result_is_kept_however_old`
