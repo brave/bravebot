@@ -2081,7 +2081,9 @@ mod tests {
 
     /// The names [`kde_open_marker_outcome`] sets to a program or to a directory that holds a marker
     /// handler, with what each is set to: `true` for a directory tree and `false` for the path of
-    /// the marker program. A name that holds a plug-in directory, a plug-in name or a flag has no
+    /// the marker program. `HOME` is a directory tree too, and is run with `XDG_DATA_HOME`,
+    /// `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` removed, since Qt reads `$HOME/.local/share` and
+    /// `$HOME/.config` only then. A name that holds a plug-in directory, a plug-in name or a flag has no
     /// marker form (a marker program is not a plug-in), so it is not in the list and the test says
     /// which names it did not exercise.
     #[cfg(unix)]
@@ -2095,6 +2097,7 @@ mod tests {
         ("XDG_CONFIG_DIRS", true),
         ("KDEHOME", true),
         ("KDEDIRS", true),
+        ("HOME", true),
     ];
 
     /// Runs the installed `kde-open` on an address that only a marker handler opens, with the
@@ -2202,6 +2205,9 @@ mod tests {
             entry(&directory, "planted-ran");
             default(&directory, "planted-ran");
         }
+        // The places Qt reads under `HOME` when the `XDG_` directories are not set.
+        entry(&tree.join(".local/share/applications"), "planted-ran");
+        default(&tree.join(".config"), "planted-ran");
 
         let mut command = std::process::Command::new(kde_open);
         command
@@ -2236,6 +2242,11 @@ mod tests {
                 script("planted-ran")
             };
             command.env(name, value);
+            if name == "HOME" {
+                for unset in ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"] {
+                    command.env_remove(unset);
+                }
+            }
         }
         // A `kde-open` that does not end within the deadline is killed with every program it
         // started, and the test fails naming the variable under test, as it does for `xdg-open`.
