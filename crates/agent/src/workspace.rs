@@ -600,15 +600,17 @@ impl Workspace {
 
     /// [`Workspace::is_the_named_settings_file`] for a path that is not text.
     pub(crate) fn reaches_the_named_settings_file(&self, path: &Path) -> bool {
-        self.reaches_the_named_settings_file_where(path, &volume_folds_case)
+        self.reaches_the_named_settings_file_where(path, &volume_case_folding)
     }
 
-    /// [`Workspace::reaches_the_named_settings_file`] with the answer to whether the volume holding
-    /// a directory folds case given, so a test states it on any host.
+    /// [`Workspace::reaches_the_named_settings_file`] with what the volume holding a directory says
+    /// about case given, so a test states it on any host. The file is protected, so a volume that
+    /// could not be asked is read as one that folds: a miss would leave the file open to a write
+    /// under another case (TRUST-2).
     pub(crate) fn reaches_the_named_settings_file_where(
         &self,
         path: &Path,
-        volume_folds: &dyn Fn(&Path) -> bool,
+        volume_case: &dyn Fn(&Path) -> bravebot_core::CaseFolding,
     ) -> bool {
         if self.named_settings.is_empty() {
             return false;
@@ -626,7 +628,9 @@ impl Workspace {
             // A volume that folds case holds `Grant.json` and `grant.json` as one file, which a
             // write to a file not made yet reaches by either spelling, and `same_file` cannot
             // tell for a file that is not there.
-            let folds = named.parent().is_some_and(volume_folds);
+            let folds = named
+                .parent()
+                .is_some_and(|directory| volume_case(directory).restricts());
             spellings
                 .iter()
                 .any(|spelled| names_one_path(spelled, named, folds))
