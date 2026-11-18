@@ -22,6 +22,9 @@ mod aliases;
 #[path = "../test-support/turns.rs"]
 mod turns;
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{
     self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING,
@@ -8091,6 +8094,70 @@ fn a_deny_rule_holds_when_a_listing_walks_the_directory_above_the_file() {
     assert!(
         listed,
         "the listing named nothing at all, so it proves nothing about what it left out"
+    );
+}
+
+/// PERM-3, PERM-7: a `Read(./)` deny rule in the managed file fences every file in the workspace,
+/// not only the root. A read of a file by name is refused and its contents do not reach the
+/// planner, and a listing, a search and a repository map return no file. The same files are
+/// returned when no rule is in force, so the empty results are the rule's.
+#[test]
+fn a_managed_rule_naming_the_workspace_root_refuses_a_read_and_hides_every_file_from_a_walk() {
+    let scratch = Scratch::new("permissions-managed-root-deny");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("marker.txt"), "CANARY_CONTENTS_ONE").unwrap();
+    std::fs::write(
+        scratch.path.join("sub/walked_only.rs"),
+        "pub fn canary_declaration() {} // CANARY_CONTENTS_TWO\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let elsewhere = Scratch::new("permissions-managed-root-deny-home");
+    let home = elsewhere.path.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let managed = elsewhere.path.join("managed.json");
+    std::fs::write(&managed, r#"{"permissions": {"deny": ["Read(./)"]}}"#).unwrap();
+    let settings = bravebot_config::Settings::layered(Some(home), Some(workspace.root()), None)
+        .under(&bravebot_config::Managed::at(&managed));
+    let (permissions, rejected) =
+        bravebot_agent::permissions::from_settings(&settings, None, workspace.root());
+    assert!(rejected.is_empty(), "a rule in this test did not parse");
+
+    let calls = [
+        ("read_file", r#"{"path":"marker.txt"}"#),
+        ("list_files", r#"{"directory":"."}"#),
+        (
+            "search",
+            r#"{"pattern":"CANARY_CONT.NTS","directory":".","output":"lines"}"#,
+        ),
+        ("repo_map", r#"{"directory":"."}"#),
+    ];
+    let bodies =
+        run_calls_under(&workspace, permissions, trusting_the_workspace(), &calls).join("\n");
+    for leaked in ["CANARY_CONTENTS", "canary_declaration", "walked_only"] {
+        assert!(
+            !bodies.contains(leaked),
+            "{leaked} reached the planner under a managed Read(./) rule: {bodies}"
+        );
+    }
+    assert!(
+        bodies.contains("deny rule"),
+        "the planner was not told a rule refused: {bodies}"
+    );
+
+    // Without the rule the same calls return the files, so the results above are not empty for
+    // another reason.
+    let bodies = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trusting_the_workspace(),
+        &calls,
+    )
+    .join("\n");
+    assert!(
+        bodies.contains("CANARY_CONTENTS_ONE") && bodies.contains("canary_declaration"),
+        "the control run returned neither file: {bodies}"
     );
 }
 
@@ -22363,7 +22430,7 @@ fn a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_b
             )],
         ),
     );
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -34424,9 +34491,11 @@ fn requests_for_one_run_vouching(
 }
 
 /// A file the session's profile does not let a program write, and one it does not let a strict
-/// program read: in the target directory, which is neither the temporary directory nor the home.
+/// program read: under the scratch root, which is neither the temporary directory nor the home.
+/// The root is made here, since a file written into it or a redirect into it needs it to be there.
 fn outside_the_session(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("sandbox-mode-{name}"))
+    std::fs::create_dir_all(scratch_root::scratch_root()).expect("the scratch root");
+    scratch_root::scratch_dir(&format!("sandbox-mode-{name}"))
 }
 
 /// SANDBOX-22: `off` starts a program with no profile, so a write the profile refuses lands, and the
@@ -35212,9 +35281,7 @@ fn keeping_a_request_for_every_session_is_read_by_another_session() {
 /// public halves of a key at one of ssh's default names and of `work`, which the ssh configuration
 /// names: two keys ssh could offer.
 fn a_profile_with_two_keys(name: &str) -> std::path::PathBuf {
-    let profile = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-scratch")
-        .join(format!("turn-two-keys-{name}"));
+    let profile = scratch_root::scratch_dir(&format!("turn-two-keys-{name}"));
     let _ = std::fs::remove_dir_all(&profile);
     std::fs::create_dir_all(profile.join(".ssh")).expect("an .ssh");
     for key in ["id_ed25519.pub", "work.pub"] {
@@ -43157,7 +43224,7 @@ fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
         ),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut shown = ShownAfterAVet::new(true);
@@ -44340,7 +44407,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
@@ -44580,7 +44647,7 @@ fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_r
         tool_request("read_output", r#"{"ref":"ref:1"}"#),
         reply_with("done"),
     ]);
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let mut sink = RecordingSink::new();
     let mut confirmer = ReadsWhatItRan::new(false);
     let shown = confirmer.shown.clone();
@@ -50567,9 +50634,7 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
         return;
     }
     for (confining, written) in [(false, true), (true, false)] {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("delegate-confined-{confining}"));
+        let top = crate::scratch_root::scratch_dir(&format!("delegate-confined-{confining}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("session")).unwrap();
         std::fs::create_dir_all(top.join("beside")).unwrap();
@@ -50745,9 +50810,7 @@ fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
         (bravebot_sandbox::SandboxMode::WorkspaceWrite, false),
         (bravebot_sandbox::SandboxMode::Off, true),
     ] {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("delegate-mode-{mode}"));
+        let top = crate::scratch_root::scratch_dir(&format!("delegate-mode-{mode}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("session")).unwrap();
         std::fs::create_dir_all(top.join("beside")).unwrap();
@@ -50911,9 +50974,7 @@ fn a_delegate_of_a_strict_turn_cannot_read_what_a_workspace_write_one_reads() {
         (bravebot_sandbox::SandboxMode::WorkspaceWrite, true),
         (bravebot_sandbox::SandboxMode::Strict, false),
     ] {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("delegate-read-{mode}"));
+        let top = crate::scratch_root::scratch_dir(&format!("delegate-read-{mode}"));
         let _ = std::fs::remove_dir_all(&top);
         std::fs::create_dir_all(top.join("session")).unwrap();
         std::fs::create_dir_all(top.join("beside")).unwrap();
@@ -73682,7 +73743,8 @@ fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpo
     let mut c = bravebot_agent::Conversation::new();
     let mut r = bravebot_agent::report::RecordingReporter::default();
     let _ = take_a_turn_reporting(
-        &config_for(&format!("{url}/REVIEW_DIAGNOSTIC_SECRET")),
+        &config_for(&format!("{url}/REVIEW_DIAGNOSTIC_SECRET"))
+            .with_patience(three_requests_and_no_more()),
         &workspace,
         &mut c,
         Task::new("REVIEW-PARENT-LEAK"),
@@ -89669,16 +89731,14 @@ impl Drop for ArmingWatches {
 }
 
 impl PathPlaces {
-    /// Under `target/test-homes` rather than `target/test-scratch`. Under bypass a stage is given a
+    /// A directory beside the scratch root rather than under it. Under bypass a stage is given a
     /// row for each entry of every directory on the way to the home's credential directories
     /// (SANDBOX-28), and on macOS the rows are in the profile `sandbox-exec` takes as an argument.
-    /// `target/test-scratch` holds an entry for each test that ran before, and with about 8000 of
+    /// The scratch root holds an entry for each test that ran before, and with about 8000 of
     /// them the profile is larger than the arguments a program can be started with, so no stage
     /// starts.
     fn new(name: &str) -> Self {
-        let top = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-homes")
-            .join(format!("path-{name}"));
+        let top = scratch_root::isolated_dir("test-homes").join(format!("path-{name}"));
         let _ = std::fs::remove_dir_all(&top);
         let home = top.join("home");
         let beside = top.join("beside");
@@ -96212,6 +96272,16 @@ fn a_turn_allowing_every_edit<C: bravebot_agent::confirm::Confirmer + Send>(
     calls: Vec<String>,
 ) {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    a_turn_allowing_every_edit_in(&workspace, mode, inner, calls);
+}
+
+/// [`a_turn_allowing_every_edit`] in a workspace the caller built.
+fn a_turn_allowing_every_edit_in<C: bravebot_agent::confirm::Confirmer + Send>(
+    workspace: &Workspace,
+    mode: bravebot_agent::PermissionMode,
+    inner: &mut C,
+    calls: Vec<String>,
+) {
     let mut replies = calls;
     replies.push(reply_with("understood"));
     let (endpoint, _received) = serve_sequence(replies);
@@ -96220,7 +96290,7 @@ fn a_turn_allowing_every_edit<C: bravebot_agent::confirm::Confirmer + Send>(
     turns::run_with_trust(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
-        &workspace,
+        workspace,
         &Task::new("set the hooks up")
             .with_permission_mode(mode)
             .with_permissions(rules(&[], &[], &["Edit(**)"])),
@@ -96354,6 +96424,105 @@ fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later(
             "{file}: bypassing did not write"
         );
     }
+}
+
+/// MODE-2 and PERM-9 for the settings file named with `--settings`. A session reads it as a layer
+/// that grants an `allow` rule, a sandbox mode and a network setting wherever it sits, so a write to
+/// it through a tool is put to the person under accepting edits and under an `Edit(**)` allow rule,
+/// as a write to `.bravebot/settings.json` is, and is refused where nobody can be asked. A write to
+/// another file beside it is answered by the mode and the rule, so both are live.
+#[test]
+fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_to_the_named_settings_file() {
+    use bravebot_agent::PermissionMode;
+
+    let setup = |name: &str| {
+        let scratch = Scratch::new(name);
+        std::fs::create_dir(scratch.path.join("tooling")).unwrap();
+        std::fs::write(scratch.path.join("tooling/grant.json"), "{\"old\":1}\n").unwrap();
+        std::fs::write(scratch.path.join("tooling/other.json"), "{\"old\":1}\n").unwrap();
+        let workspace = Workspace::new(&scratch.path)
+            .expect("workspace")
+            .with_named_settings_file(Some(&scratch.path.join("tooling/grant.json")));
+        (scratch, workspace)
+    };
+    let edit = |path: &str| {
+        tool_request_2(
+            "edit_file",
+            &format!(r#"{{"path":"{path}","old_text":"old","new_text":"new"}}"#),
+        )
+    };
+    let calls = || vec![edit("tooling/other.json"), edit("tooling/grant.json")];
+    let read = |scratch: &Scratch, name: &str| {
+        std::fs::read_to_string(scratch.path.join("tooling").join(name)).unwrap()
+    };
+
+    // A person behind accepting edits is asked about the named file and not the other.
+    let (scratch, workspace) = setup("named-settings-accept-edits-asked");
+    let mut person = RemembersWrites::default();
+    a_turn_allowing_every_edit_in(
+        &workspace,
+        PermissionMode::AcceptEdits,
+        &mut person,
+        calls(),
+    );
+    assert_eq!(
+        person
+            .asked
+            .iter()
+            .map(|request| (request.path.as_str(), request.protected))
+            .collect::<Vec<_>>(),
+        [("tooling/grant.json", true)],
+        "only the edit of the named settings file should reach the person"
+    );
+    assert!(
+        read(&scratch, "other.json").contains("new"),
+        "an ordinary edit was not answered"
+    );
+
+    // Nobody behind it: refused, and the ordinary edit still goes through.
+    let (scratch, workspace) = setup("named-settings-accept-edits-unattended");
+    a_turn_allowing_every_edit_in(
+        &workspace,
+        PermissionMode::AcceptEdits,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(read(&scratch, "other.json").contains("new"), "control");
+    assert!(
+        read(&scratch, "grant.json").contains("old"),
+        "an edit of the named settings file nobody was asked about landed under accepting edits"
+    );
+
+    // Asking with an `Edit(**)` rule and nobody to ask: the rule answers nothing here.
+    let (scratch, workspace) = setup("named-settings-ask-unattended");
+    a_turn_allowing_every_edit_in(
+        &workspace,
+        PermissionMode::Ask,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(read(&scratch, "other.json").contains("new"), "control");
+    assert!(
+        read(&scratch, "grant.json").contains("old"),
+        "an allow rule answered an edit of the named settings file"
+    );
+
+    // Without the file named, the same turn writes it: the named flag is what protects it.
+    let (scratch, _named) = setup("named-settings-control");
+    a_turn_allowing_every_edit(
+        &scratch,
+        PermissionMode::AcceptEdits,
+        &mut bravebot_agent::Unattended,
+        calls(),
+    );
+    assert!(read(&scratch, "grant.json").contains("new"), "control");
+
+    // Bypassing is the person's flag and answers it.
+    let (scratch, workspace) = setup("named-settings-bypass");
+    let mut person = RemembersWrites::default();
+    a_turn_allowing_every_edit_in(&workspace, PermissionMode::Bypass, &mut person, calls());
+    assert!(person.asked.is_empty(), "{:?}", person.asked);
+    assert!(read(&scratch, "grant.json").contains("new"));
 }
 
 /// A definition naming the delegates it may start (DELEGATE-30) is offered those and no others by
@@ -99132,7 +99301,7 @@ fn fetch_script_turn(
         Some(checks) => serve_sequence_answering_checks_with(checks, script),
         None => serve_sequence_losing_every_check(script),
     };
-    let config = config_for(&endpoint);
+    let config = config_for(&endpoint).with_patience(three_requests_and_no_more());
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
     let mut inner = ApprovesFetchesAndWrites::default();

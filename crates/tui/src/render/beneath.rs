@@ -477,6 +477,7 @@ fn slash_lines(
             Origin::Skill(Source::Workspace) => t!(skill_from_project).to_string(),
             Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
             Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
+            Origin::Skill(Source::Plugin) => t!(skill_from_plugin).to_string(),
             Origin::Server { alias, .. } => {
                 t!(skill_from_mcp_server, alias = alias.as_str())
             }
@@ -563,7 +564,7 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The fifteen the file can move
+/// list names the key that answers rather than the key that used to. The sixteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
@@ -601,6 +602,7 @@ pub(super) fn shortcuts(
         (bindings.background_name(), "background a running command"),
         (bindings.panel_name(), "show or hide the info panel"),
         (bindings.todos_name(), t!(shortcut_todos)),
+        (bindings.peek_name(), t!(shortcut_peek)),
         (
             bindings.scope_name(),
             "earlier prompts: this session or all",

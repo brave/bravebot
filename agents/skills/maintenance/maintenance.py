@@ -10,7 +10,8 @@
     python3 agents/skills/maintenance/maintenance.py claims-collect --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py clean --work-dir DIR
 
-The scan reads every tracked source file and lists candidates in fourteen lanes: public items
+The scan reads every tracked source file except those under third_party/, which are published
+crates kept close to their release, and lists candidates in fourteen lanes: public items
 nothing names, items only tests name, attributes that silence a lint, blocks of lines repeated in
 several places, string literals repeated across files, files or functions past a length, deeply
 nested functions, modules that use many others, public functions no test names, shared mutable
@@ -131,7 +132,9 @@ COMMENTED_OUT = 2
 
 AREAS = (
     "area/trust", "area/tools", "area/turns", "area/interface", "area/cli",
-    "area/delegation", "area/backends", "area/skus", "area/i18n",
+    "area/delegation", "area/backends", "area/skus", "area/i18n", "area/acp", "area/plugins",
+    "area/mcp", "area/background", "area/remote", "area/sandbox", "area/browser", "area/desktop",
+    "area/release", "area/connectors",
 )
 INFRASTRUCTURE = "infrastructure"
 INFRASTRUCTURE_PATHS = ("contrib/", "agents/", ".github/", "Makefile", "scripts/")
@@ -146,6 +149,11 @@ LANGUAGE = {
 # by function name, a workflow, a manifest. Read as plain text for references only.
 REFERENCE_ONLY = re.compile(r"(?:^|/)(?:Makefile|[^/]+\.(?:toml|ya?ml|json|sh|html|css))$")
 NEVER_READ = re.compile(r"(?:^|/)(?:Cargo\.lock|pnpm-lock\.yaml|package-lock\.json)$")
+# Published crates patched only to remove the programs they start (SANDBOX-30). They are outside
+# the workspace, its lints and `cargo fmt`, and third_party/README.md says to update one by
+# replacing `src/` with the next release, so a change to one adds to the differences that README
+# has to list. No lane reads them, and their names count for no reference.
+VENDORED = re.compile(r"^third_party/")
 LARGEST_READ = 4_000_000
 
 TEST_DIRECTORIES = {
@@ -530,7 +538,7 @@ def read_tree(root):
     """Every tracked file worth reading, as `Source`, keyed by path."""
     sources = {}
     for name in tracked_files(root):
-        if NEVER_READ.search(name):
+        if NEVER_READ.search(name) or VENDORED.search(name):
             continue
         language = LANGUAGE.get(Path(name).suffix)
         if language is None and not REFERENCE_ONLY.search(name):
@@ -1183,7 +1191,9 @@ COMMENTED_CODE = {
         r"|return\b.*|raise\b.*|[\w.]+\(.*\)|[\w.\[\]]+\s*[-+*/|&]?=\s*[^=\s].*)"
     ),
 }
-TODO_MARKER = re.compile(r"\b(?:TODO|FIXME|HACK|XXX)\b")
+# `\b` matches between `O` and `-`, so a spec clause ID such as TODO-2 would match. The `(?!-\d)`
+# stops it, and still matches `TODO-list`.
+TODO_MARKER = re.compile(r"\b(?:TODO|FIXME|HACK|XXX)\b(?!-\d)")
 ISSUE_REFERENCE = re.compile(r"#\d+|issues/\d+|\bGH-\d+")
 
 
@@ -1221,14 +1231,20 @@ def commented_out_blocks(source):
 def unissued_todos(source):
     """The lines holding a `TODO`, `FIXME`, `HACK` or `XXX` in a comment, with no issue named. A
     marker inside a string is not one: its place in `source.code`, where comments are blanked and
-    strings are kept, is not blank."""
+    strings are kept, is not blank. Nor is one inside a backtick code span, which quotes the word
+    (an odd number of backticks of the comment come before it on its line; a backtick in the code
+    before the comment does not count), or one that is a clause ID like TODO-2. A span that runs
+    over several lines is not recognised."""
     found = []
     for number, line in enumerate(source.text.split("\n"), start=1):
-        marked = TODO_MARKER.search(line)
-        if not marked or source.is_test(number) or ISSUE_REFERENCE.search(line):
+        if source.is_test(number) or ISSUE_REFERENCE.search(line):
             continue
-        if not source.code[number - 1][marked.start() : marked.end()].strip():
-            found.append(number)
+        code = source.code[number - 1]
+        for marked in TODO_MARKER.finditer(line):
+            ticks = sum(1 for at in range(marked.start()) if line[at] == "`" and not code[at].strip())
+            if ticks % 2 == 0 and not code[marked.start() : marked.end()].strip():
+                found.append(number)
+                break
     return found
 
 

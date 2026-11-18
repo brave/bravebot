@@ -15,6 +15,10 @@ CLAUSE_HEADING = re.compile(r"^###\s+([A-Z]+)-(\d+)\s*:\s*(.*)$")
 ANCHOR = re.compile(r'<a id="[^"]*"></a>')
 VERIFIED_BY = re.compile(r"verified-by:\s*([^`\n]+)")
 TEST_FN = re.compile(r"^\s*fn\s+([A-Za-z0-9_]+)\s*\(")
+PROOF_FN = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?proof\s+fn\s+([A-Za-z0-9_]+)\s*[(<]")
+# The crates `make check-verus` runs Verus on, which contrib/check-verus.py names in `CRATES`.
+VERUS_CRATES = re.compile(r"^CRATES\s*=\s*\{([^}]*)\}", re.M)
+VERUS_RUNNER = Path("contrib/check-verus.py")
 EM_DASH = "—"
 
 
@@ -274,12 +278,31 @@ def crate_directories():
     return mapping
 
 
+def verus_crates():
+    """The crate directories Verus verifies, from `CRATES` in contrib/check-verus.py. A proof in any
+    other crate is never run, so it pins nothing."""
+    if not VERUS_RUNNER.is_file():
+        return []
+    found = VERUS_CRATES.search(VERUS_RUNNER.read_text(encoding="utf-8"))
+    if not found:
+        return []
+    return [Path(one) for one in re.findall(r'"([^"]+)"\s*:', found.group(1))]
+
+
 class TestIndex:
-    """Every `#[test]` function in the workspace, by name and by file."""
+    """Every `#[test]` function in the workspace, and every Verus `proof fn` in a crate Verus
+    verifies, by name and by file."""
 
     def __init__(self, crates=None):
         self.crates = crate_directories() if crates is None else crates
         self.by_name = {}
+        for crate in verus_crates():
+            for source in sorted((crate / "src").rglob("*.rs")):
+                lines = source.read_text(encoding="utf-8", errors="replace").split("\n")
+                for number, raw in enumerate(lines, start=1):
+                    name = PROOF_FN.match(raw)
+                    if name:
+                        self.by_name.setdefault(name.group(1), []).append((source, number))
         for source in sorted(Path("crates").rglob("*.rs")):
             lines = source.read_text(encoding="utf-8", errors="replace").split("\n")
             attributed = False

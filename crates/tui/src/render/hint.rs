@@ -507,10 +507,12 @@ pub(super) fn draw_hint(
     // for (FILES-4, FILES-9). Where the panel is not drawn nothing else shows the keys, so the line
     // names them, as it keeps a figure the panel does not draw (PANEL-8). Every other key does
     // nothing there, so nothing else on the line applies.
-    if session.files_open() {
+    if session.files_open() || session.peeking() {
         let panel_drawn = crate::panel::drawn(session, area.width);
         let keys = if panel_drawn {
             String::new()
+        } else if session.peeking() {
+            t!(peek_keys).to_string()
         } else {
             t!(files_keys).to_string()
         };

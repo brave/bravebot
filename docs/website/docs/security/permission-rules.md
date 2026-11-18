@@ -42,7 +42,9 @@ in force, an entry with more than one name is left out. The trust map is asked u
 link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
 `real/secret.txt`. A `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the
 project also covers the file under the relative name the file tools ask by, so in a session opened in
-your home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`. On Linux and macOS a `deny` or `ask`
+your home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`. A rule on a directory above the
+project covers the project's files the same way, so in a session opened in `~/proj`, `Read(~/**)`
+refuses `secrets/canary.txt`. On Linux and macOS a `deny` or `ask`
 rule also covers the name a file has under a second path to an open directory, such as a macOS
 firmlink or a Linux bind mount once you have opened it with `/add-dir`; the file is matched by its
 device and inode. An `allow` rule is matched as written, so a grant reaches no further than the

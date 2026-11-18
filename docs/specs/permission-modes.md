@@ -105,6 +105,11 @@ starts. The mode is not the person, so it does not answer it; where nobody is th
 write is refused ([PROMPT-9](prompting.md#PROMPT-9)). The match is on the path the planner named and
 on the path it lands on once links are followed, so a write through a link to `.git` asks. A file
 with a hard link is matched on each of its other names. The decision reads no byte of the body.
+The file `--settings` named is in the protected set, wherever it sits and also where it does not
+exist yet, so accepting edits does not answer a write to it and an `Edit` allow rule does not
+either; where nobody can ask, the write is refused. Bypassing answers it as it answers any protected
+path, and the sandbox profile on macOS still refuses a stage the file under bypassing
+([SANDBOX-14](sandboxing.md#SANDBOX-14)).
 Putting old bytes back with a rewind or `/hunks` is such a write, and this mode does not answer it
 either; only bypassing does ([SESSION-19](sessions.md#SESSION-19)).
 
@@ -115,6 +120,7 @@ remembered. It reads the destinations of the plan and the file system, never wha
 `verified-by: bravebot_agent::permission_mode::only_bypassing_answers_a_run_with_a_protected_destination`
 `verified-by: bravebot_agent::turn::accepting_edits_and_ask_put_a_redirection_into_a_hook_to_the_person`
 `verified-by: bravebot_agent::turn::an_unattended_turn_refuses_a_run_into_a_protected_path_and_tells_the_planner`
+`verified-by: bravebot_agent::turn::accepting_edits_and_an_allow_rule_do_not_answer_a_write_to_the_named_settings_file`
 
 **Why.** A write and a run are not the same risk. A write lands in a tree the person can read
 afterwards, and `git diff` shows them all of it; a program runs with everything their own shell has,
@@ -362,7 +368,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
-`verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
+`verified-by: bravebot_agent::opening::bypassing_asks_nothing_and_writes_nothing`
+`verified-by: bravebot_ui_bridge::project_questions_tests::bypass_opens_the_named_directories_unasked`
+`verified-by: bravebot_ui_bridge::project_questions_tests::bypass_says_a_named_directory_it_could_not_open`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`

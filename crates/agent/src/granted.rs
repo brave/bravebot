@@ -164,36 +164,45 @@ impl Store {
             .collect()
     }
 
-    /// Record that these rules were granted, in the session named.
+    /// Record that these rules were granted, in the session named, and say whether every line was
+    /// written.
     ///
     /// Appended, never rewritten. Best effort: a home that is full or read-only means the answer
     /// does not last past this session, which is the state every answer was in before this existed,
-    /// and is not a reason to refuse the rules the person has just granted.
-    pub fn grant(&self, rules: &[&Proposed], session: &str) {
+    /// and is not a reason to refuse the rules the person has just granted. The caller is told, so a
+    /// front can say the yes holds for this session only rather than that it was kept.
+    ///
+    /// Writes nothing and returns `false` in a session that may not add to the record
+    /// ([`may_be_added_to`]) and for no rules, where there was nothing to write.
+    pub fn grant(&self, rules: &[&Proposed], session: &str) -> bool {
         if !may_be_added_to() || rules.is_empty() {
-            return;
+            return false;
         }
         let Some(parent) = self.path.parent() else {
-            return;
+            return false;
         };
         if crate::home::create_directory(parent).is_err() {
-            return;
+            return false;
         }
         let Ok(mut file) = crate::home::append_to_file(&self.path) else {
-            return;
+            return false;
         };
+        let mut written = true;
         for rule in rules {
-            let Ok(mut encoded) = serde_json::to_string(&Written {
+            let encoded = serde_json::to_string(&Written {
                 workspace: WrittenPath::of(&self.workspace),
                 session: session.to_string(),
                 rule: rule.rule.clone(),
                 path: WrittenPath::of(&rule.path),
-            }) else {
+            });
+            let Ok(mut encoded) = encoded else {
+                written = false;
                 continue;
             };
             encoded.push('\n');
-            let _ = file.write_all(encoded.as_bytes());
+            written &= file.write_all(encoded.as_bytes()).is_ok();
         }
+        written
     }
 }
 

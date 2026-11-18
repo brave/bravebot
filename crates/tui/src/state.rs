@@ -21,6 +21,7 @@ mod files;
 mod hover;
 mod menu;
 mod open_loops;
+mod peek;
 mod queue;
 mod references;
 mod scheduling;
@@ -545,6 +546,8 @@ pub struct Session {
     /// Beside `panel` rather than in place of it, so that ending the state puts the panel back as it
     /// was: closed if it was closed.
     files: Option<crate::files_mode::State>,
+    /// The paste the info panel is showing whole, while its peek state is open.
+    peek: Option<crate::peek_mode::State>,
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
@@ -879,6 +882,14 @@ pub struct Session {
     /// the session asks: a run of two or more events was available in the same instant, so `\x03\x03`
     /// in one write is two key events rather than the two presses that gesture asks for.
     pub key_arrived_alone: bool,
+    /// Whether the next frame is to be preceded by giving the terminal's modes back and asking for
+    /// them again, and drawn in full, which `/redraw` sets (CMD-33).
+    ///
+    /// A terminal that was reset or cleared from outside forgets what the interface asked for, such
+    /// as the alternate screen, mouse reports, bracketed paste and focus reports, and shows nothing
+    /// where the next frame leaves a cell unchanged. No event reports it, so only a person's own
+    /// request repairs it.
+    pub retake_terminal: bool,
     /// Whether there was a picture on the clipboard when it was last looked at.
     ///
     /// Only ever a hint on screen, so a stale answer costs a line that is briefly wrong and nothing
@@ -1432,6 +1443,7 @@ impl Session {
             show_thinking: false,
             panel: false,
             files: None,
+            peek: None,
             panel_width: crate::panel::WIDTH,
             panel_sections: crate::panel::Sections::default(),
             panel_drag: false,
@@ -1518,6 +1530,7 @@ impl Session {
             leave_word_sent: false,
             command_sent_as_prompt: false,
             key_arrived_alone: true,
+            retake_terminal: false,
             image_on_clipboard: false,
             written: 0,
             progress: Default::default(),
@@ -1915,6 +1928,7 @@ impl Session {
         self.roster.clear();
         // The edits it listed were in the transcript that is gone (FILES-10).
         self.files = None;
+        self.peek = None;
         self.expandable_lines = 0;
         self.last_request = None;
         self.turns = 0;
@@ -2522,6 +2536,10 @@ impl Session {
     /// Returns whether the key was spent here. A shell line, a line with a row of the list
     /// highlighted, and one naming only files the turn can read are left for the arms that follow.
     /// Asked of the line the person wrote, which is the only kind that names files (NAME-1).
+    ///
+    /// Asked of the line as the box holds it, with each folded paste still a marker. The words
+    /// behind a marker are sent as text and name no file (NAME-12), and a person cannot see or edit
+    /// them to remove an `@` from them.
     pub fn refuse_unsendable_names(&mut self) -> bool {
         if self.shell || self.completion != 0 {
             return false;
@@ -2529,7 +2547,7 @@ impl Session {
         let Some(workspace) = self.named_in.clone() else {
             return false;
         };
-        let line = self.unfolded(self.input.trim());
+        let line = self.input.trim().to_string();
         let refused: Vec<String> = bravebot_agent::named::surveyed(
             &workspace,
             bravebot_mentions::referenced(&line),

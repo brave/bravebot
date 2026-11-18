@@ -75,6 +75,11 @@ pub struct State {
     /// opened and abandoned leaves nothing behind. A resumed one has this from the start:
     /// it already has a record, and the point of resuming is to write back to it.
     pub handle: Option<Handle>,
+    /// The id a fresh session's record will be written under, taken before there is a record
+    /// because something written elsewhere already named the session: a grant of the rules a
+    /// checkout proposed, which names the session the yes was given in as the terminal's does
+    /// (PERM-15). `None` once the handle exists, or where nothing has named the session yet.
+    pub named: Option<String>,
     pub turns: usize,
     /// Where each turn began and ended, and what came of it (SESSION-23).
     ///
@@ -202,7 +207,39 @@ pub enum Mcp {
     Started(Option<bravebot_agent::mcp::Session>),
 }
 
+/// A handle for a fresh session in `project`, under the id it was `named` by already if it was
+/// ([`State::named`]).
+pub fn begin_named(named: Option<String>, project: &Path) -> Handle {
+    match named {
+        Some(id) => Handle::begin_as(id, project, crate::FRONT, crate::agent_build()),
+        None => Handle::begin(project, crate::FRONT, crate::agent_build()),
+    }
+}
+
 impl State {
+    /// The id the session's record is written under, named now where it has none yet. Writes
+    /// nothing: the handle made later, by the first turn, takes this id.
+    pub fn id(&mut self, project: &Path) -> String {
+        if let Some(handle) = &self.handle {
+            return handle.id().to_string();
+        }
+        self.named
+            .get_or_insert_with(|| {
+                Handle::begin(project, crate::FRONT, crate::agent_build())
+                    .id()
+                    .to_string()
+            })
+            .clone()
+    }
+
+    /// How the session is written down, begun now if it has not been, under the id it was named
+    /// by already if it was.
+    pub fn handle_or_begin(&mut self, project: &Path) -> &mut Handle {
+        let named = self.named.take();
+        self.handle
+            .get_or_insert_with(|| begin_named(named, project))
+    }
+
     pub fn fresh(trust: TrustStore) -> Self {
         Self::blank(
             Conversation::new(),
@@ -224,6 +261,7 @@ impl State {
             answered_by_mode: false,
             kept: None,
             handle: None,
+            named: None,
             turns: 0,
             history: Some(Vec::new()),
             tokens: 0,

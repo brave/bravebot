@@ -27,7 +27,7 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: thirteen sources kept as files, two more only when named, and no others
+### INSTR-1: fifteen sources kept as files, two more only when named, and no others
 
 The table lists the files read without being asked. Two more, `~/.agents/skills/<name>/SKILL.md` and
 `~/.claude/skills/<name>/SKILL.md`, apply to every project and are read only for the directory
@@ -39,6 +39,8 @@ the person's settings name ([INSTR-17](#INSTR-17)).
 | `~/.bravebot/projects/<id>/rules.md` | the project [RECALL-1](recall.md#RECALL-1) names |
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
 | `~/.bravebot/agents/<name>.md` | every project |
+| `~/.bravebot/plugins/<name>/skills/<name>/SKILL.md` | every project, from an installed and enabled plugin ([PLUGIN-12](plugins.md#PLUGIN-12)) |
+| `~/.bravebot/plugins/<name>/agents/<name>.md` | every project, from an installed and enabled plugin ([PLUGIN-12](plugins.md#PLUGIN-12)) |
 | `~/.bravebot/rules/<name>.md` | every project, from the turn a file its `paths` match is touched, or every turn without `paths` |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
@@ -166,6 +168,8 @@ The user's own directory is read before the project. Both `AGENTS.md` files are 
 reach the planner, in that order, and a project skill replaces a global one of the same name.
 A skill in `~/.bravebot/skills` replaces one of the same name in a shared directory the person
 named ([INSTR-17](#INSTR-17)), and a project skill replaces both.
+A skill or definition from an installed plugin is the least specific file source: every other source
+of the same name replaces it ([PLUGIN-12](plugins.md#PLUGIN-12)).
 This is the same "most specific wins" rule the trust map uses for paths.
 
 **Why.** A habit carried between projects should hold until the project says otherwise. Shadowing
@@ -174,6 +178,8 @@ by name rather than merging is what lets a project override one skill without re
 `verified-by: bravebot_agent::preamble::the_home_agents_file_is_read_before_the_project_one`
 `verified-by: bravebot_agent::skills::a_workspace_skill_shadows_a_home_skill_of_the_same_name`
 `verified-by: bravebot_agent::agents::a_workspace_definition_shadows_a_home_one_of_the_same_name`
+`verified-by: bravebot_agent::plugin_sources::a_plugin_skill_is_shadowed_by_every_other_source_of_its_name`
+`verified-by: bravebot_agent::plugin_sources::a_plugin_definition_is_shadowed_by_every_other_source_of_its_name`
 
 <a id="INSTR-5"></a>
 ### INSTR-5: what is resolved goes into the system prompt, never into the conversation
@@ -879,7 +885,8 @@ A named directory is the person's own, so its skills are labelled from provenanc
 `~/.bravebot/skills` are, with the exception [SKILL-3](skills.md#SKILL-3) makes for a path the
 workspace can write to or reach through. They are read before `~/.bravebot/skills`, `.agents/skills`
 first, so a skill in `~/.bravebot/skills` shadows one of the same name in either, and a project skill
-shadows all of them ([INSTR-4](#INSTR-4)).
+shadows all of them ([INSTR-4](#INSTR-4)). A skill from an installed plugin is read before all of
+them and is shadowed by all of them ([PLUGIN-12](plugins.md#PLUGIN-12)).
 
 `doctor` names a directory of the two that exists and is not named, so a person who keeps skills for
 another agent is told they were found and left alone. That is decided from the two fixed paths and

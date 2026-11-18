@@ -69,7 +69,8 @@ test('an allow rule a project wrote is named with its file, and said not to stop
 
   assert.ok(markup.includes('<code>Bash(cargo test)</code>'), markup)
   assert.ok(markup.includes('<code>/home/someone/project/.bravebot/settings.json</code>'), markup)
-  assert.ok(markup.includes('only your own settings file may write one'), markup)
+  assert.ok(markup.includes('were not granted'), markup)
+  assert.ok(markup.includes('only one you grant, or one in your own settings file, is in force'), markup)
   assert.ok(markup.includes('You will still be asked'), markup)
 })
 
@@ -77,7 +78,7 @@ test('a directory a file named is said not to be open', () => {
   const markup = render(RulesBanner, { rules: rules({ directories: ['../other'] }) })
 
   assert.ok(markup.includes('<code>../other</code>'), markup)
-  assert.ok(markup.includes('This app opens none'), markup)
+  assert.ok(markup.includes('and they are not open'), markup)
 })
 
 test('the count is of everything not in force', () => {

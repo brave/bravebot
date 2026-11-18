@@ -9,6 +9,8 @@ import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
+// `t` is the transcript here, so the window's words go by another name.
+import { t as words } from '../i18n'
 import * as asking from '../asking'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
@@ -17,7 +19,8 @@ import { Diff } from './Diff'
 import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps } from './Composer'
 import { BotView } from './BotView'
 import type { BotConversation } from '../../shared/bot-history'
-import type { SessionSummary } from '../../shared/protocol'
+import type { FolderQuestion, RefusedFolder, RulesQuestion, SessionSummary } from '../../shared/protocol'
+import { unopened, waitingOn as firstAsked, waitingWords } from '../project-questions'
 import { Toasts } from './Toasts'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
@@ -75,6 +78,10 @@ interface Live {
   sandboxMode: SandboxMode
   trustRemembered?: KeptTrust | null
   rules?: SettingsRules | null
+  /** The questions asked after trust, while one is out, and the directories that could not be opened. */
+  rulesQuestion?: RulesQuestion | null
+  folderQuestion?: FolderQuestion | null
+  foldersRefused?: RefusedFolder[]
   /** The points this session can be put back to, newest first. */
   rewind?: RewindPoint[]
   sendRefused?: string | null
@@ -186,6 +193,8 @@ interface Props {
   footer?: ComposerFooterProps
   /** Whether the open conversation runs in a bot's home folder, which has no project to show. */
   noProject: boolean
+  /** Ask for a folder to open beside the project, through the main process's picker (TRUST-9). */
+  onAddFolder?: () => void
 }
 
 /** Dispatched on `document` by the View menu's Find item. */
@@ -358,6 +367,7 @@ export function Transcript({
   onOpenSummon,
   footer,
   noProject,
+  onAddFolder,
 }: Props): React.JSX.Element {
   const bottom = useRef<HTMLDivElement>(null)
   const marked = useRef<HTMLDivElement>(null)
@@ -681,6 +691,19 @@ export function Transcript({
             <leo-menu-item onClick={() => afterMenu(() => setWatches(true))}>
               <span className="menu-icon-row"><Icon name="eye-on" />File watches…</span>
             </leo-menu-item>
+            {/* Greyed while a turn runs, which the agent refuses anyway, with the reason under it:
+                a greyed item draws no tooltip. */}
+            {onAddFolder && !noProject && (
+              <leo-menu-item aria-disabled={live.running ? 'true' : undefined} data-test="add-folder"
+                onClick={() => { if (!live.running) afterMenu(onAddFolder) }}>
+                <span className="menu-icon-row"><Icon name="folder-new" />
+                  <span className="menu-text">
+                    <span className="menu-title">{words.uiFoldersAdd()}</span>
+                    {live.running && <span className="menu-subtitle">{words.uiFoldersWait()}</span>}
+                  </span>
+                </span>
+              </leo-menu-item>
+            )}
           </IconMenu>
         </div>}
         {!contextless && <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />}
@@ -826,6 +849,7 @@ export function Transcript({
           kept={live.trustRemembered ?? null}
           vetting={live.autoVetting === true}
           rules={live.rules ?? null}
+          refused={live.foldersRefused ?? []}
           onOpenParent={onOpenParent}
           onManage={() => setPermissions(true)}
         />
@@ -893,7 +917,8 @@ export function Transcript({
           session={live.handle}
           model={live.model}
           running={live.running}
-          askingTrust={!!live.askingTrust}
+          askingTrust={firstAsked(live) !== null}
+          waiting={waitingWords(firstAsked(live))}
           compacting={live.phase === 'compacting'}
           contextTokens={live.contextTokens}
           archived={live.archived}
@@ -1614,15 +1639,17 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-export function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
   kept: KeptTrust | null
   vetting: boolean
   rules: SettingsRules | null
+  /** The directories a settings file named that could not be opened, as the bridge's `foldersRefused` lists them. */
+  refused?: RefusedFolder[]
   onOpenParent: () => void
   onManage: () => void
 }): React.JSX.Element | null {
-  const unheld = t.notInForce(rules)
+  const unheld = t.notInForce(rules, refused) || t.grantedRules(rules)
   if (!forkedFrom && !kept && !vetting && !unheld) return null
   return (
     <div className="session-notices">
@@ -1653,7 +1680,7 @@ export function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent,
           </span>
         </p>
       )}
-      {unheld && rules && <RulesBanner rules={rules} />}
+      {unheld && rules && <RulesBanner rules={rules} refused={refused} />}
     </div>
   )
 }
@@ -1663,23 +1690,50 @@ export function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent,
  *
  * Drawn only where there is something to say. A rule that reads as protection and is not in
  * force is worth telling the person about, and so is an allow rule that will not stop a question
- * it was written to stop.
+ * it was written to stop. The checkout rules a yes granted are said too, and where the grant is
+ * kept, since they now answer questions; a granted rule is never listed as not in force, because
+ * the bridge lists it under `granted` and not under `proposed`.
  */
-export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Element {
+export function RulesBanner({ rules, refused: folders = [] }: { rules: SettingsRules; refused?: RefusedFolder[] }): React.JSX.Element {
   const refused = t.refusedPaths(rules)
   const ignored = rules.filesystemIgnored ?? []
-  const count = rules.unreadable.length + rules.proposed.length + rules.directories.length + refused.length + ignored.length
+  const granted = rules.granted ?? []
+  const { closed, refused: unlisted } = unopened(rules, folders)
+  const count = rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + refused.length + ignored.length + (rules.namedWithheld ? 1 : 0)
   return (
-    <details className="rules-banner" role="note">
+    <details className="rules-banner" role="note" data-test="rules-note">
       <summary className="session-notice">
-        <Icon name="warning-triangle-outline" />
+        <Icon name={count > 0 ? 'warning-triangle-outline' : 'shield-done'} />
         <span className="notice-text">
-          <strong>
-            {count} permission {count === 1 ? 'setting is' : 'settings are'} not in force.
-          </strong>{' '}
-          Details
+          {count > 0 && (
+            <strong>
+              {count} permission {count === 1 ? 'setting is' : 'settings are'} not in force.
+            </strong>
+          )}
+          {count > 0 && granted.length > 0 && ' '}
+          {granted.length > 0 && (count > 0 ? words.uiRulesNoteGrantedSummary({ count: granted.length }) : <strong>{words.uiRulesNoteGrantedSummary({ count: granted.length })}</strong>)}
+          {' '}Details
         </span>
       </summary>
+      {granted.length > 0 && (
+        <div data-test="rules-note-granted">
+          <p>{words.uiRulesNoteGranted()}</p>
+          <ul>
+            {granted.map((entry, index) => (
+              <li key={index}>
+                <code>{entry.shownRule}</code> from <code>{entry.shownFile}</code>
+                {entry.before && <> ({words.uiRulesNoteGrantedBefore()})</>}
+              </li>
+            ))}
+          </ul>
+          <p>
+            {rules.shownGrantedRecord
+              ? words.uiRulesNoteGrantedRecord({ path: rules.shownGrantedRecord })
+              : words.uiRulesNoteGrantedThisChat()}
+          </p>
+        </div>
+      )}
+      {rules.namedWithheld && <p>{rules.namedWithheld}</p>}
       {rules.unreadable.length > 0 && (
         <>
           <p>These entries could not be read as rules, so they decide nothing:</p>
@@ -1692,12 +1746,8 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
       )}
       {rules.proposed.length > 0 && (
         <>
-          <p>
-            These allow rules were written by this project’s settings file. An allow rule
-            answers a question for you, so only your own settings file may write one. You will
-            still be asked:
-          </p>
-          <ul>
+          <p>{words.uiRulesNoteProposed()}</p>
+          <ul data-test="rules-note-proposed">
             {rules.proposed.map((entry, index) => (
               <li key={index}>
                 <code>{entry.shownRule}</code> from <code>{entry.shownFile}</code>
@@ -1706,13 +1756,25 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           </ul>
         </>
       )}
-      {rules.directories.length > 0 && (
+      {closed.length > 0 && (
         <>
-          <p>A settings file asked for these directories to be opened. This app opens none:</p>
-          <ul>
-            {rules.directories.map((directory, index) => (
+          <p>{words.uiRulesNoteDirectories()}</p>
+          <ul data-test="rules-note-directories">
+            {closed.map((directory, index) => (
               <li key={index}>
-                <code>{rules.shownDirectories?.[index] ?? directory}</code>
+                <code>{directory.shown}</code>{directory.problem && <>: {directory.problem}</>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {unlisted.length > 0 && (
+        <>
+          <p>{words.uiRulesNoteRefused()}</p>
+          <ul data-test="rules-note-refused">
+            {unlisted.map((folder, index) => (
+              <li key={index}>
+                <code>{folder.shownDirectory}</code>: {folder.shownProblem}
               </li>
             ))}
           </ul>

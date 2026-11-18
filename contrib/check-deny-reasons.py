@@ -64,6 +64,11 @@ def exception_starts(lines, name):
 def problems(text):
     """One line for each exception in `text` with no reason."""
     config = tomllib.loads(text)
+    if config.get("advisories", {}).get("unsound") != "all":
+        yield (
+            '[advisories] unsound is not "all", so an advisory against a crate no workspace '
+            "member depends on directly is dropped with no diagnostic"
+        )
     for section, key in EXCEPTIONS:
         for index, entry in enumerate(config.get(section, {}).get(key, [])):
             reason = entry.get("reason") if isinstance(entry, dict) else None
@@ -79,119 +84,144 @@ def problems(text):
 
 def selftest():
     with_reason = '{ crate = "a:1", reason = "pinned by b" }'
+    # Every case below is about the EXCEPTIONS and licence checks, which assume [advisories]
+    # already sets `unsound = "all"`. ADVISORIES_OK is folded into each one's text so adding the
+    # unsound check does not change what those cases assert; dedicated cases for the unsound
+    # check itself follow.
+    advisories_ok = '[advisories]\nunsound = "all"\n'
+    unsound_problem = (
+        '[advisories] unsound is not "all", so an advisory against a crate no workspace '
+        "member depends on directly is dropped with no diagnostic"
+    )
     cases = (
-        ("an empty file", "", []),
-        ("empty lists", "[advisories]\nignore = []\n[bans]\nskip = []\n", []),
-        ("a skip with a reason", f"[bans]\nskip = [{with_reason}]\n", []),
-        ("a deny with a reason", '[bans]\ndeny = [{ crate = "x", reason = "runs programs" }]\n', []),
+        ("an empty file", advisories_ok, []),
+        ("empty lists", advisories_ok + "ignore = []\n[bans]\nskip = []\n", []),
+        ("a skip with a reason", advisories_ok + f"[bans]\nskip = [{with_reason}]\n", []),
+        (
+            "a deny with a reason",
+            advisories_ok + '[bans]\ndeny = [{ crate = "x", reason = "runs programs" }]\n',
+            [],
+        ),
         (
             "an ignore with a reason",
-            '[advisories]\nignore = [{ id = "RUSTSEC-2000-0001", reason = "unreachable" }]\n',
+            advisories_ok + 'ignore = [{ id = "RUSTSEC-2000-0001", reason = "unreachable" }]\n',
             [],
         ),
         (
             "a skip with no reason",
-            '[bans]\nskip = [{ crate = "a:1" }]\n',
+            advisories_ok + '[bans]\nskip = [{ crate = "a:1" }]\n',
             ["[bans] skip[0] (a:1) has no reason"],
         ),
         (
             "a bare string in a skip",
-            '[bans]\nskip = ["a:1"]\n',
+            advisories_ok + '[bans]\nskip = ["a:1"]\n',
             ["[bans] skip[0] (a:1) has no reason"],
         ),
         (
             "a bare advisory id",
-            '[advisories]\nignore = ["RUSTSEC-2000-0001"]\n',
+            advisories_ok + 'ignore = ["RUSTSEC-2000-0001"]\n',
             ["[advisories] ignore[0] (RUSTSEC-2000-0001) has no reason"],
         ),
         (
             "an empty reason",
-            '[bans]\nskip = [{ crate = "a:1", reason = "" }]\n',
+            advisories_ok + '[bans]\nskip = [{ crate = "a:1", reason = "" }]\n',
             ["[bans] skip[0] (a:1) has no reason"],
         ),
         (
             "a reason of spaces",
-            '[bans]\ndeny = [{ crate = "x", reason = "   " }]\n',
+            advisories_ok + '[bans]\ndeny = [{ crate = "x", reason = "   " }]\n',
             ["[bans] deny[0] (x) has no reason"],
         ),
         (
             "a reason that is not a string",
-            '[bans]\nskip = [{ crate = "a:1", reason = 3 }]\n',
+            advisories_ok + '[bans]\nskip = [{ crate = "a:1", reason = 3 }]\n',
             ["[bans] skip[0] (a:1) has no reason"],
         ),
         (
             "a skip-tree with no reason",
-            '[bans]\nskip-tree = [{ crate = "t" }]\n',
+            advisories_ok + '[bans]\nskip-tree = [{ crate = "t" }]\n',
             ["[bans] skip-tree[0] (t) has no reason"],
         ),
         (
             "a licence exception with a comment above it",
-            '[licenses]\nexceptions = [\n    # vendored, permissive\n    { crate = "x", allow = ["NCSA"] },\n]\n',
+            advisories_ok
+            + '[licenses]\nexceptions = [\n    # vendored, permissive\n    { crate = "x", allow = ["NCSA"] },\n]\n',
             [],
         ),
         (
             "a licence exception with a comment after it",
-            '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },  # vendored\n]\n',
+            advisories_ok
+            + '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },  # vendored\n]\n',
             [],
         ),
         (
             "a licence exception with no comment",
-            '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },\n]\n',
+            advisories_ok + '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },\n]\n',
             ["[licenses] exceptions[0] (x) has no comment saying why"],
         ),
         (
             "a licence exception whose only # is inside its crate name",
-            '[licenses]\nexceptions = [\n    { crate = "x#1", allow = ["NCSA"] },\n]\n',
+            advisories_ok + '[licenses]\nexceptions = [\n    { crate = "x#1", allow = ["NCSA"] },\n]\n',
             ["[licenses] exceptions[0] (x#1) has no comment saying why"],
         ),
         (
             "a comment above one licence exception does not cover the next",
-            '[licenses]\nexceptions = [\n    # vendored\n    { crate = "x", allow = ["NCSA"] },\n'
+            advisories_ok
+            + '[licenses]\nexceptions = [\n    # vendored\n    { crate = "x", allow = ["NCSA"] },\n'
             '    { crate = "y", allow = ["NCSA"] },\n]\n',
             ["[licenses] exceptions[1] (y) has no comment saying why"],
         ),
         (
             "a licence exception in a table of its own, with a comment above its header",
-            '# vendored, permissive\n[[licenses.exceptions]]\ncrate = "x"\nallow = ["NCSA"]\n',
+            advisories_ok + '# vendored, permissive\n[[licenses.exceptions]]\ncrate = "x"\nallow = ["NCSA"]\n',
             [],
         ),
         (
             "a licence exception in a table of its own, with no comment",
-            '[[licenses.exceptions]]\ncrate = "x"\nallow = ["NCSA"]\n',
+            advisories_ok + '[[licenses.exceptions]]\ncrate = "x"\nallow = ["NCSA"]\n',
             ["[licenses] exceptions[0] (x) has no comment saying why"],
         ),
         (
             "a licence exception whose crate is single-quoted, with a comment above it",
-            "[licenses]\nexceptions = [\n    # vendored\n    { crate = 'x', allow = ['NCSA'] },\n]\n",
+            advisories_ok + "[licenses]\nexceptions = [\n    # vendored\n    { crate = 'x', allow = ['NCSA'] },\n]\n",
             [],
         ),
         (
             "a licence exception whose only # is inside a single-quoted string",
-            "[licenses]\nexceptions = [\n    { crate = \"x\", allow = ['N#'] },\n]\n",
+            advisories_ok + "[licenses]\nexceptions = [\n    { crate = \"x\", allow = ['N#'] },\n]\n",
             ["[licenses] exceptions[0] (x) has no comment saying why"],
         ),
         (
             "a crate that is banned with a comment does not explain its licence exception",
-            '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },\n]\n'
+            advisories_ok
+            + '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },\n]\n'
             '[bans]\ndeny = [\n    # banned\n    { crate = "x", reason = "r" },\n]\n',
             ["[licenses] exceptions[0] (x) has no comment saying why"],
         ),
         (
             "a ban of the same crate does not make a commented licence exception fail",
-            '[licenses]\nexceptions = [\n    # vendored\n    { crate = "x", allow = ["NCSA"] },\n]\n'
+            advisories_ok
+            + '[licenses]\nexceptions = [\n    # vendored\n    { crate = "x", allow = ["NCSA"] },\n]\n'
             '[bans]\ndeny = [\n    { crate = "x", reason = "r" },\n]\n',
             [],
         ),
         (
             "a licence allowance with no exceptions",
-            '[licenses]\nallow = ["MIT"]\n',
+            advisories_ok + '[licenses]\nallow = ["MIT"]\n',
             [],
         ),
         (
             "only the entry without a reason",
-            f'[bans]\nskip = [{with_reason}, {{ crate = "c:2" }}]\n',
+            advisories_ok + f'[bans]\nskip = [{with_reason}, {{ crate = "c:2" }}]\n',
             ["[bans] skip[1] (c:2) has no reason"],
         ),
+        ("no advisories table at all, so unsound is unset", "", [unsound_problem]),
+        (
+            "unsound left at cargo-deny's default scope",
+            '[advisories]\nunsound = "workspace"\n',
+            [unsound_problem],
+        ),
+        ("unsound widened to all", advisories_ok, []),
     )
     failed = 0
     for claim, text, expected in cases:
@@ -203,6 +233,7 @@ def selftest():
         return 1
     print(f"selftest: {len(cases)} checks passed")
     return 0
+
 
 
 def main():

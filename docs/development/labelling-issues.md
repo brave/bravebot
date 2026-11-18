@@ -148,10 +148,37 @@ gh label create develop-on/windows --repo brave/bravebot --color 1d76db \
 
 ## Where the work is
 
-An `area` label says which part of the tree an issue lands in: `area/trust`, `area/tools`,
-`area/turns`, `area/interface`, `area/cli`, `area/delegation`, `area/backends`, `area/skus`,
-`area/i18n`. `infrastructure` is the one that is not an `area`, because the build and the tracker
+An `area` label says which part of the tree an issue lands in. An issue takes the narrowest area
+that holds it, so a plugin issue is `area/plugins` and not `area/interface`, and an MCP issue is
+`area/mcp` and not `area/tools`.
+
+| `area` | What lands in it |
+|---|---|
+| `area/trust` | the guarantee: permissions, the trust map, egress, confidentiality |
+| `area/sandbox` | confining the programs a session runs: the OS sandboxes, environment scrubbing, credential scopes |
+| `area/tools` | the tool surface and the tools: `run`, `read_file`, `command-line`, `lsp` |
+| `area/mcp` | MCP servers, resources, elicitation, OAuth and server events |
+| `area/browser` | the Brave extension and its browser tools |
+| `area/connectors` | connectors to external services such as Gmail, Drive and GitHub, and their credentials |
+| `area/turns` | the loop and its record: sessions, turns, compaction, dropping, the trace, spend |
+| `area/background` | background sessions: attach, deny-instead-of-prompting, jobs, per-session checkouts, scheduled runs |
+| `area/delegation` | processors, delegates, skills, hooks, `/loop` and `/goal` |
+| `area/plugins` | plugins and marketplaces: install, update, enable, and what a plugin bundles |
+| `area/backends` | routing, the roster, bedrock, aichat, effort, prompt caching, request signing |
+| `area/skus` | premium credentials and the store |
+| `area/interface` | terminal input, vi mode, the scroller, the theme, the transcript, commands |
+| `area/desktop` | the desktop application and the mobile app |
+| `area/acp` | the editor protocol server |
+| `area/remote` | reaching a session from a browser, a phone or a chat channel, and running tools on another host |
+| `area/cli` | arguments, settings and precedence, one-shot and manifest runs, platforms |
+| `area/release` | building, signing, publishing and installing releases |
+| `area/i18n` | locales, plural rules, the message catalogue |
+
+`area/backends/chatgpt` is a narrower label for the ChatGPT sign-in and goes with `area/backends`.
+
+`infrastructure` is the one that is not an `area`, because the build and the tracker
 are not part of the product and an issue about a workflow belongs to whoever owns the pipeline.
+Build and release work on the product itself is `area/release`.
 
 An area is a fact about the issue rather than a judgement, so it can be applied by whoever files
 it. Apply none where the answer is not clear from the issue: an area guessed wrong is worse than

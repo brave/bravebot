@@ -54,7 +54,7 @@ bravebot doctor
 configuration OK
   offers    Brave Leo
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
-  premium   https://ai-gateway-api.bsg.brave.software/v1/chat/completions, without a premium key, so requests go to the endpoint above
+  premium   https://ai-gateway-api.bsg.brave.com/v1/chat/completions, without a premium key, so requests go to the endpoint above
   key id    …
   model     automatic-bravebot (default)
   key       … (never transmitted)
@@ -347,6 +347,13 @@ you never opened is the outcome worth ruling out. `run.scrubEnv` is not in that 
 a name in it can also keep a restriction off a program, such as `npm_config_ignore_scripts` or
 `PYTHONSAFEPATH` in your environment, so only your own file and the file `--settings` names are read
 for it.
+
+A key written twice inside one file is read the same way, since a JSON parser would keep the last copy
+and say nothing. Two blocks written under one key are combined, a list that only refuses keeps the
+entries of both (`permissions.deny`, `permissions.ask`, `run.scrubEnv`, `sandbox.filesystem.denyRead`
+and `denyWrite`, `sandbox.network.deniedHosts`), and any other repeated key is read as the later copy.
+`bravebot doctor` names each repeated key with the file and the key's path, and never its value. A key
+written once in each of two files is the layering above and is not a repeat.
 
 `allow` goes the other way, which is why it is the one list a checkout cannot write by itself. An
 entry there stops a prompt appearing, so one in `.bravebot/settings.json` or
@@ -1593,7 +1600,7 @@ only; a project or local file that sets it is ignored and reported by `bravebot 
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Fifteen actions can be moved and nothing else can (fourteen on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Sixteen actions can be moved and nothing else can (fifteen on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
@@ -1608,6 +1615,7 @@ Fifteen actions can be moved and nothing else can (fourteen on Windows, which ha
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
 | `todos` | `alt-a` | print the whole plan, as [`/todos`](../reference/commands.md#todos) does |
+| `peek` | `alt-v` | open the folded paste the caret is on, to read it whole ([Reading a folded paste](../using/context.md#reading-a-folded-paste)) |
 | `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
 | `suspend` | `ctrl-z` | suspend the session to the shell ([Interactive mode](../using/interactive-mode.md#suspending-to-the-shell)) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([Interactive mode](../using/interactive-mode.md#undoing-an-edit)) |
@@ -1623,12 +1631,12 @@ are not rebindable.
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
 actions *trading* chords is not a conflict and both get what they asked for. `scope`, `undo`,
-`suspend` and `enhance` are among the newest of the fifteen, so a file that already gave `ctrl-n`, `ctrl-_`, `ctrl-z` or `ctrl-p` to
+`suspend` and `enhance` are among the newest of the sixteen, so a file that already gave `ctrl-n`, `ctrl-_`, `ctrl-z` or `ctrl-p` to
 another action now asks for a chord the new action stands on, and that action is back on its default
 until the file moves `scope`, `undo`, `suspend` or `enhance` as well. `outputs` is newer still and
 stands on `alt-l`, so a file that gave `alt-l` to another action has that action back on its default
 until the file moves `outputs` too. `todos` is as new and stands on `alt-a`, so a file that gave `alt-a`
-to another action has that action back on its default until the file moves `todos` too.
+to another action has that action back on its default until the file moves `todos` too. `peek` is as new and stands on `alt-v`, so a file that gave `alt-v` to another action has that action back on its default until the file moves `peek` too.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
 the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.

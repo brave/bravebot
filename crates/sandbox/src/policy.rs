@@ -98,6 +98,13 @@ pub struct SandboxPolicy {
     /// judged it and before the entry is written is given the entry at its new target. The
     /// caller's judgement when it builds the policy is the only check on Windows.
     pub not_through_a_link: Vec<PathBuf>,
+    /// Files whose path a process must not take, change or replace, which the macOS profile holds
+    /// by refusing the removal and the renaming of every directory above each one. A refusal of
+    /// writes ([`SandboxPolicy::unwritable`]) at a path covers the path alone: Seatbelt lets a
+    /// process rename a directory above it, or put another directory in the place of an empty
+    /// one, and the name then leads to a file the refusal does not cover. Entries made and
+    /// removed beside the file are not refused. The Linux and Windows backends ignore it.
+    pub kept_in_place: Vec<PathBuf>,
 }
 
 impl SandboxPolicy {
@@ -116,7 +123,16 @@ impl SandboxPolicy {
             git_directories_writable: false,
             allow_loopback: false,
             not_through_a_link: Vec::new(),
+            kept_in_place: Vec::new(),
         }
+    }
+
+    /// Hold the file at `path` in place: no directory above it can be removed or renamed, and so
+    /// replaced. Pair it with [`SandboxPolicy::deny_write`] at the same path. See
+    /// [`SandboxPolicy::kept_in_place`].
+    pub fn keep_in_place(mut self, path: impl Into<PathBuf>) -> Self {
+        self.kept_in_place.push(path.into());
+        self
     }
 
     /// Have a backend that opens rows by name open the row at `path` without following a link in
@@ -317,6 +333,7 @@ impl SandboxPolicy {
                 git_directories_writable: self.git_directories_writable,
                 allow_loopback: self.allow_loopback,
                 not_through_a_link: self.not_through_a_link.clone(),
+                kept_in_place: self.kept_in_place.clone(),
             },
             omitted,
         }

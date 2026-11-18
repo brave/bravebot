@@ -600,6 +600,73 @@ def bracket_names(*paths, create=()):
     return break_it
 
 
+VERUS_RUNNER_FIXTURE = 'CRATES = {"crates/demo": "bravebot_demo"}\n'
+
+
+def cite_a_proof(source, runner=VERUS_RUNNER_FIXTURE):
+    """The `break_it` that makes DEMO-1 cite `the_gate_opens_once_for_every_input`, written into
+    crates/demo/src/spec.rs as `source`, with contrib/check-verus.py saying which crates Verus
+    verifies as `runner`, or absent where `runner` is None."""
+
+    def break_it(root):
+        (root / "crates" / "demo" / "src" / "spec.rs").write_text(source, encoding="utf-8")
+        if runner is not None:
+            (root / "contrib").mkdir(exist_ok=True)
+            (root / "contrib" / "check-verus.py").write_text(runner, encoding="utf-8")
+        edit_spec(
+            root,
+            "bravebot_demo::lib::the_gate_opens_only_once`",
+            "bravebot_demo::spec::the_gate_opens_once_for_every_input`",
+        )
+
+    return break_it
+
+
+A_PROOF = (
+    "verus! {\n"
+    "pub proof fn the_gate_opens_once_for_every_input(a: u8)\n"
+    "    ensures a == a,\n"
+    "{\n"
+    "}\n"
+    "}\n"
+)
+
+
+CASES_OF_PROOFS = [
+    (
+        "a verified-by naming a Verus proof in a crate Verus verifies",
+        cite_a_proof(A_PROOF),
+        None,
+    ),
+    (
+        "a verified-by naming a generic Verus proof without pub",
+        cite_a_proof(A_PROOF.replace("pub proof fn the_gate_opens_once_for_every_input(",
+                                     "proof fn the_gate_opens_once_for_every_input<T>(")),
+        None,
+    ),
+    (
+        "a verified-by naming a Verus proof in a crate Verus does not verify",
+        cite_a_proof(A_PROOF, runner='CRATES = {"crates/core": "bravebot_core"}\n'),
+        "verified-by-missing",
+    ),
+    (
+        "a verified-by naming a Verus proof where nothing runs Verus",
+        cite_a_proof(A_PROOF, runner=None),
+        "verified-by-missing",
+    ),
+    (
+        "a verified-by naming a Verus spec fn, which proves nothing",
+        cite_a_proof(A_PROOF.replace("pub proof fn", "pub spec fn")),
+        "verified-by-missing",
+    ),
+    (
+        "a verified-by naming a Verus proof in a comment",
+        cite_a_proof("// pub proof fn the_gate_opens_once_for_every_input(a: u8)\n"),
+        "verified-by-missing",
+    ),
+]
+
+
 CASES = [
     ("a clean spec tree reports nothing", lambda root: None, None),
     (
@@ -2444,6 +2511,8 @@ CASES += [
         "reviewed-malformed",
     ),
 ]
+
+CASES += CASES_OF_PROOFS
 
 
 # Which runs may write the file. A run given a filter read part of the tree, and the list is

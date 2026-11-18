@@ -13,6 +13,9 @@
 //! in SafeHouse; this applies the same idea to a general-purpose agent.
 
 #![forbid(unsafe_code)]
+// A Verus contract on a loop is an attribute on an expression, which rustc takes only behind this
+// feature. Verus's toolchain has it, and only Verus sets `verus_keep_ghost`.
+#![cfg_attr(verus_keep_ghost, feature(proc_macro_hygiene))]
 
 // Verus reads this crate as it is (docs/development/verification.md). A contract is a
 // `verus_spec` attribute behind `cfg_attr(verus_keep_ghost, ...)`, which only Verus sets, so a
@@ -85,5 +88,5 @@ pub use reference::{Presentation, Reference};
 pub use remembered::{Remembered, RememberedLine};
 pub use slot::{Fill, Measured, SlotError, SlotId, SlotStore, SlotWriter};
 pub use todo::{Item as TodoItem, List as TodoList, Status as TodoStatus};
-pub use trust::TrustStore;
+pub use trust::{CaseFolding, TrustStore};
 pub use value::Labelled;

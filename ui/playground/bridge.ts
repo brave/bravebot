@@ -504,6 +504,8 @@ const bridge: BravebotApi = {
   selectSettings: async () => null,
   saveHooks: async () => undefined,
   chooseDirectory: async () => DIRECTORY,
+  // The playground has no picker, so a folder is never added.
+  addFolder: async () => null,
   exportSession: async () => ({ status: 'saved', where: '/Users/example/Desktop/conversation.md' }),
   composeBugReport: async () => ({ available: true, text: 'Bravebot playground report\n\nNothing here is real.', log: null }),
   saveBugReport: async () => ({ status: 'saved', where: '/Users/example/Desktop/report.txt' }),

@@ -979,6 +979,21 @@ checks before the line starts ([PERM-9](permissions.md#PERM-9)). This clause hol
 the names on macOS; a stage's own write on Linux and a `ln` or `cp` a stage runs are not decided by
 the driver's check, which reads the redirection destinations of the plan.
 
+The file `--settings` named is held back on macOS too, as a path rather than as a name: the profile
+refuses a stage every write to it, in every mode, under every row whatever granted it, `--add-dir`
+rows and the whole-machine row of bypassing among them, and under the lift below. It is refused
+under the spelling typed made absolute and under the path it lands on after links are followed, and
+whether or not the file exists: where it does not, a stage may not create it or the first missing
+directory above it. A stage cannot rename or remove a directory that holds it, make a new hard link
+to it, rename another file over it or move it away. Reading it is allowed. The paths are the ones
+`Workspace::named_settings_paths` returns, which is also the list the file tools hold back
+([PERM-9](permissions.md#PERM-9)). A stage does not start while the file has a second hard link,
+since a profile rule is by path and cannot name the inode, and the sentence refusing it names the
+file. On Linux and Windows nothing holds one file back from a stage that may write the directory it
+sits in, which is a known cost ([#2599](https://github.com/brave/bravebot/issues/2599)): the file
+is read as a checkout's file there while it lies inside such a directory, which is
+[PERM-14](permissions.md#PERM-14)'s rule and is what the person is told.
+
 Every other write a row grants is granted.
 A policy can lift the refusal, as the profile of a `run` stage whose program is git does so that
 `git` works in the directories it was given ([SANDBOX-18](#SANDBOX-18)), and then a write row
@@ -1001,13 +1016,27 @@ names, a `.husky` script and the project's own `.bravebot` settings are run or l
 person's rights the same way. A confined process that may write one of these may therefore run code
 outside its confinement. Seatbelt lets the last rule matching a path decide, so the refusal follows
 the rows it narrows. The default macOS volume opens `.GIT` when git asks for `.git`, which is why
-the case of the name does not matter.
+the case of the name does not matter. The settings file named with `--settings` is read at the next
+launch as the person's own, with its `allow` rules, `sandbox.mode` and `run.network`, so a stage
+that could rewrite it would run unasked and unconfined the next time the flag is used
+([#4319](https://github.com/brave/bravebot/issues/4319)). Its refusal does not depend on a row or on
+the git lift because the file can be anywhere, including inside a row the stage was given.
 
 **What it costs.** A gitdir that is not named `.git`, such as one `--separate-git-dir` made, is
 written as any other directory, and so is a directory a process lays out as a repository itself, a
 `HEAD` file beside `objects` and `refs` directories, which git started inside it opens. A stage
 that has to write a `.husky` or `.bravebot` file under a row, such as an installer of hooks, is
-refused, and the person makes that edit through a tool that asks.
+refused, and the person makes that edit through a tool that asks. A stage that has to write the
+settings file named with `--settings` is refused the same way, and so is a stage that would start
+while that file has a second hard link; the person edits the file through a tool that asks or
+removes the extra link. A refusal of one file is by path, so the rest of its directory stays
+writable under the row that covers it. On Linux and Windows the file is not held back, and the
+withholding of its grants replaces the hold: a named file in a directory a stage may write grants
+nothing, and a person who wants its rules in force names a file outside the working directory and
+the directories added with `--add-dir`, `/add-dir` or `--sandbox-allow-write`. The temporary,
+scratch, state and cache directories a policy writes are not counted as directories a stage may
+write for this, so a named file inside one of them is not withheld on Linux and Windows although a
+stage can write it there.
 
 A person's trust of a directory lets a plain line run there without asking only where every stage of it
 is held back from a protected name by this clause, so on macOS and for a stage that is not git ([RUN-5](tools/run.md#RUN-5)).
@@ -1025,6 +1054,17 @@ The auto mode's classifier is kept from a line with a git stage for the same rea
 `verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::a_git_above_the_session_directory_in_its_checkout_writes_no_git_directory`
 `verified-by: bravebot_agent::confine::only_git_writes_a_repositorys_hooks_and_configuration_on_macos`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_is_not_changed_by_any_stage_write`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_is_kept_through_a_link_to_its_directory`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_that_does_not_exist_yet_cannot_be_made_or_reached`
+`verified-by: bravebot_sandbox::macos::a_file_kept_in_place_stays_kept_for_a_stage_that_may_write_git_directories`
+`verified-by: bravebot_agent::confine::a_stage_cannot_change_the_named_settings_file_the_session_row_would_grant`
+`verified-by: bravebot_agent::confine::the_named_settings_file_is_kept_in_an_added_directory_and_under_bypass`
+`verified-by: bravebot_agent::confine::a_git_stage_cannot_write_the_named_settings_file`
+`verified-by: bravebot_agent::confine::a_stage_cannot_create_a_named_settings_file_that_is_not_there_yet`
+`verified-by: bravebot_agent::confine::a_stage_does_not_start_while_the_named_settings_file_has_another_hard_link`
+`verified-by: bravebot_agent::protected_names::the_sandbox_keeps_the_paths_the_file_tools_hold_back`
+`verified-by: bravebot_cli::running::a_stage_cannot_rewrite_the_settings_file_named_by_the_flag`
 
 <a id="SANDBOX-15"></a>
 ### SANDBOX-15: a toolchain's list is keyed on the file its program resolved to, and names a cache and never the token beside it
@@ -2513,10 +2553,12 @@ and `python3` reading an environment file or a `usercustomize.py` from the home.
 suite chose are removed and no file is read. `makefile` stays where it is the workflow's `Makefile`
 on a volume that ignores case. The files and the programs' versions are in
 [SANDBOX-30](#SANDBOX-30). The parents of the session directory are not cleaned. The root of the
-suite is the state directory's `doctor-sandbox`, and `target/test-scratch` in the tests. Neither is
-under the system temp directory a confined stage may write while the state directory and the
-checkout are outside it, and the tests are run from a checkout outside it
-([checks.md](../development/checks.md#before-a-commit)). The stage writes the session
+suite is the state directory's `doctor-sandbox`, and the scratch root of the tests, which is
+`target/test-scratch` for a checkout outside the system temp directory and a directory under the
+user's cache directory for a checkout inside it. Neither is under the system temp directory a
+confined stage may write while the state directory is outside it and the tests have a root
+outside it ([checks.md](../development/checks.md#before-a-commit), which says what happens when
+none exists). The stage writes the session
 directory and not its parent, which
 `a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one` shows,
 so a `.cargo/config.toml` that `cargo` finds in a parent does not come from a stage. Each attempt,
@@ -2706,8 +2748,8 @@ program printed goes to a log file under the suite's directory, and neither the 
 `verified-by: bravebot_agent::usability::a_setup_npm_does_not_run_an_init_script_from_the_home`
 `verified-by: bravebot_agent::usability::a_setup_go_does_not_switch_toolchain_from_an_environment_file_in_the_home`
 `verified-by: bravebot_agent::usability::a_confined_stage_writes_a_configuration_file_in_the_session_and_nowhere_a_start_reads_one`
-`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
-`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
+`verified-by: bravebot_agent::usability_loader::the_gh_the_login_row_starts_is_not_handed_a_dyld_variable`
+`verified-by: bravebot_agent::usability_loader::the_gh_the_login_row_starts_is_not_handed_an_ld_variable`
 `verified-by: bravebot_agent::usability_path::a_program_found_only_in_a_directory_a_stage_may_write_is_skipped_as_not_installed`
 `verified-by: bravebot_agent::usability_path::a_gh_found_only_in_a_directory_a_stage_may_write_gives_no_login_row`
 `verified-by: bravebot_cli::sandbox_check::doctor_sandbox_prints_a_failed_row_with_its_stage_and_its_fix`
@@ -3508,6 +3550,16 @@ need a file made in the tree and a refusal that names a file the volume holds ap
 back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
 person did not write.
 
+An entry of `denyRead` or `denyWrite` that names a path that is not on disk keeps the spelling it
+was written in beneath the part that is. A volume that opens a name under every canonically
+equivalent form (APFS) opens a file made there later under either form, so the path of a request and
+an allowance at the path a refusal names are compared with the refusal one name at a time, as
+written or in canonical decomposition, whichever form the entry and the file are in. A name that is not
+text is compared as the bytes it is. Case is not folded, since the entry names one path and not a
+pattern, and a volume that holds the two forms apart is refused more than the entry spells and never
+less. A recorded writable directory and a `PATH` entry that do not exist, spelled in different
+forms, are compared by name only ([SANDBOX-30](#SANDBOX-30)).
+
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
 is, and the result names the key and the entry. Where the backend cannot subtract from a grant
@@ -3570,6 +3622,11 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_deny_glob_still_meets_every_name_it_met_as_written`
 `verified-by: bravebot_sandbox::rules::an_allow_glob_meets_names_exactly`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
+`verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
+`verified-by: bravebot_sandbox::rules::a_denial_of_a_missing_path_refuses_the_file_made_later_in_either_unicode_form`
+`verified-by: bravebot_sandbox::rules::an_allowance_is_overridden_by_a_refusal_spelled_in_the_other_unicode_form`
+`verified-by: bravebot_sandbox::rules::a_denied_path_is_met_in_either_unicode_form_and_no_other_name_is`
+`verified-by: bravebot_sandbox::rules::a_denied_name_that_is_not_text_is_not_met_by_its_lossy_lookalike`
 `verified-by: bravebot_sandbox::rules::a_denial_decides_the_path_it_names_and_a_pinned_one_what_is_beneath`
 `verified-by: bravebot_sandbox::rules::a_denial_beats_the_stages_own_rows_and_a_narrower_row_of_the_persons_stands`
 `verified-by: bravebot_sandbox::rules::a_denial_with_no_grant_above_it_is_not_added`
@@ -4407,7 +4464,7 @@ file. A new spawn that looks a name up through
   the handler it runs (`XDG_DATA_DIRS` is also in the generic table), `XDG_CACHE_HOME` (the
   directory `kde-open` reads its service cache from when `KDESYCOCA` is not set),
   `GIO_LAUNCH_DESKTOP`, `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`
-  and the GIO, Qt, KDE and Windows names in its table below, 29 names in `CODE_SELECTORS` in
+  and the GIO, Qt, KDE and Windows names in its table below, 30 names in `CODE_SELECTORS` in
   `crates/tui/src/opener.rs`. `GIO_LAUNCH_DESKTOP` is one file
   (`Names::File`): `gio open` executes the wrapper it names
   with the whole command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line
@@ -4449,8 +4506,8 @@ file. A new spawn that looks a name up through
   its generic path, so under GNOME with `gio` installed it is not read. The desktop application
   deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories, `XDG_CACHE_HOME` and the GIO,
   Qt and KDE names of the opener's table below from its own environment (`OPENER_SELECTORS`, 16
-  names: the opener's 29 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the
-  application leaves set, and without the ten Windows names, as `APPLICATION_EXCEPTIONS` in
+  names: the opener's 30 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the
+  application leaves set, and without the eleven Windows names, as `APPLICATION_EXCEPTIONS` in
   `contrib/check-code-selectors.py` records), and `XDG_CURRENT_DESKTOP` and
   `XDG_MENU_PREFIX` when the value contains a `/` (`FILE_NAME_PREFIXES` in
   `ui/src/main/external-open.ts`, tested by `a file-name prefix is deleted only when it has a slash,
@@ -4847,11 +4904,12 @@ file. A new spawn that looks a name up through
   | `KDESYCOCA` | a file | the service cache `kde-open` reads the `Exec` line of a handler from |
   | `COMSPEC` | a file | the program Wine's `kernelbase` starts a batch file through (read, not run) |
   | `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` | a directory | the Windows start, `rundll32 url.dll,FileProtocolHandler`, hands the address to `ShellExecute`, which expands `%name%` in the command of the handler it runs from the environment (Wine's `shlexec.c`, read, not run), so a handler written with one of these runs what the name leads to |
+  | `PSModulePath` | a list of directories | with the name left set, a handler whose command is `%PSModulePath%\helper.cmd`, as a `REG_EXPAND_SZ` value, runs the helper in the directory the name is set to through the opener's start, which is why the opener removes it (the run under "What a checked start does not cover"). No source read shows this start reading it, and the opener does not start PowerShell |
   | `PATHEXT` | options | the extensions tried for a bare command name. No source read shows this start reading it. It is removed whatever it holds. The Windows CI runs removed it and `rundll32` exited with status 0; whether a page opened was not observed |
 
-  That is 29 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
+  That is 30 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
   application's `OPENER_SELECTORS` in `ui/src/main/external-open.ts` holds the same names without
-  `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the ten Windows names, 16, and
+  `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the eleven Windows names, 16, and
   `make check-code-selectors` fails when the two differ in anything else.
 
   What was run and what was read for these names is in "What a checked start does not cover".
@@ -5329,9 +5387,72 @@ shown by running the program, or not entirely:
     value, with the same name naming an installed path still honoured
     (`a_gio_wrapper_or_library_a_stage_may_write_is_not_run_by_the_installed_xdg_open_under_gnome`).
     That run is of the three names and does not show that no other variable `gio open` reads runs
-    code. The Homebrew and pip `aws` scripts, the asdf and pyenv shims and `kde-open` were not run
-    on Linux, and `osascript` is macOS only, so their lists are as the paragraphs above record them.
-    That is what remains of #3809.
+    code. The Homebrew and pip `aws` scripts, the asdf and pyenv shims and `kde-open` were run on
+    Linux as the next entry records, and `osascript` is macOS only.
+  - **Linux runs of the `aws` scripts, the asdf and pyenv shims and `kde-open`** (Ubuntu 25.10,
+    x86_64, kernel 6.17, bash 5.2.37, Python 3.13.7), with the method of the macOS runs above: `env -i`,
+    a scratch `HOME`, `PATH=/usr/bin:/bin` and a helper that appends to a marker file, planted under
+    one name at a time, and a control with nothing planted that wrote no marker.
+    - **pip `aws`**: `awscli` 1.46.3 in a virtualenv. The helper ran under `AWS_CONFIG_FILE` and
+      `AWS_SHARED_CREDENTIALS_FILE` (a `credential_process`), `HOME` (the same entries in
+      `~/.aws/config`, and a `!` alias in `~/.aws/cli/alias`), `PAGER` and `MANPAGER` (for `aws s3
+      help`), `PYTHONPATH` (a `sitecustomize`, also with `PYTHONSAFEPATH=1`), `PYTHONWARNINGS` together
+      with a `PYTHONPATH` that placed the module, and a `[plugins]` entry with a `PYTHONPATH` that
+      placed the module (without the `PYTHONPATH` the CLI exited with `ModuleNotFoundError`). It ran
+      nothing under `PYTHONWARNINGS` alone, `PYTHONHOME`, `PYTHONEXECUTABLE`, `PYTHONBREAKPOINT`,
+      `PYTHONSTARTUP`, `PYTHONDEVMODE`, `PYTHONTRACEMALLOC`, `BOTOCORE_EXPERIMENTAL__PLUGINS` with a
+      client created, `AWS_PAGER` with piped streams, or `EDITOR`, `VISUAL` and `BROWSER` for `aws
+      configure list`. `usercustomize.py` in `~/.local/lib/python3.13/site-packages` ran under `HOME`,
+      and in `PYTHONUSERBASE`, only in a virtualenv that keeps the user site; the virtualenv of the
+      first runs, which does not, ran neither. The results match the macOS pip run.
+    - **frozen `aws` 2.40.3**: the helper ran under `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`,
+      `HOME` (a `credential_process` and a `!` alias) and `PAGER` and `MANPAGER` for `aws s3 help`. It
+      ran nothing under `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONWARNINGS` or any other `PYTHON*` name
+      tried, as for the frozen 2.37.12 on macOS. The Homebrew `awscli` formula was not run on Linux.
+    - **pyenv** (commit ba617bb of `pyenv/pyenv`, with the shims `pyenv rehash` writes): the helper
+      ran under `PYENV_HOOK_PATH` (a `.bash` file under `<dir>/exec/`), `PYENV_VERSION=../../evil`
+      (resolved to `$PYENV_ROOT/versions/../../evil/bin/python3`; an absolute directory ran nothing),
+      `PYENV_ROOT` when `pyenv exec` is started directly (a hook under `<root>/pyenv.d/exec`; an
+      installed shim sets its own), `HOME` (a hook under `~/.pyenv/pyenv.d/exec`, with `PYENV_ROOT`
+      unset), `SHELLOPTS=xtrace` with a `PS4` that holds a command substitution, `BASH_ENV`, the
+      exported function `BASH_FUNC_pyenv-version-name%%`, and `PYTHONPATH` when the version's `python3`
+      is a real interpreter. It ran nothing under `BASH_FUNC_cp%%`, `BASH_FUNC_readlink%%`, `BASHOPTS`,
+      `PYENV_DIR`, `PYENV_DEBUG` alone, `_PYENV_SHIM_PATH` or a plug-in under `PYENV_ROOT/plugins/*/bin`
+      (for `pyenv version-name`). `PYENV_NATIVE_EXT=1` made the shim exit with `failed to load
+      realpath builtin` and ran nothing. The results match the macOS pyenv run.
+    - **asdf** (release binary v0.20.2, commit cb72590, linux-amd64): the helper ran under
+      `ASDF_DATA_DIR` (a plug-in `exec-env`), `ASDF_CONFIG_FILE` (a `pre_<tool>_<command>` line),
+      `ASDF_<TOOL>_VERSION=path:<dir>`, `HOME` (`~/.asdf/installs/<tool>/<version>/bin/<tool>` with a
+      `.tool-versions` and `ASDF_DATA_DIR` unset), `SHELLOPTS=xtrace` with a `PS4` that holds a command
+      substitution, `BASH_ENV` and `BASH_FUNC_exec%%`. It ran nothing under `ASDF_<TOOL>_VERSION=1.0`,
+      `ASDF_DIR`, `ASDF_CONCURRENCY` or `BASH_FUNC_cp%%`; `ASDF_TOOL_VERSIONS_FILENAME=x` made the shim
+      exit with status 126 because it found no version, and ran nothing. The results match the macOS
+      asdf run.
+    - **`kde-open`** 6.4.5 (`kde-cli-tools` 4:6.4.5-0ubuntu2 and its amd64 dependencies unpacked with
+      `dpkg -x` into a directory, with `LD_LIBRARY_PATH` and `QT_PLUGIN_PATH` set by a wrapper, so no
+      KDE session or desktop was present): `kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
+      ran with `BRAVEBOT_OBSERVE_KDE_OPEN` set, under `dbus-run-session` and with
+      `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` unset, with the same result: the baseline ran the
+      genuine handler, and the planted handler ran under `XDG_DATA_HOME`, `XDG_DATA_DIRS`,
+      `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS` and `HOME` (with the three `XDG_` home names unset, which is
+      when Qt reads `$HOME/.local/share` and `$HOME/.config`), and did not run under `BROWSER`,
+      `GIO_LAUNCH_DESKTOP`, `KDESYCOCA`, `KDEHOME` or `KDEDIRS`. A control with an empty `HOME` and no
+      `XDG_` names found no `applications.menu` and ran nothing. So `kde-open` needed no session bus
+      here: its start of the handler was in forking mode (`Failed to determine systemd version, falling
+      back to extremely legacy forking mode`). All five names that ran are in the opener's list. The
+      test has a `HOME` row; with `HOME` removed from the list it fails with
+      `HOME made kde-open run a program and the opener does not remove it`. `QT_PLUGIN_PATH`,
+      `QT_QPA_PLATFORM_PLUGIN_PATH`, the other `QT_` names, `XDG_CACHE_HOME` and the `GIO_` module names
+      have no marker form and were not run.
+    - **No variable was added** to any list: every name that ran code is already in the generic table
+      or in the list of the start that runs the program. These runs are of the names above, on one
+      Linux host and one release of each program, and do not show that no other variable selects
+      code ([PATH-008](../best-practices/paths.md#PATH-008)).
+    - **Not run**: the Homebrew `awscli` formula on Linux, `kde-open` in a KDE session (the run above
+      was in no session: `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true` were set by the test),
+      `kde-open5` and KIO 5, and a Frameworks release other than 6.4.5 by running. The release the
+      source was read at (6.29.0) is not the release that ran.
+    That is all of #3809.
   - **`kde-open`** cannot run to the point of a handler on macOS. On Linux (ubuntu-latest, under
     `dbus-run-session`, the `ci.yml` step `Run kde-open with each name set to a marker handler`)
     the installed `kde-open` started with the baseline environment of the test and exited with
@@ -5428,10 +5549,11 @@ shown by running the program, or not entirely:
     that. So the four `XDG_` directory names select the program `kde-open` runs, and
     `XDG_CURRENT_DESKTOP` selects among `mimeapps.list` files. `kprocessrunner.cpp` starts the
     program through systemd on the session bus when the bus reports systemd, and otherwise forks it;
-    read so, a session bus may not be required, and the child gets the process environment. This is
-    from source and was not run, and whether `kde-open` needs a session bus is not established. The
-    `ci.yml` step that runs `kde-open` does so under `dbus-run-session`, so a bus exists there, and
-    whether a bus is required is not established. A run of `kde-open` on Linux is tracked by #3822 and #3884.
+    read so, a session bus may not be required, and the child gets the process environment. The
+    Linux run recorded above shows `kde-open` needs no session bus: it ran the handler with
+    `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` unset. The `ci.yml` step that runs `kde-open`
+    does so under `dbus-run-session`, so a bus exists there. A run of `kde-open` in a KDE session is
+    tracked by #3884.
 - Five more names `xdg-open` and `xdg-mime` 1.2.1 read, judged from the real scripts (read in full
   for these names, and the first two run) on macOS with `uname` stubbed to print `Linux`, not on a
   Linux host:
@@ -5498,9 +5620,14 @@ shown by running the program, or not entirely:
   every program it started (it runs in a process group of its own), and the test fails with the
   variable under test in the message, including where `CI` is not set. It is not skipped. The
   generic-mode test ran for 16 and 48 minutes in two runs until the child was killed by hand, which
-  the deadline turns into a failure within 20 seconds. The cause of that hang is not
-  recorded here: it was not reproduced, since no host with `xdg-open` and a desktop was available
-  to the change that added the deadline. `an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started`
+  the deadline turns into a failure within 20 seconds. The cause of that hang is `xprop`, which
+  `xdg-open`'s `detectDE` runs when a display is set. With `DISPLAY=:9999` and no local socket,
+  libxcb connects over TCP to `localhost` port 15999. On a host whose `/etc/hosts` maps `localhost`
+  to an address that does not answer, that connect waits for the kernel's connection timeout
+  instead of being refused. The generic-mode test sets `DISPLAY` to a socket path that does not
+  exist, which `xprop` fails to open at once, and
+  `the_display_given_to_xdg_open_is_one_xprop_fails_to_open_at_once` runs the installed `xprop` on it.
+  `an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started`
   and `a_command_that_does_not_end_is_killed_at_the_deadline_and_one_that_ends_is_not` show the
   deadline against a stand-in that never ends.
   What is covered, per name and per desktop mode:
@@ -5534,7 +5661,7 @@ shown by running the program, or not entirely:
   of the 13 names that are not options (`BROWSER`, `HOME`, the five `XDG_` directories,
   `GIO_EXTRA_MODULES`, `GIO_MODULE_DIR`, `GIO_LAUNCH_DESKTOP`, `QT_PLUGIN_PATH`,
   `QT_QPA_PLATFORM_PLUGIN_PATH`, `KDESYCOCA`) fails both tests with `<NAME> was not kept`, so a safe
-  value of each reaches the program `xdg-open` starts. The ten Windows names were in neither run.
+  value of each reaches the program `xdg-open` starts. The eleven Windows names were in neither run.
   This is what the opener hands on, not a trace
   of the real programs. `strace -f -e trace=execve,openat` of the real `gio open` and `kde-open` was
   not made: this host has no `strace` and no Linux VM or container runtime, `dtruss` refuses to run
@@ -5730,7 +5857,8 @@ shown by running the program, or not entirely:
   `XDG_CONFIG_DIRS` rests on the source (`xdg-mime` `defapp_generic`, which reads the variable
   without checking it) and on the stubbed run, and was not run on Linux. The removal of the other
   three names has the same standing in generic mode, except for the `BROWSER` test and the GNOME
-  `gio open` cells marked run above. The Windows `rundll32` start was read and not run.
+  `gio open` cells marked run above. The Windows `rundll32` start is recorded under "What a checked
+  start does not cover".
   Not read: `G_RESOURCE_OVERLAYS` is read and judged unreachable, the `QT_*` names not listed, and `LD_*` variables.
   These are unobserved.
   `a_home_a_stage_may_write_is_not_read_by_the_installed_xdg_open_under_gnome` prints
@@ -5773,42 +5901,67 @@ shown by running the program, or not entirely:
   pages name no variable; Microsoft's `rundll32` page and the rest of the ReactOS tree were not
   read, and no source read shows `PATHEXT` being read by this start. No Wine or ReactOS
   version is recorded for the source named. The `sandbox-windows` job ran the start on
-  `windows-latest` (Windows Server 2025 Datacenter 10.0.26100, runner image 20261103.298.1) in two
-  runs of `ci.yml` on main, 43115512926 and 43116736884. In both, the opener's start removed the
-  ten names listed below, the batch file did not run, and `rundll32` exited with status 0. A start
-  with only one of the ten names, or only `PSModulePath`, put back on the command did not run the
-  batch file either. That shows that setting a name to a directory a stage may write does not by
-  itself make this start run a file in it on that image. It does not show which names select the
-  program: the test registers no handler whose command expands a listed name, and sets `COMSPEC`
-  without starting a batch file. An exit status of 0 from `rundll32` does not show that a page
-  opened, so it does not show that the start works without `PATHEXT` and the other nine names. The opener
+  `windows-latest` (Windows Server 2025 Datacenter 10.0.26100, runner image 20261103.298.1) in
+  three runs of `ci.yml` on main, 43115512926, 43116736884 and 44007981464. In the first two, the
+  opener's start removed the ten names other than `PSModulePath`, the batch file did not run, and
+  `rundll32` exited with status 0. A start with only one of the ten names, or only `PSModulePath`, put back
+  on the command did not run the batch file either, with the address of an `https` page and no
+  handler that expands a name. That shows that setting a name to a directory a stage may write
+  does not by itself make this start run a file in it on that image. An exit status of 0 from
+  `rundll32` does not show that a page opened. The opener
   removes `PATHEXT`, `COMSPEC`, `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`,
-  `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and `USERPROFILE`, pinned on hosts with Unix paths by
+  `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE` and `PSModulePath`, pinned on hosts
+  with Unix paths by
   `the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write` and
   `comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`, and on
   Windows by `a_windows_name_is_removed_in_whatever_case_it_is_set`. The `sandbox-windows` job in
   `.github/workflows/ci.yml` runs
   `the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`, which sets
-  the ten names in a child run of the test binary, asserts that the opener's start removes all
-  ten and that a stage-written batch file does not run, and prints for each name, and for
-  `PSModulePath`, whether a start with only that name put back ran the batch file. The child
+  the eleven names in a child run of the test binary, asserts that the opener's start removes all
+  eleven and that a stage-written batch file does not run, and prints for each name whether a
+  start with only that name put back ran the batch file. The child
   begins with a newline and prefixes each record it prints with `windows-start-record: `, and the
   test reads the records from the lines that begin with that prefix, so the check does not depend
   on where the test harness's own output on the same stream ends; it also asserts that every
   child printed its `start ended` record. The printed
-  record is not asserted. Which names select the program on Windows is still unobserved. #3860
-  owns the run that shows it: a handler registered for the current user whose command expands a
-  listed name, started through the opener, with the helper reachable only through that name.
-  #3822 owns the rest of the opener list.
-  These were not run: `kde-open` and a KDE session
-  (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because `kde-open` is not installed on the host that
-  ran the rest and installing it there with apt would add 152 packages, so what it reads is
-  unobserved (the marker test and CI step are meant to observe it); `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
+  record is not asserted.
+  `a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper` observes
+  which names select the program. It registers a handler for the current user
+  for a scheme of its own, as a `REG_EXPAND_SZ` and as a `REG_SZ` value, whose command expands one
+  name (`%COMSPEC%` for `COMSPEC`, `%<name>%\helper.cmd` for each directory name, and the helper's
+  path without an extension for `PATHEXT`) and so reaches a batch file that only creates a marker,
+  in a directory a stage may write. It starts the opener's `rundll32` through the address of that
+  scheme in a child run of the test binary, with the name set to that directory. It asserts that a
+  handler written with the helper's own path runs it through the opener's start, and that the
+  start with each of the ten names other than `PATHEXT` set does not run the helper. The
+  `PATHEXT` handler names the helper by a path in the stage's directory, and on the Windows
+  Server 2025 runner `rundll32` ran it with `PATHEXT` removed and with it put back, so the
+  test prints that case and does not assert it. It prints, for each of the eleven
+  names, whether the helper ran with the name removed and with it put back on
+  the command, and whether it ran when the handler is written with the helper's own path and the
+  name is removed. Run 44007981464 (merge commit 5e1a8908a, Windows Server 2025 10.0.26100, runner
+  image 20261103.298.1) printed, with the name put back on the command of a `REG_EXPAND_SZ`
+  handler, that the helper ran for `windir`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`,
+  `APPDATA`, `USERPROFILE` and `PSModulePath`, and did not run for `COMSPEC`, `SystemRoot` or
+  `ProgramFiles`. With a `REG_SZ` handler the helper ran for no name, so `ShellExecute` expanded
+  `%name%` only in the expandable type. With `PSModulePath` left set, the start runs the helper
+  through a `REG_EXPAND_SZ` handler that expands `%PSModulePath%`, which is why the opener removes
+  it. With the name removed and the handler written with the helper's
+  own path the helper ran for every name but `SystemRoot`, so the start still opens a handler
+  without ten of the eleven names, and does not without `SystemRoot`. The three names that did not
+  select the program stay in the list, since the run tried one command form on one image.
+  A variable outside the list and these eleven was not tried, and #3822 owns the rest of the
+  opener list.
+  These were not run: `kde-open` in a KDE session
+  (`XDG_CURRENT_DESKTOP=KDE` with `kde-open`), because no host with one was available. `kde-open` itself
+  was run on Linux outside a session, and the Linux runs entry above records what it showed, so what it
+  reads in a session is unobserved (#3884); `XDG_DATA_DIRS` through the installed `xdg-open` in generic mode, since removing a
   planted value there lets `xdg-mime` and `gio open` use the system's handlers and start a real
   browser, so `xdg_data_dirs_a_stage_may_write_is_not_passed_by_the_opener_in_generic_mode` runs a
   stand-in for `xdg-open` instead; that `kde-open` chooses its handler
   through `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `XDG_CONFIG_HOME`, `XDG_CONFIG_DIRS`, `XDG_CACHE_HOME`
-  and `XDG_CURRENT_DESKTOP`, which is read from source and was not run (Qt's `QDesktopServices` and
+  and `XDG_CURRENT_DESKTOP`, which is read from source (the first four and `HOME` were run on Linux,
+  see the Linux runs entry; `XDG_CACHE_HOME` and `XDG_CURRENT_DESKTOP` were not) (Qt's `QDesktopServices` and
   `QStandardPaths` and KDE's `KService`, `KSycoca` and `KConfig` are read, see the `kde-open` entry
   above); a start of `kde-open` by a Frameworks release other than 6.29.0
   or by Plasma 5 (only `kde-open5`'s `kioclient.cpp` was read, not KIO 5);
@@ -6313,6 +6466,7 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`
 `verified-by: bravebot_tui::opener::a_windows_name_is_removed_in_whatever_case_it_is_set`
 `verified-by: bravebot_tui::opener::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`
+`verified-by: bravebot_tui::opener::a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the sixteen names set and the same calls on Electron's shell start it with all sixteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the ten Windows names, which the application keeps)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`

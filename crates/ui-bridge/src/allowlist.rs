@@ -140,6 +140,11 @@ pub const DENIED: &[&str] = &[
     "session.import",
     "session.rewind",
     "session.note",
+    // Open another directory beside the workspace and vouch for it, or close one (TRUST-9). The
+    // window adds one only through its main process's own folder picker.
+    "session.folders.list",
+    "session.folders.add",
+    "session.folders.close",
     "models.list",
     // Change how the host's own sessions behave, which a person at the host decides.
     "session.mode",
@@ -226,6 +231,11 @@ pub const DENIED: &[&str] = &[
     "mcp-tools.reply",
     "mcp-call.reply",
     "mcp-move.reply",
+    // The questions a session opens with about what its checkout's settings ask for. The host's
+    // sessions put none of them (`Bridge::not_putting_project_questions`), so there is nothing to
+    // answer.
+    "rules.reply",
+    "folder.reply",
 ];
 
 fn refused(message: String) -> Failure {

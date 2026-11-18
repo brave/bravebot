@@ -4290,7 +4290,6 @@ where
                 file_wait,
                 &mut output,
             );
-            round_steps::collect_from_a_result(policy, task, state, reporter, &output);
             // As with a context file: what the turn has seen belongs to the conversation the
             // moment it sees it, not once the turn happens to end well.
             conversation.observed(policy.context_label());

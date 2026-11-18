@@ -123,6 +123,20 @@ pub fn said_in_a_session(rejected: &Rejected, described: String) -> String {
     }
 }
 
+/// The sentence for the file `--settings` named where it is read as a checkout's file because this
+/// platform's sandbox cannot hold it back from a directory a stage may write (#2599), or `None`
+/// where it is read as the person's own. Every client says the same words: `doctor`, the plain and
+/// terminal openings, the desktop's rules report and an editor's session.
+#[must_use]
+pub fn named_withheld_said(settings: &Settings) -> Option<String> {
+    settings.named_withheld().map(|path| {
+        t!(
+            session_settings_named_withheld,
+            path = crate::confirm::shown_path(path)
+        )
+    })
+}
+
 /// Every entry of the four filesystem lists with why it is not in force, or `None` where it is.
 ///
 /// An entry that resolved is still not in force where the backend cannot subtract from a grant and
@@ -308,27 +322,44 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
         };
         Some(held.to_string_lossy().into_owned())
     });
+    // A rule about a place above the workspace, such as `~/**` in a session opened in `~/proj`,
+    // covers the workspace's files, which the file tools ask about by their relative names.
+    if let Some(root) = &root {
+        permissions.cover_workspace(&root.to_string_lossy());
+    }
 }
 
-/// `path` relative to `root` where it lies at or under it. Names are compared as the OS holds them,
-/// except where the volume folds case: the key a rule's prefix arrives in was folded there, and
-/// folding takes text.
+/// `path` relative to `root` where it lies at or under it, with the names after the root spelled as
+/// `path` has them. Names are compared as text in the form every canonically equivalent spelling
+/// shares ([`bravebot_core::trust::canonical_key`]), so `cafe\u{301}` is `caf\u{e9}` whether or
+/// not the volume folds case. A name that is not UTF-8 is compared as the OS holds it, except where
+/// the volume folds case, since folding takes text.
 ///
-/// Two names are one where either fold joins them: the full one
+/// Where the volume folds case, two names are one where either fold joins them: the full one
 /// ([`bravebot_core::trust::fold_case`]), which joins `cla\u{df}` with `class`, and the one-letter
 /// one ([`bravebot_core::trust::fold_simple`]), which joins `cla\u{df}` with `cla\u{1e9e}`. That is
 /// the direction a refusal reads (TRUST-2): only `deny` and `ask` rules are given to
 /// [`follow_links`], so a rule about a place under `cla\u{df}` also covers it under a root spelled
 /// `class` or `cla\u{1e9e}`, and nothing is granted by it.
 fn beneath(path: &std::path::Path, root: &std::path::Path, folds_case: bool) -> Option<String> {
-    if !folds_case {
-        let relative = path.strip_prefix(root).ok()?;
-        return Some(tail(relative.components()));
+    use bravebot_core::trust::{canonical_key, fold_simple};
+    fn text(name: &std::ffi::OsStr, folds_case: bool) -> Option<std::borrow::Cow<'_, str>> {
+        match folds_case {
+            true => Some(name.to_string_lossy()),
+            false => name.to_str().map(std::borrow::Cow::Borrowed),
+        }
     }
-    let same = |one: &std::ffi::OsStr, other: &std::ffi::OsStr| {
-        let (one, other) = (one.to_string_lossy(), other.to_string_lossy());
-        bravebot_core::trust::fold_case(&one) == bravebot_core::trust::fold_case(&other)
-            || bravebot_core::trust::fold_simple(&one) == bravebot_core::trust::fold_simple(&other)
+    let same = |one: &std::ffi::OsStr, other: &std::ffi::OsStr| match (
+        text(one, folds_case),
+        text(other, folds_case),
+    ) {
+        (Some(one), Some(other)) => {
+            canonical_key(&one, folds_case) == canonical_key(&other, folds_case)
+                || folds_case
+                    && canonical_key(&fold_simple(&one), true)
+                        == canonical_key(&fold_simple(&other), true)
+        }
+        _ => one == other,
     };
     let mut names = path.components();
     for held in root.components() {
@@ -1676,6 +1707,117 @@ mod tests {
         assert_eq!(permissions.len(), 2);
     }
 
+    /// The decisions for `secret/key` under its relative name and its full path, in a project whose
+    /// directory is named `dir_form` and a `deny` rule spelling that directory as `rule_form`.
+    /// `None` where the volume does not keep the directory in the form asked for, so it cannot hold
+    /// the case.
+    #[cfg(unix)]
+    fn decisions_for_a_directory_spelled_two_ways(
+        index: usize,
+        dir_form: &str,
+        rule_form: &str,
+    ) -> Option<(Decision, Decision)> {
+        let scratch =
+            crate::testutil::scratch_dir(&format!("permissions-unicode-form-of-root-{index}"));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let project = scratch.join(dir_form);
+        std::fs::create_dir_all(project.join("secret")).unwrap();
+        std::fs::write(project.join("secret").join("key"), "hunter2").unwrap();
+        let root = project.canonicalize().unwrap();
+        if root.file_name() != Some(std::ffi::OsStr::new(dir_form)) {
+            return None;
+        }
+        let rule_root = root.parent().unwrap().join(rule_form);
+        let settings = Settings::parse(&format!(
+            r#"{{"permissions": {{"deny": ["Read(/{}/secret/**)"]}}}}"#,
+            rule_root.display()
+        ));
+        let (permissions, rejected) = from_settings(&settings, None, &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+        Some((
+            permissions.for_path(Subject::Read, "secret/key"),
+            permissions.for_path(
+                Subject::Read,
+                &root.join("secret").join("key").display().to_string(),
+            ),
+        ))
+    }
+
+    /// PERM-7: a full path rule covers a project file by its relative name and by its full path
+    /// whichever Unicode form the workspace directory is stored in and the rule spells it in, and a
+    /// different directory name is not covered.
+    #[cfg(unix)]
+    #[test]
+    fn a_full_path_rule_covers_a_project_file_whichever_unicode_form_the_workspace_is_spelled_in() {
+        let (nfc, nfd) = ("caf\u{e9}-proj", "cafe\u{301}-proj");
+        for (index, (dir_form, rule_form)) in [(nfd, nfc), (nfc, nfd), (nfc, nfc), (nfd, nfd)]
+            .into_iter()
+            .enumerate()
+        {
+            // A volume that normalizes names as it creates them cannot hold the other form.
+            let Some((relative, absolute)) =
+                decisions_for_a_directory_spelled_two_ways(index, dir_form, rule_form)
+            else {
+                continue;
+            };
+            assert_eq!(
+                relative,
+                Decision::Ruled(Ruling::Deny),
+                "a rule spelled {rule_form:?} missed `secret/key` in a workspace stored as {dir_form:?}"
+            );
+            assert_eq!(
+                absolute,
+                Decision::Ruled(Ruling::Deny),
+                "a rule spelled {rule_form:?} missed the full path in a workspace stored as {dir_form:?}"
+            );
+        }
+        if let Some((relative, absolute)) =
+            decisions_for_a_directory_spelled_two_ways(4, nfd, "cafe\u{301}-other")
+        {
+            assert_eq!(
+                (relative, absolute),
+                (Decision::Unmatched, Decision::Unmatched),
+                "a rule about a differently named directory covered the project"
+            );
+        }
+    }
+
+    /// PERM-7: a root and a path that differ only in Unicode form are one place, whether or not the
+    /// volume folds case, and what is left of the path keeps the spelling it had.
+    #[test]
+    fn a_root_is_read_as_the_root_a_refusal_names_in_either_unicode_form() {
+        use std::path::Path;
+        for folds_case in [false, true] {
+            assert_eq!(
+                beneath(
+                    Path::new("/p/cafe\u{301}/r\u{e9}/b"),
+                    Path::new("/p/caf\u{e9}"),
+                    folds_case
+                ),
+                Some("r\u{e9}/b".to_string()),
+                "a path stored decomposed was not under a root spelled precomposed"
+            );
+            assert_eq!(
+                beneath(
+                    Path::new("/p/caf\u{e9}/re\u{301}/b"),
+                    Path::new("/p/cafe\u{301}"),
+                    folds_case
+                ),
+                Some("re\u{301}/b".to_string()),
+                "a path spelled precomposed was not under a root stored decomposed"
+            );
+            assert_eq!(
+                beneath(
+                    Path::new("/p/cafe\u{301}x/a"),
+                    Path::new("/p/caf\u{e9}"),
+                    folds_case
+                ),
+                None,
+                "a longer name was read as the root"
+            );
+        }
+    }
+
     /// PERM-7: in a session opened in the home directory, a `~/` rule covers the file as `.ssh/key`.
     #[cfg(unix)]
     #[test]
@@ -1693,6 +1835,148 @@ mod tests {
         assert_eq!(
             permissions.for_path(Subject::Read, "notes.md"),
             Decision::Unmatched
+        );
+    }
+
+    /// PERM-7: a rule on an ancestor of the workspace, such as `~/**` in a session opened in
+    /// `~/proj`, covers the workspace's files by the relative name the file tools ask by, for
+    /// `Read` and `Edit` and for `deny` and `ask`. `~/proj/` names the workspace itself and covers
+    /// it the same way.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_on_an_ancestor_of_the_workspace_covers_the_workspace_by_its_relative_name() {
+        let scratch = crate::testutil::scratch_dir("permissions-ancestor-of-the-workspace");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = home.join("proj");
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        for tree in ["~/**", "~/", "~/proj/**", "~/proj/"] {
+            for (subject, family) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+                for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+                    let settings = Settings::parse(&format!(
+                        r#"{{"permissions": {{"{list}": ["{family}({tree})"]}}}}"#
+                    ));
+                    let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+                    assert!(rejected.is_empty(), "{rejected:?}");
+                    for name in ["secrets/canary.txt", "notes.md"] {
+                        assert_eq!(
+                            permissions.for_path(subject, name),
+                            Decision::Ruled(ruling),
+                            "{family}({tree}) in {list} did not cover {name}, which the file tools ask by"
+                        );
+                    }
+                    let absolute = root.join("secrets").join("canary.txt");
+                    assert_eq!(
+                        permissions.for_path(subject, &absolute.display().to_string()),
+                        Decision::Ruled(ruling),
+                        "{family}({tree}) in {list} stopped covering the absolute name"
+                    );
+                    assert_eq!(
+                        permissions.len(),
+                        1,
+                        "a spelling was counted as a rule of its own"
+                    );
+                }
+            }
+        }
+    }
+
+    /// PERM-7: a rule on an ancestor covers the workspace and nothing beside it. A sibling of the
+    /// workspace under the same ancestor is not named by a relative path, an `allow` rule on the
+    /// ancestor grants no relative name, and a rule about a place inside the workspace is not
+    /// widened to the rest of it.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_on_an_ancestor_gives_no_relative_name_to_what_it_does_not_cover() {
+        let scratch = crate::testutil::scratch_dir("permissions-ancestor-limits");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = home.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(~/sibling/**)", "Read(~/proj/secrets/**)"], "allow": ["Edit(~/**)"]}}"#,
+        );
+        let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "secrets/canary.txt"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched,
+            "a rule about a place inside the workspace covered the rest of it"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "sibling/a"),
+            Decision::Unmatched,
+            "a rule about a sibling of the workspace covered a project name"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "notes.md"),
+            Decision::Unmatched,
+            "an allow rule on an ancestor granted a relative name"
+        );
+    }
+
+    /// PERM-7: a rule on an ancestor of a workspace whose name is not UTF-8 covers the workspace
+    /// by its relative names, and a rule naming the workspace's lossy lookalike covers nothing of
+    /// it, since that is another directory (PATH-003). Linux only: other volumes refuse a name that
+    /// is not UTF-8.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_rule_on_an_ancestor_of_a_workspace_that_is_not_utf8_covers_it_by_its_relative_name() {
+        use std::os::unix::ffi::OsStrExt;
+        let scratch = crate::testutil::scratch_dir("permissions-ancestor-not-utf8");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = home.join(std::ffi::OsStr::from_bytes(b"proj-\xff"));
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        assert!(root.to_str().is_none(), "the workspace name is UTF-8");
+
+        for tree in ["~/**", "~/*/secrets/**"] {
+            let settings = Settings::parse(&format!(
+                r#"{{"permissions": {{"deny": ["Read({tree})"]}}}}"#
+            ));
+            let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            let names: &[&str] = match tree {
+                "~/**" => &["secrets/canary.txt", "notes.md"],
+                _ => &["secrets/canary.txt"],
+            };
+            for name in names {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, name),
+                    Decision::Ruled(Ruling::Deny),
+                    "Read({tree}) did not cover {name} in a workspace whose name is not UTF-8"
+                );
+            }
+        }
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(~/*/secrets/**)"]}}"#);
+        let (permissions, _) = from_settings(&settings, Some(&home), &root);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched,
+            "a rule about secrets covered a file outside it"
+        );
+
+        // A rule that names the lossy lookalike names another directory: it ends at the workspace,
+        // so `cover_workspace` leaves it to `follow_links`, and `beneath` does not read the
+        // lookalike as the root.
+        let settings = Settings::parse(&format!(
+            r#"{{"permissions": {{"deny": ["Read(~/proj-{}/**)"]}}}}"#,
+            '\u{FFFD}'
+        ));
+        let (permissions, rejected) = from_settings(&settings, Some(&home), &root);
+        assert!(rejected.is_empty(), "{rejected:?}");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "notes.md"),
+            Decision::Unmatched,
+            "a rule naming the lossy lookalike covered the directory whose name is not UTF-8"
         );
     }
 

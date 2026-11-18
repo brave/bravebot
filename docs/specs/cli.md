@@ -760,6 +760,14 @@ itself from a file is a run whose configuration is that file, so carrying on und
 directory happened to hold is the wrong configuration used in silence. A mistyped path and a
 variable that expanded to nothing look the same from here, and both are ordinary.
 
+The named file grants, so it is protected as `.bravebot` is: a write to it through a tool asks, a
+`run` redirection into it asks, and a stage cannot rewrite it on macOS, where the next launch with
+the flag would otherwise read the rewrite as the person's own ([PERM-9](permissions.md#PERM-9),
+[PERM-14](permissions.md#PERM-14), [SANDBOX-14](sandboxing.md#SANDBOX-14)). On Linux and Windows a
+file inside a directory a stage may write is read as a checkout's file is: it grants no rule,
+`sandbox.mode` or `run.network`, and sets no other key a checkout's file may not set. The session
+says so.
+
 What is checked is that the file is there, which is the mistake a command line makes. What is in it
 is read by the rule [backends.md](backends.md) states for every layer, where one that is oversized
 or unparseable leaves the others in force, and `doctor` lists the layers it read, so a named file
@@ -771,6 +779,7 @@ that did not parse is visible by its absence from that list.
 `verified-by: bravebot_cli::main::a_settings_flag_with_no_path_is_refused`
 `verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
 `verified-by: bravebot_cli::running::a_settings_file_named_on_the_command_line_is_read_above_the_ones_found`
+`verified-by: bravebot_cli::running::a_stage_cannot_rewrite_the_settings_file_named_by_the_flag`
 `verified-by: bravebot_cli::running::a_refused_argument_exits_non_zero`
 `verified-by: bravebot_cli::running::a_refused_settings_file_still_answers_with_a_result_object`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`

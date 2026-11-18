@@ -41,8 +41,9 @@ pub(super) fn mark_the_hovered(frame: &mut Frame, session: &Session, laid: &Laid
     let top = laid.window.map_or(0, |window| window.top);
     let areas: Vec<Rect> = match hovered.hit {
         // The track of the scrollbar is a column of blanks round the thumb, which is no text to
-        // underline.
-        Hit::Scrollbar => Vec::new(),
+        // underline. The face is a picture drawn in cells, and an underline across one reads as a
+        // fault in the picture; the line on the row of hints is what says a click does something.
+        Hit::Scrollbar | Hit::Face => Vec::new(),
         // An address or a path that was wrapped is one link over several rows.
         Hit::Link(index) => laid
             .targets
@@ -153,6 +154,7 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         Hit::Panel(Target::Files) => said(t!(hover_panel_files)),
         Hit::Panel(Target::File(_)) => said(t!(hover_panel_file)),
         Hit::Panel(Target::CloseFiles) => said(t!(hover_panel_close_files)),
+        Hit::Panel(Target::ClosePeek) => said(t!(hover_panel_close_peek)),
         Hit::Panel(Target::PreviousEdit) => said(t!(hover_panel_edit_previous)),
         Hit::Panel(Target::NextEdit) => said(t!(hover_panel_edit_next)),
         Hit::Panel(Target::Name) => said(t!(hover_panel_name)),
