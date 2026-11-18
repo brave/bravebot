@@ -91,7 +91,14 @@ fn project(name: &str) -> PathBuf {
 
 /// The settings that point the agent at the scripted model service.
 fn settings_for(endpoint: &str, directory: &Path) -> PathBuf {
-    let settings = directory.join("test-settings.json");
+    // Beside the directory and not in it, so the file grants on every host (PERM-14).
+    let settings = directory.with_file_name(format!(
+        "{}-test-settings.json",
+        directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project")
+    ));
     std::fs::write(
         &settings,
         json!({"model": "hooks-test/test", "provider": {"hooks-test": {

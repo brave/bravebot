@@ -50,7 +50,11 @@ use std::process::Stdio;
 /// `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not set, and Qt and GLib keep configuration under it.
 /// [`home_reads_outside_stage_writable`] also judges those two paths, since a stage can write them
 /// without writing `HOME` itself. A value a stage may write is removed and the program falls back
-/// to the account's own home.
+/// to the account's own home. That helps when `HOME` names a directory other than the account's
+/// home. When `HOME` is the account's home the fallback reads the same directories, so removing it
+/// changes nothing there. The writes are refused instead: `~/.config/mimeapps.list`, the
+/// `~/.config/<desktop>-mimeapps.list` files and `~/.local/share/applications` are persistence
+/// locations that a stage may not write (SANDBOX-18).
 ///
 /// `GIO_LAUNCH_DESKTOP` is the path of the wrapper program that `gio open` executes with the whole
 /// command line of the handler it starts (GLib 2.88.4, `gdesktopappinfo.c` line 3100), so it is one
@@ -66,11 +70,19 @@ use std::process::Stdio;
 /// `unix:runtime=yes`. A path is judged where it leads on the disk, a path that does not exist is
 /// removed, and the file at it is not required to be a socket.
 ///
-/// The last ten names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
-/// (brave/bravebot#3860). The sources are Wine's and ReactOS's source and Microsoft's
-/// `ShellExecute` page. The `sandbox-windows` job ran the start on a Windows Server 2025 runner
-/// (10.0.26100) and it did not show that a name chooses the program, because the test registers no
-/// handler whose command expands one of the names ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). Wine's
+/// The last eleven names are those of the Windows start, `rundll32 url.dll,FileProtocolHandler`
+/// (brave/bravebot#3860). Ten were taken from Wine's and ReactOS's source and Microsoft's
+/// `ShellExecute` page, and `PSModulePath` from a run. The `sandbox-windows` job registered a handler
+/// for the current user whose command expands one name, as a `REG_EXPAND_SZ` and as a `REG_SZ` value,
+/// and started the start through it on a Windows Server 2025 runner (10.0.26100) with the helper
+/// reachable only through that name. With the name put back on the command the helper ran for
+/// `PSModulePath`, `windir`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA` and
+/// `USERPROFILE` in the `REG_EXPAND_SZ` handler, and for no name in the `REG_SZ` handler. While
+/// `PSModulePath` was not listed, the opener's own start ran the helper through it. It did not
+/// run for `COMSPEC`, `SystemRoot` or `ProgramFiles` in either form. Those three stay listed: the run
+/// tried one command form on one image, and a value outside every directory a stage may write is
+/// kept for them as for the others. A name outside the eleven and `PATHEXT` was not tried
+/// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). Wine's
 /// `url.dll` passes the address to `ShellExecuteA` with no verb, and its `shlexec.c` reads
 /// `%name%` in the command template of the handler it runs from the process's environment
 /// (`GetEnvironmentVariableW`), so a handler whose command is written with `%ProgramFiles%` or
@@ -81,11 +93,11 @@ use std::process::Stdio;
 /// `COMSPEC` names, so it is one file ([`Names::File`]). `PATHEXT` is the list of extensions a
 /// command processor tries for a bare name; none of those sources reads it for this start, and it
 /// is removed whatever it holds ([`Names::Options`]). The Windows runs removed it and `rundll32`
-/// exited with status 0; whether a page opened without it was not observed.
-/// `PSModulePath` is not listed: nothing read shows `rundll32` or `ShellExecute` reading it, and the
-/// opener does not start PowerShell. The Windows run test sets it on a control start and records
-/// whether it reaches the helper.
-const CODE_SELECTORS: [(&str, Names); 29] = [
+/// exited with status 0; whether a page opened without it was not observed, and the handler run
+/// shows nothing about it, since its handler names the helper by a path and the helper ran with
+/// and no source read shows this start reading it, but `ShellExecute` expanded it in a handler's
+/// command in the run above. The opener does not start PowerShell.
+const CODE_SELECTORS: [(&str, Names); 30] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
     ("XDG_DATA_HOME", Names::Directory),
@@ -115,6 +127,7 @@ const CODE_SELECTORS: [(&str, Names); 29] = [
     ("LOCALAPPDATA", Names::Directory),
     ("APPDATA", Names::Directory),
     ("USERPROFILE", Names::Directory),
+    ("PSModulePath", Names::Directories),
 ];
 
 /// The names `xdg-mime` 1.2.1 joins to a directory it has already judged, as the start of a file
@@ -266,7 +279,10 @@ const READ_UNDER_HOME: [&str; 2] = [".config", ".local/share/applications"];
 /// Whether what `xdg-open` reads under `home` is outside the directories a stage may write.
 ///
 /// A session opened on `~/.config` or `~/.local/share` has no row for `HOME` itself, so `HOME` alone
-/// passes while the files read under it can be written. Each path in [`READ_UNDER_HOME`] is judged
+/// passes while the files read under it can be written. Removing `HOME` for that reason helps only
+/// where `HOME` names a directory other than the account's home, since the program then reads the
+/// account's home instead. Where `HOME` is the account's home, the persistence locations refuse the
+/// stage the writes (SANDBOX-18). Each path in [`READ_UNDER_HOME`] is judged
 /// as it is when it exists (a link counts and is followed by the judgment). One that does not exist
 /// is judged by the nearest existing directory above it below `home`, since whoever may write that
 /// directory can make the path. `home` itself is judged by [`CODE_SELECTORS`].
@@ -367,7 +383,43 @@ mod tests {
         assert!(!withheld("BROWSER", "/safe/bin/fire\u{fffd}ox %s"));
     }
 
+    /// The `DISPLAY` the tests give the installed `xdg-open` so that it looks up a handler (it does
+    /// so only when a display is set), and that no X server answers. It names a socket path, so
+    /// `xprop` and every X client fail to open it at once. A bare number such as `:9999` is not
+    /// that: when its local socket is missing, libxcb connects over TCP to `localhost` port 15999,
+    /// and on a host whose `localhost` is an address that does not answer that connect waits for the
+    /// kernel's connection timeout (#4230).
+    #[cfg(unix)]
+    const NO_X_SERVER: &str = "unix:/nonexistent-bravebot-test/X0";
+
+    /// How long a test waits for the installed `xdg-open` to end. It ends in well under a second
+    /// where it works. A host busy enough to take longer than this is not one the test can judge.
+    /// A program that has not ended by then fails the test and is killed with what it started.
+    #[cfg(unix)]
+    const OPENER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+    /// How long a test waits for a child run of this test binary: the deadline of the opener it
+    /// starts, and the time the binary needs to start and to report. A child that is past it is
+    /// hung in something other than the opener, whose own wait is bounded in the child.
+    #[cfg(unix)]
+    const CHILD_BACKSTOP: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// The deadline the child run by [`helper_run_by`] and its callers gives the opener: the
+    /// number of milliseconds in `BRAVEBOT_TEST_BROWSER_DEADLINE_MS` when a test sets it, so a test
+    /// of the deadline itself does not wait for [`OPENER_DEADLINE`].
+    #[cfg(unix)]
+    fn the_deadline_the_child_gives_the_opener() -> std::time::Duration {
+        std::env::var("BRAVEBOT_TEST_BROWSER_DEADLINE_MS")
+            .ok()
+            .and_then(|milliseconds| milliseconds.parse().ok())
+            .map_or(OPENER_DEADLINE, std::time::Duration::from_millis)
+    }
+
     /// Whether this process is the child of [`helper_run_by`], which has done what it is for.
+    ///
+    /// The opener is waited for at most [`the_deadline_the_child_gives_the_opener`]. One that has not
+    /// ended by then is killed with every program it started, and this panics, which fails the
+    /// child and so the test that ran it.
     #[cfg(unix)]
     fn is_the_child_of_helper_run_by() -> bool {
         const SESSION: &str = "BRAVEBOT_TEST_BROWSER_SESSION";
@@ -379,14 +431,25 @@ mod tests {
         bravebot_sandbox::programs::keep_out(Path::new(&session));
         let address = std::env::var("BRAVEBOT_TEST_BROWSER_ADDRESS")
             .unwrap_or_else(|_| "https://example.invalid/".to_string());
-        let status = opening(
-            &Resolved::found_earlier(std::path::PathBuf::from(opener)),
-            &[address],
-        )
-        .status()
-        .unwrap();
+        let status = crate::testutil::status_within(
+            &mut opening(
+                &Resolved::found_earlier(std::path::PathBuf::from(opener)),
+                &[address],
+            ),
+            the_deadline_the_child_gives_the_opener(),
+            "the opener",
+        );
         println!("opener ended: {status}");
         true
+    }
+
+    /// The child run of this test binary that `command` starts, waited for at most
+    /// [`CHILD_BACKSTOP`]. A child that does not end fails the test with `what` in the message, and
+    /// `what` names the variable or case under test. Its output is returned as
+    /// [`std::process::Command::output`] returns it.
+    #[cfg(unix)]
+    fn output_of_child(command: &mut std::process::Command, what: &str) -> std::process::Output {
+        crate::testutil::output_within(command, CHILD_BACKSTOP, what)
     }
 
     /// The opener's command run with `BROWSER` naming a helper that records it ran, once with the
@@ -456,10 +519,10 @@ mod tests {
                 for (name, set) in desktop {
                     command.env(name, set);
                 }
-                let child = command.output().unwrap();
+                let child = output_of_child(&mut command, &format!("BROWSER in {name}"));
                 assert!(
                     child.status.success(),
-                    "{}",
+                    "BROWSER in {name}: {}",
                     String::from_utf8_lossy(&child.stderr)
                 );
             }
@@ -672,7 +735,7 @@ mod tests {
     /// In generic mode `xdg-open` asks `xdg-mime` for the handler of `https` only when it sees a
     /// display (`has_display` in `xdg-open.in`: `DISPLAY` or `WAYLAND_DISPLAY` not empty), so a
     /// generic run that gives no display sets `WAYLAND_DISPLAY` to a name no socket has, and the
-    /// generic-mode test gives `DISPLAY` set to `:9999`, which no X server answers. Nothing
+    /// generic-mode test gives `DISPLAY` set to [`NO_X_SERVER`], which no X server answers. Nothing
     /// connects to a real display on that path: the only programs that could, `xprop` in `detectDE`
     /// and an X client, read `DISPLAY`. `DBUS_SESSION_BUS_ADDRESS` is removed in every run that
     /// sets no `XDG_CURRENT_DESKTOP` so the
@@ -683,12 +746,31 @@ mod tests {
     ///
     /// `BROWSER` names a command, so each side holds a `helper.sh` that records it ran and
     /// `BROWSER` is that path followed by ` %s`, which replaces the stand-in above.
+    ///
+    /// The opener is waited for at most [`OPENER_DEADLINE`], in the child run of this test binary.
+    /// An opener that has not ended by then is killed with every program it started, and the test
+    /// fails with `variable` in the message, on every host: a handler that does not exit is not a
+    /// reason to skip. The wait on the child run is bounded by [`CHILD_BACKSTOP`] for the same
+    /// reason.
     #[cfg(unix)]
     fn handler_run_by(
         test: &str,
         variable: &str,
         desktop: &[(&str, &str)],
         opener: &Path,
+    ) -> (bool, bool) {
+        handler_run_by_within(test, variable, desktop, opener, OPENER_DEADLINE)
+    }
+
+    /// [`handler_run_by`] with the time the child gives the opener to end set by the caller, so a
+    /// test of the deadline does not wait [`OPENER_DEADLINE`].
+    #[cfg(unix)]
+    fn handler_run_by_within(
+        test: &str,
+        variable: &str,
+        desktop: &[(&str, &str)],
+        opener: &Path,
+        deadline: std::time::Duration,
     ) -> (bool, bool) {
         use std::os::unix::fs::PermissionsExt;
 
@@ -785,6 +867,10 @@ mod tests {
                     .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
                     .env("BRAVEBOT_TEST_BROWSER_OPENER", opener)
                     .env(
+                        "BRAVEBOT_TEST_BROWSER_DEADLINE_MS",
+                        deadline.as_millis().to_string(),
+                    )
+                    .env(
                         "BRAVEBOT_TEST_BROWSER_ADDRESS",
                         format!("{scheme}://example.invalid/"),
                     )
@@ -824,9 +910,8 @@ mod tests {
                 }
                 command
                     .env("XDG_UTILS_DEBUG_LEVEL", "3")
-                    .env(variable, value)
-                    .output()
-                    .unwrap()
+                    .env(variable, value);
+                output_of_child(&mut command, variable)
             };
             logs.push(format!(
                 "{variable} in {}:\nstdout:\n{}\nstderr:\n{}",
@@ -836,7 +921,7 @@ mod tests {
             ));
             assert!(
                 child.status.success(),
-                "{}",
+                "{variable}: {}",
                 String::from_utf8_lossy(&child.stderr)
             );
         }
@@ -1057,10 +1142,10 @@ mod tests {
                 .env_remove("GIO_MODULE_DIR")
                 .env_remove("GIO_LAUNCH_DESKTOP")
                 .env(variable, value);
-            let child = command.output().unwrap();
+            let child = output_of_child(&mut command, variable);
             assert!(
                 child.status.success(),
-                "{}",
+                "{variable}: {}",
                 String::from_utf8_lossy(&child.stderr)
             );
         }
@@ -1148,6 +1233,10 @@ mod tests {
     /// `/etc/xdg/mimeapps.list` exists, since a removed `XDG_CONFIG_DIRS` falls back to it and it could
     /// name a real browser. The `XDG_CONFIG_DIRS` case is the variable under test, so the run cannot
     /// point it at an empty directory to avoid the file, and the skip stays on CI too.
+    ///
+    /// A handler that does not exit fails the test and does not skip it or stall the run:
+    /// [`handler_run_by`] bounds the wait on the installed `xdg-open`, which on a host whose
+    /// `xprop` or `xdg-mime` does not return would otherwise never end.
     #[cfg(unix)]
     #[test]
     fn an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode() {
@@ -1176,12 +1265,12 @@ mod tests {
             "XDG_DATA_DIRS",
         ] {
             // `xdg-open` 1.2.1 looks up a scheme handler in generic mode only when `DISPLAY` or
-            // `WAYLAND_DISPLAY` is set. `DISPLAY` names a number no X server answers, so `xprop`
+            // `WAYLAND_DISPLAY` is set. `DISPLAY` names a socket no X server answers, so `xprop`
             // in `detectDE` cannot reach a real one. The handlers are scripts that connect to nothing.
             let ran = handler_run_by(
                 "opener::tests::an_xdg_directory_a_stage_may_write_is_not_read_by_the_installed_xdg_open_in_generic_mode",
                 variable,
-                &[("DISPLAY", ":9999")],
+                &[("DISPLAY", NO_X_SERVER)],
                 &opener,
             );
             match ran {
@@ -1197,6 +1286,182 @@ mod tests {
                 ran => assert_eq!(ran, (false, true), "{variable}"),
             }
         }
+    }
+
+    /// The display the generic-mode tests give `xdg-open` is one `xprop` fails to open at once
+    /// (#4230). The regression it rejects: a bare display number such as `:9999`, which libxcb
+    /// opens over TCP to `localhost` when the local socket is missing, so that on a host whose
+    /// `localhost` does not answer `xprop` and with it `xdg-open` waits for the connection timeout
+    /// and the generic-mode test fails at its deadline. The test passes when the installed `xprop`
+    /// ends within five seconds, unable to open the display. It prints `skipped` and passes where
+    /// there is no `xprop`. On a host whose `localhost` answers with a refusal, a bare number also
+    /// fails at once, so only a host whose `localhost` does not answer shows the difference.
+    #[cfg(unix)]
+    #[test]
+    fn the_display_given_to_xdg_open_is_one_xprop_fails_to_open_at_once() {
+        let Some(xprop) = bravebot_sandbox::programs::find(OsStr::new("xprop")) else {
+            println!("skipped: no xprop on this host");
+            return;
+        };
+        let mut command = std::process::Command::new(xprop);
+        command
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("DISPLAY", NO_X_SERVER)
+            .args(["-root", "_DT_SAVE_MODE"]);
+        let output = crate::testutil::output_within(
+            &mut command,
+            std::time::Duration::from_secs(5),
+            "xprop on the display the generic-mode tests give xdg-open",
+        );
+        assert!(!output.status.success(), "xprop opened {NO_X_SERVER}");
+        let said = String::from_utf8_lossy(&output.stderr);
+        assert!(said.contains("unable to open display"), "{said}");
+    }
+
+    /// The deadline on the installed `xdg-open` (#4230). The regression it rejects: a test that
+    /// waits for the opener with no bound, so an `xdg-open` that never ends stalls the run (it did
+    /// for 16 and 48 minutes on a GNOME session, in `xprop`); a deadline that returns or skips
+    /// where it should fail; a failure that does not name the variable; and a kill of the opener
+    /// alone, which leaves the program it started running.
+    ///
+    /// The opener is a stand-in that starts a background program, which writes `survived` after
+    /// three seconds, and then runs `sleep 600`. The deadline is one second. The test passes when
+    /// the call fails within seconds with the variable and the deadline in the message, and nothing
+    /// the stand-in started has written `survived` once the three seconds have passed.
+    #[cfg(unix)]
+    #[test]
+    fn an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if is_the_child_of_helper_run_by() {
+            return;
+        }
+        let directory = crate::testutil::scratch_dir("opener-deadline");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let survived = directory.join("survived");
+        let stand_in = directory.join("xdg-open");
+        std::fs::write(
+            &stand_in,
+            format!(
+                "#!/bin/sh\n(sleep 3; : > '{}') &\nexec sleep 600\n",
+                survived.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let started = std::time::Instant::now();
+        // The call runs on a thread that this test waits for at most 30 seconds, so a call with no
+        // deadline fails this test and does not stall the run.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opener = stand_in.clone();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(|| {
+                handler_run_by_within(
+                    "opener::tests::an_opener_that_does_not_end_fails_the_test_and_is_killed_with_what_it_started",
+                    "XDG_DATA_HOME",
+                    &[("DISPLAY", NO_X_SERVER)],
+                    &opener,
+                    std::time::Duration::from_secs(1),
+                )
+            });
+            let _ = sender.send(result);
+        });
+        let failed = receiver
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| {
+                panic!("the call did not return within 30 seconds for an opener that never ends")
+            });
+        let waited = started.elapsed();
+        let message = match failed {
+            Ok(ran) => panic!("the call returned {ran:?} for an opener that never ends"),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_string())
+                })
+                .unwrap_or_default(),
+        };
+        assert!(
+            waited < std::time::Duration::from_secs(30),
+            "the call took {waited:?}: {message}"
+        );
+        assert!(
+            message.contains("XDG_DATA_HOME") && message.contains("did not end within 1s"),
+            "{message}"
+        );
+
+        // The background program writes `survived` three seconds after the stand-in started, if
+        // nothing ended it. The stand-in started at the latest when the call began.
+        let until = started + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let left_running = survived.exists();
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(
+            !left_running,
+            "a program the opener started was still running after the deadline"
+        );
+    }
+
+    /// The wait on a child run of this test binary is bounded too (#4230). The regression it
+    /// rejects: [`output_of_child`] and [`crate::testutil::output_within`] waiting with no bound, so
+    /// a child that hangs before it reaches the opener stalls the run. A command that does not end
+    /// is killed at the deadline and fails with the name the caller gave it, and a command that
+    /// ends in time returns what it wrote.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_does_not_end_is_killed_at_the_deadline_and_one_that_ends_is_not() {
+        let mut quick = std::process::Command::new("sh");
+        quick.args(["-c", "echo out; echo err >&2; exit 3"]);
+        let output = crate::testutil::output_within(
+            &mut quick,
+            std::time::Duration::from_secs(20),
+            "a quick command",
+        );
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "err\n");
+
+        let started = std::time::Instant::now();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(|| {
+                let mut never = std::process::Command::new("sh");
+                never.args(["-c", "sleep 600"]);
+                crate::testutil::output_within(
+                    &mut never,
+                    std::time::Duration::from_millis(300),
+                    "a command that never ends",
+                )
+            });
+            let _ = sender.send(result);
+        });
+        let failed = receiver
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("a command with a deadline of 300ms was waited on for 30s"));
+        let message = match failed {
+            Ok(output) => panic!("a command that never ends returned {:?}", output.status),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_default(),
+        };
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the wait took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            message.contains("a command that never ends did not end within 300ms"),
+            "{message}"
+        );
     }
 
     /// SANDBOX-30, through the installed `xdg-open` under KDE (`XDG_CURRENT_DESKTOP=KDE` and
@@ -1357,7 +1622,7 @@ mod tests {
             .env("BRAVEBOT_TEST_BROWSER_SESSION", &session)
             .env("BRAVEBOT_TEST_BROWSER_OPENER", &stand_in);
         without_a_desktop(&mut through_the_opener);
-        let child = through_the_opener.output().unwrap();
+        let child = output_of_child(&mut through_the_opener, "XDG_DATA_DIRS");
 
         let seen = std::fs::read_to_string(&log).unwrap_or_default();
         let report = String::from_utf8_lossy(&child.stderr).into_owned();
@@ -1660,10 +1925,10 @@ mod tests {
             command.env(chosen, set);
         }
         command.env(variable, &value);
-        let child = command.output().unwrap();
+        let child = output_of_child(&mut command, variable);
         assert!(
             child.status.success(),
-            "{}",
+            "{variable}: {}",
             String::from_utf8_lossy(&child.stderr)
         );
         let seen = std::fs::read_to_string(&log).ok();
@@ -1816,7 +2081,9 @@ mod tests {
 
     /// The names [`kde_open_marker_outcome`] sets to a program or to a directory that holds a marker
     /// handler, with what each is set to: `true` for a directory tree and `false` for the path of
-    /// the marker program. A name that holds a plug-in directory, a plug-in name or a flag has no
+    /// the marker program. `HOME` is a directory tree too, and is run with `XDG_DATA_HOME`,
+    /// `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` removed, since Qt reads `$HOME/.local/share` and
+    /// `$HOME/.config` only then. A name that holds a plug-in directory, a plug-in name or a flag has no
     /// marker form (a marker program is not a plug-in), so it is not in the list and the test says
     /// which names it did not exercise.
     #[cfg(unix)]
@@ -1830,6 +2097,7 @@ mod tests {
         ("XDG_CONFIG_DIRS", true),
         ("KDEHOME", true),
         ("KDEDIRS", true),
+        ("HOME", true),
     ];
 
     /// Runs the installed `kde-open` on an address that only a marker handler opens, with the
@@ -1937,6 +2205,9 @@ mod tests {
             entry(&directory, "planted-ran");
             default(&directory, "planted-ran");
         }
+        // The places Qt reads under `HOME` when the `XDG_` directories are not set.
+        entry(&tree.join(".local/share/applications"), "planted-ran");
+        default(&tree.join(".config"), "planted-ran");
 
         let mut command = std::process::Command::new(kde_open);
         command
@@ -1971,20 +2242,20 @@ mod tests {
                 script("planted-ran")
             };
             command.env(name, value);
+            if name == "HOME" {
+                for unset in ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"] {
+                    command.env_remove(unset);
+                }
+            }
         }
-        let mut child = command.spawn().unwrap();
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let mut status = child.try_wait().unwrap();
-        while status.is_none() && std::time::Instant::now() < until {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            status = child.try_wait().unwrap();
-        }
-        let ended = status.map_or_else(
-            || "still running after 30 seconds, then killed".to_string(),
-            |status| format!("ended with {status}"),
+        // A `kde-open` that does not end within the deadline is killed with every program it
+        // started, and the test fails naming the variable under test, as it does for `xdg-open`.
+        let status = crate::testutil::status_within(
+            &mut command,
+            OPENER_DEADLINE,
+            variable.map_or("the baseline run", |(name, _)| name),
         );
-        let _ = child.kill();
-        let _ = child.wait();
+        let ended = format!("ended with {status}");
         let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while !session.join("genuine-ran").exists()
             && !session.join("planted-ran").exists()
@@ -2117,14 +2388,16 @@ mod tests {
 
     /// SANDBOX-30, the Windows start (#3860): each directory name the start's list holds is removed
     /// when it names a directory a stage may write and kept when it names one outside them, and
-    /// `PATHEXT` is removed whatever it holds. The regression it rejects: a name left out of the
-    /// list, so a handler command written with `%LOCALAPPDATA%` or `%ProgramFiles%` that
+    /// `PATHEXT` is removed whatever it holds. `PSModulePath` is a list of directories, removed when
+    /// any entry may be written by a stage. The regression it rejects: a name left out of the
+    /// list, so a handler command written with `%LOCALAPPDATA%` or `%PSModulePath%` that
     /// `ShellExecute` expands from the environment runs what a stage wrote; a name judged as an
-    /// option, which removes a safe value; and `PATHEXT` kept or judged as a path. Checked on the
+    /// option, which removes a safe value; `PSModulePath` judged as one directory, so a list whose
+    /// second entry a stage may write is kept; and `PATHEXT` kept or judged as a path. Checked on the
     /// hosts with Unix paths, since the values are `/stage/dir` and `/safe/dir`, which are not
     /// absolute paths on Windows; the case rule is checked on Windows by
-    /// `a_windows_name_is_removed_in_whatever_case_it_is_set`. That the names choose the program
-    /// was read in Wine and ReactOS source and not run; see [`CODE_SELECTORS`].
+    /// `a_windows_name_is_removed_in_whatever_case_it_is_set`. Which names choose the program is
+    /// recorded in [`CODE_SELECTORS`].
     #[cfg(unix)]
     #[test]
     fn the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write() {
@@ -2152,6 +2425,15 @@ mod tests {
         assert!(withheld("USERPROFILE", "/stage/dir"));
         assert!(withheld("USERPROFILE", "relative"));
         assert!(!withheld("USERPROFILE", "/safe/dir"));
+        // A list of directories: one entry a stage may write removes the whole value, wherever
+        // in the list it is, and an empty entry is the current directory.
+        assert!(withheld("PSModulePath", "/stage/dir"));
+        assert!(withheld("PSModulePath", "relative"));
+        assert!(withheld("PSModulePath", "/safe/dir:/stage/dir"));
+        assert!(withheld("PSModulePath", "/stage/dir:/safe/dir"));
+        assert!(withheld("PSModulePath", "/safe/dir:"));
+        assert!(!withheld("PSModulePath", "/safe/dir"));
+        assert!(!withheld("PSModulePath", "/safe/one:/safe/two"));
 
         assert!(withheld("PATHEXT", ".COM;.EXE;.BAT;.CMD"));
         assert!(withheld("PATHEXT", ".CMD"));
@@ -2230,6 +2512,8 @@ mod tests {
         assert!(withheld("ProgramFiles(x86)", r"C:\stage\dir"));
         assert!(withheld("ComSpec", r"C:\stage\cmd.exe"));
         assert!(withheld("PathExt", ".CMD"));
+        assert!(withheld("PSModulePath", r"C:\safe;C:\stage\dir"));
+        assert!(withheld("PsModulePath", r"C:\stage\dir"));
         assert!(!withheld("Windir", r"C:\safe\dir"));
     }
 
@@ -2249,6 +2533,86 @@ mod tests {
     /// prefix at the start of its own line and not by its first words.
     #[cfg(windows)]
     const WINDOWS_START_RECORD: &str = "windows-start-record: ";
+    /// The address the child gives the start, when the test sets one. Without it the child opens
+    /// an `https` address, which the person's default browser handles.
+    #[cfg(windows)]
+    const WINDOWS_START_ADDRESS: &str = "BRAVEBOT_TEST_WINDOWS_START_ADDRESS";
+    /// How long the child waits for `rundll32` to end. `rundll32` shows a message box when the
+    /// command of the handler it was asked to run cannot be started, and nothing in a test answers
+    /// it, so a start that has not ended by then is killed and recorded as not ended.
+    #[cfg(windows)]
+    const WINDOWS_START_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// How `command` ended, written as `{:?}` writes an `io::Result` of an exit status, or as not
+    /// ended when it was still running at [`WINDOWS_START_DEADLINE`] and was killed.
+    #[cfg(windows)]
+    fn how_the_start_ended(command: &mut std::process::Command) -> String {
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => return format!("Err({error:?})"),
+        };
+        let until = std::time::Instant::now() + WINDOWS_START_DEADLINE;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return format!("Ok({status:?})"),
+                Ok(None) if std::time::Instant::now() < until => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return format!("not ended within {WINDOWS_START_DEADLINE:?}, killed");
+                }
+                Err(error) => return format!("Err({error:?})"),
+            }
+        }
+    }
+
+    /// What a child run of this test binary printed when it made the opener's start against this
+    /// process's environment with `names` set over it, putting `put_back` on the command again
+    /// when that is given and handing the start `address` when that is given. `test` is the test
+    /// that runs the child. A child that did not print how the start ended fails the caller.
+    #[cfg(windows)]
+    fn windows_start_child(
+        test: &str,
+        program: &Path,
+        stage: &Path,
+        names: &[(&str, OsString)],
+        put_back: Option<&str>,
+        address: Option<&str>,
+    ) -> String {
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let mut run = std::process::Command::new(std::env::current_exe().unwrap());
+        run.args(["--exact", test, "--test-threads=1", "--nocapture"])
+            .env(WINDOWS_START_STAGE, stage)
+            .env(WINDOWS_START_PROGRAM, program)
+            .env_remove(WINDOWS_START_PUT_BACK)
+            .env_remove(WINDOWS_START_ADDRESS);
+        for (name, value) in names {
+            run.env(name, value);
+        }
+        if let Some(name) = put_back {
+            run.env(WINDOWS_START_PUT_BACK, name);
+        }
+        if let Some(address) = address {
+            run.env(WINDOWS_START_ADDRESS, address);
+        }
+        let output = run.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let printed = String::from_utf8_lossy(&output.stdout).into_owned();
+        // A child that printed nothing has not made the start.
+        assert!(
+            records_of_the_windows_start(&printed)
+                .iter()
+                .any(|record| record.starts_with("start ended: ")),
+            "the child did not print how the start ended: {printed}"
+        );
+        printed
+    }
 
     /// The records in what the child printed, each without [`WINDOWS_START_RECORD`]: the lines
     /// that begin with it, whatever else the output holds.
@@ -2274,7 +2638,9 @@ mod tests {
             return false;
         };
         let stage = std::path::PathBuf::from(stage);
-        let (_, arguments) = opener("windows", "https://example.invalid/");
+        let address = std::env::var(WINDOWS_START_ADDRESS)
+            .unwrap_or_else(|_| "https://example.invalid/".to_string());
+        let (_, arguments) = opener("windows", &address);
         let mut command = opening_against(
             &Resolved::found_earlier(std::path::PathBuf::from(program)),
             &arguments,
@@ -2291,37 +2657,41 @@ mod tests {
         for name in withheld_from(&command) {
             println!("{WINDOWS_START_RECORD}removed {name}");
         }
-        println!("{WINDOWS_START_RECORD}start ended: {:?}", command.status());
+        println!(
+            "{WINDOWS_START_RECORD}start ended: {}",
+            how_the_start_ended(&mut command)
+        );
         true
     }
 
     /// SANDBOX-30, the Windows start (#3860), run on Windows. `rundll32 url.dll,FileProtocolHandler`
-    /// is started through the opener with each of the ten names of the Windows list set to a path
+    /// is started through the opener with each of the eleven names of the Windows list set to a path
     /// in a directory a stage may write, `COMSPEC` to a batch file that only creates a marker file
     /// and `PATHEXT` to `.CMD`. The start is made in a child run of this test binary, because the
     /// command takes its environment from the process and a test cannot set one: the parent gives
     /// the child those names with `Command::env`, and the child calls the opener's start against
     /// its own environment, prints the names the command takes off and runs it. The test asserts
-    /// that the child printed a record for every one of the ten and for how the start ended, each
+    /// that the child printed a record for every one of the eleven and for how the start ended, each
     /// on a line of its own, and that the marker was not created. The
     /// helper is shown to create the marker when run directly through `cmd`, so an absent marker
     /// is not a helper that cannot run.
     ///
-    /// For each of the ten names and for `PSModulePath`, which the list leaves out, the test then
-    /// makes the same start with only that name set, and the child sets it on the command again
+    /// For each of the eleven names the test then makes the same start with only that name set,
+    /// and the child sets it on the command again
     /// after the opener took it off. It prints whether the marker appeared and how the start
     /// ended. That record is printed and not asserted: a start that does not run the helper is
     /// the result for a name `rundll32` does not read, and it ending badly with `SystemRoot` put
     /// back at a stage's directory says nothing about the opener. A green run therefore shows
-    /// that the opener removes the ten names from the real start and that the marker did not
+    /// that the opener removes the eleven names from the real start and that the marker did not
     /// appear, and shows nothing about which names select code; the printed record does.
     ///
     /// The regression it rejects: a name of the list that the command does not take off, such as
     /// `ProgramFiles` dropped from [`CODE_SELECTORS`], or a start that does not remove a name
     /// under the case the environment holds it in. It does not reject a name that selects code
-    /// and is in neither the list nor this test, which is found by reading the program. It has
-    /// not shown which names select code: the test registers no handler whose command expands a
-    /// listed name. It runs in the `sandbox-windows` job of `ci.yml`.
+    /// and is in neither the list nor this test, which is found by reading the program. It does
+    /// not show which names select code: it registers no handler whose command expands a listed
+    /// name. [`a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper`]
+    /// registers one. It runs in the `sandbox-windows` job of `ci.yml`.
     #[cfg(windows)]
     #[test]
     fn the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it() {
@@ -2366,9 +2736,8 @@ mod tests {
             ("LOCALAPPDATA", directory.clone()),
             ("APPDATA", directory.clone()),
             ("USERPROFILE", directory.clone()),
+            ("PSModulePath", directory),
         ];
-        // Not in the list, so only the control sets it.
-        let not_listed = [("PSModulePath", directory)];
 
         // The helper creates the marker when it is run, and the wait sees it.
         let environment: Vec<(OsString, OsString)> = std::env::vars_os().collect();
@@ -2389,33 +2758,7 @@ mod tests {
         // What the child printed when it made the start with `names` set over this process's
         // environment, putting `put_back` on the command again when that is given.
         let made = |names: &[(&str, OsString)], put_back: Option<&str>| {
-            // nosemgrep: rust.lang.security.current-exe.current-exe
-            let mut run = std::process::Command::new(std::env::current_exe().unwrap());
-            run.args(["--exact", test, "--test-threads=1", "--nocapture"])
-                .env(WINDOWS_START_STAGE, &stage)
-                .env(WINDOWS_START_PROGRAM, program.as_path())
-                .env_remove(WINDOWS_START_PUT_BACK);
-            for (name, value) in names {
-                run.env(name, value);
-            }
-            if let Some(name) = put_back {
-                run.env(WINDOWS_START_PUT_BACK, name);
-            }
-            let output = run.output().unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let printed = String::from_utf8_lossy(&output.stdout).into_owned();
-            // A child that printed nothing has not made the start.
-            assert!(
-                records_of_the_windows_start(&printed)
-                    .iter()
-                    .any(|record| record.starts_with("start ended: ")),
-                "the child did not print how the start ended: {printed}"
-            );
-            printed
+            windows_start_child(test, program.as_path(), &stage, names, put_back, None)
         };
 
         let printed = made(&listed, None);
@@ -2433,7 +2776,7 @@ mod tests {
             "the helper was run by the checked start"
         );
 
-        for (name, value) in listed.iter().chain(&not_listed) {
+        for (name, value) in &listed {
             let one = [(*name, value.clone())];
             let printed = made(&one, Some(name));
             let ended = records_of_the_windows_start(&printed)
@@ -2445,6 +2788,220 @@ mod tests {
                 appeared(&marker)
             );
             let _ = std::fs::remove_file(&marker);
+        }
+        let _ = std::fs::remove_dir_all(&session);
+    }
+
+    /// The key under `HKEY_CURRENT_USER` of the scheme the handler test registers.
+    #[cfg(windows)]
+    const HANDLER_KEY: &str = r"HKCU\Software\Classes\bravebot-opener-test";
+    /// The scheme of the address the handler test opens.
+    #[cfg(windows)]
+    const HANDLER_SCHEME: &str = "bravebot-opener-test";
+
+    /// Whether `reg` ran with `arguments` and succeeded.
+    #[cfg(windows)]
+    fn reg(arguments: &[&str]) -> bool {
+        let Some(program) = Resolved::find(OsStr::new("reg")) else {
+            return false;
+        };
+        let arguments: Vec<String> = arguments
+            .iter()
+            .map(|argument| (*argument).to_string())
+            .collect();
+        opening_against(&program, &arguments, std::env::vars_os(), &|_| true)
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// The handler of [`HANDLER_SCHEME`] for the current user, removed again when this is dropped
+    /// so a failed assertion does not leave a handler registered on the machine.
+    #[cfg(windows)]
+    struct RegisteredHandler;
+
+    #[cfg(windows)]
+    impl RegisteredHandler {
+        /// Registers the scheme with `command` as the command that opens it, stored as a registry
+        /// value of type `kind` (`REG_SZ` or `REG_EXPAND_SZ`). Windows expands `%name%` in the
+        /// second type when the command is read, and whether it does in the first is not assumed.
+        fn write(command: &str, kind: &str) {
+            let command_key = format!(r"{HANDLER_KEY}\shell\open\command");
+            for arguments in [
+                vec![
+                    "add",
+                    HANDLER_KEY,
+                    "/ve",
+                    "/d",
+                    "URL:bravebot opener test",
+                    "/f",
+                ],
+                vec![
+                    "add",
+                    HANDLER_KEY,
+                    "/v",
+                    "URL Protocol",
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    "",
+                    "/f",
+                ],
+                vec!["add", &command_key, "/ve", "/t", kind, "/d", command, "/f"],
+            ] {
+                assert!(reg(&arguments), "reg {arguments:?} failed");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for RegisteredHandler {
+        fn drop(&mut self) {
+            let _ = reg(&["delete", HANDLER_KEY, "/f"]);
+        }
+    }
+
+    /// SANDBOX-30, the Windows start (#3860), run on Windows with a handler. A handler is registered
+    /// for the current user for a scheme of this test's own, whose command expands one name of the
+    /// Windows list and so reaches `helper.cmd`, which only creates a marker file, in a directory a
+    /// stage may write, and nowhere else. The opener's `rundll32 url.dll,FileProtocolHandler` is
+    /// then started with that scheme's address, in a child run of this test binary as
+    /// [`the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`] does,
+    /// with the name set to that directory. The names are the eleven Windows names of
+    /// [`CODE_SELECTORS`]. Each handler is written as a `REG_EXPAND_SZ` and
+    /// as a `REG_SZ` value. `COMSPEC` is the helper itself and the command is `%COMSPEC%`;
+    /// `PATHEXT` is `.CMD` and the command names `helper` without an extension.
+    ///
+    /// Asserted: a handler written with the helper's own path runs it through the opener's start,
+    /// so a helper that does not run under a name is not a registration that cannot run; and for
+    /// each of the ten names other than `PATHEXT` the opener's start with that name set to the
+    /// stage's directory does not run the helper.
+    ///
+    /// Printed and not asserted: `PATHEXT`. The `PATHEXT` handler names the
+    /// helper by a path in the stage's directory, and `rundll32` reaches that helper with `PATHEXT`
+    /// removed and with it put back, so no start that removes `PATHEXT` keeps it from running.
+    /// For every name the printed lines are the answer to what `rundll32` does, which the opener
+    /// does not decide: whether the handler written with the helper's own path still runs with the
+    /// name removed (that the start works without the name), and for each value type whether the
+    /// helper ran when the name was put back on the command, which is the name selecting the
+    /// program. `rundll32` shows a message box when a command cannot be started, so each child
+    /// waits for it at most [`WINDOWS_START_DEADLINE`].
+    ///
+    /// The regression it rejects: a name that a handler's command expands, dropped from
+    /// [`CODE_SELECTORS`] or not removed under the case the environment holds it in, so the
+    /// handler runs a file a stage wrote. It does not reject that for a name `rundll32` does not
+    /// expand, which a green run does not distinguish from one it does; the printed records do.
+    /// It runs in the `sandbox-windows` job of `ci.yml`.
+    #[cfg(windows)]
+    #[test]
+    fn a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper() {
+        if is_the_child_of_the_windows_start() {
+            return;
+        }
+        let test = "opener::tests::a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper";
+        let appeared = |marker: &Path| {
+            (0..20).any(|_| {
+                if marker.exists() {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                false
+            })
+        };
+        let session = crate::testutil::scratch_dir("opener-windows-handler-session");
+        let _ = std::fs::remove_dir_all(&session);
+        std::fs::create_dir_all(&session).unwrap();
+        let session = session.canonicalize().unwrap();
+        // The registry value and `cmd` do not read a `\\?\` path, which `canonicalize` returns.
+        let plain = |path: &Path| {
+            std::path::PathBuf::from(path.to_string_lossy().trim_start_matches(r"\\?\"))
+        };
+        let marker = plain(&session.join("marker.txt"));
+        let helper = plain(&session.join("helper.cmd"));
+        std::fs::write(
+            &helper,
+            format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display()),
+        )
+        .unwrap();
+        let stage = plain(&session);
+        let directory = stage.clone().into_os_string();
+        let through = |name: &str| format!(r#""%{name}%\helper.cmd" "%1""#);
+        let mut cases: Vec<(&str, OsString, String)> = vec![
+            (
+                "PATHEXT",
+                OsString::from(".CMD"),
+                format!(r#""{}" "%1""#, stage.join("helper").display()),
+            ),
+            (
+                "COMSPEC",
+                helper.clone().into_os_string(),
+                r#""%COMSPEC%" "%1""#.to_string(),
+            ),
+        ];
+        for name in [
+            "SystemRoot",
+            "windir",
+            "ProgramFiles",
+            "ProgramW6432",
+            "ProgramFiles(x86)",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "USERPROFILE",
+            "PSModulePath",
+        ] {
+            cases.push((name, directory.clone(), through(name)));
+        }
+        let address = format!("{HANDLER_SCHEME}://opened");
+        let program = Resolved::find(OsStr::new("rundll32")).expect("rundll32 is not found");
+        let start = |names: &[(&str, OsString)], put_back: Option<&str>| {
+            windows_start_child(
+                test,
+                program.as_path(),
+                &stage,
+                names,
+                put_back,
+                Some(&address),
+            )
+        };
+        let literal = format!(r#""{}" "%1""#, helper.display());
+
+        let _registered = RegisteredHandler;
+        let _ = reg(&["delete", HANDLER_KEY, "/f"]);
+        RegisteredHandler::write(&literal, "REG_SZ");
+        let printed = start(&[], None);
+        println!("{printed}");
+        assert!(
+            appeared(&marker),
+            "a handler written with the helper's own path did not run it through the opener's start, so a helper that does not run under a name shows nothing: {printed}"
+        );
+        let _ = std::fs::remove_file(&marker);
+
+        for (name, value, command) in &cases {
+            let one = [(*name, value.clone())];
+            RegisteredHandler::write(&literal, "REG_SZ");
+            start(&one, None);
+            println!(
+                "start with only {name} set to the stage and removed, handler written with the helper's own path: helper run {}",
+                appeared(&marker)
+            );
+            let _ = std::fs::remove_file(&marker);
+            for kind in ["REG_EXPAND_SZ", "REG_SZ"] {
+                RegisteredHandler::write(command, kind);
+                let checked = start(&one, None);
+                let ran_checked = appeared(&marker);
+                let _ = std::fs::remove_file(&marker);
+                start(&one, Some(name));
+                let ran_put_back = appeared(&marker);
+                let _ = std::fs::remove_file(&marker);
+                println!(
+                    "{kind} handler expanding {name}: the opener's start ran the helper {ran_checked}, with {name} put back it ran the helper {ran_put_back}"
+                );
+                if *name != "PATHEXT" {
+                    assert!(
+                        !ran_checked,
+                        "the opener's start ran a helper a {kind} handler reached through {name}: {checked}"
+                    );
+                }
+            }
         }
         let _ = std::fs::remove_dir_all(&session);
     }
@@ -2643,10 +3200,11 @@ mod tests {
 
     /// SANDBOX-30, on the disk: `HOME` is removed when it, or the configuration or handler
     /// directory `xdg-open` reads under it, leads to a directory a stage may write, and kept
-    /// otherwise. The regression it rejects: `HOME` judged alone, so a session opened on
-    /// `~/.config` or on `~/.local/share/applications` (which has no row for `HOME`) leaves `HOME`
-    /// as set while the files read under it are the stage's; and a comparison of the names as
-    /// written, which a link into the session slips past.
+    /// otherwise. The regression it rejects: `HOME` judged alone, so a `HOME` naming a directory
+    /// whose `.config` or `.local/share/applications` is a stage's (a session opened on either has
+    /// no row for `HOME`) is left as set; and a comparison of the names as written, which a link
+    /// into the session slips past. Removing `HOME` does not protect an account's own home, which
+    /// GLib reads when `HOME` is unset; SANDBOX-18 refuses the writes there.
     #[cfg(unix)]
     #[test]
     fn a_home_is_judged_with_the_paths_the_opener_reads_under_it_on_the_disk() {
@@ -2954,6 +3512,15 @@ mod tests {
             )
             .unwrap();
         }
+        // A run that finds no handler falls back to `BROWSER`, and with it unset and a display it
+        // starts `x-www-browser`, `firefox` or `chromium`, which may not end by the deadline.
+        let fallback = root.join("fallback.sh");
+        std::fs::write(
+            &fallback,
+            format!("#!/bin/sh\n: > '{}'\n", log.join("fallback").display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(0o755)).unwrap();
         let planted = "x-scheme-handler/bravebot-test=../../../stage/handler.desktop\n";
         let installed_default = "x-scheme-handler/bravebot-test=handler.desktop\n";
         let list = |default: &str| format!("[Default Applications]\n{default}");
@@ -2993,11 +3560,12 @@ mod tests {
             .env("XDG_CONFIG_HOME", &config)
             .env("XDG_CONFIG_DIRS", &config)
             .env("WAYLAND_DISPLAY", "bravebot-test-no-such-display")
+            .env("BROWSER", format!("{} %s", fallback.display()))
             .arg("bravebot-test://example.invalid/");
         if !removed {
             command.env(variable, &value);
         }
-        let _ = command.output().unwrap();
+        let _ = crate::testutil::output_within(&mut command, OPENER_DEADLINE, variable);
         let ran = (log.join("planted").exists(), log.join("genuine").exists());
         let _ = std::fs::remove_dir_all(&root);
         ran

@@ -691,6 +691,67 @@ fn a_malformed_dropped_list_costs_the_files_and_not_the_turn() {
     }
 }
 
+/// AUTO-1, ACP-7, HOST-2: a bridge built with `opening_in_ask` opens a new session, an opened one
+/// and a fork asking where the person's settings say `permissions.startInAuto`, and says so in each
+/// reply, and one built without it opens all three in auto. The faults it rejects are an option the
+/// bridge does not read for one of the three ways of opening, and a bridge that asks whatever the
+/// option says.
+#[test]
+fn a_bridge_opening_in_ask_opens_every_session_asking_where_the_setting_says_auto() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = test_profile::project("opening-in-ask");
+    std::fs::create_dir_all(&project).expect("a project directory");
+    let settings = project.with_extension("settings.json");
+    std::fs::write(&settings, r#"{"permissions": {"startInAuto": true}}"#)
+        .expect("a settings file");
+    let store = bravebot_session::sessions::project_directory(&project).expect("a store");
+    std::fs::create_dir_all(&store).expect("a store directory");
+    let record = json!({
+        "id": "20260101T000000-aaaa", "directory": project, "title": "fix it",
+        "started": 1, "updated": 2, "turns": 1,
+        "conversation": {"context": "trusted", "messages": [
+            {"role": "user", "content": "fix it"},
+            {"role": "assistant", "content": "fixed"},
+        ]},
+    });
+    std::fs::write(store.join("20260101T000000-aaaa.json"), record.to_string()).expect("a record");
+
+    for (asking, expected) in [(true, "ask"), (false, "auto")] {
+        let (bridge, _) = harness();
+        let mut bridge = bridge.with_settings(Some(settings.clone()));
+        if asking {
+            bridge = bridge.opening_in_ask();
+        }
+        let made = call(&mut bridge, "session.new", json!({"directory": project})).unwrap();
+        assert_eq!(
+            made["permissionMode"], expected,
+            "new, asking {asking}: {made}"
+        );
+        let opened = call(
+            &mut bridge,
+            "session.open",
+            json!({"directory": project, "id": "20260101T000000-aaaa"}),
+        )
+        .unwrap();
+        assert_eq!(
+            opened["permissionMode"], expected,
+            "opened, asking {asking}: {opened}"
+        );
+        let forked = call(
+            &mut bridge,
+            "session.fork",
+            json!({"session": opened["session"], "prompt": 0, "text": "fix it"}),
+        )
+        .unwrap();
+        assert_eq!(
+            forked["permissionMode"], expected,
+            "forked, asking {asking}: {forked}"
+        );
+    }
+}
+
 /// In a profile of its own: a yes is kept for later sessions in the directory, and none of this
 /// belongs in the developer's home.
 #[test]

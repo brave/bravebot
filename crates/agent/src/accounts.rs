@@ -13,7 +13,6 @@ use bravebot_config::{Config, ConfigError, Managed, Settings, brave_key, env_var
 use bravebot_skus::chatgpt::AccountError;
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -869,22 +868,7 @@ pub fn write_keys(directory: &Path, stored: &Keys) -> std::io::Result<()> {
             removed => removed,
         };
     }
-    home::create_directory(directory)?;
-    let temporary = path.with_file_name(format!("{}.{}.tmp", keys::FILE, std::process::id()));
-    // The file is closed at the end of the closure, before the rename, which Windows refuses while
-    // a handle is still open on either name.
-    let written = bravebot_skus::store::create_private(&temporary)
-        .and_then(|mut file| {
-            file.write_all(stored.to_text().expose().as_bytes())?;
-            // On disk before the rename, or a crash just after it can leave the name on an empty
-            // file where a filesystem orders the rename first.
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temporary, &path));
-    if written.is_err() {
-        std::fs::remove_file(&temporary).unwrap_or_default();
-    }
-    written
+    home::replace_private(directory, keys::FILE, stored.to_text().expose())
 }
 
 #[cfg(test)]
@@ -894,9 +878,7 @@ mod tests {
     use bravebot_skus::oauth::Defect;
 
     fn scratch(name: &str) -> PathBuf {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch/accounts")
-            .join(name);
+        let path = crate::testutil::scratch_dir("accounts").join(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("a scratch directory");
         path

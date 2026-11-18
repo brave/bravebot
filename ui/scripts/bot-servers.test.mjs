@@ -5,6 +5,7 @@ import { buildSync } from 'esbuild'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { botRow, fakeBots, loadMain } from './fake-bots.mjs'
 
 const require = createRequire(import.meta.url)
 const load = (entry, profile) => {
@@ -14,8 +15,16 @@ const load = (entry, profile) => {
   new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
   return module.exports
 }
-const { isServerSelection, parseBotServers, parseBots } = load('src/shared/bots.ts')
-const definition = { slug: 'web-dev', name: 'Web dev', purpose: 'Build websites', home: '/tmp/bot-homes/web-dev', avatar: 'v2:preview', session: null }
+const { isServerSelection, parseBotServers } = load('src/shared/bots.ts')
+
+function storageFor(profile) {
+  const storage = loadMain(
+    "export * from './src/main/bots'\nexport { useBotsBridge } from './src/main/bot-store'\n",
+    { app: { getPath: () => profile } },
+  )
+  storage.useBotsBridge(fakeBots().request)
+  return storage
+}
 
 const FLAGS = { editable: true, every: true, everyPossible: true }
 const ANSWER = { servers: null, tools: false, inline: false, kind: 'worker', ...FLAGS }
@@ -38,10 +47,10 @@ test('only a whole answer from the agent is taken as a bot’s servers, with its
 
 test('servers are read and written under the stored definition name, never another', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-servers-'))
-  const storage = load('src/main/bots.ts', profile)
+  const storage = storageFor(profile)
   try {
-    const stored = { ...parseBots({ bots: [definition] }).bots[0], definition: 'web-dev-2' }
-    storage.saveBot(stored)
+    const stored = botRow({ definition: 'web-dev-2' })
+    await storage.saveBot(stored)
     const calls = []
     let line = null
     const request = async (method, params) => {
@@ -63,10 +72,10 @@ test('servers are read and written under the stored definition name, never anoth
 
 test('a refused or unanswered write is an error, and the next one still runs', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-servers-'))
-  const storage = load('src/main/bots.ts', profile)
+  const storage = storageFor(profile)
   try {
-    const stored = { ...parseBots({ bots: [definition] }).bots[0], definition: 'web-dev' }
-    storage.saveBot(stored)
+    const stored = botRow({ definition: 'web-dev' })
+    await storage.saveBot(stored)
     await assert.rejects(storage.saveBotServers(stored, [], null), /not running/)
     await assert.rejects(storage.saveBotServers(stored, [], async () => { throw new Error('inline mcpServers') }), /inline mcpServers/)
     await assert.rejects(storage.saveBotServers(stored, [], async () => ({ name: 'other' })), /did not rewrite/)

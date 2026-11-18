@@ -23,15 +23,15 @@ So a person reading the address could approve it alone ([TOOL-2](tool-surface.md
 
 The refusals say that nothing was recorded and do not repeat the address.
 
-`verified-by: bravebot_agent::tools::an_address_the_person_typed_is_recorded_under_the_kind_asked_for`
-`verified-by: bravebot_agent::tools::an_address_the_person_did_not_type_is_refused_and_nothing_is_recorded`
-`verified-by: bravebot_agent::tools::the_start_of_a_longer_typed_address_is_refused`
-`verified-by: bravebot_agent::tools::a_typed_word_that_is_not_a_web_address_is_refused`
-`verified-by: bravebot_agent::tools::a_kind_other_than_issue_or_pull_request_is_refused`
-`verified-by: bravebot_agent::tools::a_context_that_has_met_something_untrusted_cannot_set_a_link`
-`verified-by: bravebot_agent::tools::a_context_holding_private_content_still_records_a_typed_address_and_nothing_else`
-`verified-by: bravebot_agent::tools::an_address_on_another_tracker_is_recorded`
-`verified-by: bravebot_agent::tools::only_the_address_the_planner_names_is_recorded_from_a_line_with_several`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::an_address_the_person_typed_is_recorded_under_the_kind_asked_for`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::an_address_the_person_did_not_type_is_refused_and_nothing_is_recorded`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::the_start_of_a_longer_typed_address_is_refused`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::a_typed_word_that_is_not_a_web_address_is_refused`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::a_kind_other_than_issue_or_pull_request_is_refused`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::a_context_that_has_met_something_untrusted_cannot_set_a_link`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::a_context_holding_private_content_still_records_a_typed_address_and_nothing_else`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::an_address_on_another_tracker_is_recorded`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::only_the_address_the_planner_names_is_recorded_from_a_line_with_several`
 `verified-by: bravebot_agent::tools::only_a_call_that_dispatches_as_set_link_is_handed_the_typed_lines`
 `verified-by: bravebot_agent::links::the_start_of_a_longer_address_is_not_found`
 `verified-by: bravebot_agent::links::a_whole_word_of_a_typed_line_is_found`
@@ -64,10 +64,11 @@ The tool is offered only to a turn whose front end keeps the link: the terminal,
 
 A delegate is offered no `set_link`, and a call from one is answered as an unknown name is, since a delegate's task is a sentence the driver composed and the lines the person typed are not its to cite. `set_link` is among the names a delegate is never offered.
 
-`verified-by: bravebot_agent::tools::a_delegate_cannot_set_a_link`
+`verified-by: bravebot_agent::tools::tests::setting_a_link::a_delegate_cannot_set_a_link`
 `verified-by: bravebot_core::policy::an_addressed_turn_is_offered_only_the_tools_its_definition_named`
 `verified-by: bravebot_core::policy::the_tools_no_delegate_is_offered_are_offered_to_an_addressed_turn`
 
 ## Known costs
 
 - **Only a line typed in this run of the session counts.** A message restored from a saved session has no recorded origin and is left out, so after a resume the person types the address again, or uses `/issue` and `/pr`. A line sent with files dropped on it is left out as well. An address in a file or a page does not count, and neither does one a program printed.
+- **A reference met in a command is not the session's link.** The list of issues and pull requests a session has named ([PANEL-16](../info-panel.md#PANEL-16)) is a second reader in `crates/agent/src/links.rs`, over the lines the person typed and the planner's own tool-call arguments. It sets no link: `gh pr view 123` in a command the planner wrote lists that pull request and does not make it the session's pull request. `/issue` and `/pr` do not read the list, the panel draws the session's own link first and then the list, and a call to `set_link` still needs the address to be a word of a line the person typed.

@@ -14,6 +14,7 @@
 
 use crate::answerers::Answerers;
 use crate::emit::{Emitter, Listener};
+use crate::project_questions::Questions;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
@@ -73,6 +74,12 @@ struct Open {
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
+    /// Whether the file tools are held to the project (PERM-16). Read with the permission rules
+    /// when the session opens and held for its turns (PERM-12), so a settings file edited while
+    /// the session is open neither widens nor narrows what its next turn reads. A copy of the
+    /// value the session's rules hold, kept here so a request answered while a turn holds the
+    /// session's state builds its workspace under the same answer.
+    reads_stay_in_workspace: bool,
     /// The definition this session's conversation belongs to, once a turn has said so
     /// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)).
     ///
@@ -81,7 +88,8 @@ struct Open {
     /// which has no request to carry one.
     definition: Option<String>,
     /// What the next turn asks before it acts. Asking whenever a session opens, a resume or a fork
-    /// included, since a mode is never read from a record (MODE-10).
+    /// included, since a mode is never read from a record (MODE-10), unless the person's own
+    /// `permissions.startInAuto` opens it in auto (AUTO-1).
     ///
     /// Held here rather than sent with each `turn.send`, because a watch fires a turn that no
     /// request asked for, and that turn must run in the mode the window shows.
@@ -102,6 +110,15 @@ struct Open {
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
+    /// The questions put once the trust question is answered, about what the checkout's settings
+    /// ask for (PERM-15, TRUST-9). A turn is refused while one is waiting.
+    questions: Questions,
+    /// The names in `additionalDirectories` that cannot be opened at all, which are reported
+    /// rather than asked about.
+    refused_folders: Vec<crate::project_questions::Refused>,
+    /// The folders open beside the project, as the state held them when they last changed, for a
+    /// `session.folders.list` asked while a turn holds the state.
+    folders: Vec<PathBuf>,
 }
 
 impl Open {
@@ -116,6 +133,7 @@ impl Open {
     ) -> Self {
         Self {
             project,
+            folders: state.directories.clone(),
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -123,23 +141,40 @@ impl Open {
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             auto_vetting,
+            // Set with the rules, which are read once the session is minted.
+            reads_stay_in_workspace: false,
             definition: None,
             permission_mode: LiveMode::default(),
             sandbox: None,
             offered_definitions: Mutex::new(Vec::new()),
             enhancing: None,
             sends: crate::sends::Sends::default(),
+            questions: Questions::Settled,
+            refused_folders: Vec::new(),
         }
     }
 
-    /// Whether the session can take a turn or a manifest run now: the trust question is answered
-    /// and nothing is running.
+    /// This session opened in `mode`, which the three ways a window opens one choose from the
+    /// person's own settings (AUTO-1).
+    fn starting_in(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = LiveMode::new(mode);
+        self
+    }
+
+    /// Whether the session can take a turn or a manifest run now: the trust question and the
+    /// questions after it are answered, and nothing is running.
     fn ready_for_work(&self) -> Result<(), Failure> {
         if !self.answered_trust {
             return Err(Failure::bad_request(
                 "this session has not been asked whether the directory is trusted; \
                  send trust.reply first",
             ));
+        }
+        if let Some(method) = self.questions.reply_method() {
+            return Err(Failure::bad_request(format!(
+                "this session has a question about the project's settings waiting; \
+                 send {method} first"
+            )));
         }
         if self.running.is_some() {
             return Err(Failure::new(
@@ -172,13 +207,27 @@ pub struct Bridge {
     /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
     /// make answerable is not.
     refuse_until_set: bool,
+    /// Whether every session opens asking, whatever the person's `permissions.startInAuto` says. A
+    /// client that cannot leave auto, or answer from it, sets it.
+    opening_in_ask: bool,
+    /// The front end the planner is told it runs in (INSTR-9): the desktop application unless a
+    /// host that projects this bridge says otherwise, as the editor server does.
+    front_end: bravebot_agent::FrontEnd,
     /// The ChatGPT or xAI sign-in the window started, while it runs.
     sign_ins: crate::accounts::SignIns,
+    /// Whether a session puts the questions about its checkout's settings once trust is answered
+    /// (PERM-15). A client that has no way to answer them is built with
+    /// [`Bridge::not_putting_project_questions`], and its sessions grant and open none of it.
+    putting_project_questions: bool,
+    /// The last request id given to one of those questions. Never reused, so a reply meant for
+    /// one cannot answer a later one.
+    project_questions: u64,
 }
 
 impl Bridge {
     pub fn new(emit: Listener) -> Self {
         Self {
+            front_end: bravebot_agent::FrontEnd::Desktop,
             open: HashMap::new(),
             next_handle: 0,
             settings: None,
@@ -188,8 +237,19 @@ impl Bridge {
             closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
+            opening_in_ask: false,
             sign_ins: crate::accounts::SignIns::default(),
+            putting_project_questions: true,
+            project_questions: 0,
         }
+    }
+
+    /// Put none of the questions about a checkout's settings (PERM-15): its proposed `allow` rules
+    /// stay proposed and the directories it names stay closed, each reported. For a client that
+    /// has no way to answer them, so a session never waits on a question nobody can see.
+    pub fn not_putting_project_questions(mut self) -> Self {
+        self.putting_project_questions = false;
+        self
     }
 
     /// Refuse every question of a session until [`Bridge::set_answerable`] or
@@ -199,10 +259,25 @@ impl Bridge {
         self
     }
 
+    /// Open every session asking, a new one, an opened one and a fork, where the person's own
+    /// `permissions.startInAuto` would open it in auto (AUTO-1). For a client that is offered no way
+    /// out of auto, so a session never opens in a mode it cannot leave (ACP-7, HOST-2).
+    pub fn opening_in_ask(mut self) -> Self {
+        self.opening_in_ask = true;
+        self
+    }
+
     /// Preserve the selected path even if it disappeared: future requests must fail rather
     /// than silently fall back to another destination after a process restart.
     pub fn with_settings(mut self, path: Option<PathBuf>) -> Self {
         self.settings = path;
+        self
+    }
+
+    /// Say which front end this bridge is the projection of, so the planner is told the one the
+    /// person is using (INSTR-9). Prompt-only: the front word a record carries is not changed.
+    pub fn with_front_end(mut self, front_end: bravebot_agent::FrontEnd) -> Self {
+        self.front_end = front_end;
         self
     }
 
@@ -254,6 +329,9 @@ impl Bridge {
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
+            "session.folders.list" | "session.folders.add" | "session.folders.close" => {
+                self.folders(request)
+            }
             "turn.send" => self.send_turn(request),
             "turn.lookup" => {
                 let id = crate::wire::message_id(request.params.get("messageId"))?;
@@ -344,6 +422,8 @@ impl Bridge {
             "mcp-move.reply" => self.reply_decision(request, Reply::McpMove),
             "ask.reply" => self.reply_ask(request),
             "trust.reply" => self.reply_trust(request),
+            "rules.reply" => self.reply_rules(request),
+            "folder.reply" => self.reply_folder(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
             "settings.inspect" => Ok(crate::settings::report(
@@ -373,6 +453,16 @@ impl Bridge {
             "effort.set" => crate::effort::set(request),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
+            "usage_ping.get" => Ok(crate::usage_ping::get()),
+            "usage_ping.set" => crate::usage_ping::set(request),
+            "usage_ping.notice_due" => {
+                Ok(json!({"due": bravebot_session::store::usage_ping_notice_due()}))
+            }
+            "usage_ping.mark_notice_shown" => {
+                bravebot_session::store::mark_usage_ping_notice_shown();
+                crate::usage_ping::start(self.settings.as_deref());
+                Ok(json!({"shown": bravebot_session::store::usage_ping_notice_shown()}))
+            }
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
             "caffeinate.confirmed" => {
@@ -383,6 +473,8 @@ impl Bridge {
                 Ok(json!({"kept": bravebot_session::store::load_caffeinate_confirmed()}))
             }
             "bot.define" => crate::definitions::make(request),
+            "bot.list" => crate::bots::list(request),
+            "bot.replace" => crate::bots::replace(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
             "bot.servers.read" => crate::definitions::servers_read(request),
@@ -563,15 +655,28 @@ impl Bridge {
         state.account = self.account_session(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
-        let handle = self.mint(Open::opened(
-            directory.clone(),
-            state,
-            opening.answered,
-            opening.keeping,
-            auto_vetting,
-        ));
+        let handle = self.mint(
+            Open::opened(
+                directory.clone(),
+                state,
+                opening.answered,
+                opening.keeping,
+                auto_vetting,
+            )
+            .starting_in(self.opening_mode(&directory)),
+        );
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
+        // The record's own map is that session's user's answer, and the session asks nothing it
+        // did not grant (PERM-10). A kept yes is the person here answering (TRUST-23).
+        self.settle_questions(
+            &handle,
+            if settled.is_some() {
+                bravebot_agent::opening::Whence::Asked
+            } else {
+                bravebot_agent::opening::Whence::Resumed
+            },
+        );
         if let Some(open) = self
             .open
             .get(&handle)
@@ -593,6 +698,7 @@ impl Bridge {
             opened["trust"] = settled;
         }
         merge(&mut opened, reported);
+        merge(&mut opened, self.questions_report(&handle));
         Ok(Stored::Opened(opened))
     }
 
@@ -600,26 +706,165 @@ impl Bridge {
     /// as a front end reads them.
     ///
     /// Read from the settings files once, here, and kept by the session (PERM-12). `inherited`
-    /// is a parent's rules, which a fork takes in place of reading the files again.
+    /// is a parent's rules, which a fork takes in place of reading the files again. Whether the
+    /// file tools are held to the project comes with them (PERM-16).
+    ///
+    /// The layers read are also what the questions after the trust question ask about, so they are
+    /// held until those are settled.
     fn open_under_rules(
-        &self,
+        &mut self,
         handle: &str,
         inherited: Option<crate::rules::SettingsRules>,
     ) -> Value {
-        let Some(open) = self.open.get(handle) else {
+        let Some(open) = self.open.get_mut(handle) else {
             return Value::Null;
         };
         let rules = inherited.unwrap_or_else(|| {
-            crate::rules::SettingsRules::read(
-                &crate::settings::layers(Some(&open.project), self.settings.as_deref()),
-                &open.project,
-            )
+            let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+            let rules = crate::rules::SettingsRules::read(&settings, &open.project);
+            if self.putting_project_questions {
+                open.questions = Questions::Unsettled(Box::new(settings));
+            }
+            rules
         });
+        open.reads_stay_in_workspace = rules.reads_stay_in_workspace;
         let reported = rules.json();
         if let Ok(mut state) = open.state.lock() {
             state.answers.rules = rules;
         }
         reported
+    }
+
+    /// Settle the questions the session opened as `handle` puts once its trust question is answered,
+    /// where it is: the proposed `allow` rules the record does not already grant (PERM-15), then
+    /// each directory named in `additionalDirectories`, one at a time (TRUST-9).
+    ///
+    /// `whence` is where the answer came from. Bypass answers in its place, as it does in the
+    /// terminal, and opens the named directories unasked. A resumed session opens none: the ones it
+    /// has open are the ones its record reopened. A session settled already, or still waiting on
+    /// the trust question, is left as it is.
+    fn settle_questions(&mut self, handle: &str, whence: bravebot_agent::opening::Whence) {
+        use bravebot_agent::opening::{
+            Named, Whence, mode_answers, named_directories, rules_to_grant,
+        };
+        let Some(open) = self.open.get_mut(handle) else {
+            return;
+        };
+        if !open.answered_trust || !matches!(open.questions, Questions::Unsettled(_)) {
+            return;
+        }
+        let Questions::Unsettled(settings) = std::mem::take(&mut open.questions) else {
+            return;
+        };
+        let whence = if mode_answers(open.permission_mode.get()) {
+            Whence::Unasked
+        } else {
+            whence
+        };
+        let store = crate::project_questions::grant_record(&open.project);
+        let proposed = bravebot_agent::opening::proposed_rules(&settings);
+        let question = rules_to_grant(whence, store.as_ref(), &proposed);
+        let rules = crate::rules::SettingsRules::read_granting(
+            &settings,
+            &open.project,
+            crate::rules::Granting {
+                granted: &question.granted,
+                held: &question.held,
+                // Named only where there is something it could hold, as the terminal names it.
+                record: store
+                    .as_ref()
+                    .filter(|_| !proposed.is_empty())
+                    .map(bravebot_agent::granted::Store::path),
+            },
+        );
+        if let Ok(mut state) = open.state.lock() {
+            state.answers.rules = rules;
+            // What the mode granted is the mode's, and the record says so (MODE-4).
+            state.answered_by_mode |= whence == Whence::Unasked && !question.granted.is_empty();
+        }
+
+        // Resolved now, before anything is asked, so what is asked about is what a yes opens.
+        let (names, unasked) = match named_directories(
+            whence,
+            bravebot_agent::permissions::additional_directories(&settings),
+        ) {
+            Named::Opening(names) => (names, true),
+            Named::Asking(names) => (names, false),
+        };
+        let (mut folders, refused) = match workspace_of(open, &settings, |state| state.lock().ok())
+        {
+            Ok(workspace) if !names.is_empty() => {
+                crate::project_questions::named_folders(&workspace, &names)
+            }
+            _ => Default::default(),
+        };
+        open.refused_folders = refused;
+        if unasked {
+            let opened_any = open_unasked(open, &settings, std::mem::take(&mut folders));
+            if let Ok(mut state) = open.state.lock() {
+                state.answered_by_mode |= whence == Whence::Unasked && opened_any;
+            }
+        }
+
+        open.questions = if question.needs_asking() {
+            Questions::Rules {
+                request: crate::project_questions::take(&mut self.project_questions),
+                question,
+                settings,
+                folders,
+            }
+        } else {
+            Questions::next_folder(folders, settings, &mut self.project_questions)
+        };
+        self.put_question(handle);
+    }
+
+    /// Send the event for the question the session opened as `handle` has out, if it has one.
+    fn put_question(&self, handle: &str) {
+        let Some(open) = self.open.get(handle) else {
+            return;
+        };
+        let rules = open.questions.rules_json(&open.project);
+        if !rules.is_null() {
+            self.emitter
+                .send(Event::new("rules.request", handle, rules));
+        }
+        let folder = open.questions.folder_json();
+        if !folder.is_null() {
+            self.emitter
+                .send(Event::new("folder.request", handle, folder));
+        }
+    }
+
+    /// What a response that may make a question due adds about it: the question out, if any, and
+    /// the rules as they stand. Nothing for a bridge that puts none.
+    fn questions_report(&self, handle: &str) -> Value {
+        let Some(open) = self
+            .open
+            .get(handle)
+            .filter(|_| self.putting_project_questions)
+        else {
+            return json!({});
+        };
+        let (rules, folders) = open
+            .state
+            .lock()
+            .map(|state| {
+                (
+                    state.answers.rules.json(),
+                    json!(folders::folders_json(&state.directories)),
+                )
+            })
+            .unwrap_or((Value::Null, Value::Null));
+        json!({
+            "rulesQuestion": open.questions.rules_json(&open.project),
+            "folderQuestion": open.questions.folder_json(),
+            "foldersRefused": crate::project_questions::refused_json(&open.refused_folders),
+            "settingsRules": rules,
+            // The folders open beside the project now, which a mode that opens every named
+            // directory unasked has already added to, so a window learns them with the questions.
+            "folders": folders,
+        })
     }
 
     /// Put the trust question to the window, where the session opened as `handle` is waiting on it.
@@ -670,6 +915,33 @@ impl Bridge {
     ) -> bravebot_agent::chatgpt::AccountSession {
         let settings = crate::settings::layers(Some(project), self.settings.as_deref());
         bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
+    }
+
+    /// The mode a session opened in `project` starts in: auto where the person's own settings say
+    /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1), and asking always for a
+    /// bridge built with [`Bridge::opening_in_ask`]. A checkout's file and the managed file are not
+    /// read for it, and nothing a request carries chooses it, which is what `session.mode` is for
+    /// once the session is open.
+    fn opening_mode(&self, project: &std::path::Path) -> PermissionMode {
+        if self.opening_in_ask {
+            return PermissionMode::Ask;
+        }
+        match crate::settings::layers(Some(project), self.settings.as_deref()).start_in_auto() {
+            true => PermissionMode::Auto,
+            false => PermissionMode::Ask,
+        }
+    }
+
+    /// The name of the mode the session opened as `handle` is in, read off the handle a turn reads so
+    /// that what a reply says and what the session does cannot differ. A handle that is not open
+    /// names asking.
+    fn permission_mode_of(&self, handle: &str) -> &'static str {
+        wire::permission_mode_name(
+            self.open
+                .get(handle)
+                .map(|open| open.permission_mode.get())
+                .unwrap_or_default(),
+        )
     }
 
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
@@ -743,7 +1015,7 @@ impl Bridge {
                 crate::FRONT,
             ),
             "autoVetting": auto_vetting,
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(handle),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(directory, None)),
         })
     }
@@ -783,16 +1055,29 @@ impl Bridge {
 
         // Opened as `--add-dir` opens one: reachable, and vouched for by nobody. An entry that is
         // not an absolute path to an existing directory refuses the whole request before anything
-        // is minted, rather than opening the session with some of the list silently missing.
+        // is minted, rather than opening the session with some of the list silently missing. The
+        // probe holds the key every turn's workspace holds, read from the same layers, so a name
+        // no turn could reach is refused here with the key named (PERM-16).
         let mut additional = Vec::new();
         if !request.param("directories").is_null() {
+            let reads_stay_inside = crate::rules::reads_stay_in_workspace(
+                &crate::settings::layers(Some(&directory), self.settings.as_deref()),
+                &bravebot_config::Managed::load(),
+            );
             let mut probe = Workspace::new(&directory)
-                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?
+                .with_reads_kept_inside(reads_stay_inside);
             for path in strings(request, "directories")? {
                 let canonical = probe
                     .add_directory(&path)
                     .map_err(|error| Failure::bad_request(error.to_string()))?;
                 additional.push(canonical);
+            }
+            // Counted for the settings layered from here on, which decide whether the file the
+            // process was started on may grant where the sandbox cannot hold it back (#2599). Kept
+            // for the life of the process, so a closed session leaves a root that only withholds.
+            for added in &additional {
+                bravebot_config::add_writable_directory(added.clone());
             }
         }
 
@@ -806,18 +1091,23 @@ impl Bridge {
         let mut state = State::fresh(opening.trust);
         state.account = self.account_session(&directory);
         state.directories = additional;
-        let handle = self.mint(Open::opened(
-            directory.clone(),
-            state,
-            opening.answered,
-            opening.keeping,
-            auto_vetting,
-        ));
+        let handle = self.mint(
+            Open::opened(
+                directory.clone(),
+                state,
+                opening.answered,
+                opening.keeping,
+                auto_vetting,
+            )
+            .starting_in(self.opening_mode(&directory)),
+        );
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
         self.ask_about_trust(&handle);
         let rules = self.open_under_rules(&handle, None);
+        // A kept yes answered the trust question, and the person who gave it is here (TRUST-23).
+        self.settle_questions(&handle, bravebot_agent::opening::Whence::Asked);
 
         let mut made = json!({
             "session": handle,
@@ -827,10 +1117,11 @@ impl Bridge {
             "branch": branch,
             "autoVetting": auto_vetting,
             "scratch": self.scratch_report(&handle),
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(&handle),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&directory, None)),
         });
         merge(&mut made, reported);
+        merge(&mut made, self.questions_report(&handle));
         Ok(made)
     }
 
@@ -871,6 +1162,10 @@ impl Bridge {
         let project = open.project.clone();
         let answered_trust = open.answered_trust;
         let auto_vetting = open.auto_vetting;
+        // A question the parent has not answered is the child's to answer, since the child carries
+        // on the same session and is refused turns until it is.
+        let questions = open.questions.clone();
+        let refused_folders = open.refused_folders.clone();
 
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
@@ -969,36 +1264,48 @@ impl Bridge {
         let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
 
-        let child = self.mint(Open::opened(
-            project.clone(),
-            {
-                let mut forked = State::forked(
-                    begun,
-                    cut.before,
-                    opening.trust,
-                    programs,
-                    directories,
-                    ordinal,
-                    todos.clone(),
-                    first_prompt,
-                );
-                // The map is the parent's, so what the mode answered in it is still the mode's.
-                forked.answered_by_mode = by_mode;
-                forked.account = self.account_session(&project);
-                forked
-            },
-            // Inherited along with the map itself: the same person, in the same directory, in
-            // the same window, so asking again would be asking somebody to answer twice.
-            opening.answered,
-            opening.keeping,
-            // The parent's, not read again: the child's transcript is the parent's up to the cut,
-            // and the notice at its top says what the parent opened under.
-            auto_vetting,
-        ));
+        let opening_mode = self.opening_mode(&project);
+        let child = self.mint(
+            Open::opened(
+                project.clone(),
+                {
+                    let mut forked = State::forked(
+                        begun,
+                        cut.before,
+                        opening.trust,
+                        programs,
+                        directories,
+                        ordinal,
+                        todos.clone(),
+                        first_prompt,
+                    );
+                    // The map is the parent's, so what the mode answered in it is still the mode's.
+                    forked.answered_by_mode = by_mode;
+                    forked.account = self.account_session(&project);
+                    forked
+                },
+                // Inherited along with the map itself: the same person, in the same directory, in
+                // the same window, so asking again would be asking somebody to answer twice.
+                opening.answered,
+                opening.keeping,
+                // The parent's, not read again: the child's transcript is the parent's up to the cut,
+                // and the notice at its top says what the parent opened under.
+                auto_vetting,
+            )
+            .starting_in(opening_mode),
+        );
         self.ask_about_trust(&child);
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
         let settings_rules = self.open_under_rules(&child, Some(inherited));
+        if let Some(open) = self.open.get_mut(&child) {
+            open.questions = questions.renumbered(&mut self.project_questions);
+            open.refused_folders = refused_folders;
+        }
+        self.put_question(&child);
+        // A parent still waiting on the trust question hands down the questions after it too, which
+        // a kept yes about the directory settles for the child.
+        self.settle_questions(&child, bravebot_agent::opening::Whence::Asked);
         if let Some(touched) = touched.filter(|touched| !touched.is_empty())
             && let Some(open) = self.open.get(&child)
         {
@@ -1025,7 +1332,7 @@ impl Bridge {
             "todos": todos_json(&todos),
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
-            "permissionMode": wire::permission_mode_name(PermissionMode::Ask),
+            "permissionMode": self.permission_mode_of(&child),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&project, None)),
             "settingsRules": settings_rules,
             "scratch": self.scratch_report(&child),
@@ -1037,6 +1344,7 @@ impl Bridge {
             },
         });
         merge(&mut forked, reported);
+        merge(&mut forked, self.questions_report(&child));
         Ok(forked)
     }
 
@@ -1532,14 +1840,12 @@ impl Bridge {
             }
         }
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // A model the machine-level layer refuses is not requested, whichever service would have
-        // answered for it and whoever asked. The roster this window draws leaves such a model out,
-        // so reaching here means the name came from somewhere else (BACKEND-48).
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let attribution = settings.attribution().clone();
         // The level the terminal's `/effort` and this window's picker record, ranked against the
         // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
@@ -1547,8 +1853,9 @@ impl Bridge {
         let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
-        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
         let auto_vetting = open.auto_vetting;
+        let front_end = self.front_end;
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
             open.sandbox,
             &settings,
@@ -1631,6 +1938,7 @@ impl Bridge {
                 download_cap,
                 deadlines,
                 auto_vetting,
+                front_end,
                 sandbox,
                 permission_mode,
                 mcp_requested,
@@ -1679,11 +1987,12 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
         open.ready_for_work()?;
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let state = Arc::clone(&open.state);
         // Taken here, on the thread that holds the state, because a conversation is not `Clone`
         // and what crosses to the worker is the request and not the exchange.
@@ -1787,19 +2096,17 @@ impl Bridge {
             .ok_or_else(Failure::no_such_session)?;
         open.ready_for_work()?;
 
-        let model = requested_model.or_else(|| open.model.clone());
-        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // A model the machine-level layer refuses is not requested, whichever service would have
-        // answered for it and whoever asked. The roster this window draws leaves such a model out,
-        // so reaching here means the name came from somewhere else (BACKEND-48).
-        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
-            return Err(Failure::bad_request(refused));
-        }
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
         let effort = recorded_effort(&settings);
         let output_cap = settings.run_output_cap();
-        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
+        let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
         let sandbox = bravebot_config::sandbox::for_a_window_choosing(
             open.sandbox,
             &settings,
@@ -1944,12 +2251,9 @@ impl Bridge {
         }
         let project = open.project.clone();
         let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
-        let mut workspace = turn_workspace(
-            project.clone(),
-            &settings,
-            &bravebot_config::Managed::load(),
-        )
-        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let mut workspace =
+            turn_workspace(project.clone(), &settings, open.reads_stay_in_workspace)
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
         let mut guard = open
             .state
             .lock()
@@ -1958,6 +2262,7 @@ impl Bridge {
         // Opened as a turn opens them, so a path a rewound turn wrote in one goes back there.
         for directory in &state.directories {
             let _ = workspace.add_directory(&directory.display().to_string());
+            bravebot_config::add_writable_directory(directory.clone());
         }
 
         state.rewind.bind_coverage(&workspace);
@@ -2302,7 +2607,143 @@ impl Bridge {
         // sentence is kept without it.
         let kept = trusted::keep_a_yes(keeping.as_ref(), trusted, &named, said_confined_lines);
 
-        Ok(json!({ "trusted": trusted, "kept": kept }))
+        // The person is here, so what the checkout's settings ask for is put to them next, a no
+        // to the trust question included, as in the terminal (PERM-15).
+        self.settle_questions(&handle, bravebot_agent::opening::Whence::Asked);
+        let mut replied = json!({ "trusted": trusted, "kept": kept });
+        merge(&mut replied, self.questions_report(&handle));
+        Ok(replied)
+    }
+
+    /// Record what the person answered to the question about the `allow` rules a checkout proposed
+    /// (PERM-15). A yes grants the rules the question named and no others, and is kept in the grant
+    /// record unless the session is incognito, where the rules hold for this session alone. A reply
+    /// to a question that is not out, answered already or never put, changes nothing and is refused.
+    fn reply_rules(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let id = request.number("request")?;
+        let granted = request
+            .params
+            .get("granted")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| Failure::bad_request("`granted` must be a boolean"))?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if !matches!(open.questions, Questions::Rules { request, .. } if request == id) {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                format!("request {id} is not waiting for an answer"),
+            ));
+        }
+        let Questions::Rules {
+            question,
+            settings,
+            folders,
+            ..
+        } = std::mem::take(&mut open.questions)
+        else {
+            unreachable!("matched above");
+        };
+        let store = crate::project_questions::grant_record(&open.project);
+        let held = question.held.clone();
+        // The grant names the session the yes was given in, as the terminal's does. A session with
+        // no record yet is named now, and its record is written under that name when it is.
+        let named = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?
+            .id(&open.project);
+        // Written with the state let go: nothing else takes it while this question is out, since
+        // a turn is refused until it is answered.
+        let answered = question.answer(granted, store.as_ref(), &named);
+        let kept = answered.kept;
+        let in_force = answered.granted;
+        let mut state = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
+        state.answers.rules = crate::rules::SettingsRules::read_granting(
+            &settings,
+            &open.project,
+            crate::rules::Granting {
+                granted: &in_force,
+                held: &held,
+                record: store.as_ref().map(bravebot_agent::granted::Store::path),
+            },
+        );
+        let rules = state.answers.rules.json();
+        drop(state);
+        // The directories the files named are asked about next, whatever the answer was: a no to
+        // the rules is not a no to a directory.
+        open.questions = Questions::next_folder(folders, settings, &mut self.project_questions);
+        let folder = open.questions.folder_json();
+        self.put_question(&handle);
+        Ok(json!({
+            "granted": granted,
+            "kept": kept,
+            "settingsRules": rules,
+            "folderQuestion": folder,
+        }))
+    }
+
+    /// Record what the person answered to the question about one directory a settings file named
+    /// (TRUST-9). A yes opens it on the terms `/add-dir` opens one, for this session: reachable,
+    /// vouched for, and kept in the session's record. A no leaves it closed. Either way the next
+    /// named directory is asked about. A reply to a question that is not out is refused.
+    fn reply_folder(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let id = request.number("request")?;
+        let yes = request
+            .params
+            .get("open")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| Failure::bad_request("`open` must be a boolean"))?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if !matches!(open.questions, Questions::Folder { request, .. } if request == id) {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                format!("request {id} is not waiting for an answer"),
+            ));
+        }
+        let Questions::Folder {
+            folder,
+            rest,
+            settings,
+            ..
+        } = std::mem::take(&mut open.questions)
+        else {
+            unreachable!("matched above");
+        };
+        let mut problem = Value::Null;
+        let opened = yes
+            && match open_named_folder(open, &settings, &folder) {
+                Ok(_) => true,
+                Err(refused) => {
+                    problem = json!(refused.problem);
+                    open.refused_folders.push(refused);
+                    false
+                }
+            };
+        if let Ok(state) = open.state.lock() {
+            open.folders.clone_from(&state.directories);
+        }
+        let folders = folders::folders_json(&open.folders);
+        open.questions = Questions::next_folder(rest, settings, &mut self.project_questions);
+        let next = open.questions.folder_json();
+        self.put_question(&handle);
+        Ok(json!({
+            "opened": opened,
+            "folder": folder.directory,
+            "shownFolder": bravebot_agent::confirm::shown_path(Path::new(&folder.directory)),
+            "problem": problem,
+            "folders": folders,
+            "folderQuestion": next,
+        }))
     }
 
     /// Inspect or reduce existing grants. No operation on this channel can add trust.
@@ -2372,7 +2813,7 @@ impl Bridge {
                 );
             }
         }
-        Ok(json!({
+        let mut listed = json!({
             "paths": listed_rules(&state.answers.trust),
             "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
@@ -2381,7 +2822,12 @@ impl Bridge {
             // The rules this session opened under. They are read from settings files and
             // cannot be revoked here: editing the file changes them for the next session.
             "settingsRules": state.answers.rules.json(),
-        }))
+        });
+        drop(state);
+        // The question out, if any, so a window whose answer to one was refused as stale can
+        // read which one is waiting now (§9.1).
+        merge(&mut listed, self.questions_report(&handle));
+        Ok(listed)
     }
 
     /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
@@ -2421,6 +2867,11 @@ impl Bridge {
             if !open.answered_trust {
                 return Err(Failure::bad_request(
                     "Answer the project trust question first.",
+                ));
+            }
+            if open.questions.reply_method().is_some() {
+                return Err(Failure::bad_request(
+                    "Answer the question about the project's settings first.",
                 ));
             }
             if open.running.is_some() {
@@ -2471,7 +2922,10 @@ impl Bridge {
             let Some(open) = self.open.get(&handle) else {
                 continue;
             };
-            if open.running.is_some() || !open.answered_trust {
+            if open.running.is_some()
+                || !open.answered_trust
+                || open.questions.reply_method().is_some()
+            {
                 continue;
             }
             if open.watches.lock().map(|w| w.is_empty()).unwrap_or(true) {
@@ -2493,7 +2947,7 @@ impl Bridge {
             let Ok(mut workspace) = turn_workspace(
                 open.project.clone(),
                 &settings,
-                &bravebot_config::Managed::load(),
+                open.reads_stay_in_workspace,
             ) else {
                 if let Ok(mut watches) = open.watches.lock() {
                     for watch in watches.live() {
@@ -2510,6 +2964,7 @@ impl Bridge {
             if let Some((directories, _)) = &held {
                 for directory in directories {
                     let _ = workspace.add_directory(&directory.display().to_string());
+                    bravebot_config::add_writable_directory(directory.clone());
                 }
             }
             let mode = open.permission_mode.clone();
@@ -2899,27 +3354,24 @@ fn import_sessions(request: &Request) -> Result<Value, Failure> {
 /// settings file reaches a search here or nowhere. A cap nobody named is `None`, which leaves the
 /// built-in one standing.
 ///
-/// Whether the file tools are held to the project comes over the same way (PERM-16), and from the
-/// managed file as well as the settings layers: both are layers that may ask for it, and the
-/// strictest thing either said is what holds (PERM-18).
+/// Whether the file tools are held to the project (PERM-16) is not read from `settings`. It is
+/// what the session read with its permission rules when it opened (PERM-12), and the caller
+/// passes it as `reads_stay_in_workspace`.
 ///
 /// A function of its own rather than three lines at the call site, so a test can build the
 /// workspace a turn is given without a backend to run one against.
 pub fn turn_workspace(
     project: PathBuf,
     settings: &Settings,
-    managed: &bravebot_config::Managed,
+    reads_stay_in_workspace: bool,
 ) -> Result<Workspace, WorkspaceError> {
     let caps = settings.search();
-    let inside = settings
-        .narrowing()
-        .strictest(managed.narrowing())
-        .keeps_reads_in_the_workspace();
     Ok(Workspace::new(project)?
         .with_search_caps(caps.files, caps.time)
-        .with_reads_kept_inside(inside)
+        .with_reads_kept_inside(reads_stay_in_workspace)
         .with_references(settings.references(), settings.references_unread())
-        .with_shared_skill_directories(settings.shared_skill_directories()))
+        .with_shared_skill_directories(settings.shared_skill_directories())
+        .with_named_settings_file(settings.named_settings_file()))
 }
 
 /// The workspace a turn in this session reads through, as the session stands now.
@@ -2937,11 +3389,6 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     workspace_of(open, settings, |state| state.lock().ok())
 }
 
-/// `session_workspace` for a request answered while a turn may be running, which never waits for
-/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
-/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
-/// turn is blocked on. A turn holding it leaves out the directories the session added and its
-/// scratch directory, the same fallback a poisoned lock gets.
 /// The definitions a message from this session may be addressed to, as rows for the `@` list: the
 /// set `/agent` accepts, resolved under the session's trust and permission rules.
 ///
@@ -2979,6 +3426,11 @@ fn offered_definitions(open: &Open, settings: Option<&Path>) -> Vec<bravebot_men
     rows
 }
 
+/// `session_workspace` for a request answered while a turn may be running, which never waits for
+/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
+/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
+/// turn is blocked on. A turn holding it leaves out the directories the session added and its
+/// scratch directory, the same fallback a poisoned lock gets.
 fn session_workspace_unless_running(
     open: &Open,
     settings: &Settings,
@@ -2991,20 +3443,68 @@ fn workspace_of(
     settings: &Settings,
     take: impl for<'a> FnOnce(&'a Mutex<State>) -> Option<MutexGuard<'a, State>>,
 ) -> Result<Workspace, Failure> {
-    let mut workspace = turn_workspace(
-        open.project.clone(),
-        settings,
-        &bravebot_config::Managed::load(),
-    )
-    .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+    let mut workspace =
+        turn_workspace(open.project.clone(), settings, open.reads_stay_in_workspace)
+            .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
     let (directories, scratch) = take(&open.state)
         .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
     workspace.open_scratch(scratch);
     for directory in &directories {
         let _ = workspace.add_directory(&directory.display().to_string());
+        bravebot_config::add_writable_directory(directory.clone());
     }
     Ok(workspace)
+}
+
+/// Open each of `folders`, directories the settings files named that nobody is asked about, in the
+/// session `open`. One that cannot be opened is said among the ones not opened, with why. Returns
+/// whether any was opened.
+fn open_unasked(
+    open: &mut Open,
+    settings: &Settings,
+    folders: impl IntoIterator<Item = crate::project_questions::Named>,
+) -> bool {
+    let mut opened_any = false;
+    for folder in folders {
+        match open_named_folder(open, settings, &folder) {
+            Ok(_) => opened_any = true,
+            Err(problem) => open.refused_folders.push(problem),
+        }
+    }
+    if let Ok(state) = open.state.lock() {
+        open.folders.clone_from(&state.directories);
+    }
+    opened_any
+}
+
+/// Open a directory the settings files named, which the person (or the mode) said yes to, in the
+/// session `open`, on the terms `/add-dir` opens one (TRUST-9). The names that reached it are no
+/// longer reported as not opened. A directory that cannot be opened now, one deleted since it was
+/// asked about, is refused with why.
+fn open_named_folder(
+    open: &Open,
+    settings: &Settings,
+    folder: &crate::project_questions::Named,
+) -> Result<PathBuf, crate::project_questions::Refused> {
+    let refused = |problem: String| crate::project_questions::Refused {
+        name: folder.directory.clone(),
+        problem,
+    };
+    let mut workspace =
+        workspace_of(open, settings, |state| state.lock().ok()).map_err(|f| refused(f.message))?;
+    let mut state = open
+        .state
+        .lock()
+        .map_err(|_| refused("session state is poisoned".to_string()))?;
+    let added = folders::open_asked_about(&mut workspace, &mut state, Path::new(&folder.directory))
+        .map_err(|problem| refused(problem.to_string()))?;
+    state
+        .answers
+        .rules
+        .directories
+        .retain(|name| !folder.names.contains(name));
+    Ok(added)
 }
 
 /// `workspace`, the one a turn is about to run in, given the checkouts the session keeps, or
@@ -3087,6 +3587,8 @@ struct Work {
     deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
+    /// The front end the person is using, so the planner is told (INSTR-9).
+    front_end: bravebot_agent::FrontEnd,
     /// How far the programs this turn runs may reach, from the settings and the managed file.
     sandbox: bravebot_sandbox::SandboxMode,
     /// The session's own handle, so a change made while the turn runs reaches it.
@@ -3207,6 +3709,7 @@ fn work(work: Work) {
         download_cap,
         deadlines,
         auto_vetting,
+        front_end,
         sandbox,
         permission_mode,
         mcp_requested,
@@ -3311,6 +3814,7 @@ fn work(work: Work) {
         .with_rounds(None)
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
+        .in_front_end(front_end)
         .with_model(model)
         .with_effort(effort)
         .in_account_session(state.account.clone())
@@ -3415,8 +3919,7 @@ fn work(work: Work) {
     let injected_facts = completed.decisions.injected_facts.clone();
     if !injected_facts.is_empty() {
         state
-            .handle
-            .get_or_insert_with(|| Handle::begin(&project, crate::FRONT, crate::agent_build()))
+            .handle_or_begin(&project)
             .set_injected_facts(injected_facts);
     }
     keep_the_links_of(&mut state, &project, &mut completed);
@@ -3765,10 +4268,7 @@ fn keep_the_links_of(
 ) {
     let links = std::mem::take(&mut completed.decisions.links);
     if !links.is_empty() {
-        state
-            .handle
-            .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()))
-            .apply_links(&links);
+        state.handle_or_begin(project).apply_links(&links);
     }
 }
 
@@ -3861,9 +4361,10 @@ pub(crate) fn save(
     turn: usize,
     trail: &bravebot_session::audit::Trail,
 ) -> usize {
+    let named = state.named.take();
     let handle = state
         .handle
-        .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()));
+        .get_or_insert_with(|| crate::running::begin_named(named, project));
 
     let checkouts = state
         .kept
@@ -4985,6 +5486,39 @@ mod additional_directories_tests {
         assert_eq!(refused.code, ErrorCode::BadRequest);
         assert!(bridge.open.is_empty(), "a refused session.new minted one");
     }
+
+    /// PERM-16. While `permissions.readsStayInWorkspace` holds, every turn's workspace refuses a
+    /// directory beside the project, so `session.new` refuses one before a session is minted, and
+    /// says which key refused it. The failure this rejects is a session opened with the directory
+    /// that no turn can reach.
+    #[test]
+    fn session_new_refuses_a_directory_while_reads_stay_in_the_workspace() {
+        let project = tempfile::tempdir().unwrap();
+        let beside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join(".bravebot")).unwrap();
+        std::fs::write(
+            project.path().join(".bravebot/settings.json"),
+            r#"{"permissions": {"readsStayInWorkspace": true}}"#,
+        )
+        .unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.new", "params": {
+                "directory": project.path(),
+                "directories": [beside.path()],
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let refused = bridge.dispatch(&request).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{}", refused.message);
+        assert!(
+            refused.message.contains("permissions.readsStayInWorkspace"),
+            "the refusal does not name the key: {}",
+            refused.message
+        );
+        assert!(bridge.open.is_empty(), "a refused session.new minted one");
+    }
 }
 
 #[cfg(test)]
@@ -5101,7 +5635,7 @@ mod watch_tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let held = Arc::clone(&events);
         let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
-        bridge.mint(Open {
+        let handle = bridge.mint(Open {
             watches: Arc::clone(&watches),
             state: Arc::clone(&state),
             permission_mode: mode,
@@ -5113,6 +5647,9 @@ mod watch_tests {
                 false,
             )
         });
+        // The settings are read as a session opens, with the rules (PERM-12), so the poll holds
+        // what the file said here.
+        bridge.open_under_rules(&handle, None);
         (bridge, events, watches, state, now, [project, beside])
     }
 
@@ -5460,6 +5997,13 @@ mod watch_tests {
     }
 }
 
+#[path = "folders.rs"]
+mod folders;
+
+#[cfg(test)]
+#[path = "folders_tests.rs"]
+mod folders_tests;
+
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
@@ -5511,3 +6055,7 @@ mod link_tests;
 #[cfg(test)]
 #[path = "account_session_tests.rs"]
 mod account_session_tests;
+
+#[cfg(test)]
+#[path = "project_questions_tests.rs"]
+mod project_questions_tests;

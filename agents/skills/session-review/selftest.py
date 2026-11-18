@@ -76,6 +76,26 @@ class Choosing(unittest.TestCase):
         found = [session("old", age=9000), session("newest", age=4000), session("middle", age=6000)]
         self.assertEqual([i for i, _ in self.ids(found, limit=2)], ["newest", "middle"])
 
+    def plan(self, found, **asked):
+        args = argparse.Namespace(**dict({"ids": [], "max": sr.MAX, "workspace": None}, **asked))
+        chosen = sr.select(found, list(args.ids), args.max, NOW, IDLE)
+        return sr.plan(found, chosen, args, NOW, IDLE)
+
+    def test_the_plan_says_how_many_are_reviewed_from_what_was_asked_and_how_many_remain(self):
+        found = [session(f"s{n}", age=4000 + n) for n in range(12)] + [session("done", marker={"turns": 3}), session("running", age=60)]
+        self.assertEqual(self.plan(found), "reviewing 8 sessions (up to 8, the default); 4 more due will remain for future runs")
+        self.assertEqual(self.plan(found, max=5), "reviewing 5 sessions (up to 5 as you asked); 7 more due will remain for future runs")
+        self.assertEqual(self.plan(found, max=20), "reviewing 12 sessions (up to 20 as you asked); none more due will remain")
+
+    def test_the_plan_for_named_sessions_leaves_every_other_due_session_remaining_and_never_counts_a_named_one_twice(self):
+        found = [session("s1", age=4000), session("s2", age=5000), session("s3", age=6000), session("done", marker={"turns": 3})]
+        self.assertEqual(self.plan(found, ids=["done"]), "reviewing 1 session (the ones you named); 3 more due will remain for future runs")
+        self.assertEqual(self.plan(found, ids=["s1", "s2", "s3"]), "reviewing 3 sessions (the ones you named); none more due will remain")
+
+    def test_the_plan_says_when_the_remainder_is_in_the_workspace_asked_for(self):
+        found = [session("a", age=4000), session("b", age=5000)]
+        self.assertEqual(self.plan(found, max=1, workspace="/w"), "reviewing 1 session (up to 1 as you asked); 1 more due in that workspace will remain for future runs")
+
     def test_a_named_session_is_reviewed_from_its_first_turn_whatever_its_marker_or_age(self):
         found = [session("2026-a1", marker={"turns": 3}, age=10), session("2026-b2")]
         self.assertEqual(self.ids(found, ["2026-a"]), [("2026-a1", 0)])
@@ -320,6 +340,13 @@ class Work(unittest.TestCase):
         for (kind, area), labels in wanted.items():
             with self.subTest(kind=kind, area=area):
                 self.assertEqual(sr.labels_for(dict(PROBLEM, kind=kind, area=area)), labels)
+
+    def test_every_area_the_prompt_offers_becomes_an_area_label(self):
+        for area in ("sandbox", "mcp", "browser", "connectors", "background", "plugins", "desktop", "acp", "remote", "release"):
+            with self.subTest(area=area):
+                self.assertEqual(
+                    sr.labels_for(dict(PROBLEM, kind="bug", area=area)), [f"area/{area}", "bug", "session-analysis"]
+                )
 
     def test_a_session_is_marked_only_once_every_problem_in_it_is_settled(self):
         self.analysis("a", [PROBLEM, PROBLEM])

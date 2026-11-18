@@ -19,11 +19,11 @@
 pub mod protocol;
 
 use crate::anthropic::what_was_written;
-use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
+use crate::call::{CallState, Concession, Driven, Plan, drive};
 use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
 use crate::{
-    BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key, log_retry,
-    pause_before_retry, read_in_background, refuses_the_body, remember, remembered, reply_bound,
+    Arrived, BACKOFF, ChatError, Completion, CutOff, Progress, addressed, learned_key,
+    pause_before_retry, read_in_background, refuses_the_body, reply_bound,
     worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
@@ -33,7 +33,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
-use bravebot_net::{Egress, EgressError, Request};
+use bravebot_net::{Egress, Request};
 use protocol::{Decoded, FINISH_MAX_TOKENS, Response, WireUsage};
 use serde_json::Value;
 use std::time::Duration;
@@ -44,7 +44,6 @@ const ASSUMED_CEILING: u64 = 65_536;
 
 /// One client for one request, to the service a `google-vertex` entry naming no project reaches.
 pub struct GenerateContentClient<'a> {
-    spent: Spent,
     egress: &'a Egress,
     provider: &'a Provider,
     /// What the service calls the model, which is the name the request's path carries.
@@ -56,13 +55,12 @@ pub struct GenerateContentClient<'a> {
     token: Option<Secret>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
-    /// What this model has refused so far in the call in progress, loaded and settled by
+    /// What this call has spent, how it waits and learns that it should stop, and what this model
+    /// has refused so far in the call in progress, loaded and settled by
     /// [`call::drive`](crate::call::drive). Requests carry the thinking budget a turn's level asks
-    /// for until the model refuses it, which is the only way to find out that it reads none.
-    refusals: Refusals,
-    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
-    /// unless a test shortens it.
-    pace: Pace,
+    /// for until the model refuses it, which is the only way to find out that it reads none. The
+    /// wait before the first retry is [`BACKOFF`] unless a test shortens it.
+    call: CallState,
 }
 
 impl Driven for GenerateContentClient<'_> {
@@ -72,28 +70,12 @@ impl Driven for GenerateContentClient<'_> {
         ChatError::Cancelled
     }
 
-    fn spent_mut(&mut self) -> &mut Spent {
-        &mut self.spent
+    fn state(&self) -> &CallState {
+        &self.call
     }
 
-    fn pace(&self) -> &Pace {
-        &self.pace
-    }
-
-    fn refusals(&self) -> &Refusals {
-        &self.refusals
-    }
-
-    fn refusals_mut(&mut self) -> &mut Refusals {
-        &mut self.refusals
-    }
-
-    fn recall(&self, key: &str) -> Refusals {
-        remembered(key)
-    }
-
-    fn remember(&self, key: &str, found: Refusals) {
-        remember(key, found);
+    fn state_mut(&mut self) -> &mut CallState {
+        &mut self.call
     }
 
     /// Only a refusal of the body is answered by giving something up, and only the thinking budget,
@@ -124,11 +106,7 @@ impl Driven for GenerateContentClient<'_> {
     }
 
     fn pause(&self, failures: u32, error: &ChatError) -> Duration {
-        pause_before_retry(self.pace.backoff, failures, error)
-    }
-
-    fn log_retry(&self, attempt: u32, pause: Duration) {
-        log_retry(attempt, pause);
+        pause_before_retry(self.call.pace.backoff, failures, error)
     }
 }
 
@@ -145,41 +123,39 @@ impl<'a> GenerateContentClient<'a> {
         token: Option<Secret>,
     ) -> Self {
         Self {
-            spent: Spent::default(),
+            call: CallState::new(BACKOFF),
             egress,
             provider,
             model: model.into(),
             token,
             headers: Vec::new(),
-            refusals: Refusals::default(),
-            pace: Pace::new(BACKOFF),
         }
     }
 
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.spent.attempts
+        self.call.attempts()
     }
 
     /// The request fields the last call left out after the service refused them, in order.
     pub fn conceded(&self) -> crate::call::Conceded {
-        self.spent.conceded
+        self.call.conceded()
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        self.spent.total()
+        self.call.completed_usage()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.spent.last_prompt_tokens()
+        self.call.last_request_tokens()
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.pace.cancel = Some(cancel);
+        self.call = self.call.with_cancel(cancel);
         self
     }
 
@@ -198,7 +174,7 @@ impl<'a> GenerateContentClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.pace.backoff = backoff;
+        self.call = self.call.with_backoff(backoff);
         self
     }
 
@@ -219,7 +195,7 @@ impl<'a> GenerateContentClient<'a> {
     fn contents_for(&self, request: &ChatRequest) -> protocol::GenerateContentRequest {
         protocol::request_from(&request.messages, request.tools.as_deref())
             .with_ceiling(self.stated_ceiling())
-            .with_effort(request.effort.filter(|_| !self.refusals.effort))
+            .with_effort(request.effort.filter(|_| !self.call.refusals.effort))
             .with_schema(
                 request
                     .response_format
@@ -274,37 +250,15 @@ impl<'a> GenerateContentClient<'a> {
         let body =
             serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))?;
 
-        let mut http = Request::post(url, body)
-            .with_client_certificate()
-            .header("content-type", "application/json");
-        for (name, value) in self.provider.fixed_headers() {
-            http = http.header(*name, *value);
-        }
-        if let Some(token) = self.token.as_ref().map(Secret::expose) {
-            // Attached to the socket the request was addressed to and to no other, so a hop to
-            // another host does not carry the key along. `authorization` gets that from the egress
-            // layer, which does not know this header is a credential.
-            let (name, value) = self.provider.credential_header(token);
-            http = http.socket_header(name, value);
-        }
-        // After the credential, and never over it: a name this request already set is refused
-        // where the block is read, because `Request::header` appends and a second copy of one of
-        // these would be sent rather than replace the first.
-        for (name, value) in &self.headers {
-            http = http.header(name.clone(), value.expose());
-        }
-        let bound = reply_bound(self.stated_ceiling().unwrap_or(ASSUMED_CEILING));
-        // A stream's headers come at once and the model writes after them; a reply asked for whole
-        // is written before any of it is sent.
-        let mut http = if streaming {
-            http.stream_within(bound)
-        } else {
-            http.reply_within(bound)
-        };
-        if let Some(gap) = self.provider.patience.idle_timeout {
-            http = http.idle_within(gap);
-        }
-        Ok(http)
+        Ok(addressed(
+            url,
+            body,
+            self.provider,
+            self.token.as_ref(),
+            &self.headers,
+            streaming,
+            reply_bound(self.stated_ceiling().unwrap_or(ASSUMED_CEILING)),
+        ))
     }
 
     /// Send a request and wait for the whole reply.
@@ -313,7 +267,7 @@ impl<'a> GenerateContentClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let key = self.refusal_key();
         let plan = Plan {
             key: &key,
@@ -335,7 +289,7 @@ impl<'a> GenerateContentClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
         let http = self.build(request, false)?;
-        self.spent.sent();
+        self.call.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol, like the JSON envelope in the other backends: the bytes come
@@ -351,7 +305,8 @@ impl<'a> GenerateContentClient<'a> {
             serde_json::from_slice(&bytes).map_err(|error| ChatError::Decode {
                 detail: format!("{error} (received {} bytes)", bytes.len()),
             })?;
-        self.spent
+        self.call
+            .spent
             .record(reported_usage(&envelope).map(Usage::from));
 
         let parsed: Response =
@@ -408,7 +363,7 @@ impl<'a> GenerateContentClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.spent.begin_call();
+        self.call.spent.begin_call();
         let key = self.refusal_key();
         let plan = Plan {
             key: &key,
@@ -438,51 +393,30 @@ impl<'a> GenerateContentClient<'a> {
         let http = self
             .build(request, true)?
             .header("accept", "text/event-stream");
-        self.spent.sent();
+        self.call.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.pace.cancel.as_ref(),
+            self.call.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
-        let arriving = read_in_background(stream);
+        let mut arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut reply = Reply::default();
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("generateContent stream", Label::untrusted_public());
-        let mut began = false;
 
         loop {
-            let piece = match arriving.recv_timeout(WAKE) {
-                Ok(Ok(Some(piece))) => piece,
-                Ok(Ok(None)) => break,
-                // A read that fails once the reply has begun is the reply stopping, whatever the
-                // socket reported: the request plainly got through.
-                Ok(Err(EgressError::Transport { .. })) if began => {
-                    return Err(ChatError::Incomplete);
-                }
-                // A reply cut at its deadline among them: asked for again, it runs as long.
-                Ok(Err(error)) => return Err(error.into()),
-                // Nothing has arrived yet, which is the only chance to look at anything while a
-                // reply is still being waited for.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.pace.cancelled() {
-                        return Err(ChatError::Cancelled);
-                    }
-                    continue;
-                }
-                // The reader is gone without having said the body ended, which is the silence a dead
-                // connection leaves, and is answered as one below.
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            let piece = match arriving.next(&self.call.pace) {
+                Arrived::Piece(piece) => piece,
+                Arrived::Ended => break,
+                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::Failed(error) => return Err(error.into()),
+                Arrived::Cancelled => return Err(ChatError::Cancelled),
             };
-            began = true;
-
-            if self.pace.cancelled() {
-                return Err(ChatError::Cancelled);
-            }
 
             let (bytes, _) = decoding.decode(piece);
             let written_before = reply.text.len();
@@ -507,7 +441,7 @@ impl<'a> GenerateContentClient<'a> {
                     Decoded::Ignored => {}
                 }
                 if reply.reported_in_full() {
-                    self.spent.record(Some(reply.usage()));
+                    self.call.spent.record(Some(reply.usage()));
                 }
             }
 

@@ -700,7 +700,8 @@ a stop must be abandonable: a stage can leave a child holding the write end of t
 child left the stage's process group or the stage ended by itself with the child still running, so
 the run may not wait on that pipe reaching its end, and keeps whatever had been read by then.
 
-**How a stage is stopped.** On Linux and macOS every stage leads a process group of its own. A stop
+**How a stage is stopped.** On Linux and macOS every stage leads a session of its own, and so a
+process group of its own, whether it is confined or not. A stop
 asks each stage to end by sending `SIGTERM` to its group, so the programs the stage started are
 asked with it, and gives every group the same two seconds to empty, which is how long a program that
 undoes what it holds has to do so after the stage itself has gone. Whatever is left of a group after
@@ -718,10 +719,34 @@ or partly written output behind, and that programs the line started may need che
 group, such as the `SIGINT` the terminal sends for Ctrl-C at a one-shot run, the `SIGHUP` of a
 closed terminal, or the `SIGTERM` that stops a background session, does not reach a stage, and a
 session that such a signal ends leaves the stages it was running. A stage the session ends itself, at
-the deadline, on a cancellation or when the turn ends, is stopped as above. The stage is also a
-background process group of the terminal, so one that reads the terminal is stopped by it until the
-deadline. A stage that ignores the request holds a stop for the two seconds. A confined stage on
-Linux is also the leader of a session of its own.
+the deadline, on a cancellation or when the turn ends, is stopped as above. A stage that ignores the
+request holds a stop for the two seconds.
+
+**A stage has no controlling terminal.** Every stage on Linux and macOS is started as the leader of a
+session, by `setsid` in the child before it executes the program, and the backend that confines a
+stage does it for that stage. The unconfined start does it too, on Linux as on macOS. A stage is
+started with either a session or a process group of its own and never both, since `setsid` fails in
+a process that already leads a group. A program that opens `/dev/tty` or configures the terminal
+therefore gets an error from the open and can exit with it. Without the session, the stage is a
+background process group of the terminal and `SIGTTIN` or `SIGTTOU` stops it, which nothing ends
+but the deadline, and a background job has none. The cost is that a program that needs the
+terminal, such as one that prompts on `/dev/tty`, fails to start its prompt and reads or writes
+what the pipeline gave it instead. A program the stage started can still stop itself or be stopped
+by a signal sent to it.
+
+**A stage found stopped is ended and reported as stopped.** A stopped process runs nothing and
+exits nothing, so waiting for it is waiting for the deadline. The pipeline's wait and a look at a
+job each ask the kernel, with `waitid` for a stop alone and without collecting the child's exit,
+whether a stage that has not exited is stopped and by which signal. A stage found stopped is ended
+as the deadline ends it: its group is sent `SIGTERM` and then `SIGCONT`, because a stopped process
+holds `SIGTERM` back until it is continued, and whatever remains after the two seconds is killed.
+The result carries the signal and how long the pipeline had run, and the report says the stage was
+stopped by that signal and was ended, so the planner does not read it as still running or as having
+reached a limit that a longer one would change. Only the leader of a stage is asked, by its own
+number and never by its group's, and none is asked once it has been waited for. A program in the
+stage's group that is stopped while the leader runs on is not a stop of the stage. This is structure
+only: the state of a child the driver started, read from the kernel and compared with nothing the
+stage printed, so it does not change the label of the output, which is RUN-4's to decide.
 
 **Why.** The limit is for the program that does not end, and the commonest such program is doing
 exactly what was asked: a server told to serve a page serves it, prints as it goes, and never
@@ -748,6 +773,11 @@ RUN-4's to decide.
 `verified-by: bravebot_agent::exec::what_a_stage_left_running_after_it_ended_by_itself_is_not_signalled`
 `verified-by: bravebot_agent::confine::a_confined_stage_stopped_at_the_limit_is_asked_to_end_and_what_it_started_ends_with_it`
 `verified-by: bravebot_agent::report::a_stop_says_it_can_leave_files_behind_and_a_run_still_going_does_not`
+`verified-by: bravebot_agent::exec::a_stage_cannot_open_the_controlling_terminal`
+`verified-by: bravebot_agent::exec::a_stage_stopped_by_a_signal_is_reported_as_stopped_and_ended_before_the_limit`
+`verified-by: bravebot_agent::exec::a_stopped_stage_is_continued_so_the_request_to_end_reaches_it`
+`verified-by: bravebot_agent::exec::a_stage_that_exited_is_not_reported_stopped_by_a_signal`
+`verified-by: bravebot_agent::turn::a_foreground_run_with_a_stage_stopped_by_a_signal_says_so_and_ends_it`
 
 <a id="RUN-12"></a>
 ### RUN-12: a program is not handed this agent's own credentials
@@ -768,7 +798,10 @@ names, so the set follows the configuration with no second list to keep in step.
 names is the person's own and stays. The same set is taken off a background job, a hook
 ([HOOK-4](../hooks.md#HOOK-4)), a language server ([lsp.md](lsp.md)) and the `aws` CLI the
 Bedrock backend starts. Reading the token for a request is unaffected: only the programs this agent
-starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set.
+starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set. It is
+read from the person's own settings and the file `--settings` names only: a name in it can keep a
+restriction off a program as well as a secret from it, so a project or local layer's list is not
+read ([BACKEND-24](../backends.md#BACKEND-24)).
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` restores every variable, gateway variables included.
 
 **The planner is told what is removed.** The description of `run`, on a turn that offers it, names
@@ -794,8 +827,8 @@ needs a removed variable then fails for a reason nothing in the planner's contex
 
 **Why only the fixed names are listed.** The three names are the same for everyone and fixed in
 the source. The other names are strings from a settings file: an entry in a provider's `env` is
-free-form and can be a key pasted into the wrong field, and `run.scrubEnv` takes entries from a
-checkout's layer as well. Listing them would send a person's mistake to the model provider with every
+free-form and can be a key pasted into the wrong field, and `run.scrubEnv` is a string the person
+chose. Listing them would send a person's mistake to the model provider with every
 request and put a string its author chose in the planner's context, so such variables are removed
 from the program and said to exist without being named.
 
@@ -849,11 +882,13 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::lsp::a_language_server_is_not_handed_a_gateways_environment_token`
-`verified-by: bravebot_agent::tools::run_names_its_own_credentials_and_says_what_an_unset_report_means`
-`verified-by: bravebot_agent::tools::only_the_run_description_is_given_the_statement_and_after_what_it_said`
-`verified-by: bravebot_agent::tools::a_turn_whose_filtering_is_off_says_nothing_of_a_removal`
-`verified-by: bravebot_agent::tools::a_list_without_run_is_given_no_statement`
+`verified-by: bravebot_agent::tools::tests::arguments::run_names_its_own_credentials_and_says_what_an_unset_report_means`
+`verified-by: bravebot_agent::tools::tests::arguments::only_the_run_description_is_given_the_statement_and_after_what_it_said`
+`verified-by: bravebot_agent::tools::tests::arguments::a_turn_whose_filtering_is_off_says_nothing_of_a_removal`
+`verified-by: bravebot_agent::tools::tests::arguments::a_list_without_run_is_given_no_statement`
 `verified-by: bravebot_agent::withheld_variables::the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote`
+`verified-by: bravebot_config::settings::a_checkout_adds_nothing_to_the_names_kept_from_a_program`
+`verified-by: bravebot_config::settings::the_file_named_on_the_command_line_may_add_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::scrub::the_credentials_told_to_the_planner_are_the_fixed_ones`
 `verified-by: bravebot_agent::turn::a_turn_tells_the_planner_which_variables_run_removes`
 `verified-by: bravebot_config::build_script::a_build_missing_the_withheld_credentials_says_run_removes_them`
@@ -867,6 +902,22 @@ Every result carries the driver's sentence about how the run ended, said from th
 the clock: that it exited 0, which stages did not and with what code, or that it outstayed the
 limit and was stopped. It stands in front of what the program printed, and it is there in the same
 words where the output is quarantined and the caller holds a reference to it instead.
+
+A stage a signal ended is told by the signal's number and, where the system the program ran on
+names it, the name: `step 1 was ended by signal 9 (SIGKILL)`. A stage with no exit code and no
+signal, which is one whose status could not be read, is told as `step 1 ended without an exit
+code`, since a signal that was not read is not one to name. The number is the one the system
+reported for the stage and the name is looked up from it, so neither holds a byte the program
+printed. A command substitution a signal ended is refused with the same words.
+
+A step that `SIGPIPE` ended is not one of those stages when a later step of the same pipeline
+exited 0: the next step closed its input, as `producer | head` does, and a shell would report the
+last step. The sentence says the run exited 0 and that the step stopped because the next step closed
+its input, the run counts as having succeeded wherever the exit codes decide that, and no
+confinement sentence follows. A step ended by `SIGPIPE` with no later step that exited 0, and a step
+ended by any other signal, is still a failed stage. Each pipeline of a line joined with `;`, `&&` or
+`||` is judged on its own steps. The decision is read from the exit codes and signals and the
+steps' places, never from what a step printed.
 
 On a turn that confines the programs `run` starts, a result with a step that did not exit zero
 adds the sentence [SANDBOX-19](../sandboxing.md#SANDBOX-19) describes, after this one.
@@ -886,7 +937,17 @@ where it also cannot tell success from failure.
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_read_ended`
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_not_read_ended`
 `verified-by: bravebot_agent::turn::a_line_whose_failed_stage_is_followed_by_one_that_worked_is_told_which_failed`
+`verified-by: bravebot_agent::turn::a_step_closed_by_head_is_told_as_an_ending_that_exited_zero`
+`verified-by: bravebot_agent::turn::a_step_killed_beside_head_is_still_told_as_a_failure`
+`verified-by: bravebot_agent::exec::a_stage_ended_by_sigpipe_behind_head_counts_as_closed_and_the_run_succeeded`
+`verified-by: bravebot_agent::exec::only_sigpipe_with_a_later_stage_that_exited_zero_is_forgiven`
+`verified-by: bravebot_agent::exec::a_background_stage_ended_by_sigpipe_behind_head_is_closed`
+`verified-by: bravebot_agent::tools::a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
+`verified-by: bravebot_agent::tools::each_failed_step_is_named_by_its_place_and_how_it_ended`
+`verified-by: bravebot_agent::tools::a_signal_with_no_name_is_told_by_its_number_alone`
+`verified-by: bravebot_agent::turn::a_job_output_call_names_the_signal_that_ended_a_finished_job`
+`verified-by: bravebot_agent::exec::a_substitution_ended_by_a_signal_is_refused_naming_the_signal`
 
 <a id="RUN-14"></a>
 ### RUN-14: a quarantined result says what would lift the quarantine
@@ -1028,6 +1089,17 @@ says whether the job has ended, and kills it on request. A look that passes `rea
 slice back as text where the mode or a check answers, and the account the turn gives of an ended job
 is handed back the same way where that job's latest look passed it ([RUN-22](#RUN-22)).
 
+**A look is drawn with the job's command.** The line a person reads for a `job_output` call is the
+job's name and the line the person approved for it, drawn as a `run` command is (first line, and
+nothing at all for a line that declares a credential), so a wait says what it is waiting for and not
+only `job:1`. The name is read through the gate every planner argument is read through, since finding
+the job is a comparison against the planner's words. A name that is no job of the turn is drawn as it
+was typed. A session read back off disk has no jobs, so its looks are drawn with the name alone.
+
+`verified-by: bravebot_agent::turn::a_look_at_a_job_is_drawn_with_the_command_the_job_runs`
+`verified-by: bravebot_agent::turn::a_look_at_a_vouched_job_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::the_account_of_an_ended_job_has_its_colour_codes_taken_out_and_counted`
+
 Every gate is the one a foreground run passes, at the same point and in the same order: the rules,
 the person's approval, and the label the output will carry are all settled before anything starts.
 Being left running is not a reason to ask for less.
@@ -1082,6 +1154,15 @@ job kept past its turn is exposed to that for the length of the session, where a
 exposed only for the length of the turn. Ending jobs on a terminal hangup needs the process to
 handle the signal, which no code here does yet.
 
+**A job has no terminal to be stopped by.** Each stage is started in a session of its own with no
+controlling terminal ([RUN-11](#RUN-11)), so a program that opens or configures the terminal gets an
+error and can exit, where a stage in a background group of the terminal would be stopped by
+`SIGTTIN` or `SIGTTOU` for as long as the job lived, since a job has no deadline. A stage that is
+stopped by a signal anyway is found by a look, reported as stopped and ended
+([RUN-17](#RUN-17)). That report is the state of a child the driver started, read from the kernel,
+and the output of the job keeps the label its plan was given ([RUN-16](#RUN-16)) whether it was
+stopped or not.
+
 **Ended means the account is complete.** A job is reported as ended once every step has exited and
 every pipe has reached its end, which are not the same moment: a step can print and exit with its
 output still in the pipe, unread. A caller told a job ended stops asking, so reporting it at the
@@ -1111,6 +1192,8 @@ message has come yet or not, since nothing the tool can see says which. "No such
 a fact about the delegate. The name is compared with the numbers the kernel minted, as it is with
 the job names the driver minted.
 
+`verified-by: bravebot_agent::exec::a_stage_cannot_open_the_controlling_terminal`
+`verified-by: bravebot_agent::exec::a_stage_that_exited_is_not_reported_stopped_by_a_signal`
 `verified-by: bravebot_agent::exec::a_background_pipeline_reports_what_it_printed_while_it_is_still_running`
 `verified-by: bravebot_agent::exec::a_background_pipeline_that_finishes_says_so_and_reports_its_code`
 `verified-by: bravebot_agent::exec::a_background_pipeline_reported_as_ended_has_all_of_its_output`
@@ -1127,11 +1210,11 @@ the job names the driver minted.
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
-`verified-by: bravebot_agent::tools::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_reads_the_stores_through_a_link_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_has_no_redirection_still_starts`
 `verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
 `verified-by: bravebot_agent::turn::a_refused_background_run_starts_nothing`
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
@@ -1164,6 +1247,7 @@ what was printed: nothing here reads a byte of it.
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
 `verified-by: bravebot_agent::exec::a_background_pipeline_does_not_see_this_agents_credentials`
 `verified-by: bravebot_agent::turn::a_job_keeps_the_label_it_started_with_when_the_program_is_vouched_for_afterwards`
+`verified-by: bravebot_agent::turn::a_job_slice_asked_to_be_read_has_its_colour_codes_taken_out_and_counted`
 
 <a id="RUN-17"></a>
 ### RUN-17: a look at a job may wait for it, inside the turn that owns it
@@ -1221,20 +1305,29 @@ where its output is quarantined one `read_output` call per look as well, and a j
 when the call is made never lets the wait last at all. A caller that only needs the result of such a
 job has no other way to ask for it in one call.
 
-**Between one second and ten minutes, and a value outside that is refused.** [RUN-11](#RUN-11)'s
+**Between one second and the cache bound, and a value outside that is refused.** The bound is ten
+minutes at most, and is held under the prompt cache lifetime in force: 270 seconds where the settings
+chose `5m` or nothing, and 600 where they chose `1h` ([BACKEND-27](../backends.md#BACKEND-27)). The
+request after a wait that outlasts the lifetime finds the cached conversation gone, writes all of it
+again and reads none, which is the dearest request a session makes, so a wait longer than the
+lifetime is not offered. The 30 seconds under the lifetime leave room for the request to be sent.
+The bound is set from the person's `promptCacheTtl` by the caller that read the settings and never
+from what a job printed. A planner that wants a longer window calls again. [RUN-11](#RUN-11)'s
 deadline is clamped instead, and the difference is what a caller can tell afterwards. A run whose
 deadline was shortened still ends, and the answer says how long it took, so nothing is hidden. A wait
 that was shortened comes back with silence, and silence carries no length: a caller that asked about
-ten minutes and was quietly given one reads the same nothing either way and reports it as ten
-minutes of nothing.
+five minutes and was quietly given one reads the same nothing either way and reports it as five
+minutes of nothing. The refusal names the bound in force and says why it is there, so a planner told
+'between 1 and 270' also learns the next call is the way to keep watching.
 
-**The bound is the wait's own, not the deadline's.** The two numbers happen to match today and are
-still separate, because they answer separate questions. A deadline bounds how long a pipeline may
+**The bound is the wait's own, not the deadline's.** A deadline bounds how long a pipeline may
 run; a wait bounds how long one look may sit watching one. Deciding that a build may take longer is
 not deciding that a single look may sit there longer, and a wait bounded by whatever the deadline
-bounds today would move whenever that decision was made. Both of the wait's numbers are quoted to the
+bounds would move whenever that decision was made. Both of the wait's numbers are quoted to the
 planner, in the tool's description and in the refusal, so they are pinned to what a caller is told
-rather than to each other.
+rather than to each other. A foreground `run` deadline of five minutes or more has the same cost
+after it, so the description of `deadline_seconds` says so and points at `background: true` with
+shorter waits. The deadline itself is not changed by the lifetime.
 
 **The window is named, to the planner and not only on a screen.** A wait that ends early because
 output arrived is otherwise indistinguishable from one that sat out its bound, so the answer says how
@@ -1247,6 +1340,19 @@ screen and stop there.
 something that happened to a pipeline; a look is not. Reporting a look at a live job the way a
 deadline is reported tells the planner the job is over, which is exactly the wrong thing to tell one
 that is waiting for the job to print again.
+
+**A job a stage of which is stopped by a signal is reported as stopped and is ended.** A stage that a
+terminal or a signal has stopped runs nothing and exits nothing, and a background job has no
+deadline, so a look that reported it as running would report it so for as long as anybody asked. A
+wait ends when a step that has not exited is found stopped, as it does when the steps exit. The look
+that finds one ends the job as the person's stop ends it ([RUN-27](#RUN-27)), before the output is
+taken, so what is handed over is all it printed. The answer says the stage was stopped by the signal,
+named where it is one that stops a process, and that the job was ended, so the planner does not wait
+on it or retry with a longer limit. Every later look says the same. The end is reported once: the
+turn's own look between rounds ([CMDLINE-14](command-line.md#CMDLINE-14)) and a look by the
+planner do not each report it. A foreground run that finds a stage stopped says the same and ends,
+instead of running to its deadline ([RUN-11](#RUN-11)). The state is read from the kernel for a stage
+the driver started, and no byte the job printed is read or compared to find it.
 
 **A job that has ended is reported by the codes its steps exited with.** Not as having succeeded, and
 not as whatever the look then did to it. A caller that waited for a build to finish and was told it
@@ -1279,7 +1385,7 @@ against itself. A character the pipe has only half delivered is held back until 
 arrives, rather than handed over as a replacement character that the real one would then never
 replace.
 
-**The token is checked every pass, and no pass blocks.** A bound running to ten minutes and a person
+**The token is checked every pass, and no pass blocks.** A bound of several minutes and a person
 who has changed their mind are the whole reason: cancelling should not mean sitting through the rest
 of somebody else's `tail -f`. Checking often is only worth as much as the longest pass, so nothing
 inside a pass waits on anything. In particular a wait asks only whether the steps have exited, and
@@ -1314,6 +1420,8 @@ the window.
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
+`verified-by: bravebot_agent::tools::the_longest_wait_follows_the_cache_lifetime_chosen`
+`verified-by: bravebot_agent::tools::the_descriptions_quote_the_wait_in_force_and_its_cache_cost`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
 `verified-by: bravebot_agent::tools::until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it`
 `verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`
@@ -1327,6 +1435,10 @@ the window.
 `verified-by: bravebot_agent::turn::looks_at_a_job_shown_as_text_list_no_earlier_references`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
+`verified-by: bravebot_agent::turn::a_look_at_a_job_stopped_by_a_signal_says_so_ends_it_and_reports_the_end_once`
+`verified-by: bravebot_agent::turn::a_job_stopped_by_a_signal_is_reported_between_rounds_once`
+`verified-by: bravebot_agent::exec::a_background_job_with_a_stopped_stage_says_which_signal_and_is_ended_by_a_kill`
+`verified-by: bravebot_agent::report::a_stage_stopped_by_a_signal_is_not_described_as_running_or_as_out_of_time`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
 `verified-by: bravebot_agent::report::a_look_that_waited_says_nothing_is_watching_the_job_now`
 `verified-by: bravebot_agent::tools::job_output_says_its_wait_ends_with_the_turn`
@@ -1509,11 +1621,12 @@ them a fresh session in the same directory reads, is [prompting.md](../prompting
 record is a third one.
 
 **It is read only where a prompt could be drawn, which is less than somebody reading one.** A
-one-shot run and a session whose channel has closed read no record at all. What a record answers is a
-prompt, and where no prompt can be put it would be saying instead which effects may happen with
-nobody to put them to, which is what [cli.md](../cli.md) refuses an allow rule for and what the flag
-that lifts that refusal is named and warned about for. A line in a file in the home directory must
-not do that quietly, so a one-shot run puts a covered line where it puts every other one.
+one-shot run and a session whose channel has closed read no record at all, so a one-shot run puts a
+covered line where it puts every other one. The record is read through the session it was answered
+in, and that same session is what reads the scopes and keys a `/reach` answer keeps for a line, which
+are a person's to give ([SANDBOX-26](../sandboxing.md#SANDBOX-26)); a run with nobody to ask reads
+neither. A line meant to run in a one-shot run is allowed with an `allow` rule
+([CLI-1](../cli.md#CLI-1)).
 
 The boundary is the prompt and not the person, and the difference is where this is at its most
 exposed. A tick of a loop, a round of a goal and a delegate's own step each draw their prompts to a
@@ -1955,6 +2068,52 @@ states and from nothing the output holds: a size at or below the cap, or none st
 `verified-by: bravebot_agent::turn::a_refusal_over_output_past_the_cap_says_what_read_output_returns`
 `verified-by: bravebot_agent::turn::the_read_output_description_says_what_reading_all_of_a_long_output_costs`
 
+**What the planner reads of output has its colour codes taken out and counted.** A program that
+colours its output writes codes the planner has no use for, and they cost tokens and hide the words
+they surround. In the text of a result that the planner may read and that a program printed, each
+complete colour code ([VIEW-30](../terminal-transcript.md#VIEW-30) defines one) is taken out, and the
+result ends with a sentence saying how many were, such as `14 colour codes were taken out of this
+output.` Output with no colour code gets no sentence. Every other escape is left as it is, so a
+cursor movement or an erase is not hidden from the planner.
+
+The routes are the ones above: a foreground run, a `run` that asked to read ([RUN-22](#RUN-22)), a
+`job_output` look, the account a finished job gives, and a `read_output` page or search. The text
+of standard output and standard error is treated alike. The tool's name decides whether the result
+is a program's output, and what a server or a fetched page returned is not changed.
+
+The removal is made after the cap has cut, on the text that is going to the planner, and once. The
+slot keeps the raw bytes, so every byte offset a sample, a page trailer or a matching line names is
+an offset into the slot, and `read_output` with that offset starts where the planner was told. The
+count is of what was taken out of the text shown, not of the slot.
+
+The removal is one pass. Taking a code out from between two halves of another can leave a code
+built of the halves in the text, and the planner is given it as it is: it is one escape sequence in
+text the planner reads and nothing draws, and a second pass would change what the count says. The
+sentence is English in `bravebot-core`, next to the removal, because the removal is a kernel
+function and a catalog is read in the agent; the sentences of `crates/agent/src/turn/sentences.rs`
+are the alternative home, and the count would then be returned to the agent as a number.
+
+It is made only where the planner may read the output, which is where the value is trusted and a
+result shows its text. Output nobody vouched for stays in its slot whole, the result says only what
+[RUN-4](#RUN-4) says of it, and neither the removal nor a count is made on it, because a count of
+bytes the planner may not read is something about them. The sentence is the driver's own text in
+English, as the other sentences a result gives the planner are, and is not in the catalog
+([LOCALE-1](../localization.md#LOCALE-1)).
+
+`verified-by: bravebot_core::policy::trusted_output_is_presented_without_its_colour_codes_and_counted`
+`verified-by: bravebot_core::policy::trusted_output_with_no_colour_code_says_nothing_about_them`
+`verified-by: bravebot_core::policy::trusted_output_keeps_an_escape_that_is_not_a_colour_code`
+`verified-by: bravebot_core::policy::untrusted_output_is_not_reshaped_and_is_not_counted`
+`verified-by: bravebot_core::policy::a_result_of_the_size_the_issue_measured_is_shorter_by_its_codes_and_counted`
+`verified-by: bravebot_core::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
+`verified-by: bravebot_agent::turn::a_run_result_has_its_colour_codes_taken_out_from_both_streams_and_counted`
+`verified-by: bravebot_agent::turn::a_run_result_without_colour_codes_says_nothing_and_keeps_other_escapes`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_has_its_colour_codes_taken_out_of_the_same_result`
+`verified-by: bravebot_agent::turn::colour_codes_are_taken_out_of_a_sample_a_page_and_matching_lines_by_the_raw_slots_offsets`
+`verified-by: bravebot_agent::turn::a_job_slice_asked_to_be_read_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::the_account_of_an_ended_job_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::colour_codes_in_output_nobody_vouched_for_are_not_counted_for_the_planner`
+
 <a id="RUN-22"></a>
 ### RUN-22: a run may ask to read what it printed, and gets it in the same result where the mode or a check answers
 
@@ -1964,7 +2123,8 @@ bypassed with no screening asked for ([MODE-4](../permission-modes.md#MODE-4)), 
 and then released by `read_output`'s own path, so the value is `(T,priv)`, the trail credits the
 mode in the entry [OUTPUT-1](read-output.md#OUTPUT-1) writes, and nobody is shown anything. The slot
 keeps its name, and the result gives the name beside the text, so the same bytes can still be fed to
-a line or written by reference.
+a line or written by reference. The text released in the result has its colour codes taken out and
+counted as [RUN-21](#RUN-21) has it, and the slot keeps the codes.
 
 Where screening is asked for ([CHECK-11](../vetting.md#CHECK-11)), in any mode and in a turn offered
 `read_output`, the run makes the check `read_output` would make on that slot, and the output is
@@ -2095,6 +2255,9 @@ decide it.
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
 `verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
 `verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_has_its_colour_codes_taken_out_of_the_same_result`
+`verified-by: bravebot_agent::turn::a_job_slice_asked_to_be_read_has_its_colour_codes_taken_out_and_counted`
+`verified-by: bravebot_agent::turn::the_account_of_an_ended_job_has_its_colour_codes_taken_out_and_counted`
 
 <a id="RUN-23"></a>
 ### RUN-23: how long a command may run is configurable
@@ -2267,7 +2430,7 @@ whenever it guessed wrong.
 `verified-by: bravebot_agent::turn::a_delegates_line_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::command::only_a_pipeline_without_a_route_is_one_a_job_can_hold`
 `verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
-`verified-by: bravebot_agent::tools::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
+`verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::cancel::a_handoff_requested_on_one_thread_is_seen_on_another`
 `verified-by: bravebot_core::policy::moving_a_command_to_the_background_is_recorded_in_the_audit_trail`
 `verified-by: bravebot_tui::state::a_press_moves_the_turns_command_once`
@@ -2416,10 +2579,15 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 An entry in `run.scrubEnv` may hold `*`, standing for any run of characters including none, and
 `?`, standing for exactly one. It is matched against the whole of a variable name, ignoring case, so
 `AWS_*` withholds `AWS_PROFILE` and `aws_region` and leaves `PATH`, and `MY_AWS_KEY` is not matched
-by it. An entry holding neither character is an exact name and is compared as one. A pattern
+by it. An entry holding neither character is an exact name and is compared as one, after the
+whitespace at its ends is removed, since no variable name holds any and an entry kept with it would
+withhold nothing. A pattern
 matching a variable already withheld leaves it withheld once. A pattern matching nothing withholds
 nothing, while an exact name is withheld whether this process holds the variable or not. `*` and `?`
-are the whole of the syntax: there is no character class and no brace group.
+are the whole of the syntax: there is no character class and no brace group. A pattern is read from
+the person's own settings and `--settings` only, as every other entry is ([RUN-12](#RUN-12),
+[BACKEND-24](../backends.md#BACKEND-24)): a project or local layer's list is not read, so a checkout
+cannot add a pattern, and none of its patterns is shown by `doctor`.
 
 What a pattern selects is read from the names this process holds when a stage is built, since a
 pattern is a way of naming variables and the names it stands for are not known until there are
@@ -2447,6 +2615,7 @@ here.
 person who wanted every `AWS_*` or `*_TOKEN` kept from the programs a turn starts had a list that
 went out of date without saying so.
 
+`verified-by: bravebot_config::settings::a_checkout_adds_nothing_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::scrub::a_pattern_withholds_the_family_it_names_whatever_the_case`
 `verified-by: bravebot_config::scrub::the_report_names_what_a_pattern_reached_and_not_what_an_exact_entry_spelled`
 `verified-by: bravebot_config::scrub::a_pattern_that_reached_nothing_is_not_reported`
@@ -2454,8 +2623,11 @@ went out of date without saying so.
 `verified-by: bravebot_config::scrub::a_pattern_matching_a_built_in_credential_does_not_list_it_twice`
 `verified-by: bravebot_config::scrub::a_pattern_naming_no_variable_adds_nothing_and_an_exact_name_still_does`
 `verified-by: bravebot_config::scrub::a_pattern_is_not_one_of_this_agents_own`
+`verified-by: bravebot_config::scrub::a_name_listed_with_trailing_whitespace_is_withheld_as_the_name`
+`verified-by: bravebot_config::settings::a_scrub_name_is_read_without_the_whitespace_at_its_ends`
 `verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
 `verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
+`verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 
 <a id="RUN-29"></a>
 ### RUN-29: the description points text made from an output at the processor
@@ -2540,6 +2712,13 @@ show that a model follows them.
 
 ## Known costs
 
+- **A stage cannot use the terminal, and a stop by a signal is found by asking the leader.** Every
+  stage starts in a session with no controlling terminal ([RUN-11](#RUN-11)), so a program that
+  prompts on `/dev/tty` fails where it would have prompted. A stage is found stopped only when its
+  leader is stopped ([RUN-17](#RUN-17)): a program the leader started that is stopped while the
+  leader runs on is not reported. Both are pinned by
+  `bravebot_agent::exec::a_stage_cannot_open_the_controlling_terminal` and
+  `bravebot_agent::exec::a_stage_that_exited_is_not_reported_stopped_by_a_signal`.
 - **A probe the sandbox refuses looks like a port nobody listens on.** [RUN-30](#RUN-30) tells the
   planner to ask about quitting or relaunching a browser once its probe is refused, and the
   description does not know whether the line is held to a host list's proxy port, which refuses

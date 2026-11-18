@@ -114,6 +114,8 @@ const CRASH_REPORTS_KEY: &str = "crashReports";
 
 /// Where it turns retrieval off, and the name `doctor` reports the pin by (RETRIEVE-23).
 const RETRIEVAL_KEY: &str = "retrieval.enabled";
+/// Where it turns the daily usage ping off, and the name `doctor` reports the pin by.
+const USAGE_PING_KEY: &str = "usagePing";
 
 /// Where the rules it refuses are listed, and the name `doctor` reports each list by (PERM-19).
 const RULES_DENY: &str = "permissions.deny";
@@ -260,6 +262,10 @@ impl Models {
 /// Not comparable, because a gateway it pinned may carry a token and [`crate::Secret`] refuses
 /// equality. What a test wants of one of these is a field of it rather than the whole.
 #[derive(Debug, Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the independent things the file said about keys it may not set: one flag for each"
+)]
 pub struct Managed {
     /// The pinnable variables the file set, blank ones left out.
     pins: BTreeMap<String, String>,
@@ -277,6 +283,13 @@ pub struct Managed {
     allowed: Option<Vec<Rule>>,
     /// The servers it denies, which no allow entry brings back.
     denied: Vec<Rule>,
+    /// The entries of `mcp.allow` and `mcp.deny` that are neither form, each with the name of the
+    /// list it was written in and spelled as the file spelled it, for `doctor` and the start of a
+    /// session to report (SERVERS-12).
+    ///
+    /// Reported rather than dropped in silence, as an unreadable permission rule is (PERM-11): an
+    /// administrator whose deny entry is skipped believes a server is refused that starts.
+    server_entries_unusable: Vec<(&'static str, String)>,
     /// Which models a machine may request (BACKEND-48).
     ///
     /// Read from this layer for the reason the server lists are: a list of models can only refuse
@@ -297,6 +310,12 @@ pub struct Managed {
     /// quoted `"true"` in a file nobody at the machine can change is the person least likely to find
     /// out the pin does nothing.
     narrowing_unreadable: Vec<&'static str>,
+    /// Whether the file wrote `permissions.startInAuto` as `true`, which is not read from this
+    /// layer and so decides nothing, for `doctor` to say so (AUTO-1).
+    ///
+    /// Kept apart from [`Managed::pinned`], since nothing is pinned: an administrator who wrote it
+    /// believing it binds would otherwise find no word that it does not.
+    start_in_auto_named: bool,
     /// The `deny` and `ask` rules it wrote (PERM-19).
     ///
     /// Read from this layer for the reason the keys above are: a rule in either list only narrows,
@@ -339,8 +358,8 @@ pub struct Managed {
     hosts: crate::sandbox_network::Hosts,
     /// The host keys it gave a value they cannot read, which pin nothing.
     hosts_unreadable: Vec<&'static str>,
-    /// Which of `crashReports` (CRASH-4) and `retrieval.enabled` (RETRIEVE-23) it wrote as
-    /// `false`, in that order.
+    /// Which of `crashReports` (CRASH-4), `retrieval.enabled` (RETRIEVE-23) and `usagePing` it
+    /// wrote as `false`, in that order.
     ///
     /// Read from this layer for the reason the keys above are: a key that can only turn a report
     /// off takes nothing from the person at the machine, so an administrator asking for it is not
@@ -356,6 +375,13 @@ pub struct Managed {
     /// That is a value that is not a block, or a block whose `enabled` is not a boolean. A block
     /// with no `enabled` is not this: it says nothing about the switch.
     retrieval_unreadable: bool,
+    /// The keys the file wrote twice in one object, by path, for `doctor` to report (BACKEND-36).
+    ///
+    /// The file is read as [`crate::settings`] reads a repeat, so a second `models` block cannot
+    /// erase what the first refused. Reported for the reason `narrowing_unreadable` is: an
+    /// administrator who pasted two snippets into one file is the person least likely to be told by
+    /// the machine it binds. Paths only, never values.
+    repeated: Vec<String>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -406,6 +432,14 @@ impl Managed {
                 crate::settings::ListStated::Unreadable => filesystem_unreadable.push(list),
             }
         }
+        let mut server_entries_unusable = Vec::new();
+        let mut read_server_list = |key: &str, name: &'static str| {
+            let (kept, skipped) = rules(server_list(&root, key)?);
+            server_entries_unusable.extend(skipped.into_iter().map(|entry| (name, entry)));
+            Some(kept)
+        };
+        let allowed = read_server_list("allow", SERVER_ALLOW);
+        let denied = read_server_list("deny", SERVER_DENY).unwrap_or_default();
         let mut hosts = crate::sandbox_network::Hosts::default();
         let mut hosts_unreadable = Vec::new();
         {
@@ -414,14 +448,17 @@ impl Managed {
             hosts_unreadable.extend(misshapen.into_iter().map(|(_, key)| key));
         }
         Self {
+            repeated: root.repeated().to_vec(),
             narrowing,
             narrowing_unreadable,
+            start_in_auto_named: layer.start_in_auto(),
             turned_off: [
                 (CRASH_REPORTS_KEY, root.get(CRASH_REPORTS_KEY)),
                 (
                     RETRIEVAL_KEY,
                     root.get("retrieval").and_then(|block| block.get("enabled")),
                 ),
+                (USAGE_PING_KEY, root.get(USAGE_PING_KEY)),
             ]
             .into_iter()
             .filter(|(_, value)| *value == Some(&serde_json::Value::Bool(false)))
@@ -464,8 +501,9 @@ impl Managed {
             // gateway on the machine on the strength of a stray `null`.
             gateways: matches!(root.get(PROVIDER_BLOCK), Some(serde_json::Value::Object(_)))
                 .then(|| approved(layer.providers())),
-            allowed: server_list(&root, "allow").map(rules),
-            denied: server_list(&root, "deny").map(rules).unwrap_or_default(),
+            allowed,
+            denied,
+            server_entries_unusable,
             models: Models {
                 allowed: named_list(&root, "allow").map(names),
                 denied: named_list(&root, "deny").map(names).unwrap_or_default(),
@@ -578,6 +616,17 @@ impl Managed {
         self.retrieval_unreadable
     }
 
+    /// Whether the file named `permissions.startInAuto`, which a managed file cannot set: which
+    /// sessions open in auto is the person's to say (AUTO-1).
+    pub fn names_start_in_auto(&self) -> bool {
+        self.start_in_auto_named
+    }
+
+    /// Whether this layer turned the daily usage ping off, which nothing a person sets can undo.
+    pub fn usage_ping_off(&self) -> bool {
+        self.turned_off.contains(&USAGE_PING_KEY)
+    }
+
     /// The keys it named as something other than a boolean, which are absence.
     pub fn narrowing_unreadable(&self) -> impl Iterator<Item = &str> {
         self.narrowing_unreadable.iter().copied()
@@ -619,6 +668,17 @@ impl Managed {
         self.hosts_unreadable.iter().copied()
     }
 
+    /// The entries of `mcp.allow` and `mcp.deny` that are neither a host nor a command, each with
+    /// the list it was written in and as the file spelled it (SERVERS-12).
+    ///
+    /// They allow and refuse nothing. A deny list holding one is named by [`Managed::pinned`] all
+    /// the same, since the administrator wrote it as a pin.
+    pub fn server_entries_unusable(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        self.server_entries_unusable
+            .iter()
+            .map(|(list, entry)| (*list, entry.as_str()))
+    }
+
     /// The names it pinned, for `doctor` to report.
     ///
     /// Names rather than values, for the reason the settings report gives: everyone on the machine
@@ -630,7 +690,14 @@ impl Managed {
             .map(String::as_str)
             .chain(self.gateways.is_some().then_some(PROVIDER_BLOCK))
             .chain(self.allowed.is_some().then_some(SERVER_ALLOW))
-            .chain((!self.denied.is_empty()).then_some(SERVER_DENY))
+            .chain(
+                (!self.denied.is_empty()
+                    || self
+                        .server_entries_unusable
+                        .iter()
+                        .any(|(list, _)| *list == SERVER_DENY))
+                .then_some(SERVER_DENY),
+            )
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
@@ -652,6 +719,12 @@ impl Managed {
     /// The file, where there is one there at all, read or not.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// The keys the file wrote twice in one object, by path such as `models` or `permissions.deny`
+    /// (BACKEND-36), for `doctor` to name.
+    pub fn repeated_keys(&self) -> impl Iterator<Item = &str> {
+        self.repeated.iter().map(String::as_str)
     }
 
     /// Whether anything is pinned at all.
@@ -725,33 +798,46 @@ fn names(entries: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-/// The entries of a list that are one of the two forms, and nothing else.
+/// The entries of a list that are one of the two forms, and then the ones that are neither, spelled
+/// as the file spelled them.
 ///
 /// An entry is an object with one key, `host` or `command`. Any other is skipped rather than
-/// spoiling the list: in an allow list that allows less, and in a deny list it denies nothing, so
-/// a deny list of nothing else is not reported as a pin that does nothing.
-fn rules(entries: &[serde_json::Value]) -> Vec<Rule> {
-    entries
-        .iter()
-        .filter_map(|entry| {
-            let entry = entry.as_object().filter(|entry| entry.len() == 1)?;
-            match (entry.get("host"), entry.get("command")) {
+/// spoiling the list: in an allow list that allows less, and in a deny list it denies nothing. The
+/// skipped ones are returned so that they are reported (SERVERS-12).
+fn rules(entries: &[serde_json::Value]) -> (Vec<Rule>, Vec<String>) {
+    let mut kept = Vec::new();
+    let mut skipped = Vec::new();
+    for entry in entries {
+        let rule = entry
+            .as_object()
+            .filter(|entry| entry.len() == 1)
+            .and_then(|object| match (object.get("host"), object.get("command")) {
                 (Some(serde_json::Value::String(host)), None) => host_rule(host).map(Rule::Host),
                 (None, Some(serde_json::Value::Array(argv))) => {
                     command_rule(argv).map(Rule::Command)
                 }
                 _ => None,
-            }
-        })
-        .collect()
+            });
+        match rule {
+            Some(rule) => kept.push(rule),
+            None => skipped.push(entry.to_string()),
+        }
+    }
+    (kept, skipped)
 }
 
 /// A host entry, where it is a plain host whose first label may be `*`.
 ///
 /// `*` is a whole label and only the first one: an entry that could match inside a label would be
 /// one a person could satisfy with a name they registered.
+///
+/// An IPv6 address written without brackets is read as the bracketed one, since a url spells it no
+/// other way and an unbracketed address can mean nothing else.
 fn host_rule(written: &str) -> Option<String> {
     let written = written.trim();
+    if written.parse::<std::net::Ipv6Addr>().is_ok() {
+        return Some(format!("[{}]", written.to_ascii_lowercase()));
+    }
     match written.strip_prefix("*.") {
         Some(rest) => plain(rest)
             .filter(|name| !name.starts_with('['))
@@ -1079,6 +1165,25 @@ mod tests {
             assert!(!managed.retrieval_off(), "{text}");
             assert!(managed.is_empty(), "{text}");
             assert_eq!(managed.retrieval_unreadable(), unreadable, "{text}");
+        }
+    }
+
+    /// `usagePing: false` is a pin and is named among them. `true` and a value that is not a
+    /// boolean pin nothing, so the layer can only turn the ping off.
+    #[test]
+    fn a_managed_usage_ping_false_is_a_pin_and_nothing_else_is() {
+        let off = scratch("managed-usage-ping-off", r#"{"usagePing": false}"#);
+        assert!(off.usage_ping_off());
+        assert!(!off.crash_reports_off());
+        assert_eq!(off.pinned().collect::<Vec<_>>(), vec!["usagePing"]);
+        for (name, text) in [
+            ("on", r#"{"usagePing": true}"#),
+            ("quoted", r#"{"usagePing": "false"}"#),
+            ("absent", "{}"),
+            ("crash-only", r#"{"crashReports": false}"#),
+        ] {
+            let managed = scratch(&format!("managed-usage-ping-{name}"), text);
+            assert!(!managed.usage_ping_off(), "{text}");
         }
     }
 
@@ -1509,11 +1614,15 @@ mod tests {
         }
     }
 
-    /// An entry that is neither form is skipped. In a deny list that denies nothing, so a list of
-    /// nothing else is not reported; in an allow list it allows nothing, so the list still stands
-    /// and allows less. An alias is one of them: the person declaring a server chooses it.
+    /// An entry that is neither form matches no server and is named, as an unreadable permission rule
+    /// is (PERM-11). In a deny list that means a list of nothing else still reads as pinned, so
+    /// `doctor` shows it; in an allow list the list stands and allows less. An alias is one of them:
+    /// the person declaring a server chooses it.
+    ///
+    /// Rejects skipping such an entry in silence, which leaves an administrator believing a server
+    /// is refused that starts.
     #[test]
-    fn an_entry_in_neither_form_is_skipped() {
+    fn an_entry_in_neither_form_is_skipped_and_named() {
         let malformed = r#"[
             "weather",
             {"alias": "weather"},
@@ -1523,7 +1632,11 @@ mod tests {
             {"host": "*.[::1]"},
             {"host": ""},
             {"host": "mcp.corp.example/path"},
+            {"host": "https://mcp.corp.example"},
+            {"host": "mcp.corp.example:443"},
+            {"host": "bücher.example"},
             {"command": ["approved-server", "--stdio"]},
+            {"command": ["evil-server", "--stdio"]},
             {"command": []},
             {"command": ["/usr/local/bin/approved-server", 3]},
             {"host": "mcp.corp.example", "command": ["/usr/local/bin/approved-server"]},
@@ -1535,7 +1648,27 @@ mod tests {
             "managed-deny-malformed",
             &format!(r#"{{"mcp": {{"deny": {malformed}}}}}"#),
         );
-        assert!(denying.is_empty(), "a deny list of nothing was reported");
+        assert_eq!(
+            denying.pinned().collect::<Vec<_>>(),
+            vec![SERVER_DENY],
+            "a deny list the reader cannot use was not reported as written"
+        );
+        let named: Vec<(&str, &str)> = denying.server_entries_unusable().collect();
+        assert_eq!(named.len(), 17, "{named:?}");
+        assert!(named.iter().all(|(list, _)| *list == SERVER_DENY));
+        // Each is the file's own spelling and not a summary of it.
+        for spelled in [
+            r#""weather""#,
+            r#"{"host":"https://mcp.corp.example"}"#,
+            r#"{"host":"mcp.corp.example:443"}"#,
+            r#"{"host":"bücher.example"}"#,
+            r#"{"command":["evil-server","--stdio"]}"#,
+        ] {
+            assert!(
+                named.iter().any(|(_, entry)| *entry == spelled),
+                "{spelled}: {named:?}"
+            );
+        }
         assert_eq!(refusal(&denying, remote), None);
         assert_eq!(refusal(&denying, Server::Local(&program)), None);
         let allowing = scratch(
@@ -1547,11 +1680,70 @@ mod tests {
             refusal(&allowing, Server::Local(&program)),
             Some(Refusal::NotAllowed)
         );
+        assert!(
+            allowing
+                .server_entries_unusable()
+                .all(|(list, _)| list == SERVER_ALLOW),
+            "an allow entry was named as a deny entry"
+        );
+        assert_eq!(allowing.server_entries_unusable().count(), 17);
         let spaced = scratch(
             "managed-deny-spaced",
             r#"{"mcp": {"deny": [{"host": "  MCP.corp.example  "}]}}"#,
         );
         assert!(refusal(&spaced, remote).is_some());
+        assert_eq!(spaced.server_entries_unusable().count(), 0);
+        let usable = scratch(
+            "managed-deny-usable",
+            r#"{"mcp": {"deny": [{"command": ["/opt/bad"]}]}}"#,
+        );
+        assert_eq!(
+            usable.server_entries_unusable().count(),
+            0,
+            "a usable entry was named"
+        );
+    }
+
+    /// An IPv6 address written without brackets can mean nothing but the address, so it matches the
+    /// url that spells it with them, in any case and in both lists.
+    ///
+    /// Rejects reading the unbracketed spelling as no host, which refuses nothing.
+    #[test]
+    fn an_ipv6_address_without_brackets_names_the_bracketed_host() {
+        let denying = scratch(
+            "managed-deny-unbracketed",
+            r#"{"mcp": {"deny": [{"host": "FD00::1"}, {"host": "::ffff:10.0.0.1"}]}}"#,
+        );
+        assert_eq!(denying.server_entries_unusable().count(), 0);
+        for url in ["http://[fd00::1]/mcp", "http://[FD00::1]:8080/mcp"] {
+            assert_eq!(
+                refusal(&denying, Server::Remote(url)),
+                Some(Refusal::Denied(&Rule::Host("[fd00::1]".into()))),
+                "{url}"
+            );
+        }
+        assert!(matches!(
+            refusal(&denying, Server::Remote("http://[::ffff:10.0.0.1]/")),
+            Some(Refusal::Denied(_))
+        ));
+        // A neighbouring address is another host, so the entry is not a prefix match.
+        assert_eq!(refusal(&denying, Server::Remote("http://[fd00::2]/")), None);
+        assert_eq!(
+            refusal(&denying, Server::Remote("http://[fd00::10]/")),
+            None
+        );
+        let allowing = scratch(
+            "managed-allow-unbracketed",
+            r#"{"mcp": {"allow": [{"host": "fd00::1"}]}}"#,
+        );
+        assert_eq!(
+            refusal(&allowing, Server::Remote("http://[fd00::1]/")),
+            None
+        );
+        assert_eq!(
+            refusal(&allowing, Server::Remote("http://[fd00::2]/")),
+            Some(Refusal::NotAllowed)
+        );
     }
 
     /// The layer may keep a server from starting and never add one. [`Managed`] has nowhere to
@@ -1693,5 +1885,181 @@ mod tests {
         );
         assert!(managed.gateways().is_none());
         assert_eq!(managed.get(env_var::BEDROCK_OPUS_MODEL), None);
+    }
+
+    /// Two snippets pasted into one file give `models` twice. The block written first keeps its deny
+    /// whichever order they come in, the repeat is named for `doctor`, and the list is still pinned.
+    /// The fault it rejects is serde_json's last-key-wins, under which the later `{}` erased the
+    /// refusal and nothing said so (BACKEND-36).
+    #[test]
+    fn a_models_block_written_twice_keeps_the_deny_of_either_and_is_reported() {
+        for (name, text) in [
+            (
+                "managed-models-repeat-deny-first",
+                r#"{"models":{"deny":["x"]},"models":{}}"#,
+            ),
+            (
+                "managed-models-repeat-deny-last",
+                r#"{"models":{},"models":{"deny":["x"]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert_eq!(
+                model_refusal(&managed, "x"),
+                Some(ModelRefusal::Denied),
+                "{text}"
+            );
+            assert_eq!(model_refusal(&managed, "y"), None, "{text}");
+            assert!(managed.pinned().any(|name| name == MODEL_DENY), "{text}");
+            assert_eq!(managed.repeated_keys().collect::<Vec<_>>(), ["models"]);
+            assert!(!managed.is_empty(), "{text}");
+        }
+    }
+
+    /// A repeated `deny` list keeps both lists, earlier entries first, so no refusal written in
+    /// either is lost. Nested at a depth below the repeated block, which is reported by its path.
+    #[test]
+    fn a_deny_list_written_twice_keeps_every_entry_of_both() {
+        let managed = scratch(
+            "managed-models-deny-twice",
+            r#"{"models":{"deny":["x"],"deny":["y"]}}"#,
+        );
+        assert_eq!(model_refusal(&managed, "x"), Some(ModelRefusal::Denied));
+        assert_eq!(model_refusal(&managed, "y"), Some(ModelRefusal::Denied));
+        assert_eq!(model_refusal(&managed, "z"), None);
+        assert_eq!(managed.repeated_keys().collect::<Vec<_>>(), ["models.deny"]);
+    }
+
+    /// The `permissions` repeat from the issue: an empty second `deny` must not deny nothing. The
+    /// rule stays pinned and the repeat is named by its path.
+    #[test]
+    fn a_permissions_deny_list_written_twice_keeps_the_rule_pinned() {
+        let managed = scratch(
+            "managed-permissions-deny-twice",
+            r#"{"permissions":{"deny":["Read(.env)"],"deny":[]}}"#,
+        );
+        assert_eq!(managed.rules().deny, ["Read(.env)"]);
+        assert!(managed.pinned().any(|name| name == RULES_DENY));
+        assert_eq!(
+            managed.repeated_keys().collect::<Vec<_>>(),
+            ["permissions.deny"]
+        );
+        let ask = scratch(
+            "managed-permissions-ask-twice",
+            r#"{"permissions":{"ask":["Edit(x)"]},"permissions":{"ask":["Bash(rm)"]}}"#,
+        );
+        assert_eq!(ask.rules().ask, ["Edit(x)", "Bash(rm)"]);
+        assert_eq!(
+            ask.repeated_keys().collect::<Vec<_>>(),
+            ["permissions", "permissions.ask"]
+        );
+    }
+
+    /// An allow list that restricts, written twice, allows only what both name. The last list alone
+    /// would allow `b` after the first wrote `["a"]`, and the union would allow it after the first
+    /// wrote `["a", "b"]` and the second `["a"]`, so both orders are held.
+    #[test]
+    fn a_model_allow_list_written_twice_allows_only_what_both_name() {
+        for (name, text) in [
+            (
+                "managed-models-allow-twice-a",
+                r#"{"models":{"allow":["a"],"allow":["a","b"]}}"#,
+            ),
+            (
+                "managed-models-allow-twice-b",
+                r#"{"models":{"allow":["a","b"],"allow":["a"]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert_eq!(model_refusal(&managed, "a"), None, "{text}");
+            assert_eq!(
+                model_refusal(&managed, "b"),
+                Some(ModelRefusal::NotAllowed),
+                "{text}"
+            );
+        }
+    }
+
+    /// The same for `mcp.allow`, which is a restriction on what may start. Both orders are held:
+    /// the last list alone passes the one where the narrower list comes last and fails the other.
+    #[test]
+    fn a_server_allow_list_written_twice_allows_only_what_both_name() {
+        for (name, text) in [
+            (
+                "managed-mcp-allow-twice-wide-first",
+                r#"{"mcp":{"allow":[{"host":"a.example"},{"host":"b.example"}],"allow":[{"host":"a.example"}]}}"#,
+            ),
+            (
+                "managed-mcp-allow-twice-narrow-first",
+                r#"{"mcp":{"allow":[{"host":"a.example"}],"allow":[{"host":"a.example"},{"host":"b.example"}]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert!(
+                managed
+                    .refuses(Server::Remote("https://a.example/mcp"))
+                    .is_none(),
+                "{text}"
+            );
+            assert!(
+                matches!(
+                    managed.refuses(Server::Remote("https://b.example/mcp")),
+                    Some((_, Refusal::NotAllowed))
+                ),
+                "{text}"
+            );
+        }
+    }
+
+    /// A repeated `mcp.deny` keeps both lists, so a host named in the first is still refused.
+    #[test]
+    fn a_server_deny_list_written_twice_refuses_what_either_names() {
+        let managed = scratch(
+            "managed-mcp-deny-twice",
+            r#"{"mcp":{"deny":[{"host":"a.example"}],"deny":[{"host":"b.example"}]}}"#,
+        );
+        for host in ["a.example", "b.example"] {
+            assert!(
+                matches!(
+                    managed.refuses(Server::Remote(&format!("https://{host}/mcp"))),
+                    Some((_, Refusal::Denied(_)))
+                ),
+                "{host}"
+            );
+        }
+    }
+
+    /// A repeat spelled wrongly cannot take away what the other wrote: a deny list beside a value
+    /// that is not a list stays, whichever comes last.
+    #[test]
+    fn a_deny_list_repeated_as_something_else_is_not_lost() {
+        for (name, text) in [
+            (
+                "managed-models-deny-null-last",
+                r#"{"models":{"deny":["x"],"deny":null}}"#,
+            ),
+            (
+                "managed-models-deny-null-first",
+                r#"{"models":{"deny":null,"deny":["x"]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert_eq!(
+                model_refusal(&managed, "x"),
+                Some(ModelRefusal::Denied),
+                "{text}"
+            );
+        }
+    }
+
+    /// A file that writes each key once reports no repeat, so the report names a repeat and not a
+    /// pin.
+    #[test]
+    fn a_file_that_writes_each_key_once_reports_no_repeat() {
+        let managed = scratch(
+            "managed-no-repeat",
+            r#"{"models":{"deny":["x"]},"mcp":{"deny":[{"host":"a.example"}]}}"#,
+        );
+        assert_eq!(managed.repeated_keys().count(), 0);
     }
 }

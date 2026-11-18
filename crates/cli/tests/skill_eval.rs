@@ -72,7 +72,7 @@ fn a_gateway_that_loads_the_skill() -> Gateway {
 /// One gateway whose model asks for `tool` with the arguments `arguments` gives for the number of
 /// answers already in the conversation, and says it is done once `until` answers are there (never,
 /// where it is `None`). The arguments take the count so that a model asking for ever does not ask
-/// the same call three times in a row, which a turn holds for a person (TURN-9).
+/// the same call three times in a row, which a turn holds and does not run (TURN-9).
 fn a_gateway_calling(
     tool: &'static str,
     arguments: fn(usize) -> String,

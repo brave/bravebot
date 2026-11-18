@@ -371,7 +371,9 @@ where it is until you remove it with
 
 Your own directory is read first and the project second, so a project definition of the same name
 replaces yours, which is the same "most specific wins" the trust map uses for paths. Two files in one
-directory resolve by file name, so which is live is the same on every machine.
+directory resolve by file name, so which is live is the same on every machine. A definition from a
+[plugin](plugins.md) is the least specific source: a definition of the same name from your own
+directory or a project replaces it whole.
 
 **It wins about what the definition is for, and never about what it may do.** The project's file
 takes over the description, the body, the model, the effort, the skills, the rounds and the memory, the rounds

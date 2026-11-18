@@ -161,16 +161,7 @@ impl Repository {
         out.shown.push(path.to_owned());
         let (_, size) = self.objects.header(&id)?.ok_or(Declined::Unreadable)?;
         if size > MAX_BLOB {
-            // What can still read the file, from the tools the turn's list holds.
-            let instead = match (
-                out.beside.holds(crate::tools::Named::ReadFile),
-                out.beside.holds(crate::tools::Named::Run),
-            ) {
-                (true, true) => "; use read_file on the working copy, or run",
-                (true, false) => "; use read_file on the working copy",
-                (false, true) => "; use run",
-                (false, false) => "",
-            };
+            let instead = out.instead();
             out.text.line(&format!(
                 "({path} is {size} bytes, more than read_git shows{instead})"
             ));

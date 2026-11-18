@@ -64,6 +64,18 @@ impl Session {
         self
     }
 
+    /// Open the session in auto, because `--auto` or the person's own `permissions.startInAuto`
+    /// asked for it (AUTO-1).
+    ///
+    /// Unlike [`Session::starting_in_bypass`] it records nothing about where the session began: the
+    /// line under the box names auto for as long as the session is in it, and names nothing once the
+    /// key has left it, which is what it does for a session that reached auto by the key.
+    pub fn starting_in_auto(self) -> Self {
+        self.permission_mode
+            .set(bravebot_agent::PermissionMode::Auto);
+        self
+    }
+
     /// Take bypass off the ladder, because a settings layer wrote `permissions.bypassUnreachable`.
     ///
     /// A session already in bypass is put back to asking, and the person is told, since the mode
@@ -394,6 +406,19 @@ impl Session {
         self.model_reads_effort
     }
 
+    /// Whether the model in force is recorded as refusing the cache breakpoints.
+    ///
+    /// For saying so where it does: a prefix that is paid for in full on every request draws no
+    /// cache figure, so without this nothing on the screen says the caching is off.
+    pub fn breakpoints_given_up(&self) -> bool {
+        self.breakpoints_given_up
+    }
+
+    /// Record whether the model now in force is recorded as refusing the breakpoints.
+    pub fn note_breakpoints_given_up(&mut self, given_up: bool) {
+        self.breakpoints_given_up = given_up;
+    }
+
     /// Record what the roster said about the model now in force.
     pub fn note_model_reads_effort(&mut self, reads: bool) {
         self.model_reads_effort = reads;
@@ -615,8 +640,8 @@ impl Session {
     /// How long `asking` waits with no key pressed before it is closed, where it may be at all.
     ///
     /// Only what the driver marked as the planner's own question is closed on a clock, and the
-    /// time is the person's setting: a plan, a spend limit and a repeated call wait for the person
-    /// whatever the settings say, and nothing a question says is read here.
+    /// time is the person's setting: a plan and a spend limit wait for the person whatever
+    /// the settings say, and nothing a question says is read here.
     pub fn ask_idle_for(&self, asking: &bravebot_core::ask::Asking) -> Option<Duration> {
         self.ask_idle.filter(|_| asking.closes_when_idle)
     }
@@ -691,10 +716,35 @@ impl Session {
         }
     }
 
-    /// Open the info panel where it was left open last time.
+    /// Whether the daily usage ping is on, and what turned it off where it is not.
+    ///
+    /// Read fresh each time, so a variable or settings file changed since the session started is what
+    /// the panel shows. A session that does not persist records nothing, so it has no record of a
+    /// ping and is answered as incognito; that also keeps a test from reading the developer's choice.
+    pub fn usage_ping(&self) -> bravebot_config::usage_ping::UsagePing {
+        if self.persist {
+            bravebot_session::store::usage_ping()
+        } else {
+            bravebot_config::usage_ping::UsagePing::Incognito
+        }
+    }
+
+    /// Record whether the person wants the usage ping sent, keeping it for later sessions.
+    ///
+    /// Written through to disk only for a session that persists, the same rule the editing style
+    /// follows: a test must not rewrite the developer's own choice.
+    pub fn choose_usage_ping(&mut self, on: bool) {
+        if self.persist {
+            bravebot_session::store::save_usage_ping(on);
+        }
+    }
+
+    /// Open the info panel where it was left open last time, at the width and with the sections
+    /// it was left with.
     ///
     /// Read only for a session that persists, as the editing style is, so a test is not handed the
-    /// developer's own choice. Closed where nothing was recorded.
+    /// developer's own choice. Closed where nothing was recorded, and with every section drawn
+    /// where no sections were recorded or the record does not read cleanly.
     pub fn adopt_panel(&mut self) {
         self.panel = self
             .persist
@@ -706,21 +756,43 @@ impl Session {
             .then(bravebot_session::store::load_panel_width)
             .flatten()
             .unwrap_or(crate::panel::WIDTH);
+        self.panel_sections = self
+            .persist
+            .then(bravebot_session::store::load_sidebar)
+            .flatten()
+            .map_or_else(crate::panel::Sections::default, |ids| {
+                crate::panel::Sections::from_ids(&ids)
+            });
     }
 
     /// The columns the info panel takes on a frame `columns` wide, border included: the width the
     /// person dragged it to, held between its minimum and what leaves the transcript its own.
     pub fn panel_columns(&self, columns: u16) -> u16 {
-        if self.files.is_some() {
+        if self.files.is_some() || self.peek.is_some() {
             return crate::files_mode::columns(columns);
         }
         crate::panel::clamped(self.panel_width, columns)
     }
 
+    /// The sections of the info panel that are turned off (PANEL-17).
+    pub fn panel_sections(&self) -> crate::panel::Sections {
+        self.panel_sections
+    }
+
+    /// Turn the sections of the info panel on and off as `sections` says. The next frame draws the
+    /// panel as it now is, and a session that persists keeps the choice for the next one.
+    pub fn set_panel_sections(&mut self, sections: crate::panel::Sections) {
+        self.panel_sections = sections;
+        if self.persist {
+            let hidden: Vec<&str> = sections.hidden().map(crate::panel::Section::id).collect();
+            bravebot_session::store::save_sidebar(&hidden);
+        }
+    }
+
     /// Whether a press here is on the panel's border, the column a drag resizes it by.
     fn on_panel_border(&self, row: u16, column: u16) -> bool {
         // The files state is half the terminal, which dragging does not change (FILES-4).
-        self.files.is_none() && self.on_the_panel_border_column(row, column)
+        self.files.is_none() && self.peek.is_none() && self.on_the_panel_border_column(row, column)
     }
 
     /// Whether a cell is in the column the panel draws its border in, in every state of the panel.
@@ -745,16 +817,19 @@ impl Session {
         }
     }
 
-    /// The address the row `target` of the info panel opens, if it is the pull request or issue row.
+    /// The address the row `target` of the info panel opens, if it is a row of the Pull requests or
+    /// Issues section.
     ///
     /// The one the person gave with `/pr` or `/issue` (PANEL-12), as it was set and not the text the
-    /// row draws for it, which may be the shorthand or cut. A row is a target only for an address the
-    /// opener takes, which the panel decides where it lays the rows out.
-    pub fn panel_link(&self, target: crate::panel::Target) -> Option<&str> {
-        use crate::panel::Target;
+    /// row draws for it, which may be the shorthand or cut, and for any other row the address its
+    /// reference builds (PANEL-16). A row is a target only for an address the opener takes, which the
+    /// panel decides where it lays the rows out.
+    pub fn panel_link(&self, target: crate::panel::Target) -> Option<String> {
+        use crate::panel::{Target, reference_address};
+        use bravebot_agent::links::LinkKind;
         match target {
-            Target::PullRequest => self.identity.pull_request.as_deref(),
-            Target::Issue => self.identity.issue.as_deref(),
+            Target::PullRequest(row) => reference_address(self, LinkKind::PullRequest, row),
+            Target::Issue(row) => reference_address(self, LinkKind::Issue, row),
             Target::Name
             | Target::Model
             | Target::Effort
@@ -763,6 +838,7 @@ impl Session {
             | Target::Languages
             | Target::File(_)
             | Target::CloseFiles
+            | Target::ClosePeek
             | Target::PreviousEdit
             | Target::NextEdit
             | Target::Files
@@ -891,7 +967,7 @@ impl Session {
 
     /// Whether the person has the info panel open, whether or not the last frame had room for it.
     pub fn panel_open(&self) -> bool {
-        self.panel || self.files.is_some()
+        self.panel || self.files.is_some() || self.peek.is_some()
     }
 
     /// Open or close the info panel.
@@ -902,7 +978,7 @@ impl Session {
     /// always closes, so a panel left open before the terminal was narrowed can be put away.
     pub fn toggle_panel(&mut self) {
         // The key hides the panel from either state, and the state goes with it (FILES-3).
-        if self.files.take().is_some() {
+        if self.files.take().is_some() | self.peek.take().is_some() {
             self.panel = false;
             if self.persist {
                 bravebot_session::store::save_panel(false);

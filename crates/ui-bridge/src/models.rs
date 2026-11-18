@@ -290,6 +290,40 @@ pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
     ))
 }
 
+/// The model a turn, an enhancement or a manifest run is asked on, and the configuration it runs under,
+/// or the refusal of that model.
+///
+/// The request's model wins over the one the session recorded. When neither names one, the configured model is the one checked.
+/// The configuration is loaded for the session's project and the settings file the window selected,
+/// and a failure to load it is `ErrorCode::Config`. The model is checked against that configuration
+/// after it loads, and a refused one is a `bad_request` carrying the sentence of [`refused`].
+pub fn chosen(
+    requested: Option<String>,
+    session_model: Option<&str>,
+    project: &std::path::Path,
+    selected: Option<&std::path::Path>,
+) -> Result<(Option<String>, Config), crate::protocol::Failure> {
+    let config = crate::settings::config(Some(project), selected)?;
+    let model = choose(&config, requested, session_model)?;
+    Ok((model, config))
+}
+
+/// `chosen` with the configuration already loaded.
+fn choose(
+    config: &Config,
+    requested: Option<String>,
+    session_model: Option<&str>,
+) -> Result<Option<String>, crate::protocol::Failure> {
+    let model = requested.or_else(|| session_model.map(str::to_string));
+    // A model the machine-level layer refuses is not requested, whichever service would have
+    // answered for it and whoever asked. The roster this window draws leaves such a model out, so
+    // reaching here means the name came from somewhere else (BACKEND-48).
+    if let Some(refused) = refused(config, model.as_deref()) {
+        return Err(crate::protocol::Failure::bad_request(refused));
+    }
+    Ok(model)
+}
+
 fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<Said>, origins: &Origins) -> Value {
     let default = config.default_model.as_str();
     // Dropped before the default is put back, so a refused configured model is not offered either: a
@@ -905,6 +939,53 @@ mod tests {
             );
         }
         assert_eq!(refused(&config, Some("an-allowed-model")), None);
+    }
+
+    /// A turn, an enhancement and a manifest run all take their model from `choose`: the request's own
+    /// name over the session's, the session's over the configured one, and a refusal that is the
+    /// `bad_request` of `refused` for whichever name won.
+    ///
+    /// A build that preferred the session's model to the request's would check, or start on, the wrong
+    /// one. A build that checked only the requested name would let a refused session model through,
+    /// and one that skipped the configured model would let a refused default start a turn.
+    #[test]
+    fn a_turn_takes_the_requests_model_then_the_sessions_and_refuses_a_denied_one() {
+        let managed = r#"{"models": {"deny": ["denied-model", "the-configured-model"]}}"#;
+        let config = configured("the-configured-model", Some(managed));
+        let open = configured("the-configured-model", None);
+
+        // The request wins, and the session's model is not looked at when it is.
+        assert_eq!(
+            choose(
+                &config,
+                Some("an-allowed-model".into()),
+                Some("denied-model")
+            )
+            .unwrap(),
+            Some("an-allowed-model".to_string())
+        );
+        // The session's model stands in for a request that names none.
+        assert_eq!(
+            choose(&open, None, Some("a-session-model")).unwrap(),
+            Some("a-session-model".to_string())
+        );
+        // Neither names one: the configured model is what is asked for, and it is checked.
+        assert_eq!(choose(&open, None, None).unwrap(), None);
+        let failure =
+            choose(&config, None, None).expect_err("the configured model was not refused");
+        assert_eq!(failure.code, crate::protocol::ErrorCode::BadRequest);
+        assert_eq!(failure.message, refused(&config, None).expect("refused"));
+
+        // A refused name is refused whether the request or the session gave it, with `refused`'s text.
+        for (requested, session) in [(Some("denied-model"), None), (None, Some("denied-model"))] {
+            let failure = choose(&config, requested.map(str::to_string), session)
+                .expect_err("a refused model was chosen");
+            assert_eq!(failure.code, crate::protocol::ErrorCode::BadRequest);
+            assert_eq!(
+                failure.message,
+                refused(&config, Some("denied-model")).expect("refused")
+            );
+        }
     }
 
     /// A configuration whose only service is a local gateway stating a window for its one model, and

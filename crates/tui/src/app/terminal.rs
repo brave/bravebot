@@ -155,10 +155,34 @@ pub(super) fn give_back_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Resu
 /// Asked once and remembered, because answering means writing a query and waiting for a reply, and
 /// doing that on every handover to an editor would cost a round trip each time.
 pub(super) fn enhanced_keys() -> bool {
-    use std::sync::OnceLock;
-    static SUPPORTED: OnceLock<bool> = OnceLock::new();
-    *SUPPORTED.get_or_init(|| supports_keyboard_enhancement().unwrap_or(false))
+    keyboard_reply().unwrap_or(false)
 }
+
+/// Whether the terminal answered the keyboard query at all, which ends with the primary device
+/// attributes request. One that did not will not answer the graphics query either, since that ends
+/// with the same request, so it is not asked and its wait is not spent (#3846).
+pub(super) fn terminal_answers_queries() -> bool {
+    keyboard_reply().is_some()
+}
+
+/// The keyboard query's answer, or `None` where the terminal gave none in time.
+///
+/// The query ends with the primary device attributes request, which a terminal answers whatever it
+/// supports, and that reply ends the wait, so the bound is spent only where nothing answers: a pty
+/// with nobody behind it, a driver, or an ssh link slower than the bound. Half a second covers an
+/// ssh round trip across continents, and is a quarter of the two seconds crossterm waits, which were
+/// before the first frame (#3846). A reply later than that is read as an internal event, never as a
+/// key, and the session goes without disambiguated keys, which are asked for only where the
+/// terminal said it understands (INPUT-33).
+fn keyboard_reply() -> Option<bool> {
+    use ratatui::crossterm::terminal::supports_keyboard_enhancement_within;
+    use std::sync::OnceLock;
+    static SUPPORTED: OnceLock<Option<bool>> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| supports_keyboard_enhancement_within(KEYBOARD_QUERY_BOUND).ok())
+}
+
+/// How long the keyboard query waits for a terminal that answers nothing.
+pub(super) const KEYBOARD_QUERY_BOUND: Duration = Duration::from_millis(500);
 
 /// Hand the terminal to the user's editor, and take back whatever they saved.
 ///

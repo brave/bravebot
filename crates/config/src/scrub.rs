@@ -20,7 +20,15 @@
 //! named. A program somebody asked for gets the second; a program this agent starts for itself
 //! gets the first. A name in `run.scrubEnv` is an answer about what *their* commands may see, and
 //! reading it anywhere else turns a list that can only take something away into one that can stop
-//! this agent resolving its own credential, from a project layer that arrived with a clone.
+//! this agent resolving its own credential.
+//!
+//! # Whose file the list is read from
+//!
+//! The person's own file and the file `--settings` names only. A name in the list is not only a
+//! restriction: a program started without `npm_config_ignore_scripts` or `PYTHONSAFEPATH` runs
+//! what the person's value kept from running, so a project or local layer arriving with a clone
+//! is not read for it, patterns included ([BACKEND-24](../../../docs/specs/backends.md)). The
+//! decision is which layer a file is, made in [`Settings`] before this module sees a list.
 //!
 //! # Narrow on purpose
 //!
@@ -49,7 +57,7 @@
 use crate::Settings;
 use std::sync::OnceLock;
 
-/// What the settings file named in `run.scrubEnv`, read once per process.
+/// What the person's settings file named in `run.scrubEnv`, read once per process.
 ///
 /// A file on disk rather than something threaded through every caller: what it holds is a property
 /// of the machine, not of a turn, and a path from here to the turn loop would put a configuration
@@ -362,6 +370,17 @@ mod tests {
             names.iter().any(|name| name == "SERVICES_KEY_AICHAT"),
             "naming one replaced the built-in set instead of adding to it"
         );
+    }
+
+    /// RUN-28: the name a settings file lists with whitespace at an end is the name that is
+    /// withheld. `names` is what a stage is built from, so the assertion is on the variable the
+    /// stage loses and not on the settings that were read.
+    #[test]
+    fn a_name_listed_with_trailing_whitespace_is_withheld_as_the_name() {
+        let settings = Settings::parse(r#"{"run": {"scrubEnv": ["MY_TOKEN "]}}"#);
+        let names = names(&settings);
+        assert!(names.iter().any(|name| name == "MY_TOKEN"));
+        assert!(!names.iter().any(|name| name == "MY_TOKEN "));
     }
 
     /// A program this agent starts for its own purposes is not held to somebody's own list. A name

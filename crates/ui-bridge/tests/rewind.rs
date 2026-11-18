@@ -25,7 +25,14 @@ struct Window {
 impl Window {
     /// A bridge whose model is the scripted endpoint, on a project the person trusted.
     fn on(project: &Path, endpoint: &str) -> (Self, String) {
-        let settings = project.join("test-settings.json");
+        // Beside the project and not in it, so the file grants on every host (PERM-14).
+        let settings = project.with_file_name(format!(
+            "{}-test-settings.json",
+            project
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("project")
+        ));
         std::fs::write(
             &settings,
             json!({"model": "undo-test/test", "provider": {"undo-test": {

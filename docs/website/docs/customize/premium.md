@@ -56,8 +56,8 @@ The third form names the file when it cannot be read.
 
 The premium host is compiled in, so nobody sets an address. A build whose free endpoint is under
 `brave.software` or `bravesoftware.com` has the development host and any other build has the production
-host. Both are `https://ai-gateway-api.bsg.brave.software` while the premium service is live only in
-development. A build that reaches no Brave backend (AWS Bedrock only) has no premium host and holds no
+host. The development host is `https://ai-gateway-api.bsg.brave.software` and the production host is
+`https://ai-gateway-api.bsg.brave.com`. A build that reaches no Brave backend (AWS Bedrock only) has no premium host and holds no
 key.
 
 With a key stored, a request for the Brave backend goes to the premium host's `/v1/chat/completions`
@@ -82,12 +82,6 @@ session whose model is one of Brave's, with no key stored and no other model ser
 Bedrock block, gateway, ChatGPT sign-in or xAI sign-in), does not start. Instead it says no model
 service is configured and lists the ways to configure one. The last is Brave's premium service, with
 `bravebot auth login brave`.
-
-A stored key that cannot be presented is reported as:
-
-```
-the premium key could not be used: {detail}. Run `bravebot auth login brave` to replace it, or `bravebot auth logout brave` to send requests to the free endpoint instead
-```
 
 ## Which tier a turn actually ran on
 

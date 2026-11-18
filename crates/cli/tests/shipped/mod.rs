@@ -255,6 +255,17 @@ pub fn code_of(text: &str) -> Source {
     }
 }
 
+/// Whether `file` is under a directory named `tests` inside a crate's `src`. A module of tests
+/// declared inside an inline `mod tests { mod name; }` reads `src/<module>/tests/name.rs`, which the
+/// declarations this module looks for (a `mod name;` marked for tests) do not name.
+fn in_a_directory_of_tests(file: &Path) -> bool {
+    relative(file)
+        .split('/')
+        .skip_while(|part| *part != "src")
+        .skip(1)
+        .any(|part| part == "tests")
+}
+
 /// Every file under a crate's `src` that a release build compiles, as the code it contributes. A
 /// file that only a test module declares is a test and is left out with the files under its
 /// directory, and the test items and comments of the others are left out of their text.
@@ -295,6 +306,7 @@ pub fn sources() -> Vec<Source> {
                 && !test_directories
                     .iter()
                     .any(|directory| file.starts_with(directory))
+                && !in_a_directory_of_tests(file)
         })
         .map(|(file, text)| {
             let mut source = code_of(&text);

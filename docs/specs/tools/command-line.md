@@ -402,7 +402,8 @@ each `..` taken out, is inside the workspace or an opened directory, which means
 out. A destination in a directory the remedy names is let through once that directory is opened.
 It names no `request_path`, whose grant a redirection does not pass. Where nobody can be asked in
 the run ([CLI-1](../cli.md#CLI-1)), a remedy that opens a directory is given as none, and the
-planner is told to say in its reply which path the work needs. The `unconfined` sentence above is
+planner is told to say in its reply which path the work needs. A file tool's refusal for leaving the
+workspace is worded the same way ([TRUST-10](../trust-map.md#TRUST-10)). The `unconfined` sentence above is
 said with every remedy, a credential location's included, where the session accepts that argument
 and only there. The trail records the remedy the planner was told. The choice reads the line's
 path, the file system and the session's settings, never a byte a file or a program holds.
@@ -413,9 +414,9 @@ directories the stage writes. The driver holds no path for it, so the sentence a
 step ([SANDBOX-19](../sandboxing.md#SANDBOX-19)) names none and says to write the redirection on the
 `run` line itself.
 
-`verified-by: bravebot_agent::tools::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
-`verified-by: bravebot_agent::tools::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
-`verified-by: bravebot_agent::tools::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_the_workspace_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_into_a_credential_location_names_the_unconfined_line_only_where_accepted`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path`
 `verified-by: bravebot_agent::workspace::a_redirection_climbing_above_the_top_of_the_file_system_is_offered_nothing`
 `verified-by: bravebot_agent::workspace::a_redirection_onto_a_name_that_is_not_utf8_is_offered_nothing`
 `verified-by: bravebot_agent::workspace::a_refused_redirection_is_let_through_once_the_directory_it_names_is_opened`
@@ -425,9 +426,9 @@ step ([SANDBOX-19](../sandboxing.md#SANDBOX-19)) names none and says to write th
 `verified-by: bravebot_agent::workspace::a_redirection_into_a_credential_location_is_offered_no_directory`
 `verified-by: bravebot_agent::workspace::a_redirection_a_link_carries_out_or_into_the_stores_is_offered_nothing`
 `verified-by: bravebot_agent::workspace::a_redirection_outside_where_reads_stay_inside_is_offered_no_directory`
-`verified-by: bravebot_agent::tools::a_redirection_outside_is_given_the_open_remedy_and_one_into_credentials_the_credential_remedy`
-`verified-by: bravebot_agent::tools::a_refused_redirection_writes_its_file_once_the_directory_it_names_is_added`
-`verified-by: bravebot_agent::tools::read_file_and_a_redirection_of_the_same_outside_path_are_offered_the_same_remedy`
+`verified-by: bravebot_agent::tools::tests::confinement::a_redirection_outside_is_given_the_open_remedy_and_one_into_credentials_the_credential_remedy`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_redirection_writes_its_file_once_the_directory_it_names_is_added`
+`verified-by: bravebot_agent::tools::tests::confinement::read_file_and_a_redirection_of_the_same_outside_path_are_offered_the_same_remedy`
 
 **Where the permission mode reaches a path.** While the mode that answers every permission question
 is in force ([MODE-4](../permission-modes.md#MODE-4)), a destination in a directory outside the
@@ -470,7 +471,7 @@ names, settings and file-system identity, never the bytes of a file.
 `verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_through_a_link_when_the_sandbox_is_off`
 `verified-by: bravebot_agent::turn::a_deny_rule_refuses_a_redirection_inside_a_substitution_through_a_link_an_earlier_part_made`
 `verified-by: bravebot_agent::turn::a_limited_delegate_cannot_redirect_through_a_link_its_own_line_made_out_of_its_files`
-`verified-by: bravebot_agent::tools::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
+`verified-by: bravebot_agent::tools::tests::arguments::a_redirection_writing_into_the_stores_is_refused_when_it_is_opened`
 
 `>>` is a write. `<` is a read and joins the read set, and it is standard input as well: the
 file's bytes go into a program, so the plan reports it as private input and it takes the
@@ -494,12 +495,12 @@ no effect and changes no decision. A failed attempt to open a destination is con
 its possible effects; an approval alone changes nothing.
 
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
-`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
-`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted`
-`verified-by: bravebot_agent::tools::a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted`
-`verified-by: bravebot_agent::tools::a_foreground_line_whose_substitution_writes_into_an_opened_directory_still_writes_it`
-`verified-by: bravebot_agent::tools::a_line_naming_the_stores_directly_or_through_an_existing_link_is_refused_before_it_runs`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_writes_into_an_opened_directory_still_writes_it`
+`verified-by: bravebot_agent::tools::tests::arguments::a_line_naming_the_stores_directly_or_through_an_existing_link_is_refused_before_it_runs`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
 
 **What the one direction costs.** A destination a vouched-for line overwrote stays untrusted until
 a person says otherwise, so reading it back is quarantined and costs a prompt. Recording a path as
@@ -767,7 +768,7 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::the_set_leaves_the_results_for_the_directory_alone_as_they_were`
 `verified-by: bravebot_agent::workspace::the_directories_a_program_may_not_resolve_into_follow_the_session`
 `verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_may_not_resolve_a_program_into_the_working_directory`
-`verified-by: bravebot_agent::tools::a_directory_a_remembered_grant_lets_a_stage_write_is_in_the_unproven_set`
+`verified-by: bravebot_agent::tools::tests::arguments::a_directory_a_remembered_grant_lets_a_stage_write_is_in_the_unproven_set`
 `verified-by: bravebot_agent::proof_road_checkout::a_program_reached_through_a_link_into_the_checkout_above_the_directory_is_asked_about`
 `verified-by: bravebot_agent::proof_road_checkout::a_program_in_a_directory_a_remembered_grant_lets_a_stage_write_is_asked_about`
 `verified-by: bravebot_agent::programs::a_relative_path_entry_is_read_under_the_working_directory`
@@ -999,7 +1000,17 @@ leave a child holding the write end of the pipe.
 
 Not a safety property. A program that finishes in time is no safer than one that does not.
 
+A run stopped at a deadline equal to the ceiling in force is reported separately from one stopped
+below it. A longer deadline cannot be asked for there, so the sentence says so and says to start the
+line again with `background: true`, which a deadline does not stop. The choice compares the
+deadline the run was given with the ceiling in force, two figures a person set, and reads nothing the
+program printed. The description of `run` also says that a build or test gate that may outlast the
+ceiling starts in the background.
+
 `verified-by: bravebot_agent::turn::a_run_is_stopped_at_the_deadline_its_call_named`
+`verified-by: bravebot_agent::turn::a_run_stopped_at_the_ceiling_in_force_is_told_so_and_one_below_it_is_not`
+`verified-by: bravebot_agent::report::a_run_stopped_at_the_ceiling_is_sent_to_the_background_and_one_below_it_is_not`
+`verified-by: bravebot_agent::tools::the_run_tool_says_a_gate_that_may_outlast_the_ceiling_starts_in_the_background`
 `verified-by: bravebot_agent::turn::a_null_deadline_takes_the_default`
 `verified-by: bravebot_agent::turn::a_negative_deadline_is_clamped_to_floor`
 `verified-by: bravebot_agent::tools::run_deadline_is_held_to_bounds_and_defaults_cleanly`
@@ -1057,6 +1068,25 @@ plain `--fixup=<commit>` or `--fixup <commit>` is not refused either, because gi
 two-word spellings, open an editor and are refused unless a message source is also given.
 `--squash=<commit>` and a bare `git commit` are refused.
 
+A line that names the editor outright is not refused for opening one. The editor is named by a
+variable written in front of the `git` step itself (`GIT_SEQUENCE_EDITOR=<command>` or
+`GIT_EDITOR=<command>`) or by `git -c sequence.editor=<command>` or `-c core.editor=<command>`, and
+the value must be literal text in the line. The setting git reads first decides, as git does: a
+sequence editor, then the editor of a message. A value that is empty, that is computed when the step
+starts (only possible in bypass mode), or that is a program this list refuses as an editor (`vim`,
+`nano`) names none, and the line is refused as it would be without the setting. An assignment in
+front of another step, or of any other variable, does not lift the refusal. `GIT_SEQUENCE_EDITOR`
+and `sequence.editor` lift only the refusal of `git rebase -i`. `GIT_EDITOR` and `core.editor` also
+lift the refusal of a `git commit` that supplies no message, including `--squash=<commit>` and
+`--fixup=amend:` or `--fixup=reword:`, because git runs the named editor on the message. `git add -i`
+and `git add -p` are never lifted. The subcommand is found past `-c <key=value>` and `-C <dir>`, so
+options in front of it do not hide it from this check. The decision reads only the words of the
+line and never a file.
+
+The refusal of `git rebase -i` names the routes that work: `GIT_SEQUENCE_EDITOR=<command> git rebase
+-i <base>`, `git rebase --autosquash <base>` without `-i` to fold fixup commits, and `git commit
+--fixup=reword:<sha> -m <message>` followed by `git rebase --autosquash <base>` to change a subject.
+
 The list is a convenience rather than a guarantee. Something interactive that is not on it hits the
 deadline and returns what it printed, which is the same outcome by a slower road.
 
@@ -1064,6 +1094,9 @@ deadline and returns what it printed, which is the same outcome by a slower road
 `verified-by: bravebot_agent::cmdline::a_line_that_names_the_terminal_device_is_refused`
 `verified-by: bravebot_agent::cmdline::the_same_program_without_the_interactive_part_is_not_refused`
 `verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::cmdline::a_line_that_names_the_editor_outright_is_not_refused`
+`verified-by: bravebot_agent::cmdline::an_editor_whose_name_is_computed_does_not_lift_the_refusal`
+`verified-by: bravebot_agent::cmdline::the_refusal_of_an_interactive_rebase_names_the_routes_that_work`
 `verified-by: bravebot_agent::exec::a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal`
 
 <a id="CMDLINE-16"></a>
@@ -1209,12 +1242,12 @@ it reaches one.)
 `verified-by: bravebot_agent::exec::a_substitution_printing_more_than_65536_bytes_reaches_the_program_whole`
 `verified-by: bravebot_agent::exec::a_substitution_printing_more_than_the_system_takes_fails_the_start_naming_the_program`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
-`verified-by: bravebot_agent::tools::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
-`verified-by: bravebot_agent::tools::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_has_no_redirection_still_starts`
-`verified-by: bravebot_agent::tools::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
-`verified-by: bravebot_agent::tools::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
-`verified-by: bravebot_agent::tools::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
+`verified-by: bravebot_agent::tools::tests::arguments::a_variable_assignment_runs_in_bypass_and_is_refused_in_every_other_mode`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_run_is_cancelled_while_its_substitution_runs_and_one_that_outlasts_the_deadline_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_has_no_redirection_still_starts`
+`verified-by: bravebot_agent::tools::tests::arguments::a_background_line_whose_substitution_redirects_a_script_s_output_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_delegates_background_line_with_a_redirection_in_a_substitution_is_refused`
+`verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_with_a_redirection_in_a_substitution_is_not_offered_to_be_moved`
 `verified-by: bravebot_core::command::a_route_inside_a_substitution_is_a_route_of_the_line`
 `verified-by: bravebot_agent::exec::a_withheld_variable_is_refused_at_spawn_and_its_value_is_not_in_the_error`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_no_plan_text_error_or_result`
@@ -1228,7 +1261,7 @@ it reaches one.)
 `verified-by: bravebot_core::policy::a_remembered_line_carrying_an_expansion_is_asked_about_and_offered_no_key`
 `verified-by: bravebot_core::policy::an_expansion_leaves_a_step_unproven`
 `verified-by: bravebot_agent::exec::an_expanded_secret_appears_in_nothing_bravebot_shows_about_a_background_start`
-`verified-by: bravebot_agent::tools::an_expanded_secret_reaches_neither_the_trail_nor_what_run_reports_about_the_call`
+`verified-by: bravebot_agent::tools::tests::arguments::an_expanded_secret_reaches_neither_the_trail_nor_what_run_reports_about_the_call`
 `verified-by: bravebot_core::command::an_expansion_is_drawn_from_its_source`
 `verified-by: bravebot_core::command::a_step_with_an_expansion_draws_it_in_front_of_its_program`
 `verified-by: bravebot_core::command::the_steps_of_a_plan_list_a_substituted_command_before_the_step_using_it`

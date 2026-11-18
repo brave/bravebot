@@ -2,7 +2,7 @@
 //! rule refuses before anything is asked (PERM-7), an `allow` rule in the person's own file
 //! answers a prompt (PERM-8), an `ask` rule puts a question that would not have been put, and an
 //! `allow` rule a checkout wrote answers nothing (PERM-14). The rules are read once per session
-//! (PERM-12).
+//! (PERM-12), and `readsStayInWorkspace` (PERM-16) is read with them.
 //!
 //! Driven through the binary against a model service and a website of the test's own. Whether a
 //! fetch went out is read off the website, and whether a write landed is read off the disk.
@@ -332,10 +332,13 @@ impl FrontEnd {
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
         // A yes an earlier session here gave is kept, and settles the next one without asking.
-        if opened["remembered"].is_null() {
-            self.call("trust.reply", json!({"session": session, "trusted": true}));
-        }
-        (session, opened["settingsRules"].clone())
+        // The rules as they stand once it is answered are the ones the answer reports.
+        let settled = if opened["remembered"].is_null() {
+            self.call("trust.reply", json!({"session": session, "trusted": true}))
+        } else {
+            opened
+        };
+        (session, settled["settingsRules"].clone())
     }
 
     /// Ask for a turn, and return the next question it puts to the window or the event that
@@ -374,10 +377,11 @@ impl Drop for FrontEnd {
 
 /// Whether an event is a question a turn or a run puts to the window.
 ///
-/// The trust question is not one. It is put when a session opens, before any work, and the
-/// tests answer it as they open a session.
+/// The trust question is not one, nor are the questions after it about the checkout's settings.
+/// They are put when a session opens, before any work, and the tests answer them.
 fn asks_about_the_work(event: &str) -> bool {
-    event.ends_with(".request") && event != "trust.request"
+    event.ends_with(".request")
+        && !matches!(event, "trust.request" | "rules.request" | "folder.request")
 }
 
 fn lines(stdout: ChildStdout) -> mpsc::Receiver<Value> {
@@ -439,8 +443,9 @@ fn with_no_rule_a_fetch_is_put_to_the_window() {
     assert_eq!(
         rules,
         json!({"deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [],
-            "unreadable": [], "proposed": [], "directories": [], "shownDirectories": [],
-            "filesystem": [], "filesystemIgnored": []})
+            "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null,
+            "shownGrantedRecord": null, "directories": [], "shownDirectories": [],
+            "filesystem": [], "filesystemIgnored": [], "namedWithheld": null})
     );
 
     let question = run.front.ask(&session);
@@ -490,14 +495,30 @@ fn an_allow_rule_the_person_wrote_answers_the_fetch_prompt() {
     assert!(run.reached_the_site(), "an allowed host was not fetched");
 }
 
-/// PERM-14: an allow rule a checkout wrote answers no prompt. The fetch is put to the window,
-/// and the session says which rule is not in force and which file wrote it.
+/// PERM-14, PERM-15: an allow rule a checkout wrote answers no prompt the person did not grant it
+/// for. Said no to, the session still opens, the fetch is put to the window, and the session says
+/// which rule is not in force and which file wrote it.
 #[test]
 fn an_allow_rule_a_checkout_wrote_answers_nothing_and_is_reported() {
     let mut run = fetching("bridge-rules-checkout-allow", |scratch| {
         scratch.the_checkout_writes(json!({"allow": [THE_SITE]}));
     });
-    let (session, rules) = run.front.session(&run.scratch);
+    let (session, _) = run.front.session(&run.scratch);
+    let asked = run
+        .front
+        .until(|message| message["event"] == "rules.request");
+    let answered = run.front.call(
+        "rules.reply",
+        json!({"session": session, "request": asked["data"]["request"], "granted": false}),
+    );
+    assert_eq!(answered["granted"], false, "{answered}");
+    assert_eq!(
+        answered["kept"],
+        Value::Null,
+        "a no keeps nothing: {answered}"
+    );
+    let rules = answered["settingsRules"].clone();
+    assert_eq!(rules["granted"], json!([]), "{rules}");
     assert_eq!(rules["allow"], json!([]), "{rules}");
     assert_eq!(
         rules["proposed"],
@@ -518,8 +539,96 @@ fn an_allow_rule_a_checkout_wrote_answers_nothing_and_is_reported() {
     assert!(!run.reached_the_site(), "the fetch went out unasked");
     run.front
         .reply("fetch.reply", &session, &question, "reject");
-    assert_eq!(run.front.question_or_the_end()["event"], "turn.done");
+    let ended = run.front.question_or_the_end();
+    assert_eq!(ended["event"], "turn.done");
     assert!(!run.reached_the_site());
+
+    // Resumed from its record, the session carries its trust map, and the rules it was asked
+    // about stand as they were answered: nothing is asked again, and the rule is still reported.
+    let id = ended["data"]["id"]
+        .as_str()
+        .expect("the record")
+        .to_string();
+    run.front.call("session.close", json!({"session": session}));
+    let opened = run.front.call(
+        "session.open",
+        json!({"directory": run.scratch.project().display().to_string(), "id": id}),
+    );
+    assert_eq!(opened["rulesQuestion"], Value::Null, "{opened}");
+    assert_eq!(
+        opened["settingsRules"]["proposed"][0]["rule"], THE_SITE,
+        "{opened}"
+    );
+    let reopened = opened["session"].as_str().expect("a handle").to_string();
+    let question = run.front.ask(&reopened);
+    assert_eq!(question["event"], "fetch.request", "{question}");
+    let held = run.front.held.borrow();
+    assert!(
+        !held
+            .iter()
+            .any(|message| message["event"] == "rules.request"),
+        "a resumed session asked about the rules again"
+    );
+}
+
+/// PERM-15: granted, an allow rule a checkout wrote answers the prompt as the person's own would,
+/// and is reported as granted. A session resumed from its record asks nothing about the rules.
+#[test]
+fn an_allow_rule_a_checkout_wrote_answers_the_prompt_once_granted() {
+    let mut run = fetching("bridge-rules-checkout-granted", |scratch| {
+        scratch.the_checkout_writes(json!({"allow": [THE_SITE]}));
+    });
+    let (session, _) = run.front.session(&run.scratch);
+    let asked = run
+        .front
+        .until(|message| message["event"] == "rules.request");
+    assert_eq!(asked["session"], json!(session), "{asked}");
+    assert_eq!(asked["data"]["rules"][0]["rule"], THE_SITE, "{asked}");
+    let refused = run.front.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("rules.reply")),
+        "a turn started with the rules question out: {refused}"
+    );
+    let answered = run.front.call(
+        "rules.reply",
+        json!({"session": session, "request": asked["data"]["request"], "granted": true}),
+    );
+    assert_eq!(answered["granted"], true, "{answered}");
+    let rules = &answered["settingsRules"];
+    assert_eq!(rules["allow"], json!([THE_SITE]), "{rules}");
+    assert_eq!(rules["proposed"], json!([]), "{rules}");
+    assert_eq!(rules["granted"][0]["rule"], THE_SITE, "{rules}");
+
+    let ended = run.front.ask(&session);
+    assert_eq!(
+        ended["event"], "turn.done",
+        "a host a granted rule allows was put to the window: {ended}"
+    );
+    assert!(run.reached_the_site(), "a granted host was not fetched");
+
+    let id = ended["data"]["id"]
+        .as_str()
+        .expect("the record")
+        .to_string();
+    run.front.call("session.close", json!({"session": session}));
+    let opened = run.front.call(
+        "session.open",
+        json!({"directory": run.scratch.project().display().to_string(), "id": id}),
+    );
+    assert_eq!(opened["rulesQuestion"], Value::Null, "{opened}");
+    assert_eq!(
+        opened["settingsRules"]["allow"],
+        json!([THE_SITE]),
+        "{opened}"
+    );
+    let reopened = opened["session"].as_str().expect("a handle").to_string();
+    let ended = run.front.ask(&reopened);
+    assert_eq!(ended["event"], "turn.done", "{ended}");
 }
 
 /// A deny rule only narrows, so one a checkout wrote holds, and it beats an allow rule in the
@@ -674,4 +783,313 @@ fn a_fork_runs_under_the_rules_its_parent_opened_under() {
         "a fork asked about a host its parent's rules deny: {ended}"
     );
     assert!(!run.reached_the_site());
+}
+
+/// A session whose checkout names a directory beside the project, and whose planner writes a
+/// file there. Returns the directory, as the session is asked about it, and the question.
+fn naming_a_folder(name: &str) -> (Scratch, FrontEnd, String, PathBuf, Value) {
+    let scratch = Scratch::new(name);
+    let beside = scratch.path.join("beside");
+    std::fs::create_dir_all(&beside).expect("a directory beside the project");
+    scratch.the_checkout_writes(json!({"additionalDirectories": ["../beside"]}));
+    let write = json!({"path": beside.join("notes.md").display().to_string(),
+        "contents": "# Notes\n"});
+    let (endpoint, _rounds) = a_planner_calling("write_file", write);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, rules) = front.session(&scratch);
+    assert_eq!(rules["directories"], json!(["../beside"]), "{rules}");
+    let asked = front.until(|message| message["event"] == "folder.request");
+    assert_eq!(asked["session"], json!(session), "{asked}");
+    assert_eq!(
+        asked["data"]["directory"],
+        json!(beside.display().to_string()),
+        "{asked}"
+    );
+    let refused = front.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "do the work"})),
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("folder.reply")),
+        "a turn started with the folder question out: {refused}"
+    );
+    (scratch, front, session, beside, asked["data"].clone())
+}
+
+/// TRUST-9: a directory a checkout's settings name is opened once the person says yes to it, as
+/// `/add-dir` opens one: a write there goes through unasked, and still does after a rewind.
+#[test]
+fn a_directory_a_checkout_named_is_opened_once_the_person_says_yes() {
+    let (scratch, mut front, session, beside, asked) = naming_a_folder("bridge-folder-yes");
+    let answered = front.call(
+        "folder.reply",
+        json!({"session": session, "request": asked["request"], "open": true}),
+    );
+    assert_eq!(answered["opened"], true, "{answered}");
+    assert_eq!(
+        answered["folders"],
+        json!([beside.display().to_string()]),
+        "{answered}"
+    );
+    assert_eq!(answered["folderQuestion"], Value::Null, "{answered}");
+    let stale = front.answered(
+        "folder.reply",
+        json!({"session": session, "request": asked["request"], "open": true}),
+    );
+    assert_eq!(stale["error"]["code"], "no_such_request", "{stale}");
+
+    let ended = front.ask(&session);
+    assert_eq!(
+        ended["event"], "turn.done",
+        "a write in a directory the person opened was put to the window: {ended}"
+    );
+    let notes = beside.join("notes.md");
+    assert_eq!(
+        std::fs::read_to_string(&notes).ok().as_deref(),
+        Some("# Notes\n")
+    );
+
+    std::fs::remove_file(&notes).expect("the note is removed");
+    let until = Instant::now() + PATIENCE;
+    loop {
+        let rewound = front.answered("session.rewind", json!({"session": session, "steps": 1}));
+        if rewound.get("ok").is_some() {
+            break;
+        }
+        assert_eq!(rewound["error"]["code"], "turn_in_flight", "{rewound}");
+        assert!(Instant::now() < until, "the turn never finished");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ended = front.ask(&session);
+    assert_eq!(
+        ended["event"], "turn.done",
+        "a rewind closed a directory the person opened: {ended}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&notes).ok().as_deref(),
+        Some("# Notes\n")
+    );
+    drop(scratch);
+}
+
+/// TRUST-9: a directory the person says no to is not opened, and a write there does not land.
+#[test]
+fn a_directory_a_checkout_named_is_not_opened_on_a_no() {
+    let (_scratch, mut front, session, beside, asked) = naming_a_folder("bridge-folder-no");
+    let answered = front.call(
+        "folder.reply",
+        json!({"session": session, "request": asked["request"], "open": false}),
+    );
+    assert_eq!(answered["opened"], false, "{answered}");
+    assert_eq!(answered["folders"], json!([]), "{answered}");
+
+    let mut ended = front.ask(&session);
+    while ended["event"] != "turn.done" && ended["event"] != "turn.error" {
+        front.reply(
+            &ended["event"]
+                .as_str()
+                .unwrap()
+                .replace(".request", ".reply"),
+            &session,
+            &ended,
+            "reject",
+        );
+        ended = front.question_or_the_end();
+    }
+    assert!(
+        !beside.join("notes.md").exists(),
+        "a write landed in a directory the person declined"
+    );
+}
+
+/// The text of the file a test's planner reads beside the project.
+const BESIDE: &str = "the file beside the project";
+
+/// A session whose planner reads a file in a directory beside the project, which every session
+/// it opens asks to have open.
+struct ReadingBeside {
+    front: FrontEnd,
+    scratch: Scratch,
+    /// Every request the planner was sent, in order.
+    rounds: mpsc::Receiver<String>,
+}
+
+/// Start a front end whose planner reads `beside/notes.txt`, with the settings files `write`
+/// wrote.
+fn reading_beside(name: &str, write: impl FnOnce(&Scratch)) -> ReadingBeside {
+    let scratch = Scratch::new(name);
+    std::fs::create_dir_all(scratch.beside()).expect("a directory beside the project");
+    std::fs::write(scratch.beside().join("notes.txt"), BESIDE).expect("a file beside");
+    write(&scratch);
+    let (endpoint, rounds) = a_planner_calling(
+        "read_file",
+        json!({"path": scratch.beside().join("notes.txt").display().to_string()}),
+    );
+    let front = FrontEnd::start(&scratch, &endpoint);
+    ReadingBeside {
+        front,
+        scratch,
+        rounds,
+    }
+}
+
+impl Scratch {
+    /// A directory beside the project, which a session asks to have open as it opens.
+    fn beside(&self) -> PathBuf {
+        self.path.join("beside")
+    }
+}
+
+impl ReadingBeside {
+    /// Open a session in the project with the directory beside it named, and trust it.
+    fn session(&mut self) -> String {
+        let opened = self.front.call("session.new", self.naming_beside());
+        self.trusted(&opened)
+    }
+
+    /// Open a session in the project without naming the directory beside it, and trust it.
+    ///
+    /// Where `readsStayInWorkspace` holds, naming the directory refuses the session (PERM-16), so
+    /// a session held to the project is opened this way and reaches the file by its absolute path.
+    fn session_held_inside(&mut self) -> String {
+        let opened = self.front.call(
+            "session.new",
+            json!({"directory": self.scratch.project().display().to_string()}),
+        );
+        self.trusted(&opened)
+    }
+
+    /// The `session.new` parameters that open the project with the directory beside it named.
+    fn naming_beside(&self) -> Value {
+        json!({
+            "directory": self.scratch.project().display().to_string(),
+            "directories": [self.scratch.beside().display().to_string()],
+        })
+    }
+
+    /// The handle of the session `opened` answered, trusted if no kept answer trusted it.
+    fn trusted(&mut self, opened: &Value) -> String {
+        let session = opened["session"].as_str().expect("a handle").to_string();
+        if opened["remembered"].is_null() {
+            self.front
+                .call("trust.reply", json!({"session": session, "trusted": true}));
+        }
+        session
+    }
+
+    /// Run a turn in `session` and return what the planner was told its read came to, and where
+    /// the turn's prompt landed.
+    ///
+    /// The directory beside the project is not one the person vouched for, so a read that reaches
+    /// the file is put to the window first. The window vouches for it, so what the read found is
+    /// what the planner is told.
+    fn read(&mut self, session: &str) -> (String, u64) {
+        let mut ended = self.front.ask(session);
+        if ended["event"] == "vouch.request" {
+            self.front.reply("vouch.reply", session, &ended, "approve");
+            ended = self.front.question_or_the_end();
+        }
+        assert_eq!(ended["event"], "turn.done", "{ended}");
+        let prompt = ended["data"]["prompt"]
+            .as_u64()
+            .expect("where the prompt landed");
+        let told = tool_results(&self.rounds.try_iter().last().expect("a round"));
+        (told, prompt)
+    }
+}
+
+/// Whether the planner was told the read was refused for `readsStayInWorkspace`, rather than
+/// refused for some other reason or answered with the file.
+fn confined(told: &str) -> bool {
+    !told.contains(BESIDE) && told.contains("readsStayInWorkspace")
+}
+
+/// PERM-12 and PERM-16: `readsStayInWorkspace` is read when the session opens. Removing it from
+/// the file afterwards does not widen what the session's next turn reads, and a session opened
+/// after the edit reads as the file says then.
+#[test]
+fn removing_reads_stay_in_workspace_does_not_widen_an_open_session() {
+    let mut run = reading_beside("bridge-rules-reads-inside-removed", |scratch| {
+        scratch.the_checkout_writes(json!({"readsStayInWorkspace": true}));
+    });
+    let session = run.session_held_inside();
+    run.scratch.the_checkout_writes(json!({}));
+
+    let (told, _) = run.read(&session);
+    assert!(
+        confined(&told),
+        "a session opened confined read beside the project after the key was removed: {told}"
+    );
+
+    let opened_after = run.session();
+    let (told, _) = run.read(&opened_after);
+    assert!(
+        told.contains(BESIDE),
+        "a session opened after the key was removed was still confined: {told}"
+    );
+}
+
+/// PERM-12: adding `readsStayInWorkspace` while a session is open does not narrow its next turn.
+/// The session after the edit is the first one confined, and naming the directory beside the
+/// project refuses it (PERM-16).
+#[test]
+fn adding_reads_stay_in_workspace_confines_the_next_session_and_not_an_open_one() {
+    let mut run = reading_beside("bridge-rules-reads-inside-added", |_| {});
+    let open = run.session();
+    run.scratch
+        .the_checkout_writes(json!({"readsStayInWorkspace": true}));
+
+    let (told, _) = run.read(&open);
+    assert!(
+        told.contains(BESIDE),
+        "a session opened unconfined was confined by a key written after it opened: {told}"
+    );
+
+    let refused = run.front.answered("session.new", run.naming_beside());
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("readsStayInWorkspace")),
+        "a session opened after the key was written opened the directory beside the project: \
+         {refused}"
+    );
+
+    let opened_after = run.session_held_inside();
+    let (told, _) = run.read(&opened_after);
+    assert!(
+        confined(&told),
+        "a session opened after the key was written read beside the project: {told}"
+    );
+}
+
+/// A fork carries on the session it was cut from, so it is held to the project when its parent
+/// opened held to it, whatever the file says when the fork is cut. The pattern the rules follow
+/// in `a_fork_runs_under_the_rules_its_parent_opened_under`.
+#[test]
+fn a_fork_is_held_to_the_project_where_its_parent_opened_held_to_it() {
+    let mut run = reading_beside("bridge-rules-reads-inside-fork", |scratch| {
+        scratch.the_checkout_writes(json!({"readsStayInWorkspace": true}));
+    });
+    let parent = run.session_held_inside();
+    let (told, prompt) = run.read(&parent);
+    assert!(
+        confined(&told),
+        "the parent read beside the project: {told}"
+    );
+
+    // The key is withdrawn. A session opened now would read beside the project.
+    run.scratch.the_checkout_writes(json!({}));
+    let forked = run.front.call(
+        "session.fork",
+        json!({"session": parent, "prompt": prompt, "text": "do the work"}),
+    );
+    let child = forked["session"].as_str().expect("a handle").to_string();
+
+    let (told, _) = run.read(&child);
+    assert!(
+        confined(&told),
+        "a fork read beside the project its parent was held out of: {told}"
+    );
 }

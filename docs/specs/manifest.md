@@ -120,9 +120,15 @@ Never drop an artefact on the error path, and never make inspecting one conditio
 The validator sees a draft and nothing else. Any violation fails the run whole. A manifest is
 never half adopted, and a step is never repaired to make a plan usable.
 
+A step that lists or searches a directory is checked for a path outside the workspace as a step that
+reads a file is. A slot a plan fills therefore never stands for a file outside the workspace, so
+the reads a plan makes of its slots are given no reach under bypass
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)).
+
 `verified-by: bravebot_core::manifest::an_empty_plan_is_refused`
 `verified-by: bravebot_core::manifest::a_tool_outside_the_schema_is_refused`
 `verified-by: bravebot_core::manifest::a_path_outside_the_workspace_is_refused`
+`verified-by: bravebot_core::manifest::a_listing_or_search_of_a_directory_outside_the_workspace_is_refused`
 `verified-by: bravebot_core::manifest::a_read_after_an_action_is_refused`
 `verified-by: bravebot_core::manifest::validation_is_deterministic`
 `verified-by: bravebot_core::manifest::a_body_field_must_hold_text`

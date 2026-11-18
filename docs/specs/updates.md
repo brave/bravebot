@@ -269,10 +269,20 @@ not touch UPDATE-5. It governs only this check: the installer's checksum and sig
 ([releases.md](releases.md)) are separate and unchanged. Only a boolean `false` and the exact value
 `0` turn it off, so a misspelled value leaves the check on, as `terminalTitle` does for the title.
 
+The home layer and the file `--settings` names decide the value, the later of the two winning. A
+project or local settings file may turn the check off, and may not turn it on where the person's
+own files turned it off: its `true` over their `false` is not obeyed and `doctor` and the desktop
+settings view name the file. Where the person's own files state no boolean, a checkout's `true`
+changes nothing and is not reported, and its `false` turns the check off. The key is one row of the
+table of keys a checkout may only narrow, which [backends.md](backends.md) describes.
+
 `verified-by: bravebot_update::lib::either_switch_turns_the_check_off`
 `verified-by: bravebot_tui::incognito::a_check_turned_off_says_nothing_though_a_newer_version_is_recorded`
 `verified-by: bravebot_tui::persist::a_check_turned_off_leaves_the_record_as_it_was`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_update_check_off`
+`verified-by: bravebot_config::settings::a_checkout_may_turn_the_update_check_off_and_not_on`
+`verified-by: bravebot_cli::doctor::a_checkout_update_check_that_turns_it_on_over_the_persons_off_is_reported_with_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_update_check_turned_on_over_the_persons_off_is_listed_as_ignored`
 
 <a id="UPDATE-12"></a>
 ### UPDATE-12: the desktop app is told through a link, as a yes or no
@@ -327,7 +337,10 @@ not read: the version and the stamp still stand and still hold the next ask off,
 is told nothing of freshness until the desktop app's next ask that learns a version writes the
 time again, which is its first launch an hour or more after the last ask either made. A clock set far enough wrong makes a fresh record look stale, or a record from its own
 future no answer. The check itself is the person's setting: a project's settings file in the
-directory the window was started from turns off neither the ask nor what `update.status` says.
+directory the window was started from turns off neither the ask nor what `update.status` says. A
+project's `true` cannot turn the check on where the person's own files turned it off, because the
+terminal reads the key through the table of keys a checkout may only narrow and the desktop reads no
+project file for it.
 
 `verified-by: bravebot_update::lib::the_desktop_app_asks_the_release_listing_and_shares_the_scripts_record`
 `verified-by: bravebot_update::lib::the_desktop_app_is_told_only_whether_a_newer_version_is_recorded`

@@ -14,8 +14,9 @@
 #
 # Nor is the signature check. The checksum is published beside the binary, so whoever can replace
 # one can replace both. On Linux the checksum carries a signature that has to verify against the key
-# embedded below (skipped, with a note, when gpg is not installed). On macOS the binary has to be
-# signed by Brave's Developer ID team and pass Gatekeeper's assessment.
+# embedded below, and a machine without gpg is refused before anything is downloaded, unless
+# BRAVEBOT_ALLOW_MISSING_GPG=1 is set, which installs on the checksum alone and says so. On macOS
+# the binary has to be signed by Brave's Developer ID team and pass Gatekeeper's assessment.
 
 set -eu
 
@@ -251,6 +252,18 @@ main() {
     need_cmd spctl
   fi
 
+  # A Linux machine without gpg is refused here for the same reason. BRAVEBOT_ALLOW_MISSING_GPG=1 is
+  # how a person who cannot install gpg chooses to install on the checksum alone; only exactly 1
+  # counts, since it turns a check off. It is read only when gpg is missing, so with gpg here a
+  # signature that is missing or wrong is still refused. It names no URL, and the only request it
+  # changes is the one for the signature, which is then not made.
+  SKIP_SIGNATURE=""
+  if [ "$OS_KEY" = "linux" ] && ! command -v gpg >/dev/null 2>&1; then
+    [ "${BRAVEBOT_ALLOW_MISSING_GPG:-}" = "1" ] ||
+      fail "gpg not found, so the signature on ${ASSET_NAME}.sha256 cannot be checked; refusing to install. Install GnuPG (on Debian or Ubuntu: apt install gpg) and run this again. As a last resort, run this to install on the checksum alone, which does not show who published the binary: curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | BRAVEBOT_ALLOW_MISSING_GPG=1 sh"
+    SKIP_SIGNATURE="1"
+  fi
+
   # Where the last install put it, so running this again updates that copy instead of leaving a
   # second one somewhere else on the PATH. INSTALL_DIR wins, for a person who is moving it.
   if [ -z "${INSTALL_DIR:-}" ] && [ -n "$INSTALLED_BY" ] && [ -r "$INSTALLED_BY" ]; then
@@ -262,7 +275,14 @@ main() {
   INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 
   if [ -z "$TAG" ]; then
-    TAG="$(curl -fsSL "$API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    LATEST="$(curl -fsSL "$API_URL" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    # The tag is composed into a URL, so it is held to the shape of one that is published, the
+    # same as a version given as an argument above. Without this, whoever controls the answer
+    # from the API controls part of the download path: a tag_name holding ../ would resolve, once
+    # curl collapses it, to a release of another repository entirely.
+    case "$LATEST" in
+      v*) is_version "${LATEST#v}" && TAG="$LATEST" ;;
+    esac
     [ -n "$TAG" ] || fail "unable to resolve the latest release tag from $API_URL"
   fi
 
@@ -302,9 +322,10 @@ main() {
   # Linux ships no code signature, unlike Darwin (notarized) and Windows (Authenticode), so its
   # checksum carries a detached GPG signature instead. With gpg here, a signature that is missing
   # is refused like one that is wrong, since deleting it is what somebody replacing the release
-  # would do. Without gpg the check is skipped, and said to be.
+  # would do. The check is skipped only where the override was accepted above, and the warning says
+  # so. gpg is not looked for a second time, so a gpg removed since then makes the check fail.
   if [ "$OS_KEY" = "linux" ]; then
-    if command -v gpg >/dev/null 2>&1; then
+    if [ -z "$SKIP_SIGNATURE" ]; then
       ASC_PATH="${TMP_DIR}/${ASSET_NAME}.sha256.asc"
       PUBKEY_PATH="${TMP_DIR}/bravebot-release.asc"
       curl -fsSL "${BASE_URL}/${ASSET_NAME}.sha256.asc" -o "$ASC_PATH" ||
@@ -313,7 +334,7 @@ main() {
       verify_checksum_signature "$ASC_PATH" "$SHA_PATH" "$PUBKEY_PATH" "$SIGNING_KEY_FINGERPRINT" ||
         fail "signature verification failed for ${ASSET_NAME}.sha256; refusing to install"
     else
-      echo "note: gpg not found; skipping signature verification (the checksum above was still verified)."
+      echo "warning: gpg not found and BRAVEBOT_ALLOW_MISSING_GPG=1 is set, so the signature on ${ASSET_NAME}.sha256 was not checked; the install relies on the checksum alone, which does not show who published the binary." >&2
     fi
   fi
 

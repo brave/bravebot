@@ -6,20 +6,23 @@
 // rather than beginning another. Each of those needs a model to answer, so this needs credentials
 // and the driver above does not.
 //
-// Run it the way `drive-turn.mjs` is run. Like the other drivers it perturbs `bravebot-ui.json`,
-// and it puts its own keys back.
+// Run it the way `drive-turn.mjs` is run. It runs against a scratch user-data directory and state
+// directory, and it puts its own keys back. The scratch state directory holds copies of the real
+// `settings.json`, `model` and `leo-premium.json`, so the agent can reach the backend the real one
+// is configured for, and the copies are removed when it ends.
 
-import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON } from './drive-support.mjs'
-import { appState, forgetCheckoutSessions, locateProfile, openBot, settle } from './drive-profile.mjs'
+import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, SHOTS_DIR } from './drive-support.mjs'
+import { appBots, appState, forgetCheckoutSessions, openBot, scratchProfile, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
-const { userData, stateFile } = await locateProfile()
+const { userData, stateFile, remove } = scratchProfile('bravebot-drive-bot-turn', { live: true })
 const { readState, putKey } = appState(stateFile)
+const { readBots, putBots } = appBots(userData)
 const hadView = readState().view
 
 // This driver's own row and no more. `bots` holds somebody's actual bots — names and purposes they
@@ -27,12 +30,12 @@ const hadView = readState().view
 // clearing it to make room, and putting it back at the end, is a destructive act one interrupted
 // run away from happening. It adds one bot and removes one bot.
 const MINE = 'custodian'
-const withoutMine = () => (readState().bots ?? []).filter((bot) => bot.slug !== MINE)
+const withoutMine = () => readBots().filter((bot) => bot.slug !== MINE)
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', undefined)
 
-const app = await launch()
+const app = await launch(userData)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -64,7 +67,7 @@ check(
   `the reply obeys the purpose nobody typed into the composer (${reply.slice(0, 60)})`,
 )
 
-await page.screenshot({ path: '/tmp/bravebot-ui/24-bot-turn.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/24-bot-turn.png` })
 
 // Nothing is drawn for the briefing during the turn it arrives in, and that is not an oversight:
 // the agent emits no event when it reads a file the user named, so a live transcript has nothing
@@ -85,7 +88,7 @@ check(
 )
 
 // The id the agent minted has been written down, which is what a resume needs.
-const stored = (readState().bots ?? []).find((bot) => bot.slug === MINE)
+const stored = readBots().find((bot) => bot.slug === MINE)
 check(typeof stored?.session === 'string', `the bot remembers its session (${stored?.session})`)
 check(
   stored?.conversations?.some((each) => each.id === stored.session && each.directory === home),
@@ -96,7 +99,7 @@ await app.close()
 
 // --- and the whole point: the same session, resumed --------------------------------------
 
-const back = await launch()
+const back = await launch(userData)
 const page2 = await back.firstWindow()
 await page2.waitForLoadState('domcontentloaded')
 await page2.waitForTimeout(2500)
@@ -121,14 +124,15 @@ await page2.locator(SIDEBAR_TAB).nth(0).click()
 await page2.waitForTimeout(400)
 const listed = page2.locator('.session').filter({ has: page2.locator('.bot-face') })
 check((await listed.count()) >= 1, 'the bot’s conversation is in the Chats list with its face')
-await page2.screenshot({ path: '/tmp/bravebot-ui/25-bot-resumed.png' })
+await page2.screenshot({ path: `${SHOTS_DIR}/25-bot-resumed.png` })
 
 await back.close()
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
 forgetCheckoutSessions(home)
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
+remove()
 process.exit(problems.length ? 1 : 0)

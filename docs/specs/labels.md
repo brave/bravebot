@@ -18,20 +18,21 @@ guards:
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
-      - crates/agent/src/tools.rs: 33
+      - crates/agent/src/tools.rs: 31
+      - crates/agent/src/tools/tests/untrusted_refusals.rs: 2
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 17
+      - crates/agent/src/workspace.rs: 19
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 44
       - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 5
       - crates/aichat/src/responses.rs: 4
-      - crates/aichat/src/lib.rs: 7
+      - crates/aichat/src/lib.rs: 8
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 145
+      - crates/core/src/policy.rs: 151
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -51,8 +52,14 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 42
+      - crates/agent/src/tools.rs: 30
       - crates/agent/src/tools/recall.rs: 1
+      - crates/agent/src/tools/tests/arguments.rs: 1
+      - crates/agent/src/tools/tests/editing.rs: 5
+      - crates/agent/src/tools/tests/questions.rs: 1
+      - crates/agent/src/tools/tests/scheduling.rs: 3
+      - crates/agent/src/tools/tests/todos.rs: 1
+      - crates/agent/src/tools/tests/watching.rs: 1
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
@@ -60,7 +67,7 @@ guards:
       - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 77
+      - crates/core/src/policy.rs: 78
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 6
       - crates/mcp/tests/openshell.rs: 1
@@ -79,9 +86,13 @@ guards:
       - crates/agent/src/server_calls.rs: 2
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
-      - crates/agent/src/tools.rs: 26
+      - crates/agent/src/tools.rs: 16
+      - crates/agent/src/tools/tests/activity.rs: 2
+      - crates/agent/src/tools/tests/editing.rs: 6
+      - crates/agent/src/tools/tests/todos.rs: 1
+      - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
       - crates/agent/src/turn.rs: 10
-      - crates/agent/src/workspace.rs: 17
+      - crates/agent/src/workspace.rs: 19
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
@@ -96,7 +107,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 72
+      - crates/core/src/policy.rs: 73
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -148,8 +159,8 @@ guards:
       - crates/agent/src/classifier.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 17
-      - crates/core/src/policy.rs: 9
+      - crates/agent/src/turn.rs: 15
+      - crates/core/src/policy.rs: 11
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/aside.rs: 1
@@ -226,7 +237,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 16
+      - crates/agent/src/tools.rs: 18
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -327,6 +338,10 @@ booleans, and no total order may be imposed on it: `Label` implements neither `P
 `verified-by: bravebot_core::label::integrity_meet_is_pessimistic`
 `verified-by: bravebot_core::label::confidentiality_join_is_pessimistic`
 `verified-by: bravebot_core::label::display_matches_the_canonical_notation`
+`verified-by: bravebot_core::spec::degradation_is_a_partial_order`
+`verified-by: bravebot_core::spec::the_middle_labels_are_incomparable`
+`verified-by: bravebot_core::spec::taint_is_the_least_upper_bound`
+`verified-by: bravebot_core::spec::every_two_labels_have_a_greatest_lower_bound`
 `verified-by: by-construction (Label implements neither PartialOrd nor Ord, so two labels cannot be ranked with <, <=, > or >=; the compile_fail doctest on Label in crates/core/src/label.rs pins the < case)`
 
 <a id="LABEL-2"></a>
@@ -377,7 +392,7 @@ symbolic link in the tree led to, because whoever wrote a tree nobody vouched fo
 `verified-by: bravebot_core::reference::a_description_says_how_to_refer_to_the_content`
 `verified-by: bravebot_core::reference::a_choice_reference_states_its_limit_and_no_count`
 `verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
-`verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 `verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
 `verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
 
@@ -472,6 +487,12 @@ the planner wrote them in. So an argument may be read while that context has met
 and is refused once it has. Locating a passage to replace is the case that shows why: `old_text` is
 compared against the file, and a comparison decides whether the write happens at all.
 
+The reader that takes the issues and pull requests a session names out of a `run` command and a
+`fetch_url` or `download_url` address ([PANEL-16](info-panel.md#PANEL-16)) is one such reader. It
+runs after the gate that reads the argument and only where that gate has handed the bytes over, so a
+context that has met something untrusted collects nothing from the planner's arguments, and it adds
+no gate of its own.
+
 An argument naming something the driver minted is held the same way, since the planner is the one
 who picks which of those names a call is about. [routing.md](routing.md) is where that case is
 settled.
@@ -481,15 +502,17 @@ settled.
 `verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_proposal_cannot_be_promoted_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_private_argument_is_refused_rather_than_read`
-`verified-by: bravebot_agent::tools::an_edit_from_a_trusted_context_replaces_the_passage`
-`verified-by: bravebot_agent::tools::an_edit_is_refused_once_the_context_has_met_something_untrusted`
-`verified-by: bravebot_agent::tools::a_command_line_and_a_directory_are_read_from_a_trusted_context`
-`verified-by: bravebot_agent::tools::a_command_line_is_refused_once_the_context_has_met_something_untrusted`
-`verified-by: bravebot_agent::tools::a_url_is_read_from_a_trusted_context`
-`verified-by: bravebot_agent::tools::a_url_is_refused_once_the_context_has_met_something_untrusted`
-`verified-by: bravebot_agent::tools::a_job_name_is_read_from_a_trusted_context`
-`verified-by: bravebot_agent::tools::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
-`verified-by: bravebot_agent::tools::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_from_a_trusted_context_replaces_the_passage`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_command_line_and_a_directory_are_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::tests::arguments::a_command_line_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_url_is_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::tests::arguments::a_url_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_job_name_is_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::tests::arguments::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::references::a_context_that_has_met_something_untrusted_collects_nothing_from_the_planners_arguments`
+`verified-by: bravebot_agent::tools::tests::references::a_command_the_planner_wrote_names_the_items_it_works_on_even_where_the_call_then_fails`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect
@@ -525,8 +548,8 @@ the driver and a new caller of the wrapper adds one without moving the gate's ow
 refuses anything untrusted before it releases a byte: there is no content its callers' closures
 could read that the driver may not read for itself.
 
-`verified-by: bravebot_agent::tools::a_call_line_names_its_reference_inside_the_kernel`
-`verified-by: bravebot_agent::tools::a_task_list_is_named_inside_the_reshape_that_builds_it`
+`verified-by: bravebot_agent::tools::tests::activity::a_call_line_names_its_reference_inside_the_kernel`
+`verified-by: bravebot_agent::tools::tests::todos::a_task_list_is_named_inside_the_reshape_that_builds_it`
 `verified-by: bravebot_agent::turn::what_a_write_changed_is_diffed_inside_the_kernel_before_it_is_released`
 `verified-by: bravebot_agent::turn::a_writes_reshape_is_labelled_by_the_file_it_replaces_and_not_by_the_body_alone`
 `verified-by: bravebot_agent::turn::what_an_edit_changed_is_diffed_inside_the_kernel_before_it_is_released`
@@ -617,7 +640,7 @@ and the content has no say in it.
 | pasted text | none, for the same reason, but with the characters a terminal draws as nothing taken out first and counted on the screen ([PASTE-10](pasting.md#PASTE-10)): a character map that reads no meaning from the text and decides no effect | `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
 | a line sent while a turn is running on an input channel the person vouched for with `--trust-input-lines` | none, for the reason a typed line gets none: the flag the person typed is the vouching, and the trail records it as that and not as typed ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context` `verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed` |
-| the words of an `answer` line to a question of one prompt, on an input channel the person vouched for with `--trust-input-lines` | trusted and private, as an answer a person typed is, because the flag the person typed is the vouching. The trail records it as words from a vouched channel and not as typed, and a position among the choices the planner offered is recorded as neither. A channel nobody vouched for has its words refused ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_agent::tools::words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not` `verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for` |
+| the words of an `answer` line to a question of one prompt, on an input channel the person vouched for with `--trust-input-lines` | trusted and private, as an answer a person typed is, because the flag the person typed is the vouching. The trail records it as words from a vouched channel and not as typed, and a position among the choices the planner offered is recorded as neither. A channel nobody vouched for has its words refused ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_agent::tools::tests::questions::words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not` `verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for` |
 | a line on an input channel nobody vouched for | untrusted and private, as input piped into the process is, because the launching program is not necessarily the person ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_cli::running::lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do` |
 | a message another background session sent | the label it was sent with, read back from the word beside the text, so a message never arrives better than it left; untrusted and private where there is no word or the word names no label ([MSG-9](session-messages.md#MSG-9)) | `verified-by: bravebot_core::policy::a_message_from_another_session_keeps_the_label_it_was_sent_with` `verified-by: bravebot_core::policy::a_message_whose_label_cannot_be_read_is_untrusted_and_private` `verified-by: bravebot_agent::turn::a_message_that_is_not_labelled_trusted_reaches_the_planner_as_a_reference` |
 | a system prompt named on the command line | none, for the reason the user's own message gets none: the person who typed the flag is the person the planner works for, and the words are plain text that grants no permission | `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none` |
@@ -957,7 +980,7 @@ arrives at all.
   buys them is on this list:
 
   - **Set the answer's line and byte counts.** Within the caps `read_git` keeps: 2,000 lines, 2,000
-    characters a line and 1 MiB a blob, and the count cap. The planner is shown both numbers for
+    characters a line and 1 MiB a blob, 4 MiB a side of a diff, and the count cap. The planner is shown both numbers for
     any quarantined content ([LABEL-3](#LABEL-3)), and an attacker who owns a file already sets
     them for a read of it.
   - **Make the answer report itself incomplete.** By filling a cap, or by making the walk run to

@@ -67,7 +67,7 @@ path, a URL or a command, because a reference name means something to the planne
 
 It refuses a reference to nothing and a call from a delegate. A reference to a file
 nothing has read yet is opened rather than refused, since naming one is the ordinary way for the planner
-to ask about a file it may not read.
+to ask about a file it may not read. Under bypass the file is opened with the reach `read_file` has for its path, so a file in a directory beside the workspace is opened without a request, and in any other mode it is refused as outside the workspace.
 
 ### Asking for the result in the same call
 
@@ -235,6 +235,14 @@ said, and the answer is yours. Safe promotes nothing by itself, and unsafe withh
 
 The one key a verdict does decide is the one that answers no question: the standing key offering to turn
 auto-vetting on, which appears only where the check completed and found nothing.
+
+**An `unsafe` verdict is kept for the rest of the turn, per slot.** When a check on a program's output or a
+fetched page said `unsafe` for a call that carried `read: true`, a later `read_output` or `vet_content` on the
+same reference uses that word and makes no second check. Where you are asked, the prompt is drawn with the
+word and no sentence, since the sentence is never kept. Where nobody is asked, the output stays kept back.
+The [audit trail](audit-trail.md) says the word was reused. A `safe` word is not kept, because the output
+was released with it, and a check that could not be made or that you stopped is not kept either, so the next
+call makes its own check. The kept words end with the turn.
 
 What the check says reaches you and no model. Neither the verdict word nor the sentence reaches the
 planner, whichever way you answer, and neither reaches a second check. The sentence is free text about

@@ -22,7 +22,7 @@ The plan is shown to the user and reaches nothing else. It is the one tool with 
 The call holds no capability, decides no destination, and touches no path.
 
 `verified-by: bravebot_agent::tools::the_task_list_tool_offers_no_argument_that_names_a_destination`
-`verified-by: bravebot_agent::tools::a_task_list_decides_no_destination_and_needs_no_capability`
+`verified-by: bravebot_agent::tools::tests::todos::a_task_list_decides_no_destination_and_needs_no_capability`
 
 <a id="TODO-2"></a>
 ### TODO-2: an unrecognised status reads as outstanding work
@@ -36,8 +36,8 @@ happened.
 `verified-by: bravebot_core::todo::an_unknown_status_is_outstanding_work`
 `verified-by: bravebot_core::todo::outstanding_tasks_are_not_struck_whether_started_or_not`
 `verified-by: bravebot_tui::render::outstanding_tasks_are_not_struck_through`
-`verified-by: bravebot_agent::tools::an_unrecognised_status_shows_as_outstanding`
-`verified-by: bravebot_agent::tools::a_task_with_no_status_or_one_that_is_not_a_string_shows_as_outstanding`
+`verified-by: bravebot_agent::tools::tests::todos::an_unrecognised_status_shows_as_outstanding`
+`verified-by: bravebot_agent::tools::tests::todos::a_task_with_no_status_or_one_that_is_not_a_string_shows_as_outstanding`
 
 <a id="TODO-3"></a>
 ### TODO-3: a cancelled task is struck through and is not counted as done
@@ -51,7 +51,7 @@ achieved, and leaving it unstruck would leave it reading as work still to come.
 
 `verified-by: bravebot_core::todo::a_cancelled_task_is_struck_through_with_its_own_marker`
 `verified-by: bravebot_core::todo::a_cancelled_task_is_not_counted_as_done`
-`verified-by: bravebot_agent::tools::a_cancelled_task_is_counted_apart_from_the_finished_ones`
+`verified-by: bravebot_agent::tools::tests::todos::a_cancelled_task_is_counted_apart_from_the_finished_ones`
 `verified-by: bravebot_tui::render::a_cancelled_task_is_struck_without_the_finished_colour`
 `verified-by: bravebot_tui::panel::a_cancelled_task_in_the_panel_is_struck_and_marked_apart_from_a_done_one`
 `verified-by: bravebot_ui_bridge::wire::a_cancelled_task_crosses_as_cancelled`

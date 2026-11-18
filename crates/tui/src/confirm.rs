@@ -23,6 +23,7 @@ mod grants;
 mod mcp;
 mod note;
 mod pinned;
+mod plugin;
 mod run;
 mod vet;
 mod write;
@@ -43,6 +44,9 @@ use mcp::{
 };
 pub use note::Noted;
 use pinned::{Drawn, Seen};
+#[cfg(test)]
+pub(crate) use plugin::ask_install_reading;
+pub use plugin::{DefinitionRow, InstallRequest, SkillRow, ask_install};
 pub(crate) use run::scope_name;
 #[cfg(test)]
 use run::{RowsShown, RunDrawn, RunResponse, draw_run, run_answer_for};
@@ -287,7 +291,7 @@ enum Step<A> {
 
 /// What reading the terminal gave a prompt waiting on a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Next {
+pub(crate) enum Next {
     Press(KeyEvent),
     /// A turn of the wheel, by this many rows, positive being further down. It scrolls a body that
     /// keys scroll and answers nothing (MOUSE-46).

@@ -138,7 +138,7 @@ fn restore_with(
     mut write: impl FnMut(&Path, &Before) -> Result<(), WorkspaceError>,
 ) -> Vec<PathBuf> {
     *current = current.meet(target);
-    let folds = current.folds_case();
+    let folds = current.case_folding().restricts();
     let mut refused = Vec::new();
     let mut restored = Vec::new();
     for backup in backups {
@@ -221,11 +221,14 @@ fn put_back_kept(home: &Path, backup: &Backup, folds: bool) -> std::io::Result<(
     // The one file outside the stores a rule is appended to (RECALL-3). Exactly that name in the
     // state directory as it now resolves, or, where that name is a link, the file the backup was
     // taken of, while the link still lands on it. A link moved since, or any other file beside the
-    // name, is refused.
+    // name, is refused. The link is looked up by its exact entry name first: where the volume
+    // folds case, a link spelled `agents.md` also opens as `AGENTS.md`, and the preamble does not
+    // read it as the person's rules (INSTR-1).
     let agents = home.join(crate::preamble::AGENTS_FILE);
     let is_the_home_rules = crate::workspace::destination(home)
         .is_some_and(|state| target == state.join(crate::preamble::AGENTS_FILE))
         || (backup.path == target
+            && crate::preamble::lists_entry_named(home, crate::preamble::AGENTS_FILE)
             && std::fs::symlink_metadata(&agents).is_ok_and(|meta| meta.file_type().is_symlink())
             && crate::workspace::destination(&agents).is_some_and(|lands| lands == target));
     if !inside && !is_the_home_rules {
@@ -449,33 +452,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(home);
     }
 
-    /// MEMORY-5 for a rewind on a volume that folds case. Old bytes put back into a memory under
-    /// another spelling are recorded as a session asks about that memory.
+    /// MEMORY-5 for a rewind on a volume that folds case, or one that cannot be asked, which is
+    /// read as one that might fold. Old bytes put back into a memory under another spelling are
+    /// recorded as a session asks about that memory. A volume known to keep case holds the other
+    /// spelling apart, so nothing is recorded for it.
     #[test]
     fn a_rewind_into_a_memory_in_another_case_is_recorded_as_a_session_asks_about_it() {
-        let home = crate::testutil::scratch_dir("rewind-memory-folded-home");
-        let _ = std::fs::remove_dir_all(&home);
-        let mut trusting = TrustStore::new("/work").folding_case(true);
-        trusting.trust(".");
-        let mut current = trusting.clone();
-        let refused = restore_with(
-            vec![Backup {
-                kept: false,
-                path: "/work/.Bravebot/memory/NOTES.md".into(),
-                was: Before::Bytes(b"old notes".to_vec()),
-                captured_trust: Integrity::Untrusted,
-            }],
-            &mut current,
-            &trusting,
-            Some(&home),
-            |_, _| Ok(()),
-        );
-        assert!(refused.is_empty());
-        assert_eq!(
-            crate::memory::Record::new(&home, "/work").paths(),
-            ["/work/.bravebot/memory/notes.md"]
-        );
-        let _ = std::fs::remove_dir_all(home);
+        use bravebot_core::CaseFolding;
+        for (case, recorded) in [
+            (CaseFolding::Folds, true),
+            (CaseFolding::Unknown, true),
+            (CaseFolding::Keeps, false),
+        ] {
+            let home = crate::testutil::scratch_dir("rewind-memory-folded-home");
+            let _ = std::fs::remove_dir_all(&home);
+            let mut trusting = TrustStore::new("/work").with_case_folding(case);
+            trusting.trust(".");
+            let mut current = trusting.clone();
+            let refused = restore_with(
+                vec![Backup {
+                    kept: false,
+                    path: "/work/.Bravebot/memory/NOTES.md".into(),
+                    was: Before::Bytes(b"old notes".to_vec()),
+                    captured_trust: Integrity::Untrusted,
+                }],
+                &mut current,
+                &trusting,
+                Some(&home),
+                |_, _| Ok(()),
+            );
+            assert!(refused.is_empty(), "{case:?}");
+            assert_eq!(
+                crate::memory::Record::new(&home, "/work").paths(),
+                if recorded {
+                    vec!["/work/.bravebot/memory/notes.md".to_string()]
+                } else {
+                    Vec::new()
+                },
+                "{case:?}"
+            );
+            let _ = std::fs::remove_dir_all(home);
+        }
     }
 
     /// Unwinding from an entered effect cannot leave the earlier grant over changed bytes.
@@ -918,5 +935,54 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-5: a backup is put back through a linked home rules file only where the link is
+    /// spelled `AGENTS.md` in the state directory. Where the volume folds case, a link spelled
+    /// `agents.md` also opens as `AGENTS.md`, but the preamble does not read it as the person's
+    /// rules and no rule was appended through it, so undo must not write a backup's bytes to
+    /// where it lands. The fault this rejects is asking the volume whether `AGENTS.md` is a link,
+    /// which only a volume that folds case answers for `agents.md`. On a volume that does not, the
+    /// fault cannot be reached, so the test adds a link spelled `AGENTS.md` to another file and
+    /// checks that undo follows that link and still refuses the one spelled `agents.md`.
+    #[cfg(unix)]
+    #[test]
+    fn undo_does_not_write_through_a_link_spelled_agents_md_in_another_case() {
+        let home = crate::testutil::scratch_dir("undo-rule-lower-link-home");
+        let dotfiles = crate::testutil::scratch_dir("undo-rule-lower-link-dotfiles");
+        for dir in [&home, &dotfiles] {
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let rules = dotfiles.join("rules.md");
+        std::fs::write(&rules, "- the person's own\n").unwrap();
+        std::os::unix::fs::symlink(&rules, home.join("agents.md")).unwrap();
+        let folds = home.join("AGENTS.md").exists();
+        let forged = |path: &Path| Backup {
+            path: crate::workspace::destination(path).unwrap(),
+            was: Before::Bytes(b"- forged\n".to_vec()),
+            captured_trust: Integrity::Trusted,
+            kept: true,
+        };
+        if !folds {
+            let theirs = dotfiles.join("AGENTS.md");
+            std::fs::write(&theirs, "- the linked rules\n").unwrap();
+            std::os::unix::fs::symlink(&theirs, home.join("AGENTS.md")).unwrap();
+            let followed = put_back_kept(&home, &forged(&theirs), folds);
+            assert!(
+                followed.is_ok(),
+                "a backup was not put back through a link spelled AGENTS.md: {followed:?}"
+            );
+            assert_eq!(std::fs::read(&theirs).unwrap(), b"- forged\n");
+        }
+        let put_back = put_back_kept(&home, &forged(&rules), folds);
+        assert!(
+            put_back.is_err(),
+            "a backup was put back through a link spelled agents.md"
+        );
+        assert_eq!(std::fs::read(&rules).unwrap(), b"- the person's own\n");
+        for dir in [home, dotfiles] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 }

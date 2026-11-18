@@ -34,6 +34,7 @@ pub mod agent;
 #[cfg(all(test, unix))]
 mod alloc_probe;
 pub mod base;
+mod canonical;
 pub mod crash;
 pub mod hosts;
 pub mod inspection;
@@ -83,6 +84,17 @@ pub use process::{
 };
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+
+/// Whether this platform's backend can refuse writes to one named file beneath a write row
+/// (SANDBOX-14). The macOS profile can. Landlock and the Windows backend grant a directory or
+/// nothing, so a file inside a writable directory is writable (#2599).
+///
+/// The one place the platform split is written, so a caller that depends on it takes the answer as
+/// a value and a test can pass either.
+#[must_use]
+pub const fn holds_one_file_back() -> bool {
+    cfg!(target_os = "macos")
+}
 
 #[derive(Debug)]
 pub enum SandboxError {
@@ -195,10 +207,10 @@ pub trait Sandbox: Send {
     /// no such command, so there is no method there, and a caller cannot reach one unconfined
     /// by asking.
     ///
-    /// On Linux the process the command starts leads a session of its own, and so a process group
-    /// of its own. A caller that stops the process by signalling its group relies on that, and
-    /// must not ask for a group as well: the `setsid` the backend calls fails in a process that
-    /// already leads one.
+    /// On Linux and macOS the process the command starts leads a session of its own, and so a
+    /// process group of its own, with no controlling terminal. A caller that stops the process by
+    /// signalling its group relies on that, and must not ask for a group as well: `setsid` fails
+    /// in a process that already leads one.
     #[cfg(unix)]
     fn command(
         &self,

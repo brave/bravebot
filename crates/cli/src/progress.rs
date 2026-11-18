@@ -35,11 +35,11 @@ const BLOCK_WIDTH: usize = 80;
 /// each character that draws as nothing (a bidirectional control, a zero-width character, a
 /// variation selector, a tag character) written out as `‹U+XXXX›`. A bidirectional control is not
 /// a control character, so a name holding one would otherwise reorder the text around it on the
-/// terminal (LAYER-3).
+/// terminal (LAYER-3). This is [`bravebot_agent::confirm::printable_spelled`].
 ///
 /// A map from characters to characters: no branch is taken on the text.
 pub(crate) fn printable(text: &str) -> String {
-    bravebot_core::invisible::spelled(bravebot_agent::confirm::printable(text)).text
+    bravebot_agent::confirm::printable_spelled(text)
 }
 
 /// The lines a session opened with `--dangerously-skip-permissions` says before its first prompt,

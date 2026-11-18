@@ -159,13 +159,16 @@ enum Kind {
     Text,
     Item,
     Scrollbar,
+    Pinned,
+    ToTail,
+    Face,
     Popup,
     PopupRows,
     Match,
     SessionsScreen,
 }
 
-const KINDS: [Kind; 20] = [
+const KINDS: [Kind; 23] = [
     Kind::Back,
     Kind::Reply,
     Kind::Block,
@@ -182,6 +185,9 @@ const KINDS: [Kind; 20] = [
     Kind::Text,
     Kind::Item,
     Kind::Scrollbar,
+    Kind::Pinned,
+    Kind::ToTail,
+    Kind::Face,
     Kind::Popup,
     Kind::PopupRows,
     Kind::Match,
@@ -206,6 +212,9 @@ fn kind_of(hit: Hit) -> Kind {
         Hit::Text { .. } => Kind::Text,
         Hit::Item(_) => Kind::Item,
         Hit::Scrollbar => Kind::Scrollbar,
+        Hit::Pinned(_) => Kind::Pinned,
+        Hit::ToTail => Kind::ToTail,
+        Hit::Face => Kind::Face,
         Hit::Popup(_) => Kind::Popup,
         Hit::PopupRows(_) => Kind::PopupRows,
         Hit::Match(_) => Kind::Match,
@@ -270,7 +279,8 @@ const THE_LIST_UNDER_THE_BOX: Stands = [
     true, true, true, false, false, false, false, true, false, false,
 ];
 
-/// The scrollbar is kept beside the transcript by the files state.
+/// The scrollbar, and the button that returns the view to the tail, are kept in the transcript's pane
+/// by the files state.
 const THE_SCROLLBAR: Stands = [
     true, true, true, false, false, false, false, true, false, false,
 ];
@@ -318,6 +328,9 @@ fn expected(name: &str) -> (Kind, Stands) {
             (Kind::Delegate, A_TARGET_OF_THE_TRANSCRIPT)
         }
         "the scrollbar beside the transcript" => (Kind::Scrollbar, THE_SCROLLBAR),
+        "the prompt drawn above the view" => (Kind::Pinned, A_TARGET_OF_THE_TRANSCRIPT),
+        "the button that returns a held view to its tail" => (Kind::ToTail, THE_SCROLLBAR),
+        "the face on the opening screen" => (Kind::Face, A_ROW_OF_THE_PLAIN_FRAME),
         "a place in the text of the box" => (Kind::Text, A_ROW_OF_THE_PLAIN_FRAME),
         "the marker that leads a reply" => (Kind::Reply, A_TARGET_OF_THE_TRANSCRIPT),
         "the word that copies a fenced block" => (Kind::Block, A_TARGET_OF_THE_TRANSCRIPT),
@@ -391,6 +404,9 @@ fn the_sessions_screen_with(tab: bool) -> (Session, (u16, u16)) {
             tokens: 0,
             read: 0,
             written: 0,
+            cached: None,
+            effort: None,
+            work: Default::default(),
             mode: None,
             background: false,
             live: false,

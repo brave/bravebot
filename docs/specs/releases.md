@@ -313,15 +313,21 @@ to the shape of a published one before it is composed into a URL.
 `verified-by: by-construction (install.sh states the repository as a literal, and the package script composes both URLs from one constant and the version in the tree; npm/tests/stage-platform-package.test.mjs calls that origin with an environment set against it, holds the script to that one URL, and fails on any reach into the environment. make check-npm runs it)`
 
 <a id="RELEASE-14"></a>
-### RELEASE-14: on Linux, a checksum whose signature does not verify installs nothing
+### RELEASE-14: on Linux, only a checksum whose signature verifies installs, unless a person without `gpg` chooses the checksum alone
 
-On Linux, where `gpg` can be run, `install.sh` and the package script also fetch the signature
-published beside the checksum and check it over the checksum exactly as it was fetched, against
-the release signing key they carry embedded. The signature counts only when it was made by the key
-they name by its fingerprint. When the signature cannot be fetched, or does not verify, or was
-made by any other key, no executable is written. Where `gpg` cannot be run, `install.sh` says it
-skipped the check and installs on the checksum alone, and the package script writes nothing.
-Darwin and Windows publish no such signature and are checked as [RELEASE-15](#RELEASE-15) says.
+On Linux, `install.sh` where `gpg` is on the `PATH`, and the package script where `gpg` can be
+run, also fetch the signature published beside the checksum and check it over the checksum exactly
+as it was fetched, against the release signing key they carry embedded. The signature counts only
+when it was made by the key they name by its fingerprint. When the signature cannot be fetched, or
+does not verify, or was made by any other key, no executable is written. Where no `gpg` is on the
+`PATH`, `install.sh` refuses before it downloads anything, and says how to install GnuPG and that
+`BRAVEBOT_ALLOW_MISSING_GPG=1` installs without it. With that variable set to exactly `1` in the
+person's environment, it installs on the checksum alone, fetches no signature, and warns that the
+signature was not checked. The variable is read only where no `gpg` is on the `PATH`, so where one
+is, a signature that is missing or does not verify installs nothing whatever the variable says, and
+where that `gpg` cannot be run, the signature check fails and nothing is installed. The package
+script reads no such variable, and where `gpg` cannot be run it writes nothing. Darwin and Windows
+publish no such signature and are checked as [RELEASE-15](#RELEASE-15) says.
 
 **Why.** The Linux binary carries no signature of its own, and its checksum is uploaded beside it,
 so whoever can replace the one can replace the other: the checksum proves the download arrived
@@ -331,11 +337,17 @@ what to trust are then the tool's own, reviewed and published with it, and no se
 withhold it or fail an install for a reason that has nothing to do with what was downloaded. A
 missing signature is refused rather than skipped because skipping it would let whoever can change
 the release turn the check off by deleting one file, and that is the person the check exists for. A
-missing `gpg` is skipped by `install.sh` rather than refused because it is a property of the
-machine, which nobody changing a release controls, and requiring it would fail an install for a
-reason that has nothing to do with what was downloaded. The package script runs on a runner the
-workflow chose, which has `gpg`, so there the tool is part of the check, and a build that skipped
-it for want of the tool would be the one an attacker arranges.
+missing `gpg` is refused too, because a machine without it is where a replaced release would
+install: the checksum is published beside the binary, so a substituted binary served with its own
+checksum passes every other check `install.sh` makes there. It is refused before anything is
+downloaded, since the refusal depends on nothing the release holds. The variable is for a person
+who cannot install `gpg` and chooses the checksum alone knowingly. It comes from that person's own
+environment, which nothing in a release or a download can set, and it is read only where the
+signature cannot be checked, so it turns off no check that could run. The package script runs on a
+runner the workflow chose, which has `gpg`, so there the tool is part of the check, and a build
+that skipped it for want of the tool would be the one an attacker arranges. It reads no override,
+since what it builds is installed by everybody who installs from npm, and the variable records a
+choice a person makes for their own machine.
 
 **Note.** The check runs in a keyring made for it and removed afterwards, so nothing is read from
 or added to the person's own. The signature covers the checksum and nothing else, so it shows who
@@ -348,7 +360,10 @@ serve an older release's binary, checksum and signature together, and they verif
 `verified-by: bravebot_cli::installer_signature::a_checksum_signed_by_any_key_but_the_release_key_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_signature_that_verifies_but_was_made_by_a_key_the_installer_does_not_name_installs_nothing`
 `verified-by: bravebot_cli::installer_signature::a_linux_checksum_with_no_signature_installs_nothing`
-`verified-by: bravebot_cli::installer_signature::without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs`
+`verified-by: bravebot_cli::installer_signature::without_gpg_a_linux_install_is_refused_before_anything_is_downloaded`
+`verified-by: bravebot_cli::installer_signature::without_gpg_the_override_installs_on_the_checksum_alone_and_says_so`
+`verified-by: bravebot_cli::installer_signature::with_gpg_the_override_does_not_let_a_missing_or_wrong_signature_install`
+`verified-by: bravebot_cli::installer_signature::with_gpg_the_override_installs_a_signed_release_without_a_warning`
 `verified-by: bravebot_cli::installer_signature::a_linux_package_is_not_built_without_gpg`
 `verified-by: bravebot_cli::installer_signature::a_darwin_binary_signed_by_brave_and_notarized_installs`
 `verified-by: bravebot_cli::installer_signature::a_windows_binary_signed_by_brave_installs`
@@ -375,9 +390,10 @@ already signed and the operating systems can check that, but a binary run from a
 assessed by Gatekeeper, so a tool that does not ask never finds out. `codesign` and
 Authenticode on their own accept a valid signature from any signer whose certificate a trusted
 authority issued, which includes anybody with a developer account, so the requirement names
-Brave's team and the Windows check names the signer. A missing tool is refused rather than skipped
-because, unlike `gpg` on Linux, these tools ship with the operating system, so a machine without
-one is not a machine to trust an unchecked binary on. `spctl -t install` is used
+Brave's team and the Windows check names the signer. A missing tool is refused, as a missing `gpg`
+is on Linux. These tools ship with the operating system, so a machine without one is not a machine
+to trust an unchecked binary on, and no variable installs without them. `gpg` does not ship with
+every Linux system, and a person may be unable to install it. `spctl -t install` is used
 because `-t execute` rejects any bare executable that is not an app bundle, however it is signed.
 
 **Note.** The macOS check was run by hand against the published arm64 release and accepted it. The
@@ -653,6 +669,15 @@ package's key does not decide what is trusted for this one.
   installs nothing and leaves the old copy in place, and the person closes the session and runs the
   line again. Nothing in the tests runs it on Windows (the entry above).
 
+- **A script install made without `gpg` is refused at an update made while it still has none.**
+  The startup notice and `bravebot update` give a script install one fixed line, composed from
+  nothing, as [updates.md](updates.md) sets out, so the line does not carry
+  `BRAVEBOT_ALLOW_MISSING_GPG=1` for a copy installed with it. A person who installed that way on a
+  Linux machine that still has no `gpg`, and runs the line without the variable set, is refused
+  before anything is downloaded, with the error that names `gpg` and the variable, and the copy
+  they have is left in place. They install GnuPG and run the line again, or run it with
+  `BRAVEBOT_ALLOW_MISSING_GPG=1` on the `sh` side of the pipe.
+
 - **Opening the package changes is manual, and a package lags its release.** Between a GitHub
   release and the tap and WinGet repository taking the change, the startup notice
   ([UPDATE-2](updates.md#UPDATE-2)) can offer `brew upgrade --cask bravebot` or `winget upgrade
@@ -670,18 +695,20 @@ package's key does not decide what is trusted for this one.
 - **Only the npm publish refuses a release whose Linux checksums carry no signature that verifies.**
   The publish job in devops checks for each binary but not for a signature. The install script
   fetches the newest GitHub release whether or not npm has been published, so a release Jenkins
-  publishes without them is refused by every Linux install that has `gpg` from the moment it
-  exists, and the npm check comes too late to prevent that.
+  publishes without them is refused by every Linux install made with `install.sh` from the moment
+  it exists, except one without `gpg` that has `BRAVEBOT_ALLOW_MISSING_GPG=1` set, and the npm
+  check comes too late to prevent that.
 
 - **Changing the signing key breaks the install script that carries the old one.** The npm
   packages carry no key and check nothing when installed, so a change reaches them only through the
   next publish, which reads the key from the tag it publishes. The install script is served from the
   trunk and installs the newest release, so the key it carries has to change at the moment the
-  first release signed by the new key is published, and either order leaves a window in which Linux
-  installs with `gpg` are refused. The macOS team and the Windows signer name are embedded the same
-  way, in `install.sh` and the package script. An embedded key cannot be revoked or updated after it
-  is published: a revocation or a new signing subkey reaches only the install scripts served, and
-  the publishes made, after it.
+  first release signed by the new key is published, and either order leaves a window in which every
+  Linux install made with `install.sh` is refused, except one without `gpg` that has
+  `BRAVEBOT_ALLOW_MISSING_GPG=1` set.
+  The macOS team and the Windows signer name are embedded the same way, in `install.sh` and the
+  package script. An embedded key cannot be revoked or updated after it is published: a revocation
+  or a new signing subkey reaches only the install scripts served, and the publishes made, after it.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
   remote, and the agreement among the files that state a version. The publish job builds the tip of a

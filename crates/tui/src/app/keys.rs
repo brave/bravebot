@@ -169,6 +169,10 @@ pub enum Action {
     /// Carries the argument unparsed, since what it says back goes in the transcript, and needs the
     /// servers the session holds and the terminal to ask on, which the loop owns.
     Mcp(String),
+    /// Install a plugin from a local path, list the installed plugins, or remove, enable or disable
+    /// one. Carries the argument unparsed, since what it says back goes in the transcript, and needs
+    /// the terminal to ask on, which the loop owns. Only a typed line makes it (PLUGIN-1).
+    Plugin(String),
     /// Report the sandbox mode, or move it. Carries the word unparsed, since the answer depends on
     /// the managed file.
     Sandbox(String),
@@ -374,6 +378,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
         && !session.showing_sessions()
         && !session.searching_history()
         && !session.files_open()
+        && !session.peeking()
         && session.picking().is_none()
         && !session.menu_open()
         && (is_ctrl_c(key) || (is_escape(session, key) && !session.holds_a_selection()))
@@ -1010,6 +1015,39 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
     Action::Redraw
 }
 
+/// Interpret a key press while the info panel shows the text of a paste.
+///
+/// Every key is the state's and a key it does not name does nothing, so no character reaches the
+/// box and Enter sends nothing. Ctrl-C ends the state and does nothing else, so a turn in flight
+/// goes on. The panel chord hides the panel and the state with it.
+fn peek_key(session: &mut Session, key: KeyEvent) -> Action {
+    if is_ctrl_c(key) {
+        session.close_peek();
+        return Action::Redraw;
+    }
+    if session.bindings().is_panel(&key) {
+        session.toggle_panel();
+        return Action::Redraw;
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return Action::None;
+    }
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => session.close_peek(),
+        KeyCode::Up | KeyCode::Char('k') => session.peek_scroll(-1),
+        KeyCode::Down | KeyCode::Char('j') => session.peek_scroll(1),
+        KeyCode::Home | KeyCode::Char('g') => session.peek_to_end(false),
+        KeyCode::End | KeyCode::Char('G') => session.peek_to_end(true),
+        KeyCode::PageUp => session.peek_scroll(-session.peek_page()),
+        KeyCode::PageDown => session.peek_scroll(session.peek_page()),
+        _ => return Action::None,
+    }
+    Action::Redraw
+}
+
 /// The answer to a key that a mode standing over the session takes, and `None` where no mode is
 /// open.
 ///
@@ -1034,6 +1072,9 @@ pub(super) fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<
     }
     if session.files_open() {
         return Some(files_key(session, key));
+    }
+    if session.peeking() {
+        return Some(peek_key(session, key));
     }
     if session.showing_sessions() {
         return Some(sessions_screen_key(session, key));
@@ -1403,8 +1444,8 @@ fn offering_a_model(session: &mut Session) -> Action {
 /// One ladder rather than one per caller, because there were two and they drifted. Mid-turn, Up
 /// and Down reached no arm at all and fell through to nothing, so a person who could see their
 /// last prompt in the transcript could not recall it into the box, and the keys that scroll did
-/// not scroll either. `handle_paste_while_working` was already named for this reason; this is the
-/// same lesson in the same file.
+/// not scroll either. The paste handling was made one function, `handle_paste`, for the same
+/// reason.
 fn navigate(session: &mut Session, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
@@ -1500,6 +1541,11 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // list is said rather than silent (WATCH-7). In the shared ladder for the watch chord's
         // reason: it sends nothing.
         _ if session.bindings().is_outputs(&key) => super::open_outputs(session),
+        _ if session.bindings().is_peek(&key) => {
+            // With the caret on no marker the key opens nothing and is no key of the box either.
+            session.peek_pasted_text();
+            Action::Redraw
+        }
         // The whole plan, printed as `/todos` prints it and said into the transcript as that is
         // (CMD-28). In the shared ladder for the same reason: it sends nothing, and a plan is most
         // worth reading in full while the turn works through it.
@@ -1531,12 +1577,15 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         // While the list is open the arrows walk it. History and scrolling get them back the moment
-        // it closes, which is as soon as the line stops being a lone half-typed command.
-        KeyCode::Up if session.is_completing() => {
+        // it closes, which is as soon as the line stops being a lone half-typed command. Not while
+        // the line is a recalled history entry (INPUT-40): a recalled command is a lone word, so
+        // the list is open under it, and the arrows would stop the walk at the newest command.
+        // Editing the line leaves the walk and gives them back to the list.
+        KeyCode::Up if session.is_completing() && !session.history.is_browsing() => {
             session.previous_completion();
             Action::Redraw
         }
-        KeyCode::Down if session.is_completing() => {
+        KeyCode::Down if session.is_completing() && !session.history.is_browsing() => {
             session.next_completion();
             Action::Redraw
         }
@@ -1593,7 +1642,7 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         KeyCode::End if ctrl => {
-            session.scroll_down(u16::MAX);
+            session.return_to_the_tail();
             Action::Redraw
         }
         // How the letters become instructions, for somebody editing the way vi does, in both of the
@@ -1759,6 +1808,19 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
             return queued(session, key);
         }
         return Action::None;
+    }
+
+    // A line that begins with `!` is held in the box, whatever arm below would have queued it. The
+    // mode is armed at an idle prompt only, so a bang in the line mid-turn is a character the person
+    // typed or pasted, and queueing it puts the text into the planner's buffer at once, which is
+    // where a line meant to stay private must not go (SHELL-8). After the arms for the `/handoff`
+    // brief and the enhanced line, which answer those lines and return, so the check reads only
+    // what the person typed or pasted and never a line the planner wrote. Ctrl-Enter is held with
+    // it, so it hurries nothing.
+    if key.code == KeyCode::Enter && !session.shell && session.input().trim_start().starts_with('!')
+    {
+        session.answer_while_working(|session| session.note(t!(shell_mode_idle_only)));
+        return Action::Redraw;
     }
 
     // Before the arm that queues a command, because these commands need not wait: each reads or
@@ -2107,14 +2169,29 @@ fn carry_out_choice(session: &mut Session, choice: crate::state::Choice) -> Acti
 ///
 /// While the scroller is open it is one of the scroller's keys, so it stops at the first row and the
 /// last the way every other movement in that mode does. It takes no count, so it drops one, as any
-/// other key would. Over the rows of a list of what could be typed it walks the list and not the
-/// transcript beneath it. Over the panel in the files state it scrolls the pane under the pointer
-/// (MOUSE-19). Elsewhere it scrolls the transcript. How far it goes is what `tui.wheelRows` named,
-/// which is the same distance in each.
+/// other key would. In the Sessions screen it scrolls the details beside the list while the pointer
+/// is over them and walks the cursor elsewhere (SCREEN-12). Over the rows of a list of what could be
+/// typed it walks the list and not the transcript beneath it. Over the panel in the files state it
+/// scrolls the pane under the pointer (MOUSE-19). Elsewhere it scrolls the transcript. How far it goes
+/// is what `tui.wheelRows` named, which is the same distance in each.
 fn wheel(session: &mut Session, mouse: MouseEvent, down: bool) -> Action {
     let rows = session.wheel_rows();
+    // Over the details of the Sessions screen the wheel scrolls them, and elsewhere on it the wheel
+    // walks the cursor (SCREEN-12).
+    let over_the_details = session.sessions_screen().is_some()
+        && session
+            .laid
+            .find_of_kind(session, mouse.row, mouse.column, |hit| {
+                hit == Hit::SessionsScreen(crate::sessions_screen::Click::Details)
+            })
+            .is_some();
     if let Some(sessions_screen) = session.sessions_screen_mut() {
-        sessions_screen.wheel(usize::from(rows), down);
+        match over_the_details {
+            true => {
+                sessions_screen.scroll_details(usize::from(rows), down);
+            }
+            false => sessions_screen.wheel(usize::from(rows), down),
+        }
     } else if session.scrolling() {
         session.take_the_scroller_count();
         match down {
@@ -2123,6 +2200,8 @@ fn wheel(session: &mut Session, mouse: MouseEvent, down: bool) -> Action {
         }
     } else if session.files_wheel(mouse.row, mouse.column, !down) {
         // The pane of the files state under the pointer was scrolled.
+    } else if session.peek_wheel(mouse.row, mouse.column, !down) {
+        // The text of the paste under the pointer was scrolled.
     } else if session.completion_at(mouse.row, mouse.column).is_some() {
         session.walk_completions(rows, down);
     } else {
@@ -2190,6 +2269,11 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
             _ => Action::Copy,
         };
     }
+    // The details of the Sessions screen are drawn for the wheel and take no click, which is the
+    // selection it made, as on any cell that is no row (SCREEN-12).
+    if target.hit == Hit::SessionsScreen(crate::sessions_screen::Click::Details) {
+        return Action::Copy;
+    }
     // The same for a row of the Sessions screen: the first click puts the cursor on it and the
     // second opens it, as Enter does (SCREEN-12).
     if let Hit::SessionsScreen(click) = target.hit {
@@ -2215,6 +2299,22 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         }
         // A delegate's block opens that delegate's view as the watch key does (MOUSE-10, MOUSE-23).
         Hit::Delegate(index) => session.watch_delegate(index),
+        // The prompt drawn above the view goes to the top of it, as `{` puts one there (MOUSE-54).
+        Hit::Pinned(row) => {
+            session.go_to_the_pinned_prompt(row);
+            true
+        }
+        // The button above the box returns the view to the tail as `ctrl-end` does (MOUSE-55).
+        Hit::ToTail => {
+            session.return_to_the_tail();
+            true
+        }
+        // The face on the opening screen blinks or looks to the other side (MOUSE-56). It is drawn
+        // again at once, since the loop only looks at the face between keys.
+        Hit::Face => {
+            crate::avatar::poke();
+            true
+        }
         // A prompt waiting behind the turn comes back into the box, with the ones typed after it, as
         // Up takes them all. A command a click queued has nothing to put there, so the click removes
         // it, and so do the words on the row (MOUSE-28).
@@ -2237,7 +2337,16 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         Hit::Link(index) => return click_a_link(session, index, mouse.modifiers),
         Hit::Panel(_) | Hit::Footer(_) => return click_shortcut(session, target.hit),
         // A click in the prompt box puts the caret where it landed (MOUSE-16).
-        Hit::Text { .. } => session.click_in_the_box(row, column),
+        Hit::Text { .. } => {
+            let on_a_marker = session.click_on_a_marker(row, column);
+            let put = session.click_in_the_box(row, column);
+            // A press on the cells of a marker shows the paste whole, over the caret it just put at
+            // the marker's start.
+            if on_a_marker {
+                session.peek_pasted_text();
+            }
+            put
+        }
         // A press on the scrollbar acts on the press, and a panel that holds the input has taken the
         // press before this is asked (MOUSE-45, MOUSE-49).
         // A pane the wheel scrolls is no click: what a click acts on is drawn over it.
@@ -2356,6 +2465,10 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
             session.close_files();
             Action::Redraw
         }
+        Hit::Panel(crate::panel::Target::ClosePeek) => {
+            session.close_peek();
+            Action::Redraw
+        }
         Hit::Panel(crate::panel::Target::PreviousEdit) => {
             session.files_to_edit(false);
             Action::Redraw
@@ -2387,13 +2500,14 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
             session.go_to_task(task, render::plan_item_row);
             Action::Redraw
         }
-        // The address `/pr` or `/issue` set, as it was set (MOUSE-41).
-        Hit::Panel(link @ (crate::panel::Target::PullRequest | crate::panel::Target::Issue)) => {
-            match session.panel_link(link) {
-                Some(address) => Action::OpenUrl(address.to_string()),
-                None => Action::Redraw,
-            }
-        }
+        // The address of a row of the Pull requests or Issues section: the one `/pr` or `/issue` set,
+        // as it was set, or the one the reference builds (MOUSE-41).
+        Hit::Panel(
+            link @ (crate::panel::Target::PullRequest(_) | crate::panel::Target::Issue(_)),
+        ) => match session.panel_link(link) {
+            Some(address) => Action::OpenUrl(address),
+            None => Action::Redraw,
+        },
         // Not rows of the panel or hints, which are all this is asked about. Named, so that a kind of
         // target added to the record has to be given its place here and is not taken for nothing.
         Hit::Back
@@ -2407,6 +2521,9 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         | Hit::Words(_)
         | Hit::Wheel(_)
         | Hit::Scrollbar
+        | Hit::Pinned(_)
+        | Hit::ToTail
+        | Hit::Face
         | Hit::Item(_)
         | Hit::Text { .. }
         | Hit::Link(_)
@@ -2469,7 +2586,7 @@ fn click_footer(session: &mut Session, target: crate::state::Footer) -> Action {
         Footer::Background => {
             session.move_to_background();
         }
-        Footer::Held => session.scroll_down(u16::MAX),
+        Footer::Held => session.return_to_the_tail(),
         Footer::CancelShell => session.clear_input(),
         Footer::Paste => return Action::Paste,
     }

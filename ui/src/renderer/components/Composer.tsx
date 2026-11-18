@@ -43,8 +43,13 @@ export interface ComposerProps {
   session: string
   model: string | null
   running: boolean
-  /** A trust question is open, and nothing may be sent until it is answered. */
+  /**
+   * A question asked before the first turn is open (trust, the rules a checkout proposes, or a
+   * directory it names), and nothing may be sent until it is answered.
+   */
   askingTrust: boolean
+  /** Why, in words, while one is: said above the box so a person is not left wondering why Send does nothing. */
+  waiting?: string | null
   compacting: boolean
   contextTokens?: number
   archived?: number
@@ -100,6 +105,8 @@ export interface ComposerProps {
   onSetup: () => void
   onCheckBackend: () => void
   onDiagnostics: () => void
+  /** A one-time note docked on top of the box, such as the usage ping notice. Memoised by the caller. */
+  notice?: React.ReactNode
   /** Whether files can be attached. A bot view has no session yet, so nothing to attach them to. */
   canAttach?: boolean
   /** The strip under the box: which project this chat runs in, and its branch. */
@@ -134,7 +141,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
-    canAttach = true, footer, starting = false, summonable = NO_BOTS,
+    canAttach = true, footer, notice, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
@@ -268,6 +275,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   return (
     <footer className="composer" data-paste-session={session}>
       <div className="composer-stack">
+        {notice}
         {backendReady === false && <BackendTray onSetup={onSetup} onCheckBackend={onCheckBackend} onDiagnostics={onDiagnostics} />}
         {interjected.length > 0 && (
           <div className="composer-tray interjected-messages" role="group" aria-label="Sent to this turn" data-test="interjected-messages">
@@ -316,6 +324,12 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               <Button size="tiny" kind="plain" data-test="enhance-put-back" onClick={() => { props.onRestoreEnhanced() }}>Put back mine</Button>
             )}
             <IconButton icon="close" size="tiny" label="Dismiss" tooltip="Dismiss" onClick={onDismissEnhancement} />
+          </div>
+        )}
+        {askingTrust && props.waiting && (
+          <div className="composer-tray composer-notice question-waiting" role="status" data-test="question-waiting">
+            <Icon name="shield-done" />
+            <span className="notice-text">{props.waiting}</span>
           </div>
         )}
         {refusal && (

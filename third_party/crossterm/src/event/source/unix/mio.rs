@@ -117,6 +117,15 @@ impl EventSource for UnixInternalEventSource {
                             if let Some(event) = self.parser.next() {
                                 return Ok(Some(event));
                             }
+
+                            // The tty is not non-blocking, so a read with nothing waiting does
+                            // not return `WouldBlock`: it holds this thread until the next byte,
+                            // past the timeout and with a resize unhandled. A read that completed
+                            // no event, such as the first half of a sequence, goes back to the
+                            // poll above instead unless more bytes are already queued on the tty.
+                            if !input_waiting(&self.tty_fd) {
+                                break;
+                            }
                         }
                     }
                     SIGNAL_TOKEN => {
@@ -156,6 +165,24 @@ impl EventSource for UnixInternalEventSource {
     fn waker(&self) -> Waker {
         self.waker.clone()
     }
+}
+
+/// Whether the tty has input to read now, asked without waiting for any.
+#[cfg(not(feature = "libc"))]
+fn input_waiting(tty: &FileDesc<'_>) -> bool {
+    use rustix::fd::AsFd;
+
+    matches!(rustix::io::ioctl_fionread(tty.as_fd()), Ok(waiting) if waiting > 0)
+}
+
+/// Whether the tty has input to read now, asked without waiting for any.
+#[cfg(feature = "libc")]
+fn input_waiting(tty: &FileDesc<'_>) -> bool {
+    let mut waiting: libc::c_int = 0;
+    // SAFETY: `FIONREAD` stores one `c_int` through the pointer, which is to a `c_int` that lives
+    // through the call, and it does not wait for input.
+    let asked = unsafe { libc::ioctl(tty.raw_fd(), libc::FIONREAD, &mut waiting) };
+    asked == 0 && waiting > 0
 }
 
 //

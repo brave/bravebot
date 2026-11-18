@@ -237,6 +237,12 @@ class Work(unittest.TestCase):
         self.check(A, verdict="confirmed", security=False)
         self.assertEqual(pa.labels_for(pa.outcomes(self.work)[1][A]["fields"]), ["area/tools", "bug", "release-blocking"])
 
+    def test_every_area_the_prompt_offers_becomes_an_area_label(self):
+        for area in ("sandbox", "mcp", "browser", "connectors", "background", "plugins", "desktop", "acp", "remote", "release"):
+            with self.subTest(area=area):
+                fields = {"kind": "bug", "security": False, "area": area}
+                self.assertEqual(pa.labels_for(fields), [f"area/{area}", "bug", "release-blocking"])
+
     def test_a_draft_has_no_em_dash_pings_nobody_and_does_not_name_the_machine(self):
         self.vet(A, verdict="affected", issue=self.issue)
         self.check(A, verdict="confirmed")

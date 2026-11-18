@@ -1172,7 +1172,6 @@ fn run_keys(
 mod tests {
     use super::*;
     use crate::confirm::tests::*;
-    use crate::confirm::*;
     use bravebot_agent::reach::Lasting;
     use bravebot_i18n::t;
     use ratatui::backend::TestBackend;

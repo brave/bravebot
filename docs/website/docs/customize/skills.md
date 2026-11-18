@@ -299,7 +299,8 @@ session has read or written something under your home directory, as any director
 
 A project skill replaces a global one of the same name, and one in `.bravebot/skills` replaces one
 of the same name in `.claude/skills` or `.agents/skills`. A skill in `~/.bravebot/skills` replaces one
-of the same name in a shared directory you named.
+of the same name in a shared directory you named. A skill from a [plugin](plugins.md) is the least
+specific source: any other source of the same name replaces it.
 
 To read the skills you keep for another agent, list the directories in
 `~/.bravebot/settings.json`:

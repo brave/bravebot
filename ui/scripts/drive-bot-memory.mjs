@@ -26,29 +26,32 @@
 // be non-zero, which is the thing being avoided. The comparison it turns on is two lines in
 // `src/main/index.ts`; the expensive parts around it are what is driven here.
 //
-// Run it the way `drive-bot-turn.mjs` is run. It costs two turns. Like the other drivers it
-// perturbs `bravebot-ui.json`, and it puts its own keys back.
+// Run it the way `drive-bot-turn.mjs` is run. It costs two turns. It runs against a scratch
+// user-data directory and state directory, and it puts its own keys back. The scratch state
+// directory holds copies of the real `settings.json`, `model` and `leo-premium.json`, so the agent
+// can reach the backend the real one is configured for, and the copies are removed when it ends.
 
-import { checker, launch, COMPOSER_INPUT, BOT_OPEN_BUTTON } from './drive-support.mjs'
-import { appState, forgetCheckoutSessions, locateProfile, openBot, settle } from './drive-profile.mjs'
+import { checker, launch, COMPOSER_INPUT, BOT_OPEN_BUTTON, SHOTS_DIR } from './drive-support.mjs'
+import { appBots, appState, forgetCheckoutSessions, openBot, scratchProfile, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-mkdirSync('/tmp/bravebot-ui', { recursive: true })
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 const { check, problems } = checker()
 
-const { userData, stateFile } = await locateProfile()
+const { userData, stateFile, remove } = scratchProfile('bravebot-drive-bot-memory', { live: true })
 const { readState, putKey } = appState(stateFile)
+const { readBots, putBots } = appBots(userData)
 const hadView = readState().view
 
 // This driver's own row and no more. `bots` holds somebody's actual bots, so clearing it to make
 // room is a destructive act one interrupted run away from happening. It adds one and removes one.
 const MINE = 'archivist'
-const withoutMine = () => (readState().bots ?? []).filter((bot) => bot.slug !== MINE)
-const stored = () => (readState().bots ?? []).find((bot) => bot.slug === MINE) ?? null
+const withoutMine = () => readBots().filter((bot) => bot.slug !== MINE)
+const stored = () => readBots().find((bot) => bot.slug === MINE) ?? null
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', undefined)
 
 /**
@@ -61,7 +64,7 @@ putKey('view', undefined)
  */
 const LOOKALIKE = '[bravebot-ui] Keeping your memory current.'
 
-const app = await launch()
+const app = await launch(userData)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -88,9 +91,10 @@ const first = await settle(page)
 if (first === 'unconfigured') {
   console.log('\nRESULT: skipped — this machine has no credentials for a live turn')
   await app.close()
-  putKey('bots', withoutMine())
+  putBots(withoutMine())
   putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
   rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
+  remove()
   process.exit(0)
 }
 check(first === 'done', `the first turn finished (${first})`)
@@ -110,9 +114,8 @@ check(
 // `noteBotMemory` runs on `turn.done`, which has already happened.
 const before = stored()
 check(before !== null, 'the bot has a row to seed')
-putKey(
-  'bots',
-  (readState().bots ?? []).map((bot) =>
+putBots(
+  readBots().map((bot) =>
     bot.slug === MINE
       ? { ...bot, quiet: 9, remembered: statSync(join(home, '.bravebot-ui', 'bots', `${MINE}.md`)).mtimeMs }
       : bot,
@@ -153,7 +156,7 @@ check(
   (await page.locator('.bubble.user').last().textContent())?.includes(LOOKALIKE) === true,
   'a prompt that reads like house-keeping is drawn as the prompt it is',
 )
-await page.screenshot({ path: '/tmp/bravebot-ui/26-bot-memory-nudged.png' })
+await page.screenshot({ path: `${SHOTS_DIR}/26-bot-memory-nudged.png` })
 
 const memory = join(home, '.bravebot-ui', 'bots', `${MINE}.md`)
 check(existsSync(memory), 'the memory file is still where the bot can edit it')
@@ -170,7 +173,7 @@ await app.close()
 
 // --- and how it is drawn when the session is read back ------------------------------------
 
-const back = await launch()
+const back = await launch(userData)
 const page2 = await back.firstWindow()
 await page2.waitForLoadState('domcontentloaded')
 await page2.waitForTimeout(2500)
@@ -202,17 +205,18 @@ check(
   (await page2.locator('.bubble.user .fork-here').count()) === bubbles.length,
   'every one of them offers the cut that is taken on its ordinal',
 )
-await page2.screenshot({ path: '/tmp/bravebot-ui/27-bot-memory-replayed.png' })
+await page2.screenshot({ path: `${SHOTS_DIR}/27-bot-memory-replayed.png` })
 
 await back.close()
 
 // --- putting back only what this driver moved ---------------------------------------------
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 rmSync(join(userData, 'bots', MINE), { recursive: true, force: true })
 rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
 forgetCheckoutSessions(home)
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
+remove()
 process.exit(problems.length ? 1 : 0)

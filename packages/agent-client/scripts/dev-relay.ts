@@ -25,12 +25,15 @@ import { basename, isAbsolute } from 'node:path'
 import { parseArgs } from 'node:util'
 import { CLOSE_GOING_AWAY, CLOSE_PROTOCOL, CLOSE_WRONG_CODE, accept, type WebSocketEnd } from './websocket.js'
 
-const CODE_WAIT_MS = 60_000
-
 function fail(message: string): never {
   process.stderr.write(`dev-relay: ${message}\n`)
   process.exit(2)
 }
+
+/** Tests shorten the wait for the code with `BRAVEBOT_DEV_RELAY_CODE_WAIT_MS`. */
+const waitSetting = process.env.BRAVEBOT_DEV_RELAY_CODE_WAIT_MS
+if (waitSetting !== undefined && !/^[1-9][0-9]{0,8}$/.test(waitSetting)) fail(`BRAVEBOT_DEV_RELAY_CODE_WAIT_MS is a whole number of milliseconds above 0: ${waitSetting}`)
+const CODE_WAIT_MS = waitSetting === undefined ? 60_000 : Number(waitSetting)
 
 const { values } = parseArgs({ options: { workspace: { type: 'string', multiple: true } } })
 const directories = [...new Set(values.workspace ?? [])]

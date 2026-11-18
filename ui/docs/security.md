@@ -75,7 +75,7 @@ through `src/main/external-open.ts`, which deletes `BROWSER`, `GIO_LAUNCH_DESKTO
 directories, `XDG_CACHE_HOME` and the GIO, Qt and KDE names of `OPENER_SELECTORS` (sixteen in all,
 the names in the opener's table in [SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30); the
 terminal client's list in `crates/tui/src/opener.rs` has the same names and also `HOME`,
-`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the ten Windows names of the `rundll32` start)
+`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the eleven Windows names of the `rundll32` start)
 from the main process environment first, because the opener Electron
 starts reads them to choose the program it runs (`xdg-open` reads `BROWSER` only in its generic
 path, and not under GNOME with `gio` installed, where it runs `gio open`)

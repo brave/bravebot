@@ -369,8 +369,9 @@ does a read whose result carried no call id to attach the record to.
 **It goes with the round that showed it.** An entry stands for lines in a message the planner still
 has, and names that message by its position in the conversation, not by the id of the call it answered,
 since providers number ids per response and two rounds can carry one. Compaction removes messages from
-the request ([COMPACT-6](../compaction.md#COMPACT-6)), and removes the entry with each one, so a read
-after a compaction sends the lines again. A resumed conversation starts with no record, which errs toward
+the request ([COMPACT-6](../compaction.md#COMPACT-6)), and removes the entry with each one. A result
+replaced by a stub ([COMPACT-18](../compaction.md#COMPACT-18)) loses its entry the same way. A read
+after either sends the lines again. A resumed conversation starts with no record, which errs toward
 sending them.
 
 **The comparison is of metadata.** The token is taken from the file's size and modification time
@@ -455,8 +456,8 @@ cells. Asking for one cell's outputs by number spends a page on what the planner
 on every picture in the file. A picture's base64 is a cap spent on nothing a reader can use.
 
 `verified-by: bravebot_agent::turn::a_cells_saved_outputs_come_back_as_a_reference_not_as_text`
-`verified-by: bravebot_agent::tools::the_notebook_refusal_names_only_the_routes_the_turn_holds`
-`verified-by: bravebot_agent::tools::a_notebook_nobody_vouched_for_is_refused_in_the_helpers_words`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_notebook_refusal_names_only_the_routes_the_turn_holds`
+`verified-by: bravebot_agent::tools::tests::untrusted_refusals::a_notebook_nobody_vouched_for_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::turn::an_output_request_that_names_no_outputs_is_refused`
 `verified-by: bravebot_agent::notebook::an_output_view_keeps_text_and_replaces_a_picture_with_its_size`
 `verified-by: bravebot_agent::notebook::an_output_view_is_cut_at_the_cap`
@@ -509,4 +510,4 @@ only that a respelling was read, never what the file is called.
 `verified-by: bravebot_agent::workspace::a_missing_name_is_respelled_to_the_file_that_differs_in_its_spaces`
 `verified-by: bravebot_agent::workspace::a_missing_typed_name_with_a_space_says_the_kind_of_space_may_differ`
 `verified-by: bravebot_agent::turn::a_respelled_read_records_the_spelling_opened_as_touched`
-`verified-by: bravebot_agent::tools::a_read_by_reference_to_a_removed_file_with_a_space_carries_no_space_hint`
+`verified-by: bravebot_agent::tools::tests::editing::a_read_by_reference_to_a_removed_file_with_a_space_carries_no_space_hint`

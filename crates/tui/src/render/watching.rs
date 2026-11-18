@@ -800,10 +800,11 @@ fn picked(line: Line<'static>, highlighted: bool) -> Line<'static> {
 fn mark_for(outcome: &bravebot_agent::report::Outcome) -> (&'static str, ratatui::style::Color) {
     use bravebot_agent::report::Outcome;
     match outcome {
-        Outcome::Succeeded => ("✓", theme::ok()),
-        Outcome::Failed { .. } => ("✗", theme::fail()),
-        Outcome::Stopped(_) | Outcome::StoppedByTheUser(_) | Outcome::Running { .. } => {
-            ("●", theme::running())
-        }
+        Outcome::Succeeded | Outcome::Closed { .. } => ("✓", theme::ok()),
+        Outcome::Failed { .. } | Outcome::StoppedBySignal { .. } => ("✗", theme::fail()),
+        Outcome::Stopped(_)
+        | Outcome::StoppedAtTheCeiling(_)
+        | Outcome::StoppedByTheUser(_)
+        | Outcome::Running { .. } => ("●", theme::running()),
     }
 }

@@ -529,14 +529,38 @@ impl Patience {
     ) -> Self {
         let stated = |key: &str| options.and_then(|options| options.get(key));
         Self {
-            max_retries: stated("maxRetries")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok()),
-            idle_timeout: positive(stated("idleTimeoutMs"))
-                .map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS))),
+            max_retries: Self::bounded_retries(
+                stated("maxRetries").and_then(serde_json::Value::as_u64),
+            ),
+            idle_timeout: Self::bounded_idle_timeout(positive(stated("idleTimeoutMs"))),
             retry_window: positive(stated("retryWindowMs"))
                 .map(|window| Duration::from_millis(window.min(MAX_RETRY_WINDOW_MS))),
         }
+    }
+
+    /// What the two variables of an account reached through the tier variables state
+    /// ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)): a retry count and an idle gap in
+    /// milliseconds, held to the bounds the `options` of a block are. A value that is not a whole
+    /// number, and a zero gap, states nothing, as it does in a block. No retry window has a variable,
+    /// so none is stated and the default one applies where no count is.
+    pub(crate) fn from_variables(max_retries: Option<&str>, idle_timeout_ms: Option<&str>) -> Self {
+        let whole = |value: Option<&str>| value.and_then(|text| text.trim().parse::<u64>().ok());
+        Self {
+            max_retries: Self::bounded_retries(whole(max_retries)),
+            idle_timeout: Self::bounded_idle_timeout(whole(idle_timeout_ms).filter(|gap| *gap > 0)),
+            retry_window: None,
+        }
+    }
+
+    /// A retry count held to [`MAX_RETRIES`]. Zero is a statement and a figure above the cap is the
+    /// cap.
+    fn bounded_retries(stated: Option<u64>) -> Option<u32> {
+        stated.and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok())
+    }
+
+    /// An idle gap held to [`MAX_IDLE_TIMEOUT_MS`]. `stated` is already known to be positive.
+    fn bounded_idle_timeout(stated: Option<u64>) -> Option<Duration> {
+        stated.map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS)))
     }
 
     /// How many requests are sent before a failure is the caller's: `default` where no retry count
@@ -2959,6 +2983,49 @@ mod tests {
             provider.patience.idle_timeout, None,
             "a gap of nothing would end every reply the moment it began"
         );
+    }
+
+    /// BACKEND-33, BACKEND-55: the two tier variables are held to what a block's `maxRetries` and
+    /// `idleTimeoutMs` are, since both go through the same bounds. Every figure is read both ways
+    /// and has to come out the same, so a bound changed in one place and not the other fails here.
+    ///
+    /// The faults this rejects: a second copy of the bounds that disagrees with the block's, and a
+    /// window stated by a variable that has none.
+    #[test]
+    fn the_tier_variables_state_the_count_and_the_gap_as_an_entry_does() {
+        for (retries, gap) in [
+            ("0", "1"),
+            ("2", "240000"),
+            ("7", "600000"),
+            ("8", "600001"),
+            ("100", "86400000"),
+        ] {
+            let block = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                    "maxRetries": {retries}, "idleTimeoutMs": {gap}}}}}}}}}"#
+            ))
+            .patience;
+            let variables = Patience::from_variables(Some(retries), Some(gap));
+            assert_eq!(variables.max_retries, block.max_retries, "{retries}");
+            assert_eq!(variables.idle_timeout, block.idle_timeout, "{gap}");
+            assert_eq!(variables.retry_window, None);
+        }
+        assert_eq!(Patience::from_variables(None, None), Patience::default());
+        assert_eq!(
+            Patience::from_variables(Some(" 3 "), Some("0")),
+            Patience {
+                max_retries: Some(3),
+                ..Patience::default()
+            },
+            "a gap of zero states nothing and the count is trimmed"
+        );
+        for text in ["", "-1", "1.5", "two", "1e3"] {
+            assert_eq!(
+                Patience::from_variables(Some(text), Some(text)),
+                Patience::default(),
+                "{text:?} states nothing"
+            );
+        }
     }
 
     /// A figure above the cap is the cap, as Codex reads its own. Left as written, seven doublings

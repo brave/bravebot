@@ -54,7 +54,7 @@ The unverified rows are the gap Q5 keeps open. Closing it means pinning checksum
 
 ## Advisories and licences
 
-- `pnpm audit --audit-level=high` runs in CI for `mobile/` with the other lockfiles. It reports one high advisory, `GHSA-vfj7-8cjw-p6xm` in `braces` (no patched release), reached only through Metro and the React Native CLI, which are build-time tooling that is not in the app bundle. It is recorded in `pnpm-workspace.yaml` as `ui/` records the same advisory. A moderate advisory in `sprintf-js` (`GHSA-hp3w-g68c-fv3c`, no patched release) does not fail the audit.
+- `pnpm audit --audit-level=high` runs in CI for `mobile/` with the other lockfiles. It reports two high advisories with no patched release: `GHSA-vfj7-8cjw-p6xm` in `braces`, and `GHSA-fc5q-39xc-vjpf` in `picomatch` (a ReDoS in extglob matching, versions up to 4.0.7). Both are reached only through Metro, the React Native CLI, Jest and `@react-native/codegen`, which are build-time tooling that is not in the app bundle. Both are recorded in `pnpm-workspace.yaml` as `ui/` records the same advisories. Remove the `picomatch` entry once a patched release exists and the lockfile uses it. A moderate advisory in `sprintf-js` (`GHSA-hp3w-g68c-fv3c`, no patched release) does not fail the audit.
 - No advisory or licence check covers the Gradle, Maven or SwiftPM dependencies.
 
 ## Checks

@@ -31,14 +31,32 @@ only one with no effect at all.
 ### ASK-1: the questions are routing, approved by being read
 
 `ask_user` still has a destination, the user's screen, and the questions and their options decide
-what the user is shown and therefore what they can answer. What is drawn is exactly the bytes the
-gate checked; nothing re-parses them afterwards, and there is no effect to endorse beyond the
-display.
+what the user is shown and therefore what they can answer. What is drawn is the bytes the gate
+checked, and there is no effect to endorse beyond the display. The terminal draws a question a line
+of the box for each line it was written in and styles its inline markdown. The only characters it
+leaves off the screen are the `#` markers of a heading and the `*`, `_` and backtick markers of the
+emphasis and code it styles, and those only at the start or end of a run of characters with no
+blank in it. A run with such a marker inside it, as a link's target, an address, a path or
+`foo**bar**` can have, is drawn as written, and so is a fenced block. Every other character is drawn
+in the order it was written, links, `#123`, escapes and HTML included, since nothing else is parsed.
+
+A question taller than the box is given its rows after the options, the free-text field and the
+keys, so every choice and the way out stay on the screen however long the question is. It keeps at
+least three rows, scrolls in them with PgUp and PgDn, with the field open as well as on the list,
+and the hints name PgDn. One of those rows says how many rows of the question are below, or, once
+its last line is on the screen, that the end is reached and how many rows are above.
 
 `verified-by: bravebot_core::ask::a_shaped_question_carries_the_tag_it_is_shown_under`
 `verified-by: bravebot_core::ask::a_question_with_no_options_is_still_a_question`
 `verified-by: bravebot_tui::ask::options_whose_labels_wrap_are_fitted_by_the_rows_they_draw`
 `verified-by: bravebot_tui::ask::a_wrapping_list_scrolls_to_the_option_under_the_cursor`
+`verified-by: bravebot_tui::ask::a_plan_keeps_its_line_breaks_and_draws_its_markdown`
+`verified-by: bravebot_tui::ask::a_fenced_block_in_a_question_is_drawn_as_written`
+`verified-by: bravebot_tui::ask::every_character_of_a_question_is_drawn_but_the_markers_it_styles`
+`verified-by: bravebot_tui::ask::a_long_plan_leaves_every_choice_and_the_keys_on_screen`
+`verified-by: bravebot_tui::ask::page_keys_scroll_a_long_question_to_its_last_line_and_back`
+`verified-by: bravebot_tui::ask::the_cut_question_says_how_much_is_below_where_it_is_scrolled`
+`verified-by: bravebot_tui::ask::a_long_question_with_the_field_open_scrolls_and_keeps_its_way_out`
 
 <a id="ASK-2"></a>
 ### ASK-2: one to four questions, refused whole rather than trimmed
@@ -55,9 +73,9 @@ saw.
 `verified-by: bravebot_core::ask::a_series_key_says_how_many_questions_are_in_it`
 `verified-by: bravebot_core::ask::shaping_a_series_never_drops_a_question`
 `verified-by: bravebot_core::policy::a_refused_series_yields_no_answer_at_all`
-`verified-by: bravebot_agent::tools::more_than_four_questions_are_refused_rather_than_trimmed`
-`verified-by: bravebot_agent::tools::exactly_four_questions_are_asked_whole`
-`verified-by: bravebot_agent::tools::the_gate_runs_once_for_a_call_however_many_questions_it_holds`
+`verified-by: bravebot_agent::tools::tests::questions::more_than_four_questions_are_refused_rather_than_trimmed`
+`verified-by: bravebot_agent::tools::tests::questions::exactly_four_questions_are_asked_whole`
+`verified-by: bravebot_agent::tools::tests::questions::the_gate_runs_once_for_a_call_however_many_questions_it_holds`
 
 <a id="ASK-3"></a>
 ### ASK-3: asking stops once the planner's context has met something untrusted
@@ -132,6 +150,7 @@ only which question it is on, its drafts and its focus. What the planner is told
 
 `verified-by: bravebot_tui::ask::the_position_in_the_series_is_shown`
 `verified-by: bravebot_tui::ask::a_lone_question_is_not_labelled_one_of_one`
+`verified-by: bravebot_tui::ask::a_long_question_in_a_series_keeps_its_place_and_its_way_out`
 `verified-by: bravebot_i18n::ask::a_question_is_placed_among_those_put_and_a_lone_one_is_not`
 `verified-by: bravebot_i18n::ask_in_french::the_position_of_a_question_is_said_in_the_chosen_catalog`
 `verified-by: bravebot_core::ask::a_series_ends_at_its_last_question_and_not_before`
@@ -193,7 +212,7 @@ was answered already.
 `verified-by: bravebot_core::ask::no_question_can_spell_the_key_of_another`
 `verified-by: bravebot_core::ask::a_choice_with_no_detail_differs_from_one_with_an_empty_detail`
 `verified-by: bravebot_core::ask::the_key_is_stable_for_the_same_question`
-`verified-by: bravebot_agent::tools::the_same_plan_proposed_again_is_put_under_a_new_key`
+`verified-by: bravebot_agent::tools::tests::questions::the_same_plan_proposed_again_is_put_under_a_new_key`
 `verified-by: bravebot_core::ask::two_series_holding_the_same_questions_in_a_different_order_have_different_keys`
 `verified-by: bravebot_core::ask::a_question_with_its_choices_reordered_is_a_different_question`
 `verified-by: bravebot_core::ask::a_series_answered_entirely_from_memory_asks_nothing`
@@ -241,11 +260,11 @@ a question was closed, and the question is not remembered ([ASK-8](#ASK-8)). The
 draws for the series is the one that says so for the series, and the block under each question that
 was closed ([ASK-13](#ASK-13)) says `closed on the clock` for that question alone.
 
-Only the questions the planner puts with `ask_user` close this way. A plan to approve, a spend limit
-and a repeated call are the driver's own questions, asked of a person who has to be there, and they
+Only the questions the planner puts with `ask_user` close this way. A plan to approve and a spend
+limit are the driver's own questions, asked of a person who has to be there, and they
 wait for as long as it takes whatever the setting says. The setting is read from the person's own
-settings file and a `--settings` file outside the project, and a file that arrived with a checkout
-is ignored and named by `doctor`.
+settings file and the file `--settings` names, and a project or local file that arrived with a
+checkout is ignored and named by `doctor`.
 
 **Why.** A question with nobody at the keyboard blocks the turn for good, and a person who starts a
 long task and leaves finds it stopped at a question. The decision is a clock and a setting the person
@@ -269,10 +288,9 @@ person's file alone as well.
 `verified-by: bravebot_tui::state::only_the_planners_own_questions_are_closed_on_the_clock`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_long_a_question_waits`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_set_how_long_a_question_waits`
-`verified-by: bravebot_agent::tools::the_planners_questions_may_be_closed_when_nobody_answers`
-`verified-by: bravebot_agent::tools::a_plan_put_for_approval_is_never_closed_when_nobody_answers`
+`verified-by: bravebot_agent::tools::tests::questions::the_planners_questions_may_be_closed_when_nobody_answers`
+`verified-by: bravebot_agent::tools::tests::questions::a_plan_put_for_approval_is_never_closed_when_nobody_answers`
 `verified-by: bravebot_agent::spend_limit::the_spend_limit_question_is_never_closed_when_nobody_answers`
-`verified-by: bravebot_agent::repeated_call::the_repeated_call_question_is_never_closed_when_nobody_answers`
 
 <a id="ASK-10"></a>
 ### ASK-10: the line under the call counts the questions asked
@@ -285,10 +303,10 @@ are drawn under it by [ASK-13](#ASK-13), and the line is the same with or withou
 questions were settled when they were skipped. The kernel puts the replies into words for the planner,
 and the line does not read them a second time to count them.
 
-`verified-by: bravebot_agent::tools::the_line_counts_a_skipped_question_as_asked_and_not_as_answered`
-`verified-by: bravebot_agent::tools::the_line_counts_the_questions_asked_where_no_reply_came_back`
-`verified-by: bravebot_agent::tools::the_line_counts_every_question_asked_where_each_was_answered`
-`verified-by: bravebot_agent::tools::the_line_counts_one_question_in_the_singular`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_a_skipped_question_as_asked_and_not_as_answered`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_the_questions_asked_where_no_reply_came_back`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_every_question_asked_where_each_was_answered`
+`verified-by: bravebot_agent::tools::tests::questions::the_line_counts_one_question_in_the_singular`
 `verified-by: bravebot_agent::turn::the_line_under_a_skipped_question_does_not_call_it_an_answer`
 
 <a id="ASK-13"></a>

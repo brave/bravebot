@@ -108,8 +108,9 @@ pub(crate) fn scrub(value: &mut String) {
 ///
 /// The credential file is read as JSON, so a token is in the parsed tree before it is in a
 /// [`Secret`], and that copy is as much this program's buffer as the field it ends up in. A guard
-/// rather than a call at each place a document dies: `decode` has six early returns, and the one
-/// that forgets the call is the one a malformed file takes.
+/// rather than a call at each place a document dies: a parsed account file returns early once in
+/// `oauth::versioned` and twice in each `decode`, and the one that forgets the call is the one a
+/// malformed file takes.
 ///
 /// Every string is cleared rather than the ones under a name that looks like a credential. A
 /// document is small, the walk is cheap, and a rule about which names hold a secret is a rule to
