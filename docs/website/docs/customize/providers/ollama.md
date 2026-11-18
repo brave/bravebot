@@ -91,8 +91,10 @@ or for one model, in a block that lists it, as `limit` (which needs `output` bes
 ```
 
 A `num_ctx` among a model's `options` never replaces the window above, so the figure bravebot
-budgets against always has room above it in the one Ollama allocates. [The context
-window](openai-compatible.md#the-context-window) says what outranks what.
+budgets against always has room above it in the one Ollama allocates. `tools` and `tool_choice`
+among a model's `options` are left out of the request, so a request bravebot sends with no tools
+offers none. [The context window](openai-compatible.md#the-context-window) says what outranks
+what.
 
 ## The OpenAI-compatible endpoint
 

@@ -7,6 +7,18 @@ use bravebot_config::CacheTtl;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The body fields that say which tools a chat-completions request offers or how the model may
+/// call them. A model's `options` are not a source of tool lists, so a request built without tools
+/// offers none. `functions` and `function_call` are the older spelling of the same pair, and
+/// `parallel_tool_calls` only qualifies a list.
+pub const TOOL_KEYS: [&str; 5] = [
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "parallel_tool_calls",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {

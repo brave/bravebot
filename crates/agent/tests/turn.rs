@@ -29416,6 +29416,233 @@ fn a_chosen_variant_is_merged_into_the_planners_request() {
     );
 }
 
+/// The keys a gateway model's `options` state to hand a request a tool list, which no request that
+/// offers none may carry and no request that offers some may have replaced.
+const OPTION_TOOL_KEYS: [&str; 5] = [
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "parallel_tool_calls",
+];
+
+/// `config` with a provider `gw` whose model `a-model` states, in its own `options`, every key of
+/// [`OPTION_TOOL_KEYS`] and a tool the service would run, and whose endpoint is `endpoint`. A
+/// request sent to `gw/a-model` goes through the gateway client, which merges those options into
+/// the body, where `config_for`'s endpoint merges none.
+fn with_a_gateway_whose_model_states_tools(mut config: Config, endpoint: &str) -> Config {
+    let root = serde_json::json!({"provider": {"gw": {
+        "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+        "models": {"a-model": {"options": {
+            "tools": [{"type": "function", "function": {
+                "name": "OPTION-SUPPLIED-TOOL",
+                "parameters": {"type": "object"}
+            }}],
+            "tool_choice": "required",
+            "functions": [{"name": "OPTION-SUPPLIED-FUNCTION"}],
+            "function_call": "auto",
+            "parallel_tool_calls": true,
+            "top_k": 7
+        }}}
+    }}});
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    config
+}
+
+/// What a request with no tool list of its own may not hold, whichever of the five keys a model's
+/// options named.
+fn assert_no_tool_keys(request: &serde_json::Value, who: &str) {
+    for key in OPTION_TOOL_KEYS {
+        assert!(
+            request.get(key).is_none(),
+            "{who}'s request carried `{key}` from the model's options: {request}"
+        );
+    }
+    assert!(
+        !request.to_string().contains("OPTION-SUPPLIED"),
+        "{who}'s request carried a tool its model's options named: {request}"
+    );
+    assert_eq!(
+        request["top_k"],
+        serde_json::json!(7),
+        "{who}'s request lost an option that names no tool, so the options were dropped whole: {request}"
+    );
+}
+
+/// PROC-1 and BACKEND-15 at the request that goes out through a gateway: a processor is sent with
+/// no tool list even when its model's `options` state one, while the planner's own rounds keep the
+/// tools the turn built and gain none of the option's. The regression it rejects is a gateway
+/// client that adds every option key the body lacks, which gives a request built with no tools the
+/// tool list a service would run on quarantined text. `config_for` merges no options, so the test
+/// of the processor's request beside this one cannot see it.
+#[test]
+fn a_processors_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("processor-gateway-options");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"PROCESSOR-INSTRUCTION"}"#,
+        ),
+        processor_reply("REWRITTEN"),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = with_a_gateway_whose_model_states_tools(config_for(&endpoint), &endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config").with_model(Some("gw/a-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<serde_json::Value> = received
+        .try_iter()
+        .map(|body| serde_json::from_str(&body).expect("a JSON request"))
+        .collect();
+    let (processors, others): (Vec<_>, Vec<_>) = bodies.iter().partition(|body| {
+        body["messages"][0]
+            .to_string()
+            .contains("You are an isolated processor")
+    });
+    assert_eq!(processors.len(), 1, "the processor is asked once");
+    assert_no_tool_keys(processors[0], "the processor");
+
+    // The check that runs before the planner's write is a request with no tools of its own, so it
+    // is held to the same rule and the rest are the planner's rounds.
+    let (checks, planners): (Vec<_>, Vec<_>) = others
+        .into_iter()
+        .partition(|body| is_a_side_request(&body.to_string()));
+    for check in checks {
+        assert_no_tool_keys(check, "a check");
+    }
+    assert!(!planners.is_empty(), "the planner was never asked");
+    for planner in planners {
+        let names: Vec<&str> = planner["tools"]
+            .as_array()
+            .expect("the planner's request carries the turn's tools")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"read_file") && names.contains(&"spawn_processor"),
+            "the planner's own tools did not reach the wire: {names:?}"
+        );
+        assert!(
+            !planner.to_string().contains("OPTION-SUPPLIED"),
+            "an option replaced or joined the planner's tools: {planner}"
+        );
+        assert_eq!(
+            planner["top_k"],
+            serde_json::json!(7),
+            "the planner's request lost an option that names no tool: {planner}"
+        );
+    }
+}
+
+/// CHECK-1 and BACKEND-15 at the request that goes out through a gateway: a check, whose content
+/// is quarantined, is sent with no tool list even when its model's `options` state one. The
+/// regression it rejects is the same as the processor's: a gateway client that adds each option key
+/// the body lacks.
+#[test]
+fn a_checks_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("vet-gateway-options");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = with_a_gateway_whose_model_states_tools(config_for(&endpoint), &endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find the path").with_model(Some("gw/a-model".to_string())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut ShownAfterAVet::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_no_tool_keys(&the_check_sent(&sent), "the check");
+}
+
+/// COMPACT-2 and BACKEND-15 at the request that goes out through a gateway: the summariser is
+/// sent with no tool list even when its model's `options` state one, and the planner's round after
+/// it keeps the tools the turn built.
+#[test]
+fn the_summarisers_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("compact-gateway-options");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("a summary"), reply_with("done")]);
+    let config =
+        with_a_gateway_whose_model_states_tools(config_with_budget(&endpoint, 1_000), &endpoint);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it").with_model(Some("gw/a-model".to_string())),
+    )
+    .expect("turn runs");
+
+    let summarising: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("the summariser's request"))
+            .expect("a JSON request");
+    assert!(
+        summarising.to_string().contains(A_SUMMARY_ASKING),
+        "the first request was not the summariser's: {summarising}"
+    );
+    assert_no_tool_keys(&summarising, "the summariser");
+
+    let planning: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("the planner's request"))
+            .expect("a JSON request");
+    assert!(
+        planning["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+            && !planning.to_string().contains("OPTION-SUPPLIED"),
+        "the planner's tools were lost or replaced by the option's: {planning}"
+    );
+}
+
 /// A turn nobody asked a level of must send the request it always sent, so adding the field
 /// changes nothing for an endpoint that has never seen it.
 #[test]

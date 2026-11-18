@@ -1261,7 +1261,8 @@ fn ask<S: Sink, R: Reporter>(
         .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
     // No tools on the request. There is nothing for a planner to call, and no result for a
-    // reply to be steered by.
+    // reply to be steered by. A client never takes the keys that name a tool list from a model's
+    // `options` (BACKEND-15), so none is added below.
     let request = ChatRequest::new(chosen, history.with_system(system)).with_effort(effort);
 
     let written_before = accounting.spent.output_tokens;

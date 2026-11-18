@@ -98,6 +98,7 @@ nobody else. Where a check cannot tell, it warns.
 `verified-by: bravebot_agent::vet::a_checker_is_not_told_to_keep_quiet_about_what_it_notices`
 `verified-by: bravebot_agent::vet::a_checker_that_cannot_tell_is_told_to_warn`
 `verified-by: bravebot_agent::turn::a_check_is_sent_as_three_messages_with_no_tools_and_the_drivers_words_last`
+`verified-by: bravebot_agent::turn::a_checks_request_through_a_gateway_carries_no_tool_list_its_models_options_state`
 `verified-by: by-construction (what fixes a check holds one piece of content and the planner's sentence, has no output label, no output reference and no destination, and is built only by taking an authority minted inside the policy layer; every field is private and no method takes &mut self)`
 
 <a id="CHECK-2"></a>

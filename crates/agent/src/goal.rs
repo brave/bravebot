@@ -300,7 +300,8 @@ pub fn assess<S: Sink>(
     chat: &mut Chat<'_>,
     check: Check,
 ) -> Result<Assessed, GoalError> {
-    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
+    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty, and a client
+    // never takes the keys that name a tool list from a model's `options` (BACKEND-15), so nothing
     // below adds to it. A judge that could call a tool would be a turn, and it would be a turn
     // whose job is deciding whether turns stop.
     let model = judge_model(chat.config, chat.egress, chat.model)?;
