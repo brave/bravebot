@@ -221,6 +221,11 @@ pub struct Run<'a> {
     /// the bridge sent. A `String` cannot carry such a byte, so the spelling is not done here;
     /// `run_lines` draws each as given.
     pub writes: &'a [String],
+    /// The reference whose contents the first program is fed, where the call named one. Only the
+    /// name the driver minted when the slot was written, never a byte of what it holds, so a yes is
+    /// an answer about a reference the person was shown (PROMPT-1). `None` where the call
+    /// named none.
+    pub stdin: Option<&'a str>,
     /// What the stages are confined to, or `None` where the turn does not confine them.
     pub confinement: Option<&'a Confinement>,
     /// One sentence for each access the line reaches that nothing here holds, as the agent worded it.
@@ -242,7 +247,7 @@ pub fn not_sandboxed() -> String {
 }
 
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
-/// resolved to, what it would write, and what it is not confined to.
+/// resolved to, what it would write, the reference it is fed, and what it is not confined to.
 ///
 /// The same things the panel shows, in the same order.
 pub fn run_lines(run: &Run<'_>) -> Vec<String> {
@@ -256,6 +261,12 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         for path in run.writes {
             lines.push(format!("  {path}"));
         }
+    }
+    // What goes into the first program, where the call named a reference for it: the half of a
+    // plan the steps above do not show. The reference name only, the way the panel draws it.
+    if let Some(reference) = run.stdin {
+        lines.push(t!(run_is_fed).to_string());
+        lines.push(format!("  {}", printable(reference)));
     }
     // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
     // programs are confined to where the turn confines them, and that they are not where it does not.
@@ -947,6 +958,7 @@ mod tests {
             summary: "list containers",
             steps: &steps,
             writes: &["out.txt".to_string()],
+            stdin: None,
             confinement: Some(&confinement),
             ambient: &["it reaches the container daemon".to_string()],
             releases_private: false,
@@ -967,6 +979,45 @@ mod tests {
         }
     }
 
+    /// RUN-3, PROMPT-1: a run fed a reference names it, after the files the line writes and
+    /// under the catalog's sentence, and a run fed none draws neither. The regression it rejects
+    /// is a lines builder that leaves the reference out, so a yes to `sh -s` is an answer about a
+    /// program fed contents the person was never told of, and one that draws the sentence over
+    /// nothing.
+    #[test]
+    fn a_run_names_the_reference_it_is_fed_after_what_it_writes_and_only_where_there_is_one() {
+        let steps = [RunStep {
+            written: "sh -s".to_string(),
+            binary: "/bin/sh".to_string(),
+        }];
+        let drawn = |stdin| {
+            run_lines(&Run {
+                summary: "install it",
+                steps: &steps,
+                writes: &["out.txt".to_string()],
+                stdin,
+                confinement: None,
+                ambient: &[],
+                releases_private: false,
+                offers_remember: false,
+            })
+        };
+        let fed = drawn(Some("ref:7"));
+        let sentence = fed
+            .iter()
+            .position(|line| line == &t!(run_is_fed).to_string())
+            .unwrap_or_else(|| panic!("no sentence saying what it is fed: {fed:?}"));
+        assert_eq!(fed[sentence + 1], "  ref:7", "{fed:?}");
+        let written = fed
+            .iter()
+            .position(|line| line == "  out.txt")
+            .expect("a write");
+        assert!(written < sentence, "{fed:?}");
+        let none = drawn(None).join("\n");
+        assert!(!none.contains("it is fed the contents of"), "{none}");
+        assert!(!none.contains("ref:7"), "{none}");
+    }
+
     /// Issue #3045: a front end offering a standing "allow and remember" answer beside a run
     /// question states what it grants, and a front end with no such answer offers no sentence
     /// about it.
@@ -981,6 +1032,7 @@ mod tests {
                 summary: "list containers",
                 steps: &steps,
                 writes: &[],
+                stdin: None,
                 confinement: None,
                 ambient: &[],
                 releases_private: false,
@@ -1185,6 +1237,7 @@ mod tests {
                 summary: "write it",
                 steps: &steps,
                 writes: &[bravebot_agent::confirm::shown_name(write)],
+                stdin: None,
                 confinement: Some(&confinement),
                 ambient: &[],
                 releases_private: false,

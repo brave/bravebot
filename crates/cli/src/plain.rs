@@ -1775,6 +1775,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         summary: &request.summary(),
         steps: &steps,
         writes: &writes,
+        stdin: request.stdin.as_deref(),
         confinement: confinement.as_ref(),
         ambient: &ambient,
         releases_private: request.releases_private(),
@@ -3864,6 +3865,36 @@ mod tests {
             confined.contains("container daemon"),
             "the access the profile does not narrow was dropped: {confined}"
         );
+    }
+
+    /// A run fed a reference names it in the question, and the sentence over it is the
+    /// catalog's. A background session puts the same lines to whoever attaches, so this is the
+    /// question both read (PROMPT-1, RUN-3). The regression it rejects is a `program` that builds
+    /// the lines without reading `request.stdin`, so a yes to `sh -s` runs a page nobody named.
+    #[test]
+    fn a_run_fed_a_reference_is_asked_about_with_the_reference_named() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "sh",
+                vec!["-s".to_string()],
+            )]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/bin/sh".to_string()], "/work");
+        let unfed = program(&request);
+        assert!(
+            !unfed.iter().any(|line| line == t!(run_is_fed)),
+            "{unfed:?}"
+        );
+
+        request.stdin = Some("ref:1".to_string());
+        request.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        let lines = program(&request);
+        let sentence = lines
+            .iter()
+            .position(|line| line == t!(run_is_fed))
+            .unwrap_or_else(|| {
+                panic!("the question does not say it is fed a reference: {lines:?}")
+            });
+        assert_eq!(lines[sentence + 1], "  ref:1", "{lines:?}");
     }
 
     /// A name that reached its file through a link is asked about with the link beside the file,

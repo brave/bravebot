@@ -8,6 +8,8 @@
 
  - Fixed a vouch question showing the head of a file with tag characters, bidirectional controls and zero width characters drawn as nothing. The preview now writes each one out and says above it how many there were, in the terminal client, the plain line interface, the editor bridge and the window. Only the lines shown are written out and counted, and the planner still gets the file's own bytes. ([#4101](https://github.com/brave/bravebot/issues/4101))
 
+ - Fixed the run question in the plain line interface, in background sessions and in the editor bridge not saying which reference a command is fed. It now says the command is fed the contents of the named reference, as the terminal client and the window already did. ([#4102](https://github.com/brave/bravebot/issues/4102))
+
 ## [0.23.0](https://github.com/brave/bravebot/releases/tag/v0.23.0)
 
  - Added `/issues` and `/prs`, and Pull requests and Issues sections in the info panel, which list the issues and pull requests the session has met in text you typed, in the agent's own fetches and in trusted tool results. They cost no tokens and answer at once while a turn runs. ([#4223](https://github.com/brave/bravebot/issues/4223))

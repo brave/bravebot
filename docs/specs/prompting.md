@@ -216,6 +216,7 @@ bound to the arguments as held.
 `verified-by: bravebot_approval::lib::a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another`
+`verified-by: bravebot_cli::plain::a_run_fed_a_reference_is_asked_about_with_the_reference_named`
 `verified-by: bravebot_cli::plain::the_question_in_lines_spells_the_file_a_yes_is_kept_in`
 `verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_is_not_text_to_the_editor`
