@@ -8523,6 +8523,41 @@ mod tests {
         );
     }
 
+    /// R61 of issue 4286: a skill a plugin offers is drawn with `(plugin)` and not with the label of
+    /// the user's own or the project's, so a person choosing from the row sees where it came from.
+    /// Rejects a `Source::Plugin` row drawn as `(user)`.
+    #[test]
+    fn a_plugin_skill_row_says_it_came_from_a_plugin() {
+        use bravebot_agent::skills::Source;
+        let mut session = Session::new("none");
+        for c in "this is /rev".chars() {
+            session.type_char(c);
+        }
+        session.settle_skills(|| {
+            vec![crate::skills::Skill {
+                name: "review-plan".to_string(),
+                description: "Review a plan".to_string(),
+                argument_hint: None,
+                source: Source::Plugin.into(),
+                person_only: false,
+            }]
+        });
+
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].contains("/review-plan"), "{rows:?}");
+        assert!(rows[0].ends_with("Review a plan (plugin)"), "{rows:?}");
+    }
+
     /// The rows the box offers when a session holds a server with a prompt, settled for `line`.
     fn typed_with_prompts(line: &str) -> Session {
         let held = crate::mcp_command::tests::holding_a_server_with_prompts();

@@ -1046,8 +1046,11 @@ directory serve several of them.
 <a id="DELEGATE-20"></a>
 ### DELEGATE-20: a definition is resolved from trusted sources before the turn, or it is dropped
 
-Two roots, resolved afresh every turn where skills are, least specific first so the project has
+Three roots, resolved afresh every turn where skills are, least specific first so the project has
 the last word ([INSTR-1](instructions.md#INSTR-1), [INSTR-4](instructions.md#INSTR-4)):
+`~/.bravebot/plugins/<name>/agents/<name>.md` of each installed, enabled plugin, trusted by
+provenance and the least specific, replaced by any other source of the same name
+([PLUGIN-12](plugins.md#PLUGIN-12)),
 `~/.bravebot/agents/<name>.md`, trusted by provenance, and
 `<workspace>/.bravebot/agents/<name>.md`, trusted only if the trust map says so.
 

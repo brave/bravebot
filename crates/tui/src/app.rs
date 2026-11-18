@@ -552,6 +552,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(argument) = argument_to(line, MCP_COMMAND) {
         return Action::Mcp(argument.to_string());
     }
+    if let Some(argument) = argument_to(line, PLUGIN_COMMAND) {
+        return Action::Plugin(argument.to_string());
+    }
     if let Some(word) = argument_to(line, SANDBOX_COMMAND) {
         return Action::Sandbox(word.to_string());
     }
@@ -3238,6 +3241,7 @@ fn event_loop(
             }
             Action::Reach(argument) => held.reach(&argument),
             Action::Mcp(argument) => held.mcp(terminal, &argument, skip_permissions),
+            Action::Plugin(argument) => held.plugin(terminal, &argument),
             Action::ListCheckouts => held.list_checkouts(),
             Action::Unfinished => held.session.report_unfinished(held.workspace),
             Action::ListMemories => held.list_memories(),
@@ -29753,6 +29757,64 @@ mod tests {
                     Action::Mcp(_)
                 ),
                 "{line}"
+            );
+        }
+    }
+
+    /// `/plugin` carries what follows it whole to the loop, and a longer word or a sentence that
+    /// mentions it is not the command (CMD-2, PLUGIN-1).
+    ///
+    /// Rejects: `/plugin` read as a command inside a sentence or as the prefix of another word.
+    #[test]
+    fn the_plugin_command_carries_its_words_unparsed() {
+        let mut session = Session::new("none");
+        for (line, argument) in [
+            ("/plugin", ""),
+            ("/plugin list", "list"),
+            ("/plugin add ./demo", "add ./demo"),
+            ("/plugin remove demo", "remove demo"),
+        ] {
+            type_line(&mut session, line);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Plugin(argument.to_string()),
+                "{line}"
+            );
+        }
+        for line in ["/plugins", "does /plugin add work"] {
+            type_line(&mut session, line);
+            assert!(
+                !matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Plugin(_)
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    /// PLUGIN-1: a line that arrives by paste is text in the box, not the typed command, even where
+    /// it reads as one and ends in a newline. Only the person's own Enter sends a line.
+    ///
+    /// Rejects: a paste that carries `/plugin add` out, in one line or in a block that is folded.
+    #[test]
+    fn a_pasted_plugin_line_is_text_in_the_box_and_not_the_command() {
+        for pasted in [
+            "/plugin add /tmp/evil\n".to_string(),
+            "/plugin add /tmp/evil".to_string(),
+            format!("{}/plugin add /tmp/evil\n", "a line\n".repeat(40)),
+        ] {
+            let mut session = Session::new("none");
+            assert!(
+                !matches!(handle_paste(&mut session, &pasted), Action::Plugin(_)),
+                "a paste was carried out as /plugin"
+            );
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .all(|entry| !entry.text.contains("Installed")),
+                "a paste installed something"
             );
         }
     }

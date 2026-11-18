@@ -18323,6 +18323,41 @@ fn requests(gateway: &Gateway) -> Vec<String> {
     bodies
 }
 
+/// PLUGIN-4, CLI-31: a one-shot task opening with `/` is sent to the model as words and is not
+/// carried out as a command, so `/plugin add <directory>` as the task installs nothing: no
+/// directory or record appears under the state directory's `plugins`, and the planner's request
+/// carries the line as the person's words. Rejects a one-shot path that dispatches the line to the
+/// plugin installer.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_task_opening_with_slash_plugin_add_installs_nothing() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+    let scratch =
+        Scratch::new("cli-running-one-shot-plugin-add").with_settings(&settings_for(&gateway));
+    let source = scratch.path.join("a-plugin-source");
+    std::fs::create_dir_all(source.join("skills").join("hello")).expect("a plugin directory");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nskills = \"skills\"\n",
+    )
+    .expect("a manifest");
+    let task = format!("/plugin add {}", source.display());
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", task.as_str()]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        !scratch.path.join(".bravebot/plugins").exists(),
+        "a one-shot task installed a plugin"
+    );
+    let asked = requests(&gateway);
+    assert!(
+        asked.iter().any(|body| body.contains("/plugin add")),
+        "the line was not sent as words: {asked:?}"
+    );
+}
+
 /// A one-shot run answering `reply` at `gateway`, with `arguments` after the flags that ask for
 /// the result object.
 fn a_recorded_run(scratch: &Scratch, arguments: &[&str]) -> (Output, String, String) {

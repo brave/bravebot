@@ -67,6 +67,7 @@ pub mod permission_mode;
 pub mod permissions;
 pub mod picture;
 pub mod plan_approval;
+pub mod plugins;
 pub mod preamble;
 pub mod processor;
 pub mod programs;

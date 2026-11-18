@@ -18107,6 +18107,63 @@ mod tests {
         }
     }
 
+    /// PLUGIN-1: no tool the planner or a delegate is offered installs, removes, enables, disables
+    /// or lists a plugin. The only way is the typed `/plugin` command.
+    ///
+    /// Rejects: a tool added to any offered list whose name or description is about plugins.
+    #[test]
+    fn no_tool_offered_installs_or_changes_a_plugin() {
+        use bravebot_core::delegate::{Definitions, Kind};
+
+        let mut offered = Vec::new();
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            for arming in [
+                Arming::Allowed { free: 1 },
+                Arming::UnderALoop,
+                Arming::UnderAGoal,
+                Arming::Full,
+                Arming::Unavailable,
+            ] {
+                offered.extend(for_planner(
+                    scheduling,
+                    arming,
+                    &Definitions::default(),
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                ));
+            }
+        }
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            offered.extend(for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&Definitions::default()),
+                Deadlines::BUILT_IN,
+            ));
+        }
+        assert!(!offered.is_empty());
+        for tool in offered {
+            let name = tool.function.name.to_lowercase();
+            assert!(
+                !name.contains("plugin"),
+                "{name} is a tool about plugins, which only the typed /plugin command may touch"
+            );
+            // The description and every argument name are in the serialised spec, so a tool that
+            // installs a plugin by another name still shows here.
+            let spec = serde_json::to_string(&tool).unwrap().to_lowercase();
+            assert!(
+                !spec.contains("plugin"),
+                "{name} mentions plugins in its description or arguments: {spec}"
+            );
+        }
+    }
+
     /// A call held for being a repeat is drawn on both its lines with the reason the planner gave,
     /// as `dispatch` draws every other call (TOOL-5), and with the target `dispatch` would draw for
     /// the same call: a held call hard-coded to an empty target leaves the person watching with

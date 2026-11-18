@@ -603,11 +603,38 @@ pub fn discover<S: Sink>(
             policy,
             workspace,
             &home.join(AGENTS),
+            &format!("~/.bravebot/{AGENTS}"),
             &mut definitions,
             &mut notices,
         );
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
+    if let Some(home) = home {
+        // The least specific root (PLUGIN-12): a definition of a name any other source has is not
+        // taken, and is not merged with it either, since a merge narrows the one that replaces. Read
+        // last and added only where the name is still absent. Only the definitions part of an
+        // enabled plugin under the state directory, never a workspace one (PLUGIN-5).
+        let mut from_plugins = Definitions::default();
+        for roots in crate::plugins::enabled_roots(home) {
+            let Some(root) = roots.agents else {
+                continue;
+            };
+            let label = format!("~/.bravebot/plugins/{}/{AGENTS}", roots.plugin);
+            discover_home(
+                policy,
+                workspace,
+                &root,
+                &label,
+                &mut from_plugins,
+                &mut notices,
+            );
+        }
+        for definition in from_plugins.iter() {
+            if definitions.get(definition.name()).is_none() {
+                definitions.insert(definition.clone());
+            }
+        }
+    }
     notices.extend(rounds_held_to_their_kind(&definitions));
     notices.extend(checkouts_held_to_their_kind(&definitions));
     // Asked once every file is in, since a later definition of a name takes its key over. A
@@ -738,6 +765,7 @@ fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     root: &Path,
+    label: &str,
     definitions: &mut Definitions,
     notices: &mut Vec<Notice>,
 ) {
@@ -751,7 +779,7 @@ fn discover_home<S: Sink>(
             passed_over += 1;
             continue;
         }
-        let origin = format!("~/.bravebot/{AGENTS}/{file}");
+        let origin = format!("{label}/{file}");
 
         let Ok(text) = std::fs::read_to_string(root.join(&file)) else {
             continue;
@@ -1177,6 +1205,17 @@ pub(crate) fn markdown_files(root: &Path) -> (Vec<String>, usize) {
     }
     names.sort();
     (names, not_text)
+}
+
+/// The name and kind a definition file declares, read by the same reader a session uses, or
+/// nothing where the file is not a definition. For a listing that only names what a plugin offers.
+pub(crate) fn declared_name_and_kind(text: &str, origin: &str) -> Option<(String, Kind)> {
+    match read_definition(text, origin) {
+        Read::Definition { definition, .. } => {
+            Some((definition.name().to_string(), definition.kind()))
+        }
+        _ => None,
+    }
 }
 
 /// What a definition made for a desktop bot came to.

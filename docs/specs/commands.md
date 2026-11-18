@@ -646,6 +646,11 @@ does not read:
   person and takes the terminal, and `disable` and `remove` change the tools the turn offers, so
   those and any other word after `/mcp` wait. The line says so under the turn, naming `/mcp`, as for
   every command that waits for the turn to end.
+- **`/plugin`, in every form.** `add <path>` installs after a question put to the person and takes
+  the terminal, and `list`, `remove`, `enable` and `disable` change what the next turn is offered
+  ([PLUGIN-1](plugins.md#PLUGIN-1)), so every form waits. The line says so under the turn, naming
+  `/plugin`. The command is typed: no tool installs a plugin, and a line that arrives by paste is
+  text in the box.
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
   answers into both as it runs, so a copy taken when it began would state "every run is asked" about

@@ -477,6 +477,7 @@ fn slash_lines(
             Origin::Skill(Source::Workspace) => t!(skill_from_project).to_string(),
             Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
             Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
+            Origin::Skill(Source::Plugin) => t!(skill_from_plugin).to_string(),
             Origin::Server { alias, .. } => {
                 t!(skill_from_mcp_server, alias = alias.as_str())
             }
