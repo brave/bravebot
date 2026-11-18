@@ -3205,7 +3205,7 @@ fn a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler() {
     if !usability::available() {
         return;
     }
-    let planted = planted_dir("make-rule-asflags");
+    let planted = planted_dir("make-assembler-flags");
     let marker = planted.join("ran");
     plant(&planted.join("as"), &marker);
     let value = if cfg!(target_os = "macos") {
@@ -3215,7 +3215,7 @@ fn a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler() {
     };
 
     withheld_from_a_setup_stage(
-        "make-rule-asflags",
+        "make-assembler-flags",
         "sh",
         &["-c", "make -s -C {session} || true"],
         &[("Makefile", "all: x.o\n"), ("x.S", "")],
@@ -3524,12 +3524,12 @@ fn a_setup_make_is_not_handed_a_compiler_path() {
     if !usability::available() {
         return;
     }
-    let planted = planted_dir("make-compiler-path");
+    let planted = planted_dir("make-compiler-path-linked");
     let marker = planted.join("ran");
     plant(&planted.join("ld"), &marker);
 
     withheld_from_a_setup_stage(
-        "make-compiler-path",
+        "make-compiler-path-linked",
         "sh",
         &["-c", "make -s -C {session} || true"],
         &[
