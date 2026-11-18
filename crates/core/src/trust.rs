@@ -683,6 +683,14 @@ pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {
     }
 }
 
+/// [`canonical_form`] for a caller outside this crate that compares one name of a path with another
+/// the way a refusal does: two names are one when their keys are equal. Costs no allocation for an
+/// ASCII name on a volume that does not fold case.
+#[must_use]
+pub fn canonical_key(key: &str, folds_case: bool) -> Cow<'_, str> {
+    canonical_form(key, folds_case)
+}
+
 /// A name, held in the forms it is compared in, for a lookup that tests it against many rules.
 struct Name<'a> {
     key: &'a str,
