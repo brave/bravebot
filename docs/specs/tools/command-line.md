@@ -938,7 +938,8 @@ planner is told the directory in the words it named it with, or in the words of 
 the one it carried, and a `..` that lands in an added directory as the workspace spells it for the
 file tools. That spelling is used in the account of the line, in the origin of what it printed and
 of what a job printed, and in every refusal and failure about the line, including the sentence about
-a carried directory that no longer exists. A link in a tree nobody vouched for chooses the name it
+a carried directory that no longer exists, and in the name recorded for a file a redirection in the
+line wrote ([CHECKOUT-13](../checkouts.md#CHECKOUT-13)). A link in a tree nobody vouched for chooses the name it
 leads to ([LABEL-3](../labels.md#LABEL-3), [CMDLINE-4](#CMDLINE-4)). The auto mode's classifier is a
 model, and is shown the same spelling ([AUTO-5](../auto-mode.md#AUTO-5)).
 
@@ -955,6 +956,8 @@ root again. That is short of what this clause describes, and is left to the chan
 session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 
 `verified-by: bravebot_agent::turn::the_working_directory_persists_across_calls`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 `verified-by: bravebot_agent::turn::the_working_directory_can_be_an_added_directory`
 `verified-by: bravebot_agent::turn::a_directory_escaping_the_workspace_is_refused`
 `verified-by: bravebot_agent::turn::a_nonexistent_directory_is_an_error_and_does_not_mutate`

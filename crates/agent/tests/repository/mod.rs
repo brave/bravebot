@@ -9,22 +9,48 @@ pub fn commit_files(root: &std::path::Path, files: &[(&str, &str)], message: &st
 
 /// The same, made at `time`, in seconds since the epoch.
 pub fn commit_files_at(root: &std::path::Path, files: &[(&str, &str)], message: &str, time: i64) {
+    let entries: Vec<(&str, &str, &str)> = files
+        .iter()
+        .map(|&(path, text)| (path, text, "100644"))
+        .collect();
+    commit_entries(root, &entries, message, time);
+}
+
+/// The same as [`commit_files`], with `links` committed as symbolic links: each is a path and the
+/// target the link holds.
+pub fn commit_files_and_links(
+    root: &std::path::Path,
+    files: &[(&str, &str)],
+    links: &[(&str, &str)],
+    message: &str,
+) {
+    let entries: Vec<(&str, &str, &str)> = files
+        .iter()
+        .map(|&(path, text)| (path, text, "100644"))
+        .chain(links.iter().map(|&(path, target)| (path, target, "120000")))
+        .collect();
+    commit_entries(root, &entries, message, 1_700_000_000);
+}
+
+/// Entries are a path, the bytes of its blob and the mode git records for it.
+fn commit_entries(root: &std::path::Path, files: &[(&str, &str, &str)], message: &str, time: i64) {
     use gix_object::Write as _;
 
-    fn tree(store: &gix_odb::loose::Store, files: &[(&str, &str)]) -> gix_hash::ObjectId {
-        let mut directories: std::collections::BTreeMap<&str, Vec<(&str, &str)>> =
+    fn tree(store: &gix_odb::loose::Store, files: &[(&str, &str, &str)]) -> gix_hash::ObjectId {
+        let mut directories: std::collections::BTreeMap<&str, Vec<(&str, &str, &str)>> =
             Default::default();
         let mut entries = Vec::new();
-        for &(path, text) in files {
+        for &(path, text, mode) in files {
             match path.split_once('/') {
-                Some((directory, rest)) => {
-                    directories.entry(directory).or_default().push((rest, text))
-                }
+                Some((directory, rest)) => directories
+                    .entry(directory)
+                    .or_default()
+                    .push((rest, text, mode)),
                 None => {
                     let id = store
                         .write_buf(gix_object::Kind::Blob, text.as_bytes())
                         .expect("blob");
-                    entries.push((path.as_bytes().to_vec(), format!("100644 {path}"), id));
+                    entries.push((path.as_bytes().to_vec(), format!("{mode} {path}"), id));
                 }
             }
         }

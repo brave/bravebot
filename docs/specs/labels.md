@@ -415,6 +415,8 @@ symbolic link in the tree led to, because whoever wrote a tree nobody vouched fo
 `verified-by: bravebot_agent::tools::tests::editing::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 `verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
 `verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context

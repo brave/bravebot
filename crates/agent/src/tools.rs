@@ -12589,15 +12589,17 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     }
     for destination in &standing {
         crate::memory::after_write(policy, tools.workspace.memories(), &destination.key, folds);
-        // The line is the planner's own words, so the name in it is one it typed. Recorded only
-        // where the line left a file, so a destination it failed to open, or one the scan took
-        // back out, is not reported as written.
+        // The line is the planner's own words, so the name in it is one it typed. Recorded by
+        // `told`, the directory spelled as typed, and not by `shown`, which holds the place a link
+        // in the tree led (CHECKOUT-13, LABEL-3). Recorded only where the line left a file, so a
+        // destination it failed to open, or one the scan took back out, is not reported as
+        // written.
         let refused = left
             .refused_at
             .iter()
             .any(|refused| refused.key == destination.key);
         if !refused && std::fs::symlink_metadata(&destination.resolved).is_ok() {
-            tools.workspace.record_write(Some(&destination.shown));
+            tools.workspace.record_write(Some(&destination.told));
         }
     }
     // Spent, on the reading that the line ran. What it exited with does not enter into it, because
