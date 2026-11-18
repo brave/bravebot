@@ -12684,6 +12684,49 @@ fn doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops() {
     );
 }
 
+/// DELEGATE-19. `doctor` names the keys a delegate definition declares that nothing reads, so a
+/// definition written for another agent to be read-only is not taken for one. A definition whose
+/// every key is read is not named, and the value written after a key is never printed.
+#[test]
+fn doctor_names_the_keys_a_definition_declares_that_nothing_reads() {
+    let scratch = Scratch::new("cli-running-definition-unread")
+        .with_file(
+            ".bravebot/agents/auditor.md",
+            &a_definition(
+                "auditor",
+                "kind: worker\ndisallowedTools: run, write_file\npermissionMode: plan\n",
+            ),
+        )
+        .with_file(
+            ".bravebot/agents/tidy.md",
+            &a_definition("tidy", "kind: reader\ntools: read_file\nmodel: haiku\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("agents/auditor.md declares disallowedTools, permissionMode"),
+        "doctor did not name the keys nothing reads: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("agents/tidy.md"),
+        "doctor named a definition whose every key is read: {stdout}"
+    );
+    assert!(
+        !stdout.contains("write_file"),
+        "doctor repeated the value written after a key: {stdout}"
+    );
+}
+
 /// SKILL-16 with INSTR-17. A shared skill directory that exists and that `sharedSkillDirectories`
 /// does not name is said to be left alone, and the one that is absent is not mentioned. A `doctor`
 /// that said nothing leaves a person who keeps skills for another agent unable to tell the

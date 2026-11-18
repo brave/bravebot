@@ -158,6 +158,44 @@ fn skill_keys_unread(
         .collect()
 }
 
+/// One line per delegate definition whose file declares a key nothing here reads.
+///
+/// The definition loads with the key ignored, as a skill does, and its author believes the line is
+/// in force. For `disallowedTools` and `permissionMode` that belief is a delegate written to be
+/// read-only that is not (DELEGATE-19). The set is resolved as a turn starting in this directory
+/// resolves it, so a definition a turn would drop is not named.
+fn definition_keys_unread(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+) -> Vec<String> {
+    let sink = &mut bravebot_core::event::NullSink;
+    bravebot_agent::agents::resolved(workspace, home, trust, permissions, sink)
+        .iter()
+        .filter(|definition| !definition.unread_keys().is_empty())
+        .map(|definition| {
+            // Both the origin and the keys are the checkout's own text, so they are drawn through
+            // printable as every other piece of it shown by this command is (LAYER-3, CLI-7).
+            let keys: Vec<String> = definition
+                .unread_keys()
+                .iter()
+                .map(|key| progress::printable(key))
+                .collect();
+            aligned(
+                t!(doctor_skill_key_unread),
+                t!(
+                    doctor_definition_keys_unread,
+                    definition = progress::printable(definition.origin()),
+                    count = definition.unread_keys().len() as i64,
+                    keys = keys.join(", ")
+                ),
+                FACT,
+            )
+        })
+        .collect()
+}
+
 /// One line for each of the other agents' skill directories in the home directory that exists and
 /// that `sharedSkillDirectories` does not name, so the person can see it was found and left alone
 /// (INSTR-17).
@@ -1268,8 +1306,14 @@ pub(crate) fn doctor() -> ExitCode {
             &workspace,
             bravebot_agent::home::directory().as_deref(),
             trust_already_answered(workspace.root()),
-            permissions,
+            permissions.clone(),
         );
+        lines.extend(definition_keys_unread(
+            &workspace,
+            bravebot_agent::home::directory().as_deref(),
+            trust_already_answered(workspace.root()),
+            permissions,
+        ));
         lines.extend(shared_skill_directories_left_alone(&workspace));
         if !lines.is_empty() {
             println!();
