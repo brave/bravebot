@@ -4,7 +4,7 @@
 //! specifies, so a contract holds the code to the meaning. docs/development/verification.md says
 //! how a contract is written and run.
 
-use crate::command::{Plan, Route, Step, Steps};
+use crate::command::{Asked, Plan, Route, Step, Steps};
 use crate::label::{Confidentiality, Integrity, Label};
 use std::path::PathBuf;
 use vstd::prelude::*;
@@ -182,6 +182,13 @@ pub open spec fn plan_is_its_entries(plan: Plan) -> bool {
         stdin,
     } = plan;
     steps_are_their_entries(steps) && writes@.len() == 0 && reads@.len() == 0 && stdin is None
+}
+
+/// A request adds to its plan only what an entry does not need to hold. Every field is named, for
+/// the reason a step's are.
+pub open spec fn request_is_its_entries(plan: Plan, asked: Asked) -> bool {
+    let Asked { scopes, unconfined, protected } = asked;
+    plan_is_its_entries(plan) && !scopes && !unconfined && !protected
 }
 
 } // verus!

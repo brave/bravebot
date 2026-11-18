@@ -100,3 +100,15 @@ replace: left && right.are_their_entries() => left
 mutation: every_step_is_its_entry passes a pipeline whose later stage is not its entry
 file: crates/core/src/command.rs
 replace: if !steps[at].is_its_entry() { => if at == 0 && !steps[at].is_its_entry() {
+
+mutation: Plan::can_be_remembered_as lets a line that asked for a scope be remembered
+file: crates/core/src/command.rs
+replace: self.can_be_remembered() && !scopes && !unconfined && !protected => self.can_be_remembered() && !unconfined && !protected
+
+mutation: Plan::can_be_remembered_as lets a line that asked to run with no profile be remembered
+file: crates/core/src/command.rs
+replace: self.can_be_remembered() && !scopes && !unconfined && !protected => self.can_be_remembered() && !scopes && !protected
+
+mutation: Plan::can_be_remembered_as lets a line into a protected path be remembered
+file: crates/core/src/command.rs
+replace: self.can_be_remembered() && !scopes && !unconfined && !protected => self.can_be_remembered() && !scopes && !unconfined

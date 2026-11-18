@@ -17,6 +17,7 @@ crates/core/src/command.rs::every_route_opens_no_file/loop: invariant at <= rout
 crates/core/src/command.rs::every_step_is_its_entry: r => ensures r == (forall|i: int| 0 <= i < steps@.len() ==> crate::spec::step_is_its_entry(#[trigger] steps@[i])),
 crates/core/src/command.rs::every_step_is_its_entry/loop: invariant at <= steps.len(), forall|i: int| 0 <= i < at ==> crate::spec::step_is_its_entry(#[trigger] steps@[i]), decreases steps.len() - at,
 crates/core/src/command.rs::can_be_remembered: r => ensures r == crate::spec::plan_is_its_entries(*self),
+crates/core/src/command.rs::can_be_remembered_as: r => ensures r == crate::spec::request_is_its_entries(*self, asked),
 crates/core/src/label.rs::meet: r => ensures r == crate::spec::meet(self, other),
 crates/core/src/label.rs::join: r => ensures r == crate::spec::join(self, other),
 crates/core/src/label.rs::degrades_to: r => ensures r == crate::spec::degrades(self, other),

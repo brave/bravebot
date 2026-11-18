@@ -11552,9 +11552,11 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // asked about again. The policy carries it out of the turn and the session records it.
     //
     // Not for a line an entry could not record: one that feeds a file to a program, one that
-    // feeds it a reference, and one that writes an assignment in front of a program. The prompt
+    // feeds it a reference, one that writes an assignment in front of a program, one asking for a
+    // scope or to run with no profile, and one redirecting into a protected path. The prompt
     // offers `a` for none of them, and this is the same refusal at the layer that would act on
-    // it, asked of the same predicate so the two cannot drift. What an entry records is a
+    // it: `Plan::vouch` asks the predicate the prompt asks, which Verus proves, and the policy
+    // records an entry only from the `Vouch` it returns. What an entry records is a
     // program, its exact argv and the tree the line runs in, and a `<` redirection, a
     // `stdin_ref` and an assignment are in none of the three, so an entry made here would cover
     // the same program fed any other file or reference, or run under no assignment at all. A
@@ -11563,10 +11565,10 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // The tree is not among the refusals, and that is RUN-8's own answer rather than an
     // omission: an entry names the directory it was given in, so a line outside the workspace
     // root is one an entry can hold as written, and it grants there and nowhere else.
-    if answer.remember && plan.can_be_remembered() && !unconfined {
-        for command in request.would_vouch_for() {
-            policy.remember_command(command);
-        }
+    if answer.remember
+        && let Some(vouch) = plan.vouch(request.asked())
+    {
+        policy.remember_vouch(vouch);
     }
     // The credential scopes the planner asked for, kept for the stages they were added to
     // (SANDBOX-27). The shapes are worked out again from the plan and the closed table here,

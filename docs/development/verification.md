@@ -17,6 +17,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Labelled::relabel` | It succeeds exactly when the new label is a degradation, and keeps the value |
 | `Policy::refuse_untrusted`, `Policy::read_trusted_content` | Each refuses exactly when the label is untrusted |
 | `Plan::can_be_remembered` | It allows a line exactly when everything that decides what each step does is in the entry `a` records, as `spec::plan_is_its_entries` states over every field of `Plan` and `Step`: no file written or read by name, no reference fed in, no assignment, and no route that opens a file |
+| `Plan::can_be_remembered_as` | It allows a request exactly when its plan can be remembered and it asked for no scope, did not ask to run with no profile, and writes no protected path. `Plan::vouch` makes the only `Vouch`, and `Policy::remember_vouch` records only from one |
 
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.

@@ -909,8 +909,26 @@ fn every_step_is_its_entry(steps: &[Step]) -> bool {
     true
 }
 
+/// The entries a person's `a` adds for one line, made only by [`Plan::vouch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vouch {
+    entries: Vec<crate::programs::Command>,
+}
+
+impl Vouch {
+    /// The entries, in stage order.
+    pub fn entries(&self) -> &[crate::programs::Command] {
+        &self.entries
+    }
+
+    pub(crate) fn into_entries(self) -> Vec<crate::programs::Command> {
+        self.entries
+    }
+}
+
 /// What a run's request adds to its plan that no entry holds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub struct Asked {
     /// The planner asked the line to carry a credential scope, a toolchain list, loopback or an
     /// ssh key (SANDBOX-26).
@@ -1041,8 +1059,29 @@ impl Plan {
     /// neither ([PERM-9]).
     ///
     /// [PERM-9]: ../../../docs/specs/permissions.md
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::request_is_its_entries(*self, asked),
+    ))]
     pub fn can_be_remembered_as(&self, asked: Asked) -> bool {
-        self.can_be_remembered() && !asked.scopes && !asked.unconfined && !asked.protected
+        let Asked {
+            scopes,
+            unconfined,
+            protected,
+        } = asked;
+        self.can_be_remembered() && !scopes && !unconfined && !protected
+    }
+
+    /// The vouch a person's `a` for this line makes, or `None` where an entry could not record it
+    /// ([`Plan::can_be_remembered_as`]). The one way to make a [`Vouch`], so the policy records
+    /// only an answer that passed that question.
+    pub fn vouch(&self, asked: Asked) -> Option<Vouch> {
+        if !self.can_be_remembered_as(asked) {
+            return None;
+        }
+        Some(Vouch {
+            entries: self.entries(),
+        })
     }
 
     /// The entries vouching for this plan would add, without repeats and in stage order.
@@ -1495,6 +1534,49 @@ mod tests {
             !later_stage.can_be_remembered(),
             "a line carrying an expansion could be remembered"
         );
+    }
+
+    /// A vouch is made only where `can_be_remembered_as` allows the line, so the policy can record
+    /// no entry for a request that asked for a scope, to run with no profile, or to write a
+    /// protected path. The control is the same plan asked for plainly, whose vouch holds one entry
+    /// per distinct stage. Rejects a `vouch` that asks only `can_be_remembered`, which ignores the
+    /// request, and one that returns the entries without asking at all.
+    #[test]
+    fn a_vouch_is_made_only_for_a_request_an_entry_can_hold() {
+        let line = plan(Steps::Pipeline(vec![
+            step("git", &["log"]),
+            step("wc", &["-l"]),
+            step("git", &["log"]),
+        ]));
+        let plain = line
+            .vouch(Asked::default())
+            .expect("the control was refused");
+        assert_eq!(
+            plain.entries().len(),
+            2,
+            "a vouch did not hold one entry per stage"
+        );
+
+        for asked in [
+            Asked {
+                scopes: true,
+                ..Asked::default()
+            },
+            Asked {
+                unconfined: true,
+                ..Asked::default()
+            },
+            Asked {
+                protected: true,
+                ..Asked::default()
+            },
+        ] {
+            assert!(
+                line.can_be_remembered(),
+                "the plan alone stopped being rememberable"
+            );
+            assert!(line.vouch(asked).is_none(), "{asked:?} made a vouch");
+        }
     }
 
     /// A step that takes `name` from `parts` in front of its program.
