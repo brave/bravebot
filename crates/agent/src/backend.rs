@@ -2523,9 +2523,7 @@ mod tests {
     /// implementation about a shape the file never had. One directory per name, since the tests run
     /// at once and a shared file is a test reading another's.
     fn models_from(name: &str, text: &str) -> (bravebot_config::Models, PathBuf) {
-        let scratch = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(name);
+        let scratch = crate::testutil::scratch_dir(name);
         std::fs::create_dir_all(&scratch).expect("a scratch directory");
         let path = scratch.join("managed.json");
         std::fs::write(&path, text).expect("a managed file");

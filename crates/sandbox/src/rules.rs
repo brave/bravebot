@@ -534,7 +534,7 @@ pub fn judged_request(
         };
         covers
             && matches!(&item.state, State::InForce(paths)
-                if paths.iter().any(|denied| path.starts_with(denied)))
+                if paths.iter().any(|denied| starts_with_folded(&path, denied)))
     });
     match denied {
         true => Err(RequestRefusal::Denied),
@@ -800,7 +800,8 @@ fn overridden(rules: &Rules) -> Vec<usize> {
             reaches
                 && paths(other).iter().any(|denied| {
                     mine.iter().any(|path| {
-                        path == denied || (other.entry.pinned && path.starts_with(denied))
+                        same_path_folded(path, denied)
+                            || (other.entry.pinned && starts_with_folded(path, denied))
                     })
                 })
         });
@@ -1029,6 +1030,40 @@ fn under(path: &Path, ancestor: &Path) -> bool {
 
 fn same_path(left: &Path, right: &Path) -> bool {
     without_verbatim_prefix(left.to_path_buf()) == without_verbatim_prefix(right.to_path_buf())
+}
+
+/// Whether `path` is at or beneath `denied`, each name compared as written or in canonical
+/// decomposition.
+///
+/// An entry for a path that is not on disk keeps the spelling it was typed in beneath the part that
+/// is ([`resolved`]), and a volume such as APFS opens a name made later under every canonically
+/// equivalent form of it, so a byte comparison misses the file once it exists in the other form.
+/// The path of a request is on disk and carries the form the volume stored. A volume that holds
+/// the two forms apart is refused more than the entry spells and never less, as for a glob
+/// ([`matches_folded`]). Case is not folded, and a name that is not text is compared as the bytes it
+/// is, so it is not taken for its lossy lookalike.
+fn starts_with_folded(path: &Path, denied: &Path) -> bool {
+    let mut path = path.components();
+    denied.components().all(|want| {
+        path.next()
+            .is_some_and(|have| same_component_folded(have, want))
+    })
+}
+
+/// Whether `left` and `right` name the same path as [`starts_with_folded`] reads them.
+fn same_path_folded(left: &Path, right: &Path) -> bool {
+    starts_with_folded(left, right) && starts_with_folded(right, left)
+}
+
+fn same_component_folded(left: Component, right: Component) -> bool {
+    match (left, right) {
+        (Component::Normal(left), Component::Normal(right)) => {
+            left == right
+                || matches!((left.to_str(), right.to_str()), (Some(left), Some(right))
+                    if crate::canonical::decompose(left) == crate::canonical::decompose(right))
+        }
+        (left, right) => left == right,
+    }
 }
 
 /// Every path a pattern names.
@@ -3132,6 +3167,135 @@ mod tests {
         assert_eq!(ask(&secret, true), Err(RequestRefusal::Denied));
         assert_eq!(ask(&frozen, true), Err(RequestRefusal::Denied));
         assert_eq!(ask(&frozen, false), Ok(resolved(&frozen)));
+    }
+
+    /// A `denyRead` or `denyWrite` entry for a path that is not on disk keeps the spelling it was
+    /// typed in. A volume such as APFS opens a file made later under every canonically equivalent
+    /// spelling, so the request for the file is refused whichever form it was made in. The entry is
+    /// resolved before the file exists, and the file is made in the other form after.
+    #[test]
+    fn a_denial_of_a_missing_path_refuses_the_file_made_later_in_either_unicode_form() {
+        let nfc = "caf\u{e9}";
+        let nfd = "cafe\u{301}";
+        for (typed, made) in [(nfc, nfd), (nfd, nfc)] {
+            for list in [List::DenyRead, List::DenyWrite] {
+                let home = fresh("request-denied-missing-home");
+                let base = fresh("request-denied-missing-base");
+                let entry_path = home.join(typed).join("key");
+                let person = resolve(
+                    &only(list, entry_path.to_str().unwrap()),
+                    Some(&home),
+                    None,
+                    &base,
+                );
+                fs::create_dir_all(home.join(made)).unwrap();
+                fs::write(home.join(made).join("key"), b"x").unwrap();
+                fs::write(home.join(made).join("other"), b"x").unwrap();
+                let ask =
+                    |named: &Path, write| judged_request(named, write, Some(&home), None, &person);
+                let file = home.join(made).join("key");
+                let covered_for_reads = list == List::DenyRead;
+                assert_eq!(
+                    ask(&file, true),
+                    Err(RequestRefusal::Denied),
+                    "{list:?}: a write to {made:?} under an entry typed {typed:?}"
+                );
+                assert_eq!(
+                    ask(&file, false),
+                    match covered_for_reads {
+                        true => Err(RequestRefusal::Denied),
+                        false => Ok(resolved(&file)),
+                    },
+                    "{list:?}: a read of {made:?} under an entry typed {typed:?}"
+                );
+                // The entry names one file: its neighbour in the same directory is not refused.
+                let other = home.join(made).join("other");
+                assert_eq!(ask(&other, true), Ok(resolved(&other)));
+            }
+        }
+    }
+
+    /// An allowance and a refusal that name one missing path in two forms are the same path, so the
+    /// refusal of the person's own and the one the managed layer pinned each decide it.
+    #[test]
+    fn an_allowance_is_overridden_by_a_refusal_spelled_in_the_other_unicode_form() {
+        let nfc = "caf\u{e9}";
+        let nfd = "cafe\u{301}";
+        let home = fresh("overridden-unicode-home");
+        let base = fresh("overridden-unicode-base");
+        let lists = Lists {
+            allow_read: vec![entry(home.join(nfd).join("key").to_str().unwrap())],
+            deny_read: vec![entry(home.join(nfc).join("key").to_str().unwrap())],
+            allow_write: vec![entry(home.join(nfd).join("inner").to_str().unwrap())],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, Some(&home), None, &base);
+        let state_of = |list| {
+            rules
+                .items()
+                .iter()
+                .find(|item| item.list == list)
+                .map(|item| item.state.clone())
+        };
+        assert_eq!(
+            state_of(List::AllowRead),
+            Some(State::Refused(Reason::Overridden))
+        );
+
+        let lists = Lists {
+            deny_read: vec![pinned(home.join(nfc).to_str().unwrap())],
+            allow_read: vec![entry(home.join(nfd).join("inner").to_str().unwrap())],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, Some(&home), None, &base);
+        assert_eq!(
+            refusal_of(&rules),
+            Some(Reason::Overridden),
+            "an allowance beneath a pinned refusal in the other form"
+        );
+    }
+
+    /// The comparison joins the two Unicode forms of a name and nothing else: a different name, a
+    /// longer name that starts with the same letters, the same name in another case and a name that
+    /// is not text beside the one its lossy rendering spells each stay apart.
+    #[test]
+    fn a_denied_path_is_met_in_either_unicode_form_and_no_other_name_is() {
+        let at = |name: &str| Path::new("/d").join(name).join("key");
+        let nfc = "caf\u{e9}";
+        let nfd = "cafe\u{301}";
+        assert!(starts_with_folded(&at(nfd), &at(nfc)));
+        assert!(starts_with_folded(&at(nfc), &at(nfd)));
+        assert!(starts_with_folded(&at(nfd), Path::new("/d")));
+        assert!(starts_with_folded(&at(nfd), &Path::new("/d").join(nfc)));
+        assert!(same_path_folded(&at(nfd), &at(nfc)));
+        // A different name, a longer name and a path shorter than the entry.
+        assert!(!starts_with_folded(&at("cafe"), &at(nfc)));
+        assert!(!starts_with_folded(&at("caf\u{e9}s"), &at(nfc)));
+        assert!(!starts_with_folded(&Path::new("/d").join(nfd), &at(nfc)));
+        assert!(!same_path_folded(&Path::new("/d").join(nfd), &at(nfc)));
+        // Another case is another name here, as it is for an entry without a wildcard.
+        assert!(!starts_with_folded(&at("CAF\u{c9}"), &at(nfc)));
+        // The directory above is not the entry.
+        assert!(!starts_with_folded(
+            &Path::new("/e").join(nfd).join("key"),
+            &at(nfc)
+        ));
+    }
+
+    /// A name that is not text is compared as the bytes it is, and is not the name its lossy
+    /// rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn a_denied_name_that_is_not_text_is_not_met_by_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = Path::new("/d").join(OsStr::from_bytes(b"tool-\xff"));
+        let other_invalid = Path::new("/d").join(OsStr::from_bytes(b"tool-\xfe"));
+        let lookalike = Path::new("/d").join("tool-\u{fffd}");
+        assert!(starts_with_folded(&invalid, &invalid));
+        assert!(!starts_with_folded(&invalid, &lookalike));
+        assert!(!starts_with_folded(&lookalike, &invalid));
+        assert!(!starts_with_folded(&invalid, &other_invalid));
     }
 
     /// An approved path is a read row, and a write one is a write row that is read as well; the

@@ -193,6 +193,35 @@ fn no_granted_rule_is_written_down() {
     );
 }
 
+/// INCOG-5, PERM-15: a yes to the opening question holds the rules for this session and records
+/// none of them, so the next session asks again.
+#[test]
+fn a_yes_to_the_proposed_rules_holds_for_the_session_alone() {
+    use bravebot_agent::opening::{Whence, rules_to_grant};
+    let scratch = Scratch::new("opening-yes-not-kept");
+    let rules = [a_proposed_rule()];
+
+    let question = rules_to_grant(Whence::Asked, Some(&scratch.grants()), &rules);
+    assert_eq!(question.asking, rules);
+    let answered = question.answer(true, Some(&scratch.grants()), "a-private-session");
+    assert_eq!(
+        answered.granted, rules,
+        "the rules the person granted are not in force"
+    );
+    assert_eq!(
+        answered.kept, None,
+        "an incognito yes was reported as written, or as a failed write"
+    );
+    assert!(
+        !scratch.grants().path().exists(),
+        "an incognito session recorded a grant"
+    );
+    assert!(
+        rules_to_grant(Whence::Asked, Some(&scratch.grants()), &rules).needs_asking(),
+        "the next session was not asked again"
+    );
+}
+
 /// INCOG-5, PERM-15: reading is unchanged here too. A rule an earlier ordinary session granted in
 /// this workspace still stops the asking, so a private session is not one that has to answer every
 /// question its user already answered.

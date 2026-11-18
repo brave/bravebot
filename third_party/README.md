@@ -25,6 +25,10 @@ Differences from the published crate:
   two seconds. On Windows the event reader shares the mouse buttons it last saw held with
   `push_input()`, so a mouse record handed back is read as the console reader would read it. This
   is what keeps keys typed while the terminal is asked about itself at startup (INPUT-52, #3846).
+- `src/event/source/unix/mio.rs`: after a tty read that completes no event, the read loop asks the
+  tty how many bytes are queued (`FIONREAD`) and leaves for the outer poll where there are none.
+  The published loop reads again, and the tty is a blocking descriptor, so that read waits for the
+  next byte past the caller's timeout (INPUT-53, #3847).
 
 To update it, replace `src/` and `Cargo.toml` with those of the new release, apply the changes
 listed above and in the commits that touch `third_party/crossterm/src`, and run `make check-deps`.

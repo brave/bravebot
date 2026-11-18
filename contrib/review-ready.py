@@ -4,10 +4,11 @@
     review-ready.py [--repo OWNER/NAME] [--reviewer LOGIN] [--limit N] [--wait SECONDS]
 
 A pull request is ready when it is mergeable, is not a draft, has every check passed or skipped,
-has an approval as the latest review by the reviewer and has no latest review, by anyone, that
-requests changes. Each is printed to stdout as `<url>  <title>`, once, after the last read, with the
-pull request that has waited longest first and the most recent last. A pull request has waited since
-the reviewer's latest approval, or since it was opened where that has no time.
+has an approval as the latest review by the reviewer, has no latest review, by anyone, that
+requests changes and is not in the merge queue. Each is printed to stdout as `<url>  <title>`, once,
+after the last read, with the pull request that has waited longest first and the most recent last.
+A pull request has waited since the reviewer's latest approval, or since it was opened where that
+has no time.
 
 A check counts by its latest run. GitHub keeps every run of a check on the commit, including one
 cancelled because a newer run of the workflow started, and the pull request page shows only the
@@ -40,6 +41,9 @@ WAIT = 30.0
 INTERVAL = 3.0
 
 FIELDS = "number,title,url,createdAt,mergeable,latestReviews,isDraft,statusCheckRollup"
+# A pull request in the merge queue needs nobody. gh has no field for queue membership, so GitHub's
+# search leaves them out. The `=` form keeps gh from reading the leading `-` as a flag.
+NOT_QUEUED = "--search=-is:queued"
 PASSED = ("SUCCESS", "NEUTRAL", "SKIPPED")
 
 READY = "ready"
@@ -119,7 +123,8 @@ class GhFailed(Exception):
 
 def read(repo, limit):
     """One `gh pr list`, parsed."""
-    command = ["gh", "pr", "list", "--repo", repo, "--limit", str(limit), "--json", FIELDS]
+    command = ["gh", "pr", "list", "--repo", repo, "--limit", str(limit), "--json", FIELDS,
+               NOT_QUEUED]
     try:
         done = subprocess.run(command, capture_output=True, text=True, check=False)
     except OSError as error:

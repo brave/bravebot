@@ -24,17 +24,19 @@ use std::sync::Mutex;
 /// One lock for the whole file: `PATH` and `HOME` are process-wide.
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
-/// A directory of this test's own under the build directory, because the suite refuses a root
-/// under the temporary directory and every directory there is left out of a lookup.
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
+/// A directory of this test's own under the scratch root, which is outside the temporary directory
+/// where that is possible, because the suite refuses a root under it and every directory there is
+/// left out of a lookup.
 struct Scratch {
     path: PathBuf,
 }
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(format!("usability-path-{name}"));
+        let path = scratch_root::scratch_dir(&format!("usability-path-{name}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("a scratch directory");
         Self {

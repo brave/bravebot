@@ -14,9 +14,12 @@ use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 use std::path::{Path, PathBuf};
 
+#[path = "../../sandbox/test-support/scratch_root.rs"]
+mod scratch_root;
+
 /// A scratch directory that removes itself, so tests do not leave state behind.
 ///
-/// Under `target/` rather than the system temporary directory, which is shared between users and
+/// Under the scratch root rather than the system temporary directory, which is shared between users and
 /// between processes and where a fixed name collides whenever two checkouts run the tests at once.
 struct Scratch {
     path: PathBuf,
@@ -24,13 +27,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        // CARGO_MANIFEST_DIR is `<workspace>/crates/agent`, so two pops reach the root.
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.pop();
-        path.pop();
-        path.push("target");
-        path.push("test-scratch");
-        path.push(format!("agents-{name}"));
+        let path = scratch_root::scratch_dir(&format!("agents-{name}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }

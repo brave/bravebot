@@ -2077,28 +2077,6 @@ fn keep_references<P: Reporter + ?Sized>(
     }
 }
 
-/// Take the issues and pull requests a result names, where its label says it is trusted and the
-/// turn keeps them (PANEL-16).
-///
-/// The label is asked first, and only a trusted result is handed to `read_trusted_content`, so an
-/// untrusted result adds no reference and no event to the trail. A result is never searched here
-/// after being released to the planner: the read is the gate's, on the value that is still labelled
-/// (LABEL-6). A delegate collects nothing.
-pub(super) fn collect_from_a_result<S: Sink, P: Reporter + ?Sized>(
-    policy: &mut Policy<'_, S>,
-    task: &Task,
-    state: &mut State<'_>,
-    reporter: &mut P,
-    output: &tools::Output,
-) {
-    if !task.keeps_links || task.delegate.is_some() || !output.text.label().is_trusted() {
-        return;
-    }
-    if let Ok(text) = policy.read_trusted_content("references", &output.text) {
-        keep_references(state, reporter, &crate::links::references_in_text(&text));
-    }
-}
-
 /// What a round does once a call has returned: count what it changed, tell the hooks the call
 /// finished, start the delegates it asked for, take its time and spend into the turn's figures,
 /// and keep the wakeup, watch, loaded tool and loaded skill it carried back.

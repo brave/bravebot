@@ -3501,11 +3501,9 @@ mod tests {
     use bravebot_sandbox::network::Network;
     use bravebot_sandbox::policy::ConfinementLevel;
 
-    /// A state directory of its own under the build directory, emptied first.
+    /// A state directory of its own under the scratch root, emptied first.
     fn scratch(name: &str) -> PathBuf {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(name);
+        let path = crate::testutil::scratch_dir(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         path.canonicalize().expect("canonical scratch")

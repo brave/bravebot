@@ -86,12 +86,11 @@ pub const DEFAULT_MODEL: &str = "automatic-bravebot";
 ///
 /// Compiled in rather than configured: the key a person types with `bravebot auth login brave` goes
 /// to this host, so no variable or settings file is what decides where it goes. The two constants
-/// below are one value while the premium service is live only in development, and are two so that
-/// production can move without touching how the choice is made.
+/// below are two so that each environment has its own host.
 pub const DEV_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
 
 /// Where Brave's premium service is, for every other build.
-pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
+pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.com";
 
 /// The premium host compiled in for a build whose free endpoint is `free`.
 ///
@@ -2256,9 +2255,13 @@ impl Config {
     pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
         let name = self.model_named(name);
         // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
-        // an entry may name either whichever the model was asked for as.
+        // an entry may name either whichever the model was asked for as. So does an account model,
+        // `chatgpt/gpt-5` being sent to the account as `gpt-5`.
         let Some((provider, wire)) = self.provider_for(&name) else {
-            return self.models.refuses(&name);
+            return match self.chatgpt_model(&name).or_else(|| self.xai_model(&name)) {
+                Some(wire) => self.models.refuses_any(&[&name, wire]),
+                None => self.models.refuses(&name),
+            };
         };
         let qualified = format!("{}/{wire}", provider.id);
         self.models.refuses_any(&[&name, wire, &qualified])
@@ -4978,6 +4981,51 @@ mod tests {
         }
     }
 
+    /// BACKEND-48: an account model is asked for as `chatgpt/gpt-5` or `xai/grok-4.5` and sent to the
+    /// account as `gpt-5` or `grok-4.5`, and a list entry written either way answers for the one model.
+    ///
+    /// Both accounts, each list and each spelling of the entry. A build that compared only the
+    /// qualified name requests a model whose deny entry is written as the account is sent it, and one
+    /// that handled a single account leaves the other open. A second model of the same account that no
+    /// entry names shows that an allow entry permits one model and not the whole account.
+    #[test]
+    fn an_account_model_is_matched_by_either_of_its_spellings() {
+        let resolved = |name: &str, list: &str| {
+            let managed = managed::scratch(name, &format!(r#"{{"models": {{{list}}}}}"#));
+            let config = resolved_under(&managed, &Settings::parse("{}"), |_| None, complete_env)
+                .expect("configured");
+            (config, managed)
+        };
+        for (account, model) in [("chatgpt", "gpt-5"), ("xai", "grok-4.5")] {
+            let qualified = format!("{account}/{model}");
+            let other = format!("{account}/other-model");
+            for entry in [model, qualified.as_str()] {
+                let (config, _) =
+                    resolved("account-spelling-deny", &format!(r#""deny": ["{entry}"]"#));
+                assert_eq!(
+                    config.model_refused(&qualified).map(|(_, why)| why),
+                    Some(ModelRefusal::Denied),
+                    "deny {entry}, asked {qualified}"
+                );
+                assert_eq!(config.model_refused(&other), None, "deny {entry}");
+                let (config, _) = resolved(
+                    "account-spelling-allow",
+                    &format!(r#""allow": ["{entry}"]"#),
+                );
+                assert_eq!(
+                    config.model_refused(&qualified),
+                    None,
+                    "allow {entry}, asked {qualified}"
+                );
+                assert_eq!(
+                    config.model_refused(&other).map(|(_, why)| why),
+                    Some(ModelRefusal::NotAllowed),
+                    "allow {entry}"
+                );
+            }
+        }
+    }
+
     /// BACKEND-48, and the whole reason the check is placed after tier resolution: `opus` is not a
     /// name any service knows, so a list matched against what a settings file wrote would let
     /// `{"model": "opus"}` reach the pinned account whatever either list said.
@@ -6261,11 +6309,10 @@ mod tests {
     /// refused while the assertions above, which compare against the constants, still held.
     #[test]
     fn the_compiled_in_premium_host_is_the_one_that_accepts_a_key() {
-        let gateway = "https://ai-gateway-api.bsg.brave.software/v1/chat/completions";
         let production = Config::from_lookup(complete_env).unwrap();
         assert_eq!(
             production.premium_chat_completions_url().as_deref(),
-            Some(gateway)
+            Some("https://ai-gateway-api.bsg.brave.com/v1/chat/completions")
         );
 
         let development = Config::from_lookup(|k| match k {
@@ -6275,7 +6322,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             development.premium_chat_completions_url().as_deref(),
-            Some(gateway)
+            Some("https://ai-gateway-api.bsg.brave.software/v1/chat/completions")
         );
     }
 

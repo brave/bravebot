@@ -397,7 +397,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -1379,7 +1379,7 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 <a id="CMD-22"></a>
-### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach` and `/schedule` spell out what they take after the word
+### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach`, `/mcp` and `/schedule` spell out what they take after the word
 
 Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `read-only`,
 `workspace-write` and `off`, after the caret in place of `[<mode>]`. `/sandbox standard` is read
@@ -1390,10 +1390,13 @@ the end of the line, finishes it by the rule CMD-21 gives for `/effort`, so `/sa
 `/limit` draws `[<n>[k|m] | <n> credits | off]`, the figures it takes, and not the words `tokens`
 and `credits` as choices. `/review` draws `[staged | since <ref> | commit <ref> | pr <n>] [focus]`,
 the targets its parser reads. `/reach` draws the credential scopes, the `write` and `always`
-words, `remove <n>` and `keys`. In each, the words are the ones the parser compares against, taken
+words, `remove <n>` and `keys`. `/mcp` draws `[list | reconnect | disable | remove]`, the
+constants its parser reads, where the table and the list keep `[action]`. In each, the words are
+the ones the parser compares against, taken
 from the type or constant it reads, so a mode, scope or target added there appears in the hint.
-The completion list and the table keep the short form, so the description column does not move,
-and `--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
+The completion list and the table keep the short form, so the description column does not move
+and every row of the list shows its whole description on a terminal 120 columns wide.
+`--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
 because a name there may come from a file a person wrote. `/schedule` completes the subcommand word
 from `bravebot_schedule::words::SUBCOMMANDS` ([SCHEDULE-8](schedule.md#SCHEDULE-8)) and nothing
 after it.
@@ -1404,6 +1407,8 @@ Nothing from the conversation reaches any of them. They read the typed line and 
 apart from the parser drifts from it.
 
 `verified-by: bravebot_tui::render::the_sandbox_command_offers_its_modes_after_its_word`
+`verified-by: bravebot_tui::render::the_mcp_command_offers_its_subcommands_after_its_word`
+`verified-by: bravebot_tui::render::every_slash_row_shows_its_whole_description_at_120_columns`
 `verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
 `verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
 `verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
@@ -1938,4 +1943,28 @@ most likely to want fewer sections.
 `verified-by: bravebot_tui::app::a_section_turned_off_mid_turn_is_saved_at_once_and_the_turn_is_not_touched`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::app::a_command_that_opens_a_picker_opens_it_as_it_is_typed_mid_turn`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+
+<a id="CMD-33"></a>
+### CMD-33: `/redraw` gives the terminal's modes back, asks for them again and draws the whole screen
+
+`/redraw` repairs a terminal that was cleared or reset from outside the program, such as by a
+shortcut of the terminal emulator. Such a terminal shows nothing where the interface believes a cell
+is already drawn, because a frame sends only the cells that changed since the last one, and it
+reports the loss to nothing, so no event can start the repair. The command gives the terminal's
+modes back and asks for them again (the alternate screen, mouse reports, bracketed paste, focus
+reports and the keyboard flags), clears what the interface believes is on the screen, and draws the
+next frame in full. It takes no argument, so `/redraw` followed by words is a prompt (CMD-2). It
+reads nothing, sends nothing, spends no tokens, starts no turn and writes nothing to the transcript.
+It touches nothing a running turn holds, so typed during one it is carried out as it is typed and
+the turn goes on (CMD-8). A prompt file or skill named `redraw` is shadowed by the command (CMD-17),
+and a slash offers the word with the commands that begin like it (CMD-9).
+
+**Why.** A person who pressed a shortcut of the terminal by accident sees a blank screen, and
+returning to the window sends no event that would repair it. Opening a long list, such as the one a
+slash offers, repairs only the rows it covers.
+
+`verified-by: bravebot_tui::app::the_redraw_command_retakes_the_terminal_and_runs_mid_turn`
+`verified-by: bravebot_tui::app::redraw_is_a_command_only_as_the_whole_line`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`

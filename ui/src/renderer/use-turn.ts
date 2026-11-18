@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, type MutableRefObject, type SetStateAction } from 'react'
 import type { FileAttachment } from '../shared/files'
-import type { AskAnswer } from '../shared/protocol'
-import { canSend } from './can-send'
+import type { AskAnswer, ProjectQuestionsReport } from '../shared/protocol'
+
+/** What `trust.reply` answers: whether the yes was kept, and the questions it made due. */
+type TrustReplied = ProjectQuestionsReport & { trusted: boolean; kept: boolean | null }
+import { askingFirst, canSend } from './can-send'
+import { type Answering, replyFolder, replyRules, reported } from './project-questions'
 import { declined, markersOf, mayGo, route, sentInto } from './interjecting'
 import { type Interjection, type Live, NEW_CHAT, liveKey } from './live'
 import { conversationPreferences, setConversation } from './experience'
@@ -43,10 +47,16 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     // answer to cover confined lines (RUN-5) from this and from nothing else.
     const confinedLines = !!openedLives.current.get(handle)?.confinedLinesNotice
     try {
-      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, confinedLines })
+      const settled = await call<TrustReplied>('trust.reply', { session: handle, trusted, confinedLines })
+      const kept = settled.kept
       const remembered = kept === true && path && shownPath ? { at: Math.floor(Date.now() / 1000), path, shownPath } : null
+      // A yes may put the question about the rules this checkout proposes, or the first about a
+      // directory it names: the answer says which is out, and the window draws that next.
+      const next = reported(settled)
       updateSession(handle, (old) => (old ? {
         ...old,
+        ...next,
+        rules: next.rules !== undefined ? next.rules : old.rules,
         askingTrust: null,
         keepingTrust: null,
         shownKeepingTrust: null,
@@ -63,6 +73,28 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       answeringTrust.current = false
     }
   }, [])
+
+  // The questions after trust, answered the same way: once per question, by its request id, and
+  // what comes next read from the answer. The bridge grants and opens; this only says yes or no.
+  const answeringProject = useRef(false)
+  const answering: Answering = {
+    call,
+    read: (handle) => openedLives.current.get(handle),
+    update: (handle, change) => updateSession(handle, (old) => (old ? { ...old, ...change } : old)),
+    setProblem,
+  }
+  const answerProject = useCallback(async (reply: (handle: string) => Promise<void>) => {
+    const handle = handleRef.current
+    if (!handle || answeringProject.current) return
+    answeringProject.current = true
+    try {
+      await reply(handle)
+    } finally {
+      answeringProject.current = false
+    }
+  }, [])
+  const answerRules = useCallback((granted: boolean) => answerProject((handle) => replyRules(answering, handle, granted)), [])
+  const answerFolder = useCallback((open: boolean) => answerProject((handle) => replyFolder(answering, handle, open)), [])
 
   const send = useCallback(async (prompt: string, target?: string, selectedFiles?: FileAttachment[], queuedStaged?: Staged[]) => {
     const handle = target ?? handleRef.current
@@ -203,7 +235,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
   const dequeuing = useRef(new Set<string>())
   useEffect(() => {
     for (const item of openedLives.current.values()) {
-      if (item.running || !item.queued?.length || item.askingTrust || !mayGo(item)) continue
+      if (item.running || !item.queued?.length || askingFirst(item) || !mayGo(item)) continue
       if (dequeuing.current.has(item.handle)) continue
       const [message, ...remaining] = item.queued
       updateSession(item.handle, (old) => old ? { ...old, queued: remaining } : old)
@@ -323,7 +355,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       return
     }
     void send(prompt)
-  }, [draft, live?.running, live?.askingTrust, send, schedule, backendReady])
+  }, [draft, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, backendReady])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
@@ -344,5 +376,5 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     void interject(handle, line)
   }
 
-  return { answerTrust, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
+  return { answerTrust, answerRules, answerFolder, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
 }
