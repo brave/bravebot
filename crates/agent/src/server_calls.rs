@@ -383,6 +383,7 @@ impl Servers {
             into => {
                 let shown = crate::turn::preview_for(policy, step.tool(), &text);
                 reporter.quarantined(Shown {
+                    as_the_planner_had_it: None,
                     origin,
                     reach: Reach::NoModel,
                     label: text.label().to_string(),

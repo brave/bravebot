@@ -487,7 +487,9 @@ than a branch nobody is shown:
 - **The file a reference names, for a line a person reads**, through `names_for_display`. It
   returns every slot's filename as a plain string to be worded into a preview, a note or a task
   line, and records one `Declassified` event and one `display` allow for the call. It is a display
-  release and nothing it returns may become a path an effect uses.
+  release and nothing it returns may become a path an effect uses. A file `/export` writes is read
+  by later turns, so it holds the call as the planner had it and not these names
+  ([SESSION-17](sessions.md#SESSION-17)).
 - **The file a reference names, as a read's path or a destination**, through
   `promote_reference_for_read` and `destination_from_reference`, which [routing.md](routing.md)
   settles and which share `path_of_reference`.

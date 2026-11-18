@@ -1975,6 +1975,26 @@ fn the_hunks_of_the_last_turn_are_listed_with_their_lines() {
     assert_eq!(wrote.foo(), EDITED, "listing wrote to the file");
 }
 
+/// SESSION-17: a hunk row names its file for the person, and the file may be one the planner was
+/// given as a reference and never by name, so the export writes the hunk's number and no path.
+///
+/// Rejects: an export that writes the drawn target of a hunk row.
+#[test]
+fn an_export_writes_a_hunk_by_its_number_and_not_by_its_file() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let mut wrote = a_turn_wrote_foo("hunks-export");
+
+    wrote.list();
+
+    let exported = crate::render::as_markdown(&wrote.session, "t");
+    assert!(exported.contains("*Ran: `Hunk(1)`*"), "{exported}");
+    assert!(exported.contains("*Ran: `Hunk(2)`*"), "{exported}");
+    assert!(!exported.contains("foo.rs"), "{exported}");
+    assert_eq!(wrote.rows()[0].line(), "Hunk(1 foo.rs)");
+}
+
 /// PROMPT-1: a file the turn wrote is named in the list as every prompt names it. A name that ends
 /// in a space or holds a character that draws as nothing is not drawn as the name without it, in
 /// the row, in the line saying a hunk went back and in the line for a file with no hunks. A name

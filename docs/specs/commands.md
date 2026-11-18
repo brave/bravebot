@@ -625,7 +625,8 @@ does not read:
   typed, so a reply the turn is still writing is not in it, and neither is a prompt waiting behind
   the turn. The prompt the turn is working on is marked as still running. A waiting `/cd` or
   `/clear` has not happened yet, so the file goes where the turn is working and holds what the
-  transcript holds now, as `/copy` copies the reply it holds now.
+  transcript holds now, as `/copy` copies the reply it holds now. The file holds what the planner was
+  given and nothing a screen alone was shown ([SESSION-17](sessions.md#SESSION-17)).
 
 - **`/btw`.** It asks over a copy of the exchange the turn published with its latest request, on a
   thread of its own, so the turn's conversation, record and rewind point are neither read nor

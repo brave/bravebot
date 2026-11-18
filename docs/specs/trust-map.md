@@ -468,6 +468,10 @@ person. `cp fetched.md AGENTS.md` is that row. `sh -c`, `python3 -c` and `make` 
 argument list and are not covered. A line the audited table proves read-only copies nothing and is not
 put to a person for the paths it names; what it prints keeps the label of those paths.
 
+`/export` writes a file this process opens and records no write. It leaves out what a screen alone was
+shown, so the file holds no untrusted data the planner was not given and no row of the table applies
+([SESSION-17](sessions.md#SESSION-17)).
+
 A prompt asks one question and only this one: **may this path stop being trusted?** That is the
 only consequence a later step cannot undo, since a path recorded as untrusted can no longer be
 examined or edited.
@@ -2177,6 +2181,11 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   ([tools/command-line.md](tools/command-line.md#CMDLINE-5)), under the name the line spelled and
   with the keying cost every other write has (below). A file the program opens on its own, which
   is `cmd -o notes.txt` or anything a build writes, is not.
+
+  `/export` is the other file this process opens itself. It is not recorded, because a rule recorded
+  here is gone in a fresh session while the file stays. It is kept free of what a screen alone was
+  shown instead ([SESSION-17](sessions.md#SESSION-17)), so reading it as trusted gives the planner
+  nothing it was not already given.
 
   A line the sandbox holds in a directory whose yes said confined lines run without asking is asked
   about when a word of its argument list names a path the map holds untrusted ([RUN-5](tools/run.md#RUN-5)),

@@ -646,6 +646,30 @@ the transcript as it stands then, and the prompt the turn is working on carries 
 running when exported` where a finished prompt carries its ending. Only the turn in flight is marked:
 a prompt whose record kept no ending is left without one, as below.
 
+The file is read by later turns like any file in the directory, and nothing records that it holds
+content a screen was shown. It therefore carries what the planner was given and nothing released
+for a screen alone. A call is written with its target as the planner named it, so a reference
+stays a reference and the file it stands for is not named. A `Hunk` call is written with its number
+and no file, because the file can be one the planner was given only as a reference. Two kinds of
+call are written as they are drawn: a step of a manifest, which names the planner's own words, and
+a call read back from a stored session, which was made from the planner's own arguments. A
+quarantined block is headed with its origin as the planner was given it, and keeps its label. A task
+in a turn's task list is written as the model wrote it, with a reference left as a reference. An
+answer a manifest run released to the person is written as one sentence saying an answer was shown
+and how many lines it had, never its words. What a `!!` command printed and the rows of a command
+that was stopped ([SHELL-6](shell-mode.md#SHELL-6), [SHELL-7](shell-mode.md#SHELL-7)) were kept for
+the screen alone, so they are written the same way, as one sentence with the number of lines. The
+line the person typed is written, because the person typed it. A file the person chose to preview
+([MOUSE-42](mouse.md#MOUSE-42)) is written as the call `Preview` with no name and a block headed "a
+file the person chose to preview", because the click can name a file the planner was never given,
+and the lines are not written. Which entries are written this way is decided by the entry's own
+fields, set where the entry is made, and never by reading its text.
+
+The export records no write in the trust map, as a redirection does
+([CMDLINE-5](tools/command-line.md#CMDLINE-5)), because a recorded rule is lost when a session ends
+and the file outlives it. Leaving the content out holds in every later session
+([TRUST-4](trust-map.md#TRUST-4), [VIEW-3](terminal-transcript.md#VIEW-3)).
+
 Exporting after a resume retains each recorded prompt and safe failure reason, with failed and
 cancelled endings distinct and attached to the turn that produced them. Under each prompt, the
 export includes its recorded outcome, usage, timing, and task list with each item's saved status.
@@ -654,10 +678,20 @@ or success. All of it sits under the prompt's own heading, beside the headings t
 and how the turn ended rather than in place of any of them.
 
 `verified-by: bravebot_tui::sessions::reopening_keeps_failure_and_cancellation_in_export`
+`verified-by: bravebot_tui::link_clicks::a_previewed_file_is_exported_without_its_name_or_its_lines`
 `verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 `verified-by: bravebot_tui::sessions::exporting_while_a_turn_runs_marks_the_running_prompt_and_no_other`
 `verified-by: bravebot_tui::sessions::exporting_a_turn_with_no_recorded_ending_does_not_call_it_running`
 `verified-by: bravebot_tui::app::export_at_rest_says_where_it_wrote_and_refuses_a_name_that_is_taken`
+`verified-by: bravebot_tui::app::export_at_rest_leaves_out_what_was_released_for_the_screen_alone`
+`verified-by: bravebot_tui::app::a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words`
+`verified-by: bravebot_tui::sessions::a_resumed_task_list_is_exported_as_the_model_wrote_it`
+`verified-by: bravebot_tui::render::export::an_answer_released_for_the_screen_is_exported_as_its_length_and_a_reply_whole`
+`verified-by: bravebot_tui::render::export::a_call_and_a_block_are_exported_as_the_planner_had_them_and_not_as_the_person_read_them`
+`verified-by: bravebot_tui::render::export::a_task_is_exported_as_the_model_wrote_it_and_not_as_the_person_read_it`
+`verified-by: bravebot_tui::app::an_export_leaves_out_what_a_private_or_stopped_command_printed`
+`verified-by: bravebot_tui::undo_tests::an_export_writes_a_hunk_by_its_number_and_not_by_its_file`
+`verified-by: bravebot_agent::tools::tests::todos::a_task_list_is_named_inside_the_reshape_that_builds_it`
 
 **Why.** The transcript belongs to the person who had the conversation, which
 [compaction.md](compaction.md) says in as many words, and without this the only way to exercise

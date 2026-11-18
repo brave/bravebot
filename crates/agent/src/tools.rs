@@ -2515,7 +2515,12 @@ fn server_named(wire: &str) -> String {
     }
 }
 
-/// What a call is about, for the line shown while it runs.
+/// What a call is about, for the line shown while it runs, and the same target as the planner
+/// wrote it.
+///
+/// The second is what an export writes (SESSION-17): the first can name a file the planner was
+/// not told, and an export is a file a later turn may read. Both come out of one release, shaped
+/// together, so no second pass reads the text.
 ///
 /// Which argument names the target depends on the tool, so the key is chosen from the tool's
 /// own name. The value is the model's word for it, released to a screen and nowhere else: it
@@ -2529,19 +2534,20 @@ fn target_of<S: Sink>(
     server: Option<&str>,
     slots: &SlotStore,
     arguments: &Value,
-) -> String {
+) -> (String, String) {
     // A question is about nothing in the workspace, and its subject is the question itself,
     // which the person is about to read anyway. How many were asked is the useful thing on a
     // line that goes by while they answer, and a count is structure rather than content, so
     // nothing is released to say it.
     if tool == "propose_plan" {
-        return String::new();
+        return (String::new(), String::new());
     }
     if tool == "ask_user" {
-        return match arguments.get("questions").and_then(Value::as_array) {
+        let asked = match arguments.get("questions").and_then(Value::as_array) {
             Some(asked) if asked.len() > 1 => tally(asked.len(), "question", "questions"),
             _ => String::new(),
         };
+        return (asked.clone(), asked);
     }
 
     // A processor has no single argument naming a target: what it is working on is the set of
@@ -2553,7 +2559,7 @@ fn target_of<S: Sink>(
             Some(arguments.to_string())
         } else {
             let Some(key) = target_key(tool) else {
-                return String::new();
+                return (String::new(), String::new());
             };
 
             // A call that named a reference instead of a path says so with the reference, which
@@ -2568,7 +2574,7 @@ fn target_of<S: Sink>(
 
         match text {
             Some(text) => Labelled::new(text, bravebot_core::label::Label::untrusted_public()),
-            None => return String::new(),
+            None => return (String::new(), String::new()),
         }
     };
 
@@ -2589,14 +2595,15 @@ fn target_of<S: Sink>(
     };
     let shaped = policy.render_in_place(tool, &named, |text| {
         if let Some(server) = server {
-            return server_call_as_drawn(server, &text);
+            let drawn = server_call_as_drawn(server, &text);
+            return (drawn.clone(), drawn);
         }
         let text = if tool == "run" {
             command_as_drawn(&text)
         } else {
             text
         };
-        name_references(&text, &display_names)
+        (name_references(&text, &display_names), text)
     });
     let proof = policy.authorise_display_release("what a tool is working on");
     shaped.declassify(&proof)
@@ -3178,7 +3185,8 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         .as_ref()
         .map(|(_, alias, tool)| format!("{alias}:{tool}"))
         .or_else(|| name.strip_prefix("mcp__").map(server_named));
-    let target = target_of(policy, &name, server.as_deref(), tools.slots, &arguments);
+    let (target, as_the_planner_had_it) =
+        target_of(policy, &name, server.as_deref(), tools.slots, &arguments);
     // A look at a job is drawn with the command the job runs: its name alone says nothing to
     // the person watching, who never saw the planner choose it.
     let target = match name.as_str() {
@@ -3188,6 +3196,9 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             .unwrap_or(target),
         _ => target,
     };
+    // The planner's form is always kept beside the shown one. Whether they differ is not asked:
+    // that would compare the target's bytes.
+    let as_the_planner_had_it = Some(as_the_planner_had_it);
     // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
     // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
     // selects no server, and with either holding the server's tools back the offer is not deferred.
@@ -3199,6 +3210,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             .for_call(call_id)
             .of_tool(&name)
             .naming_a_file(names_a_file(&name))
+            .as_the_planner_had_it(as_the_planner_had_it.clone())
             .saying_why(why.clone()),
     );
 
@@ -3477,6 +3489,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         .for_call(call_id)
         .of_tool(&name)
         .naming_a_file(names_a_file(&name))
+        .as_the_planner_had_it(as_the_planner_had_it)
         .saying_why(why)
         .loading_skill(produced.skill.clone())
         .with_changes(std::mem::take(&mut produced.changes))
@@ -3588,18 +3601,22 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
         .as_ref()
         .map(|(_, alias, tool)| format!("{alias}:{tool}"))
         .or_else(|| name.strip_prefix("mcp__").map(server_named));
-    let target = target_of(policy, &name, server.as_deref(), slots, &arguments);
+    let (target, as_the_planner_had_it) =
+        target_of(policy, &name, server.as_deref(), slots, &arguments);
+    let as_the_planner_had_it = Some(as_the_planner_had_it);
     let call_id = CallId::next();
     reporter.tool_started(
         Activity::running(verb, target.clone())
             .for_call(call_id)
             .of_tool(&name)
+            .as_the_planner_had_it(as_the_planner_had_it.clone())
             .saying_why(why.clone()),
     );
     reporter.tool_finished(
         Activity::running(verb, target)
             .for_call(call_id)
             .of_tool(&name)
+            .as_the_planner_had_it(as_the_planner_had_it)
             .saying_why(why)
             .failed(produced.note.clone()),
     );

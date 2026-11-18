@@ -2287,6 +2287,7 @@ mod tests {
                 "answered after 1 round".to_string(),
                 false,
                 Some(Reported::Kept(Shown {
+                    as_the_planner_had_it: None,
                     origin: "a reader delegate".to_string(),
                     reach: bravebot_agent::report::Reach::NotThePlanner,
                     label: "untrusted".to_string(),
@@ -2739,6 +2740,7 @@ mod tests {
                 // The two previews one spawn_processor result releases: what the processor said
                 // about the file, and the file it wrote.
                 session.show(Shown {
+                    as_the_planner_had_it: None,
                     origin: "what the isolated processor said".to_string(),
                     reach: bravebot_agent::report::Reach::NoModel,
                     label: "(U,priv)".to_string(),
@@ -2746,6 +2748,7 @@ mod tests {
                     lines: 1,
                 });
                 session.show(Shown {
+                    as_the_planner_had_it: None,
                     origin: format!("notes{round}.md"),
                     reach: bravebot_agent::report::Reach::NoModel,
                     label: "(U,priv)".to_string(),
@@ -2776,6 +2779,7 @@ mod tests {
         let call = Activity::running("SERVER_CALL", "call web-helper:page_title");
         session.start_activity(call.clone());
         session.show(Shown {
+            as_the_planner_had_it: None,
             origin: "web-helper:page_title".to_string(),
             reach: bravebot_agent::report::Reach::NoModel,
             label: "(U,priv)".to_string(),
@@ -2825,6 +2829,7 @@ mod tests {
         /// arriving underneath an open scroller, which is a different thing and moves the view.
         fn reading_over(rows: u16) -> Session {
             let shown = Shown {
+                as_the_planner_had_it: None,
                 origin: "notes.md".to_string(),
                 reach: bravebot_agent::report::Reach::NotThePlanner,
                 label: "(U,priv)".to_string(),
@@ -3026,6 +3031,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             let mut read = Entry::tool(Activity::running("read", "notes.md").done("40 lines"));
             read.shown = Some(Shown {
+                as_the_planner_had_it: None,
                 origin: "notes.md".to_string(),
                 reach: bravebot_agent::report::Reach::NotThePlanner,
                 label: "(U,priv)".to_string(),
@@ -5230,6 +5236,7 @@ mod tests {
         #[test]
         fn quarantined_content_is_shown_and_marked_on_every_line() {
             let shown = Shown {
+                as_the_planner_had_it: None,
                 origin: "notes.md".to_string(),
                 reach: bravebot_agent::report::Reach::NotThePlanner,
                 label: "(U,priv)".to_string(),
@@ -5290,6 +5297,7 @@ mod tests {
                     .join("\n")
             };
             let mut shown = Shown {
+                as_the_planner_had_it: None,
                 origin: "notes.md".to_string(),
                 reach: bravebot_agent::report::Reach::NotThePlanner,
                 label: "(U,priv)".to_string(),
@@ -9463,6 +9471,7 @@ mod tests {
         session.submit();
         session.complete("read it", Vec::new(), 0);
         session.transcript.last_mut().expect("an entry").shown = Some(Shown {
+            as_the_planner_had_it: None,
             origin: "notes.md".into(),
             reach: bravebot_agent::report::Reach::NotThePlanner,
             label: "(U,priv)".to_string(),

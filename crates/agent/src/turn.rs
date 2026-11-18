@@ -1567,6 +1567,7 @@ fn take_session_messages<S: Sink, R: Reporter>(
                 (
                     frame(&from, &name, given, Body::Kept(&reference.describe())),
                     crate::report::Reported::Kept(crate::report::Shown {
+                        as_the_planner_had_it: None,
                         origin: "a message from another session".to_string(),
                         reach: crate::report::Reach::NotThePlanner,
                         label: given.to_string(),
@@ -1816,6 +1817,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                                 reference.describe()
                             ),
                             crate::report::Reported::Kept(crate::report::Shown {
+                                as_the_planner_had_it: None,
                                 origin: format!("a {kind} delegate"),
                                 reach: crate::report::Reach::NotThePlanner,
                                 label: reference.label.to_string(),
@@ -4322,6 +4324,7 @@ where
             if let Some(said) = &output.said {
                 let shown = preview_for(policy, &output.tool, said);
                 reporter.quarantined(crate::report::Shown {
+                    as_the_planner_had_it: None,
                     origin: "what the isolated processor said".to_string(),
                     reach: crate::report::Reach::NoModel,
                     label: said.label().to_string(),
@@ -4398,6 +4401,7 @@ where
                         .collect();
                 reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 reporter.quarantined(crate::report::Shown {
+                    as_the_planner_had_it: None,
                     origin: entries.origin.clone(),
                     reach: crate::report::Reach::NotThePlanner,
                     // Entries in one listing carry different labels, so the preview
@@ -4474,6 +4478,7 @@ where
                 if let Presentation::Quarantined(reference) = &text {
                     let shown = preview_for(policy, &output.tool, &output.text);
                     reporter.quarantined(crate::report::Shown {
+                        as_the_planner_had_it: None,
                         origin: origin.clone(),
                         reach: crate::report::Reach::NotThePlanner,
                         label: reference.label.to_string(),
@@ -4510,6 +4515,7 @@ where
                             holder_of_a_picture(task, &state.offered),
                         );
                         reporter.quarantined(crate::report::Shown {
+                            as_the_planner_had_it: None,
                             origin: origin.clone(),
                             reach: crate::report::Reach::NotThePlanner,
                             label: reference.label.to_string(),
@@ -4820,6 +4826,7 @@ where
                         if let Presentation::Quarantined(reference) = &kept {
                             let shown = preview_for(policy, &output.tool, &apart.text);
                             reporter.quarantined(crate::report::Shown {
+                                as_the_planner_had_it: None,
                                 origin: apart.origin.clone(),
                                 reach: crate::report::Reach::NotThePlanner,
                                 label: reference.label.to_string(),
@@ -5044,6 +5051,7 @@ where
                                 &policy.names_for_display(conversation.quarantine()),
                             );
                             reporter.quarantined(crate::report::Shown {
+                                as_the_planner_had_it: Some(reference.origin.clone()),
                                 origin,
                                 reach: crate::report::Reach::NotThePlanner,
                                 label: reference.label.to_string(),

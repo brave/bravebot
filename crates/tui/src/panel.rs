@@ -2754,6 +2754,7 @@ mod tests {
             whole: vec![TRAP.to_string()],
         });
         session.show(Shown {
+            as_the_planner_had_it: None,
             origin: TRAP.to_string(),
             reach: Reach::NotThePlanner,
             label: "untrusted".to_string(),

@@ -134,6 +134,7 @@ fn a_call_carries_the_reason_it_was_made() {
 #[test]
 fn quarantined_content_says_how_much_it_left_out() {
     let value = wire::shown(&Shown {
+        as_the_planner_had_it: None,
         origin: "https://example.com/page".into(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".into(),
@@ -160,6 +161,7 @@ fn the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label() {
         },
     );
     let value = wire::shown(&Shown {
+        as_the_planner_had_it: None,
         origin: "weather:get_forecast returned".into(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".into(),
@@ -190,6 +192,7 @@ fn the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label() {
 fn released_content_crosses_the_transport_with_the_label_it_was_released_under() {
     let shown = |label: &str| {
         wire::shown(&Shown {
+            as_the_planner_had_it: None,
             origin: "https://example.com/page".into(),
             reach: Reach::NotThePlanner,
             label: label.into(),
@@ -332,6 +335,7 @@ fn each_label_crosses_as_both_axes_named_and_an_unknown_one_as_the_bottom() {
     use bravebot_core::label::Label;
     let shown = |label: String| {
         wire::shown(&Shown {
+            as_the_planner_had_it: None,
             origin: "file.md".into(),
             reach: Reach::NotThePlanner,
             label,
@@ -740,6 +744,7 @@ fn a_message_between_sessions_crosses_as_its_own_kind_without_the_frame() {
 fn a_todo_row_sends_its_status_not_its_glyph() {
     let value = wire::row(&Row {
         content: "fix the parser".into(),
+        as_the_planner_had_it: "fix the parser".into(),
         marker: "[x]",
         status: Status::Done,
     });
@@ -757,6 +762,7 @@ fn a_cancelled_task_crosses_as_cancelled() {
     assert_eq!(
         wire::row(&Row {
             content: "rewrite the parser".into(),
+            as_the_planner_had_it: "rewrite the parser".into(),
             marker: "✗",
             status: Status::Cancelled,
         }),

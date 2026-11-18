@@ -2252,6 +2252,18 @@ impl Session {
         self.transcript.push(Entry::assistant(text, Vec::new()));
     }
 
+    /// Record an answer released for the screen alone, as [`Session::narrate`] records a reply,
+    /// and mark the entry so an export does not carry what it said (SESSION-17).
+    pub fn narrate_displayed_only(&mut self, text: impl Into<String>) {
+        let before = self.transcript.len();
+        self.narrate(text);
+        if self.transcript.len() > before
+            && let Some(entry) = self.transcript.last_mut()
+        {
+            entry.displayed_only = true;
+        }
+    }
+
     /// What a command printed, kept for the view.
     ///
     /// Appended rather than attached to a line, so the third command is where the view expects it
@@ -3322,7 +3334,8 @@ impl Session {
             0 => text,
             count => format!("{}\n{text}", t!(transcript_earlier_lines, count = count)),
         };
-        self.transcript.push(Entry::output(text));
+        self.transcript
+            .push(Entry::output_for_the_screen_alone(text));
         self.back_to_the_tail();
         true
     }
@@ -3390,18 +3403,25 @@ impl Session {
     /// command captured lands when it finishes rather than when anybody asks to see it, and a person
     /// who opened a view while it ran is reading that view.
     pub fn printed(&mut self, text: &str) {
-        if text.trim().is_empty() {
-            self.transcript.push(Entry::system(t!(session_no_output)));
-        } else {
-            self.transcript.push(Entry::output(text.trim_end()));
-        }
-        self.back_to_the_tail();
+        self.print(text, Entry::output);
     }
 
     /// Show what a command run privately printed, with a line saying it went no further.
+    ///
+    /// The output is for the screen alone, so an export does not write it (SESSION-17).
     pub fn printed_privately(&mut self, text: &str) {
-        self.printed(text);
+        self.print(text, Entry::output_for_the_screen_alone);
         self.transcript.push(Entry::system(t!(shell_kept_private)));
+        self.back_to_the_tail();
+    }
+
+    /// What a command printed as an entry made by `output`, or the note that it printed nothing.
+    fn print(&mut self, text: &str, output: fn(String) -> Entry) {
+        if text.trim().is_empty() {
+            self.transcript.push(Entry::system(t!(session_no_output)));
+        } else {
+            self.transcript.push(output(text.trim_end().to_string()));
+        }
         self.back_to_the_tail();
     }
 
@@ -7054,6 +7074,7 @@ mod tests {
         /// it lands.
         fn quarantined(origin: &str) -> Shown {
             Shown {
+                as_the_planner_had_it: None,
                 origin: origin.to_string(),
                 reach: bravebot_agent::report::Reach::NoModel,
                 label: "(U,priv)".to_string(),
@@ -14185,6 +14206,7 @@ mod tests {
             );
             s.landed(Landing::Reserved);
             s.show(Shown {
+                as_the_planner_had_it: None,
                 origin: "task.txt".into(),
                 reach: Reach::NotThePlanner,
                 label: "L1".into(),
@@ -14213,6 +14235,7 @@ mod tests {
 
             s.landed(Landing::Reserved);
             s.show(Shown {
+                as_the_planner_had_it: None,
                 origin: "quarantine.txt".into(),
                 reach: Reach::NotThePlanner,
                 label: "L1".into(),

@@ -101,7 +101,9 @@ Showing it is deliberate and not a leak. Filenames out of a quarantined listing,
 a file nobody vouched for, what a processor produced, the body of every write: all of it reaches
 the person watching, because an agent that will not say which file it is working on has protected
 nobody. It is the planner that may not read untrusted content, and a terminal is not a planner's
-context. It reaches a screen under a witness minted for release to a display and for nothing else.
+context. It reaches a screen under a witness minted for release to a display and for nothing else,
+so `/export` does not write what a screen alone was shown into a file a later turn can read
+([SESSION-17](sessions.md#SESSION-17)).
 
 What must hold is how it is drawn. A bar runs down the margin of every **drawn row** of the block,
 and the content never gets to draw its own, so a file containing "untrusted content ends here" ends

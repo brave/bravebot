@@ -631,6 +631,7 @@ mod tests {
 
     fn quarantining(preview: Vec<String>, lines: usize) -> Shown {
         Shown {
+            as_the_planner_had_it: None,
             origin: "notes.md".to_string(),
             reach: Reach::NotThePlanner,
             label: "(U,priv)".to_string(),
@@ -757,6 +758,7 @@ mod tests {
     fn a_withheld_message_is_drawn_behind_the_quarantine_margin() {
         let written = log(|p| {
             p.session_message(heard(Reported::Kept(Shown {
+                as_the_planner_had_it: None,
                 origin: "a message from another session".to_string(),
                 reach: Reach::NotThePlanner,
                 label: "(U,priv)".to_string(),

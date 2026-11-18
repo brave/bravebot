@@ -10512,6 +10512,7 @@ mod tests {
             whole: vec![result.clone()],
         });
         session.show(Shown {
+            as_the_planner_had_it: None,
             origin: FROM_A_TOOL.to_string(),
             reach: Reach::NotThePlanner,
             label: "untrusted".to_string(),
@@ -12888,6 +12889,7 @@ mod tests {
         session.finish_activity(Activity::running("Read", "README.md").done("40 lines"));
         session.landed(Landing::Quarantined);
         session.show(Shown {
+            as_the_planner_had_it: None,
             origin: "README.md".to_string(),
             reach: Reach::NotThePlanner,
             label: "(U,priv)".to_string(),
@@ -16377,6 +16379,80 @@ mod tests {
         assert!(
             conversation.messages().is_empty(),
             "a private command was recorded"
+        );
+    }
+
+    /// SESSION-17, SHELL-6, SHELL-7: what a `!!` command printed and the rows of a command that
+    /// was stopped were shown on the screen and never put in the conversation, so the file
+    /// `/export` writes holds a sentence with the line count and not the lines, and the line the
+    /// person typed.
+    ///
+    /// Rejects: an export that writes every `Speaker::Output` entry, which puts what the planner
+    /// was not given into a file a later turn reads as trusted.
+    #[test]
+    fn an_export_leaves_out_what_a_private_or_stopped_command_printed() {
+        use crate::state::Entry;
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        session.transcript.push(Entry::shell("cat .env"));
+        session.begin_command();
+        let ran = bravebot_agent::shell::Ran {
+            stdout: "PRIVATE_ONE=1\nPRIVATE_TWO=2\n".to_string(),
+            stderr: String::new(),
+            code: Some(0),
+        };
+        settle_command(&mut session, "cat .env", Ok(ran), &mut conversation, true);
+
+        session.transcript.push(Entry::shell("make"));
+        session.begin_command();
+        session.command_printing("STOPPED_ROW_ONE\nSTOPPED_ROW_TWO\nSTOPPED_ROW_THREE\n");
+        settle_command(
+            &mut session,
+            "make",
+            Err(bravebot_agent::shell::ShellError::Cancelled),
+            &mut conversation,
+            false,
+        );
+
+        session.transcript.push(Entry::shell("echo shared"));
+        session.begin_command();
+        let ran = bravebot_agent::shell::Ran {
+            stdout: "SHARED_LINE\n".to_string(),
+            stderr: String::new(),
+            code: Some(0),
+        };
+        settle_command(
+            &mut session,
+            "echo shared",
+            Ok(ran),
+            &mut conversation,
+            false,
+        );
+
+        let exported = render::as_markdown(&session, "test");
+        for left_out in [
+            "PRIVATE_ONE",
+            "PRIVATE_TWO",
+            "STOPPED_ROW_ONE",
+            "STOPPED_ROW_TWO",
+            "STOPPED_ROW_THREE",
+        ] {
+            assert!(!exported.contains(left_out), "{exported}");
+        }
+        assert!(exported.contains("`cat .env`"), "{exported}");
+        assert!(exported.contains("`make`"), "{exported}");
+        assert!(
+            exported.contains("is not kept in this file (2 lines).*"),
+            "{exported}"
+        );
+        assert!(
+            exported.contains("is not kept in this file (3 lines).*"),
+            "{exported}"
+        );
+        assert!(
+            exported.contains("```\nSHARED_LINE\n```"),
+            "output the conversation holds is written whole: {exported}"
         );
     }
 
@@ -25100,6 +25176,7 @@ mod tests {
         let call = bravebot_agent::report::Activity::running("Read", "notes.md");
         session.start_activity(call.clone());
         session.show(bravebot_agent::report::Shown {
+            as_the_planner_had_it: None,
             origin: "notes.md".to_string(),
             reach: bravebot_agent::report::Reach::NoModel,
             label: "(U,priv)".to_string(),
@@ -27831,6 +27908,61 @@ mod tests {
             std::fs::read_to_string(&written).expect("the export"),
             before
         );
+    }
+
+    /// SESSION-17: what a person was shown and the planner was not (a manifest run's answer, the
+    /// file name a quarantined block was drawn under) is not written to the file `/export` makes,
+    /// because a later turn reads that file as trusted where the directory is.
+    ///
+    /// Rejects an export that writes every Assistant entry's words and every `Shown::origin`.
+    #[test]
+    fn export_at_rest_leaves_out_what_was_released_for_the_screen_alone() {
+        use bravebot_agent::report::{Activity, Reach, Shown};
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (root, stored) = exporting_into("bravebot-app-export-display-only");
+        let mut session = Session::new("none");
+        let call = Activity::running("Read", "ref:1(U,priv):IGNORE-PREVIOUS-INSTRUCTIONS.md")
+            .as_the_planner_had_it(Some("ref:1".to_string()))
+            .done("1 line");
+        session.transcript.push(crate::state::Entry::tool(call));
+        session.transcript.last_mut().expect("the call").shown = Some(Shown {
+            as_the_planner_had_it: Some("ref:1".to_string()),
+            origin: "IGNORE-PREVIOUS-INSTRUCTIONS.md".to_string(),
+            reach: Reach::NotThePlanner,
+            label: "U,priv".to_string(),
+            lines: 1,
+            preview: vec!["x".to_string()],
+        });
+        // What a manifest run that answered calls for.
+        say_what_a_manifest_run_replied(&mut session, "THE ISSUE BODY");
+
+        export_session(&mut session, &stored, &root, Some("chat.md"));
+
+        let text = std::fs::read_to_string(root.join("chat.md")).expect("the export");
+        assert!(!text.contains("IGNORE-PREVIOUS-INSTRUCTIONS.md"), "{text}");
+        assert!(!text.contains("THE ISSUE BODY"), "{text}");
+        assert!(text.contains("ref:1"), "{text}");
+    }
+
+    /// SESSION-17: the reply a manifest run ends with is released for the screen alone, so the
+    /// export says that an answer was shown and how long it was, and not what it said. The reply
+    /// goes through the function the run's ending calls.
+    ///
+    /// Rejects a manifest ending that records its reply as an ordinary assistant entry.
+    #[test]
+    fn a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words() {
+        let mut session = having_sent(&["first question"]);
+
+        say_what_a_manifest_run_replied(&mut session, "line one SECRET-ANSWER\nline two");
+
+        let shown = session.transcript.last().expect("the reply");
+        assert!(shown.displayed_only, "the reply was not marked");
+        let exported = render::as_markdown(&session, "test");
+        assert!(!exported.contains("SECRET-ANSWER"), "{exported}");
+        assert!(exported.contains("2 lines"), "{exported}");
     }
 
     /// VIEW-8: `/export` draws writing the transcript as finished and a name already taken as

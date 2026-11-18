@@ -144,6 +144,7 @@ fn a_call_line_names_its_reference_inside_the_kernel() {
             &slots,
             &json!({"path_ref": "ref:1"}),
         )
+        .0
     };
 
     // The reference, its label and the file: the planner has only the first of the three.
@@ -310,6 +311,7 @@ fn a_servers_call_is_drawn_with_the_arguments_it_is_sent() {
             &slots,
             &json!({"body": "ref:1", "to": "ops"}),
         )
+        .0
     };
 
     assert_eq!(line, r#"notes:send {"body":"ref:1","to":"ops"}"#);
