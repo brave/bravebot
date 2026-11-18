@@ -2317,13 +2317,13 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move fifteen chords, and nothing else
+### INPUT-32: a settings file can move sixteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
 action's key says nothing about the others. There is no second file and no other spelling of the
-block, so one place answers what a key does. Fifteen actions can be moved on a platform that can
-suspend the session, fourteen on one that cannot (INPUT-47), and nothing else can be moved:
+block, so one place answers what a key does. Sixteen actions can be moved on a platform that can
+suspend the session, fifteen on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2344,6 +2344,11 @@ suspend the session, fourteen on one that cannot (INPUT-47), and nothing else ca
   nothing. Where the prompt search, a search typed in the transcript scroller or the model picker
   takes letters, it is read as the letter it carries, as is any chord a mode did not ask the
   bindings about. Alt and not Ctrl because every Ctrl letter is taken.
+- `peek` (default: `alt-v`): open the full text of the folded paste the caret is on in the info
+  panel ([PASTE-13](pasting.md#PASTE-13)). It works at the box, and while a turn runs. With the caret
+  on no marker it does nothing. In the state it opens, the files state and the other modes that ask
+  the bindings first, it does nothing, and the state's own keys are not moved by it. Alt and not Ctrl
+  because every Ctrl letter is taken.
 - `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
   this session's prompts (INPUT-40).
 - `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
@@ -2433,6 +2438,10 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
 `verified-by: bravebot_tui::keybindings::the_todos_chord_is_alt_a_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_todos_chord_and_the_todos_action_cannot_take_another`
+`verified-by: bravebot_tui::keybindings::the_peek_chord_is_alt_v_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_peek_chord_and_the_peek_action_cannot_take_another`
+`verified-by: bravebot_tui::app::tests::peeking::the_key_opens_the_viewer_with_the_caret_on_a_marker`
+`verified-by: bravebot_tui::app::tests::peeking::the_key_does_nothing_with_the_caret_off_a_marker`
 `verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
 `verified-by: bravebot_tui::app::the_todos_key_prints_nothing_in_the_files_state`
 `verified-by: bravebot_tui::app::a_mode_that_types_letters_reads_the_todos_key_as_the_letter`

@@ -3547,6 +3547,19 @@ files-too-narrow = The files view needs a terminal at least { $columns } columns
 # The last row of the panel while the state is open, naming its keys, and the hint line's where
 # the panel is not drawn.
 files-keys = ↑↓ file  ←→ edit  PgUp PgDn scroll  q back
+# The peek state of the info panel, which shows a folded paste whole: its heading, how many lines
+# the paste has, the control at the right end of that heading, the row naming its keys and the note
+# said where the terminal is too narrow to draw the panel.
+peek-heading = Pasted text #{ $number }
+peek-lines = { $count ->
+    [one] { $count } line
+   *[other] { $count } lines
+    }
+peek-close = x
+peek-keys = ↑↓ scroll  PgUp PgDn page  g G top bottom  q close
+peek-too-narrow = The pasted text view needs a terminal at least { $columns } columns wide.
+# What the `?` list says the key that shows a folded paste whole does.
+shortcut-peek = show the pasted text the caret is on
 # The info panel's Files section: its heading, and how many files the session wrote.
 panel-files = Files
 panel-files-total = { $count ->
@@ -5752,6 +5765,7 @@ hover-panel-hide = click to hide the panel
 hover-panel-files = click to see the files this session changed
 hover-panel-file = click to show the edits to this file
 hover-panel-close-files = click to go back to the panel
+hover-panel-close-peek = click to close the pasted text
 hover-panel-edit-previous = click to go to the previous edit
 hover-panel-edit-next = click to go to the next edit
 hover-panel-name = click to rename this session

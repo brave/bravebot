@@ -6653,10 +6653,10 @@ mod tests {
 
         // The key it names is the one that carries a picture here, which a settings file can move.
         let mut moved = std::collections::BTreeMap::new();
-        moved.insert("paste".to_string(), "alt-v".to_string());
+        moved.insert("paste".to_string(), "alt-u".to_string());
         session.adopt_keybindings(&moved);
         let output = rendered(&session);
-        assert!(output.contains("alt-v"), "the hint named the old key");
+        assert!(output.contains("alt-u"), "the hint named the old key");
     }
 
     /// One line, two things that want it. What a copy took is the answer to something the user did
@@ -7914,6 +7914,28 @@ mod tests {
             !output.contains("ctrl-s"),
             "default stash chord should not be displayed: {output}"
         );
+    }
+
+    /// The `?` list has a row for the key that shows a folded paste whole, on its default and on a
+    /// moved chord (INPUT-13).
+    ///
+    /// Rejects: a list that omits the action, and one that names the default after it was moved.
+    #[test]
+    fn the_shortcut_list_names_the_peek_chord() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-v"), "{listed}");
+        assert!(listed.contains("show the pasted text"), "{listed}");
+
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("peek".to_string(), "alt-y".to_string());
+        session.adopt_keybindings(&moved);
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-y"), "{listed}");
+        assert!(!listed.contains("alt-v"), "{listed}");
     }
 
     /// The `?` list has a row for the key that prints the whole plan, on its default and on a moved

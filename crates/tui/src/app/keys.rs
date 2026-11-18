@@ -374,6 +374,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
         && !session.showing_sessions()
         && !session.searching_history()
         && !session.files_open()
+        && !session.peeking()
         && session.picking().is_none()
         && !session.menu_open()
         && (is_ctrl_c(key) || (is_escape(session, key) && !session.holds_a_selection()))
@@ -1010,6 +1011,39 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
     Action::Redraw
 }
 
+/// Interpret a key press while the info panel shows the text of a paste.
+///
+/// Every key is the state's and a key it does not name does nothing, so no character reaches the
+/// box and Enter sends nothing. Ctrl-C ends the state and does nothing else, so a turn in flight
+/// goes on. The panel chord hides the panel and the state with it.
+fn peek_key(session: &mut Session, key: KeyEvent) -> Action {
+    if is_ctrl_c(key) {
+        session.close_peek();
+        return Action::Redraw;
+    }
+    if session.bindings().is_panel(&key) {
+        session.toggle_panel();
+        return Action::Redraw;
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return Action::None;
+    }
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => session.close_peek(),
+        KeyCode::Up | KeyCode::Char('k') => session.peek_scroll(-1),
+        KeyCode::Down | KeyCode::Char('j') => session.peek_scroll(1),
+        KeyCode::Home | KeyCode::Char('g') => session.peek_to_end(false),
+        KeyCode::End | KeyCode::Char('G') => session.peek_to_end(true),
+        KeyCode::PageUp => session.peek_scroll(-session.peek_page()),
+        KeyCode::PageDown => session.peek_scroll(session.peek_page()),
+        _ => return Action::None,
+    }
+    Action::Redraw
+}
+
 /// The answer to a key that a mode standing over the session takes, and `None` where no mode is
 /// open.
 ///
@@ -1034,6 +1068,9 @@ pub(super) fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<
     }
     if session.files_open() {
         return Some(files_key(session, key));
+    }
+    if session.peeking() {
+        return Some(peek_key(session, key));
     }
     if session.showing_sessions() {
         return Some(sessions_screen_key(session, key));
@@ -1500,6 +1537,11 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // list is said rather than silent (WATCH-7). In the shared ladder for the watch chord's
         // reason: it sends nothing.
         _ if session.bindings().is_outputs(&key) => super::open_outputs(session),
+        _ if session.bindings().is_peek(&key) => {
+            // With the caret on no marker the key opens nothing and is no key of the box either.
+            session.peek_pasted_text();
+            Action::Redraw
+        }
         // The whole plan, printed as `/todos` prints it and said into the transcript as that is
         // (CMD-28). In the shared ladder for the same reason: it sends nothing, and a plan is most
         // worth reading in full while the turn works through it.
@@ -2154,6 +2196,8 @@ fn wheel(session: &mut Session, mouse: MouseEvent, down: bool) -> Action {
         }
     } else if session.files_wheel(mouse.row, mouse.column, !down) {
         // The pane of the files state under the pointer was scrolled.
+    } else if session.peek_wheel(mouse.row, mouse.column, !down) {
+        // The text of the paste under the pointer was scrolled.
     } else if session.completion_at(mouse.row, mouse.column).is_some() {
         session.walk_completions(rows, down);
     } else {
@@ -2289,7 +2333,16 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         Hit::Link(index) => return click_a_link(session, index, mouse.modifiers),
         Hit::Panel(_) | Hit::Footer(_) => return click_shortcut(session, target.hit),
         // A click in the prompt box puts the caret where it landed (MOUSE-16).
-        Hit::Text { .. } => session.click_in_the_box(row, column),
+        Hit::Text { .. } => {
+            let on_a_marker = session.click_on_a_marker(row, column);
+            let put = session.click_in_the_box(row, column);
+            // A press on the cells of a marker shows the paste whole, over the caret it just put at
+            // the marker's start.
+            if on_a_marker {
+                session.peek_pasted_text();
+            }
+            put
+        }
         // A press on the scrollbar acts on the press, and a panel that holds the input has taken the
         // press before this is asked (MOUSE-45, MOUSE-49).
         // A pane the wheel scrolls is no click: what a click acts on is drawn over it.
@@ -2406,6 +2459,10 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         }
         Hit::Panel(crate::panel::Target::CloseFiles) => {
             session.close_files();
+            Action::Redraw
+        }
+        Hit::Panel(crate::panel::Target::ClosePeek) => {
+            session.close_peek();
             Action::Redraw
         }
         Hit::Panel(crate::panel::Target::PreviousEdit) => {

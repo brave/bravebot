@@ -154,6 +154,7 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         Hit::Panel(Target::Files) => said(t!(hover_panel_files)),
         Hit::Panel(Target::File(_)) => said(t!(hover_panel_file)),
         Hit::Panel(Target::CloseFiles) => said(t!(hover_panel_close_files)),
+        Hit::Panel(Target::ClosePeek) => said(t!(hover_panel_close_peek)),
         Hit::Panel(Target::PreviousEdit) => said(t!(hover_panel_edit_previous)),
         Hit::Panel(Target::NextEdit) => said(t!(hover_panel_edit_next)),
         Hit::Panel(Target::Name) => said(t!(hover_panel_name)),

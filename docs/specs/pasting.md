@@ -14,6 +14,8 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
+  - crates/tui/src/peek_mode.rs
+  - crates/tui/src/state/peek.rs
   - crates/ui-bridge/src/attached.rs
   - ui/src/main/pastes.ts
   - ui/src/preload/index.ts
@@ -31,7 +33,9 @@ What Ctrl-V puts into a turn, whether it is text, a picture or files a file mana
 what footing. Pasted text is
 presentation and holds no labels: it is the user's own words either way, and the only question is
 that the box stays readable. A pasted picture is a claim about provenance, and most of this spec is
-about that claim. A paste leaves a marker in the box, and deleting the marker takes the paste off.
+about that claim. A paste leaves a marker in the box, and deleting the marker takes the paste off. A
+folded paste can be opened in the info panel and read whole, without sending it
+([PASTE-13](#PASTE-13)).
 
 Three gestures put content into a turn on the user's own footing, and each has its own spec:
 [naming-files.md](naming-files.md) for `@` in a prompt, [pasting.md](pasting.md) for Ctrl-V, and
@@ -471,6 +475,70 @@ arrived on the clipboard, and keeping the two apart is what keeps PASTE-2 narrow
 `verified-by: bravebot_tui::app::tests::pasting::a_copied_file_is_staged_while_a_turn_runs_too`
 `verified-by: bravebot_tui::app::tests::pasting::a_refused_list_of_copied_files_says_so_and_stages_nothing`
 `verified-by: bravebot_tui::app::tests::pasting::a_copied_file_with_an_escape_in_its_name_refuses_a_shell_line_as_a_dragged_one_does`
+
+<a id="PASTE-13"></a>
+### PASTE-13: a folded paste can be opened and read whole in the panel
+
+A left click on the cells of a `[Pasted text #N +M lines]` marker in the box, and the `peek` chord
+(default Alt-V) with the caret on a marker, open the info panel in a state that shows that paste's
+text. The chord with the caret on no marker, or on a marker of another kind, does nothing and says
+nothing. A click anywhere else in the box puts the caret there as before
+([MOUSE-16](mouse.md#MOUSE-16)). A click on a marker puts the caret at the marker's start, as any click on it does
+([MOUSE-16](mouse.md#MOUSE-16)), and opens the state. With two markers in the box the one the caret is on, or the one
+clicked, is the one shown. The state is entered at rest and while a turn runs.
+
+The state draws, top to bottom, a heading row with the marker's number and the paste's line count, as
+the marker counts them, and a close control (`x`) at its right end; the whole pasted text, after the
+removal of [PASTE-10](#PASTE-10), from the row it is scrolled to; and a last row naming the state's
+keys. A line longer than the panel wraps to the next row, and an empty line is an empty row. A control
+character in the text is drawn as the visible character that names it, so no character of a paste moves
+the cursor or changes the terminal's state.
+
+The state is a state of the info panel, entered and left as the files state is
+([FILES-3](files-mode.md#FILES-3)). Opening it opens the panel if it was closed. `q`, Escape and
+Ctrl-C end it, and so does a click on its `x`, and ending it returns the panel to what it was before:
+closed if it was closed, in its ordinary state if it was open. Ctrl-C ends the state and does not stop
+a turn that is running. The `panel` chord hides the panel and the state with it. Opening and closing
+write nothing to `~/.bravebot/panel` ([PANEL-5](info-panel.md#PANEL-5)). Up, Down, `k`, `j`, PageUp,
+PageDown, Home, End, `g` and `G` scroll the text, and the wheel scrolls it with the pointer over the
+panel, each stopping at the first row and at the position that leaves the last row at the bottom.
+Every other key is the state's and does nothing, so no character reaches the box, Enter sends nothing
+and a paste is dropped. On a terminal too narrow for the panel ([PANEL-6](info-panel.md#PANEL-6)) a note
+says how wide the terminal has to be and nothing opens, for the key and the click alike.
+
+The state holds a copy of the text and the number of its marker. Opening it does not change the line in the box, the caret or the
+paste table, and they are the same after it closes as when it opened. It sends nothing to a model, adds nothing
+to the request or the transcript, and writes nothing to the session record. The text is the person's
+own words and holds no label ([PASTE-7](#PASTE-7)). Nothing is decided from its content: what opens the
+state is a caret position, a click cell and a key, which marker is shown is found by the marker the box
+holds, and the text is carried to the screen after each character is mapped to what draws it.
+
+`peek` is one of the actions a settings file can move ([INPUT-32](terminal-input.md#INPUT-32)), and
+the list `?` puts up names it.
+
+**Why.** The marker keeps a long paste out of the way of the reply being read
+([PASTE-1](#PASTE-1)), and a person who pasted it has no other way to check what the marker holds,
+short of sending it. Showing it in the panel, as `/diff` shows the files, uses a place that already
+has a way in and out, keeps the box and the transcript as they were, and needs no new kind of screen.
+It sends nothing, so it is safe to use while the turn runs and before deciding whether to send.
+
+`verified-by: bravebot_tui::app::tests::peeking::a_click_on_the_marker_opens_the_viewer_and_leaves_the_line`
+`verified-by: bravebot_tui::app::tests::peeking::a_click_on_other_box_text_moves_the_caret_and_opens_nothing`
+`verified-by: bravebot_tui::app::tests::peeking::the_key_opens_the_viewer_with_the_caret_on_a_marker`
+`verified-by: bravebot_tui::app::tests::peeking::the_key_does_nothing_with_the_caret_off_a_marker`
+`verified-by: bravebot_tui::app::tests::peeking::the_marker_under_the_caret_or_the_pointer_is_the_one_shown`
+`verified-by: bravebot_tui::app::tests::peeking::the_key_works_while_a_turn_runs_and_ctrl_c_closes_only_the_viewer`
+`verified-by: bravebot_tui::app::tests::peeking::a_click_opens_the_viewer_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tests::peeking::every_way_of_closing_returns_the_panel_to_what_it_was`
+`verified-by: bravebot_tui::app::tests::peeking::a_terminal_too_narrow_gets_a_note_and_nothing_opens`
+`verified-by: bravebot_tui::app::tests::peeking::the_keys_scroll_the_text_between_its_ends`
+`verified-by: bravebot_tui::app::tests::peeking::the_wheel_scrolls_the_text_under_the_pointer_only`
+`verified-by: bravebot_tui::app::tests::peeking::long_lines_wrap_and_control_characters_are_drawn_visibly`
+`verified-by: bravebot_tui::app::tests::peeking::the_line_and_caret_are_untouched_by_the_viewer`
+`verified-by: bravebot_tui::keybindings::the_peek_chord_is_alt_v_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_peek_chord_and_the_peek_action_cannot_take_another`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_peek_chord`
+`verified-by: by-construction (the state is a copy of the text held in the session and is drawn from it by the panel's row builder, which takes no handle to the request, the transcript's writer or the session record; the click and key tests assert that the transcript is empty after opening and closing)`
 
 ## Known costs
 

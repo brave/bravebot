@@ -21,7 +21,7 @@ const FOLD_AT_NEWLINES: usize = 3;
 ///
 /// A trailing newline ends the last line rather than starting another, so text copied with the end
 /// of its last line does not claim an empty line that nobody can see.
-fn lines_in(text: &str) -> usize {
+pub(crate) fn lines_in(text: &str) -> usize {
     let newlines = text.matches('\n').count();
     if text.ends_with('\n') {
         newlines
@@ -210,6 +210,9 @@ pub struct PastedText {
     pub marker: String,
     /// What was pasted, with its line endings already normalised.
     pub text: String,
+    /// The number the marker carries, kept as a number so the view of the text can head itself
+    /// without reading it back out of a marker the catalogue spelled.
+    pub number: usize,
 }
 
 impl Session {
@@ -283,7 +286,11 @@ impl Session {
             lines = lines_in(&text)
         );
         self.paste(&marker);
-        self.pasted_text.push(PastedText { marker, text });
+        self.pasted_text.push(PastedText {
+            marker,
+            text,
+            number: self.attachments_made,
+        });
     }
 
     /// A line with every paste marker in it put back to the text it stands for.
@@ -574,6 +581,19 @@ impl Session {
     pub(super) fn marker_before_caret(&self) -> Option<(usize, usize)> {
         self.marker_spans()
             .find(|&(start, end)| start < self.caret && self.caret <= end)
+    }
+
+    /// The pasted text whose marker the caret is on, which is none where the caret is on another
+    /// kind of marker or on none (PASTE-13).
+    ///
+    /// Looked up by the marker the box holds at the caret, which every paste has its own of, since
+    /// a number is never reused.
+    pub(super) fn pasted_text_at_caret(&self) -> Option<&PastedText> {
+        let (start, end) = self.marker_at_caret()?;
+        let marker = self.input.get(start..end)?;
+        self.pasted_text
+            .iter()
+            .find(|pasted| pasted.marker == marker)
     }
 
     /// The marker the caret is on, meaning the one the next forward press would move over.

@@ -1,5 +1,7 @@
 ## Unreleased
 
+ - Added a way to read a folded paste whole: clicking a `[Pasted text #1 +4 lines]` marker, or Alt-V with the caret on it (the `peek` action, movable in `keybindings`), shows the pasted text in the info panel, wrapped and scrollable, and `q`, Escape, Ctrl-C or the `x` closes it. It works while a turn runs and changes nothing in the line or the session record. A `keybindings` block that already put an action on `alt-v` loses that mapping and falls back to its default: move `peek`, or move the other action.
+
  - Added a daily usage ping, which tells Brave once a UTC day that a copy of bravebot ran: its platform, version, install method, front end, kind of model service, whether a premium key is held, four first-of-period flags and the week it was first counted. It holds no prompt, file, key, path or identifier, nothing is sent until bravebot has said so once, and the switch in `/config`, **Settings → General → Privacy**, `"usagePing": false`, `BRAVEBOT_USAGE_PING=0`, `DO_NOT_TRACK` or the managed file turns it off.
 
 ## [0.23.0](https://github.com/brave/bravebot/releases/tag/v0.23.0)
