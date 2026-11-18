@@ -3772,18 +3772,23 @@ mod tests {
 
     /// An outer brace that gives up on its own reading meets the same `{` again as text. The
     /// reading is the reading of the line, which does not change underneath the scan, so a brace
-    /// that offered no expansion at a depth never offers one there.
+    /// that offered no expansion at a depth never offers one there. The line is one command of
+    /// such braces, refused at its end for the pipe with no program after it, so every brace is
+    /// met again from each brace outside it before the refusal. The shortest line is asked first,
+    /// so a brace read twice fails at 8 repeats rather than hanging at 600.
     #[test]
     fn a_brace_reached_twice_is_answered_twice_not_read_twice() {
-        let line = format!("echo {}", "{a,{a|".repeat(600));
-        let (parsed, read) = counted::during(|| parse(&line));
-        assert!(parsed.is_err());
-        let bound = (MAX_NESTING + 1) * line.len() * line.len();
-        assert!(
-            read <= bound,
-            "{read} characters were read for a line of {}, past {bound}",
-            line.len()
-        );
+        for repeats in [8, 100, 600] {
+            let line = format!("echo {}|", "{a,{a".repeat(repeats));
+            let (parsed, read) = counted::during(|| parse(&line));
+            assert!(parsed.is_err(), "{repeats} repeats: {parsed:?}");
+            let bound = (MAX_NESTING + 1) * line.len() * line.len();
+            assert!(
+                read <= bound,
+                "{repeats} repeats: {read} characters were read for a line of {}, past {bound}",
+                line.len()
+            );
+        }
     }
 
     /// Braces deeper than `(` may nest stand for themselves, like an unclosed brace, rather than
