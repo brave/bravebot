@@ -21856,6 +21856,81 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
     }
 }
 
+/// PERM-3 and CLI-30 on real directories: `permissions check` decides `Read .ENV` by the casefold
+/// flag of the directory it is run in and not of the directory above it. A layout the host cannot
+/// build (`chattr +F` needs ext4 or f2fs with casefold, and an empty directory) is skipped, and the
+/// filesystem is asked about each one it builds before the report is read. The faults this rejects:
+/// the parent's answer used for the working directory (wrong in the first and third layouts), and a
+/// refusal compared byte for byte where the working directory folds.
+#[cfg(target_os = "linux")]
+#[test]
+fn permissions_check_follows_the_casefold_flag_of_the_directory_and_not_of_its_parent() {
+    let set_flag = |directory: &Path| {
+        Command::new("chattr")
+            .arg("+F")
+            .arg(directory)
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    for (name, parent_folds, folds) in [
+        ("ordinary-parent-casefold-directory", false, true),
+        ("casefold-parent-casefold-directory", true, true),
+        ("casefold-parent-ordinary-directory", true, false),
+        ("ordinary-parent-ordinary-directory", false, false),
+    ] {
+        let scratch = Scratch::new(&format!("cli-running-permissions-check-casefold-{name}"))
+            .with_settings(r#"{"permissions": {"deny": ["Read(.env)"]}}"#);
+        let parent = scratch.path.join("Parent");
+        let directory = parent.join("Workspace");
+        std::fs::create_dir_all(&directory).expect("create the directory");
+        let flagged = |place: &Path, wanted: bool| !wanted || set_flag(place);
+        // The flag can only be set on an empty directory, so the parent's goes on first.
+        std::fs::remove_dir(&directory).expect("empty the parent");
+        if !flagged(&parent, parent_folds) {
+            eprintln!("skipped {name}: this filesystem cannot set the casefold flag");
+            continue;
+        }
+        std::fs::create_dir(&directory).expect("create the directory");
+        if !flagged(&directory, folds) {
+            eprintln!("skipped {name}: this filesystem cannot set the casefold flag");
+            continue;
+        }
+        std::fs::write(directory.join(".env"), "SECRET=1\n").expect("write the file");
+        assert_eq!(
+            directory.join(".ENV").exists(),
+            folds,
+            "{name}: the directory did not fold as the layout says"
+        );
+        assert_eq!(
+            parent.join("wORKSPACE").exists(),
+            parent_folds,
+            "{name}: the parent did not fold as the layout says"
+        );
+
+        let home = scratch.settings().display().to_string();
+        let denied = [
+            "decision: deny".to_string(),
+            "rule: Read(.env)".to_string(),
+            format!("file: {home}"),
+        ];
+        assert_eq!(
+            permissions_check(&scratch, &directory, &["Read", ".env"]),
+            denied,
+            "{name}"
+        );
+        let other = permissions_check(&scratch, &directory, &["Read", ".ENV"]);
+        match folds {
+            true => assert_eq!(other, denied, "{name}: .ENV opens the file .env names"),
+            false => assert_eq!(
+                other,
+                ["decision: no rule matches, so the ordinary gates decide"],
+                "{name}: .ENV is not a file here"
+            ),
+        }
+    }
+}
+
 /// CLI-30 and PERM-1: the report reads a host in every spelling a fetch reads it in. A rule written
 /// with a trailing dot or in brackets, and a URL carrying an address inside IPv6 or as one number,
 /// are decided by the rule that names the same host, so the report says `deny` where a session
