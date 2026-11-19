@@ -2629,6 +2629,15 @@ LABEL_GATES = [
     "Policy::adopt_edited_body",
     "Policy::promote_vetted",
     "Policy::promote_vetted_picture",
+    "Policy::promote_confined_read",
+    "Policy::promote_reference_for_read",
+]
+
+# Gates the labels spec counts that build no label, so `derived_gates` does not find them. A slot
+# id the planner named is routing, and `accept_reference` turns the argument into one without
+# giving any bytes a label. They are held to the same per-file cases as the gates above.
+COUNTED_WITHOUT_A_LABEL = [
+    "Policy::accept_reference",
 ]
 
 
@@ -2655,9 +2664,10 @@ def derived_gates(labels, sources):
 
 
 def label_gate_checks():
-    """The eight gates in docs/specs/labels.md, against the real tree.
+    """The gates in docs/specs/labels.md that `LABEL_GATES` and `COUNTED_WITHOUT_A_LABEL` list,
+    against the real tree.
 
-    Three cases read the real spec: all eight are pinned with a sites list, no entry pins nothing,
+    Three cases read the real spec: every gate is pinned with a sites list, no entry pins nothing,
     and no other spec guards them. For each gate, the pinned counts must equal what the scan of its
     pinned files finds. A probe file no `sites:` list names, calling the gate as a method and as a
     qualified path, must give exactly one guard-site-unlisted finding, and one extra call in a
@@ -2680,10 +2690,11 @@ def label_gate_checks():
         paths = [Path(item.rpartition(":")[0].strip()) for item in here[symbol]]
         return {path: sources[path] for path in paths}
 
+    counted = LABEL_GATES + COUNTED_WITHOUT_A_LABEL
     checks = [
         (
             "every gate is pinned in the labels spec, with a sites list",
-            all(symbol in here for symbol in LABEL_GATES),
+            all(symbol in here for symbol in counted),
         ),
         (
             "LABEL_GATES is the set of functions in the policy layer that build a trusted or public "
@@ -2701,11 +2712,11 @@ def label_gate_checks():
                 for one in specs
                 if one.id != "LABEL"
                 for symbol in one.guards
-                if symbol in LABEL_GATES
+                if symbol in counted
             ],
         ),
     ]
-    for symbol in LABEL_GATES:
+    for symbol in counted:
         if symbol not in here:
             continue  # reported by the case above, and there is nothing to count it against
         bare = symbol.split("::")[-1]

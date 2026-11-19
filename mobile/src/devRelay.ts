@@ -20,7 +20,7 @@ export const connectDevRelayTarget: Connect = async (port, code) => {
     relay = await connectDevRelay({ port, code, deadlines, open: (url) => new WebSocket(url) as unknown as RelaySocket })
   } catch (error) {
     if (error instanceof RelayRefusedError && error.wrongCode) {
-      throw new Error('That is not the code the relay showed, so the relay has ended. Type launch on the host for a new port and code.')
+      throw new Error('That is not the code the relay showed, so the relay has ended. On the host, type launch and the name the relay was given there for a new port and code.')
     }
     if (error instanceof RelayRefusedError) {
       throw new Error(`Nothing took the connection on port ${port}. Check that the relay is running, that the port is forwarded to this device, and that no other app is connected.`)

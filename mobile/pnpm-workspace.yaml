@@ -8,6 +8,10 @@ nodeLinker: hoisted
 overrides:
   body-parser: "^2.4.0"
 
+# The React Native CLI reaches fast-xml-parser through @react-native-community/cli-config-android, and
+# 5.11.2 carries GHSA-474x-hrwr-fgx4. 5.12.0 fixes it. Remove this once the CLI depends on 5.12.0 or later.
+  fast-xml-parser: "^5.12.0"
+
 # Known high advisories in build-time tooling (Metro, the React Native CLI, Jest) that are not part of the
 # app bundle; braces and picomatch (GHSA-fc5q-39xc-vjpf, a ReDoS in extglob matching) have no patched
 # release. Remove the picomatch entry once a release above 4.0.7 is published and the lockfile uses it.

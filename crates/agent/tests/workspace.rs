@@ -4,6 +4,10 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+#[allow(
+    dead_code,
+    reason = "repository is shared by several test binaries, and this one never commits a link"
+)]
 mod repository;
 
 #[allow(

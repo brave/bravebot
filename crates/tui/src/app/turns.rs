@@ -353,13 +353,7 @@ pub(super) fn say_how_a_manifest_run_ended(
     stopped_by_the_person: bool,
 ) {
     match outcome {
-        Ok(finished) => {
-            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
-            // than into the conversation: what this run said is not something a later turn holds.
-            // Nothing is said about that here. A reply that arrived is the run having worked, and a
-            // line under it announcing what did not happen reads as a complaint about the run.
-            session.narrate(finished.reply_for_display());
-        }
+        Ok(finished) => say_what_a_manifest_run_replied(session, finished.reply_for_display()),
         // Stopped by the person, so there is nothing to report. The transcript already holds the
         // steps that ran, and a complaint about a run they turned off themselves is noise.
         Err(_) if stopped_by_the_person => {}
@@ -367,6 +361,18 @@ pub(super) fn say_how_a_manifest_run_ended(
             session.note(t!(manifest_failed, problem = failure.to_string()));
         }
     }
+}
+
+/// Put a manifest run's reply into the transcript.
+///
+/// Released for a screen, exactly as a turn's reply is, and into the transcript rather than into
+/// the conversation: what this run said is not something a later turn holds. Nothing is said about
+/// that here. A reply that arrived is the run having worked, and a line under it announcing what
+/// did not happen reads as a complaint about the run. Marked as released for the screen alone, so
+/// an export does not carry it (SESSION-17). Apart from the run so a test can say what an export
+/// holds of it.
+pub(super) fn say_what_a_manifest_run_replied(session: &mut Session, reply: &str) {
+    session.narrate_displayed_only(reply);
 }
 
 /// The record of lines remembered past a session for this workspace, and what it holds now.

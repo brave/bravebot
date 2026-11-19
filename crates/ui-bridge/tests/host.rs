@@ -14,6 +14,7 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+use bravebot_ui_bridge::allowlist::Answer;
 use bravebot_ui_bridge::host::{Ended, Host, MAX_LINE, Setup};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -47,7 +48,13 @@ struct Client {
 }
 
 impl Client {
-    fn attach(mut host: Host) -> Self {
+    /// A client that may give every answer.
+    fn attach(host: Host) -> Self {
+        Self::attach_giving(host, &Answer::ALL)
+    }
+
+    /// A client that may give only `answers`.
+    fn attach_giving(mut host: Host, answers: &'static [Answer]) -> Self {
         let (near, far) = UnixStream::pair().unwrap();
         // The reader ends by looking at `leaving` between reads. A read that waits for the
         // socket to be shut down can stay blocked on macOS.
@@ -77,7 +84,7 @@ impl Client {
             }
         });
         let served = std::thread::spawn(move || {
-            let ended = host.serve(far).expect("the channel serves");
+            let ended = host.serve(far, answers).expect("the channel serves");
             (host, ended)
         });
         Self {
@@ -184,6 +191,56 @@ fn a_method_the_host_does_not_offer_is_refused_and_does_nothing() {
     client.leave();
 }
 
+/// A reply that gives an answer the person did not let this client give is refused before the
+/// bridge sees it, whatever it names. One the client may give goes on to the bridge, which finds
+/// no such session. A host that checked only the method would let a client without `trust`
+/// answer the startup question.
+#[test]
+fn a_reply_the_client_may_not_give_is_refused_before_the_bridge_reads_it() {
+    let mut client = Client::attach_giving(a_host(Vec::new()), &[Answer::Confirm]);
+    for (method, params) in [
+        ("trust.reply", json!({"session": "s1", "trusted": true})),
+        (
+            "run.reply",
+            json!({"session": "s1", "request": 1, "decision": "approve"}),
+        ),
+        (
+            "fetch.reply",
+            json!({"session": "s1", "request": 1, "decision": "approve"}),
+        ),
+        (
+            "ask.reply",
+            json!({"session": "s1", "request": 1, "answers": []}),
+        ),
+    ] {
+        let answered = client.answered(method, params);
+        assert_eq!(
+            answered["error"]["code"], "not_allowed",
+            "{method}: {answered}"
+        );
+    }
+    let allowed = client.answered(
+        "confirm.reply",
+        json!({"session": "s1", "request": 1, "decision": "approve"}),
+    );
+    assert_eq!(allowed["error"]["code"], "no_such_session", "{allowed}");
+    client.leave();
+}
+
+/// `instance.info` tells a client which answers it may give, so it can show only the questions it
+/// can answer. Two clients of one host with different answers are told their own.
+#[test]
+fn instance_info_names_the_answers_of_the_client_that_asks() {
+    let mut first = Client::attach_giving(a_host(Vec::new()), &[Answer::Confirm, Answer::Trust]);
+    let said = first.answered("instance.info", json!({}));
+    assert_eq!(said["ok"]["answers"], json!(["confirm", "trust"]), "{said}");
+    let (host, _) = first.leave();
+    let mut second = Client::attach_giving(host, &[]);
+    let said = second.answered("instance.info", json!({}));
+    assert_eq!(said["ok"]["answers"], json!([]), "{said}");
+    second.leave();
+}
+
 #[test]
 fn a_session_cannot_be_opened_outside_the_workspaces() {
     let configured = tempfile::tempdir().unwrap();
@@ -280,7 +337,7 @@ fn a_client_that_never_reads_does_not_wedge_the_host() {
     let mut host = a_host(Vec::new());
     let (ended, ending) = mpsc::channel();
     std::thread::spawn(move || {
-        let outcome = host.serve(far).expect("the channel serves");
+        let outcome = host.serve(far, &Answer::ALL).expect("the channel serves");
         let _ = ended.send(outcome);
     });
     let mut writer = near.try_clone().unwrap();
@@ -311,7 +368,8 @@ fn a_client_that_never_reads_does_not_wedge_the_host() {
 fn a_last_line_with_no_newline_is_not_run() {
     let (near, far) = UnixStream::pair().unwrap();
     let mut host = a_host(Vec::new());
-    let served = std::thread::spawn(move || host.serve(far).expect("the channel serves"));
+    let served =
+        std::thread::spawn(move || host.serve(far, &Answer::ALL).expect("the channel serves"));
     let mut writer = near.try_clone().unwrap();
     write!(
         writer,

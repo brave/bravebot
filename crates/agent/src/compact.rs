@@ -156,7 +156,8 @@ pub fn named_model_or_session<'a>(
 /// some other `Result<_, String>` cannot be read as one of these.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SideModelRefusal {
-    /// The machine-level layer excludes it (BACKEND-48).
+    /// This machine does not request it: the machine-level layer excludes it (BACKEND-48), or it
+    /// searches the web before it replies (LABEL-8).
     Refused(String),
     /// No configured service would answer for it, so a typo degrades a side request rather than
     /// failing it.
@@ -570,6 +571,49 @@ mod tests {
             )
             .expect("not excluded"),
             "a-permitted-model"
+        );
+    }
+
+    /// LABEL-8, BACKEND-19, COMPACT-15: a model that searches the web before it replies is refused
+    /// as the model a side request runs on when it is reached over chat completions, because its
+    /// reply is adopted with the label of the context sent to it and holds pages that context does
+    /// not. The same id over the Responses protocol is not refused. The regressions it rejects are
+    /// a `summaryModel` that resolves the name, and a refusal that holds for the Responses route
+    /// as well.
+    #[test]
+    fn a_summary_model_that_searches_the_web_is_refused_over_chat_completions_only() {
+        let with_entry = |entry: &str| {
+            let mut config = bravebot_config::Config::from_lookup(aichat_only).expect("configured");
+            let serde_json::Value::Object(root) = serde_json::from_str(entry).expect("json") else {
+                panic!("not an object");
+            };
+            config.providers = bravebot_config::provider::Provider::all(&root);
+            config.summary_model = Some("openai/gpt-5-search-api".to_string());
+            config
+        };
+        let chat = with_entry(
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai-compatible",
+                "options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}}}}}"#,
+        );
+        assert_eq!(
+            side_request_model(&chat, &bravebot_net::Egress::new(), Some("a-session-model"))
+                .expect_err("a model that searches the web must be refused here"),
+            SideModelRefusal::Refused("openai/gpt-5-search-api".to_string()),
+        );
+
+        let responses = with_entry(
+            r#"{"provider": {"openai": {"options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}}}}}"#,
+        );
+        assert_eq!(
+            side_request_model(
+                &responses,
+                &bravebot_net::Egress::new(),
+                Some("a-session-model")
+            )
+            .expect("search over the Responses protocol is a tool a request has to ask for"),
+            "openai/gpt-5-search-api"
         );
     }
 

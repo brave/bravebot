@@ -648,6 +648,7 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_path_outside_the_root_does_not_make_its_directory_a_source`
 `verified-by: bravebot_agent::preamble::the_directories_worked_in_stop_at_sixty_four`
 `verified-by: bravebot_agent::preamble::a_link_in_a_touched_name_is_not_followed_to_where_it_lands`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
 `verified-by: bravebot_agent::preamble::a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import`
 `verified-by: bravebot_agent::preamble::a_nested_file_spelled_in_another_case_is_an_ordinary_file`
 `verified-by: bravebot_agent::preamble::only_the_exactly_spelled_nested_file_loads_beside_a_differently_spelled_one`
@@ -862,6 +863,7 @@ for a record as for a live session.
 `verified-by: bravebot_agent::workspace::a_name_typed_with_at_records_the_file_and_not_its_directory`
 `verified-by: bravebot_agent::workspace::a_name_typed_with_at_that_is_a_directory_or_nothing_is_not_a_file`
 `verified-by: bravebot_agent::workspace::a_touched_file_is_recorded_by_the_spelling_the_planner_typed`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
 `verified-by: bravebot_agent::workspace::a_workspace_given_what_the_session_kept_has_the_files_it_touched`
 `verified-by: bravebot_agent::workspace::the_files_touched_stop_at_a_thousand_and_twenty_four`
 `verified-by: bravebot_agent::safe::a_safe_session_reads_no_rule_file`

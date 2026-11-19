@@ -1775,6 +1775,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         summary: &request.summary(),
         steps: &steps,
         writes: &writes,
+        stdin: request.stdin.as_deref(),
         confinement: confinement.as_ref(),
         ambient: &ambient,
         releases_private: request.releases_private(),
@@ -1868,6 +1869,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.rule,
             checked(request.verdict),
             &request.preview,
+            request.hidden,
         );
         self.about(Held::Vouch);
         self.ask(&lines, t!(vouch_title))
@@ -2284,6 +2286,42 @@ mod tests {
         );
         assert_eq!(ended, None, "a hosted start on an allowed model was ended");
         assert!(allowed.output.is_empty());
+    }
+
+    /// LABEL-8: a start on a model that searches the web over chat completions is ended with no file
+    /// named, whether the model is the configured default or a recorded pick, and a model beside it
+    /// that does not search is not ended. The regression it rejects is a refusal that needs a managed
+    /// file, which would leave a `model` setting naming the search model as the one route open.
+    #[test]
+    fn a_start_on_a_model_that_searches_the_web_is_ended_without_a_file() {
+        let mut config = Config::from_lookup(|name| match name {
+            bravebot_config::env_var::ENDPOINT => Some("https://example.invalid".into()),
+            bravebot_config::env_var::KEY_ID => Some("a-key-id".into()),
+            bravebot_config::env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configured gateway");
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai-compatible",
+                "options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}, "gpt-5.5": {}}}}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config.providers = bravebot_config::provider::Provider::all(&root);
+
+        let said = refused_model(&config, Some("openai/gpt-5-search-api"))
+            .expect("the search model ended the start");
+        assert!(said.contains("openai/gpt-5-search-api"), "{said}");
+        assert!(said.contains("searches the web"), "{said}");
+        assert_eq!(refused_model(&config, Some("openai/gpt-5.5")), None);
+
+        config.default_model = "openai/gpt-5-search-api".to_string();
+        assert!(
+            refused_model(&config, None).is_some(),
+            "the configured default was not asked"
+        );
     }
 
     /// BG-8: a recorded choice or a settings key for automatic vetting answers a foreground session's
@@ -3829,6 +3867,36 @@ mod tests {
         );
     }
 
+    /// A run fed a reference names it in the question, and the sentence over it is the
+    /// catalog's. A background session puts the same lines to whoever attaches, so this is the
+    /// question both read (PROMPT-1, RUN-3). The regression it rejects is a `program` that builds
+    /// the lines without reading `request.stdin`, so a yes to `sh -s` runs a page nobody named.
+    #[test]
+    fn a_run_fed_a_reference_is_asked_about_with_the_reference_named() {
+        let pipeline =
+            bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+                "sh",
+                vec!["-s".to_string()],
+            )]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/bin/sh".to_string()], "/work");
+        let unfed = program(&request);
+        assert!(
+            !unfed.iter().any(|line| line == t!(run_is_fed)),
+            "{unfed:?}"
+        );
+
+        request.stdin = Some("ref:1".to_string());
+        request.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        let lines = program(&request);
+        let sentence = lines
+            .iter()
+            .position(|line| line == t!(run_is_fed))
+            .unwrap_or_else(|| {
+                panic!("the question does not say it is fed a reference: {lines:?}")
+            });
+        assert_eq!(lines[sentence + 1], "  ref:1", "{lines:?}");
+    }
+
     /// A name that reached its file through a link is asked about with the link beside the file,
     /// since the link is what starts and an entry for the line is keyed on both.
     #[test]
@@ -4795,6 +4863,7 @@ mod tests {
                     rule: "scripts/a.sh".to_string(),
                     preview: "echo".to_string(),
                     truncated: false,
+                    hidden: 0,
                     verdict,
                     reason: None,
                     label: String::new(),
@@ -5002,6 +5071,45 @@ mod tests {
                         "`{stem}` did not say {hidden} characters drew as nothing above the text: {screen}"
                     ),
                 }
+            }
+        }
+    }
+
+    /// PROMPT-13: the plain question for a vouch says how many characters of the preview drew as
+    /// nothing, above the preview, and says nothing of them for a preview with none. The regression
+    /// it rejects is a `confirm_vouch` that does not pass the count on to the lines it draws.
+    #[test]
+    fn the_plain_vouch_question_says_how_many_characters_of_the_preview_draw_as_nothing() {
+        let preview = "here.\u{2039}U+E0041 A\u{203A}\u{2039}U+202E\u{203A}";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+                Vec::new(),
+            );
+            let decision = asking.confirm_vouch(&VouchRequest {
+                path: "notes.md".to_string(),
+                rule: "notes.md".to_string(),
+                preview: preview.to_string(),
+                truncated: false,
+                hidden,
+                verdict: Verdict::Safe,
+                reason: None,
+                label: String::new(),
+                reason_label: None,
+            });
+            assert_eq!(decision, Decision::Approve);
+            let screen = String::from_utf8(asking.output).expect("text");
+            let rows: Vec<&str> = screen.lines().collect();
+            let saying = rows.iter().position(|row| row.contains(&said));
+            let preview_at = rows.iter().position(|row| row.ends_with(preview));
+            assert!(preview_at.is_some(), "{screen}");
+            match hidden {
+                0 => assert!(saying.is_none(), "{screen}"),
+                _ => assert!(
+                    saying.is_some() && saying < preview_at,
+                    "the vouch question did not say {hidden} characters drew as nothing above the preview: {screen}"
+                ),
             }
         }
     }

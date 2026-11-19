@@ -906,6 +906,13 @@ by default. The list changes
 with a release of either document. A block naming `models` is offered those and no others, so a model on the list is
 still reached by naming it.
 
+**A model that searches the web is not offered over chat completions.** Where an entry is reached in the chat
+completions protocol, whatever its host, the ids `gpt-5-search-api`, `gpt-4o-search-preview` and
+`gpt-4o-mini-search-preview` are left out of its listing, and a block that names one in `models` does not make it
+requestable: the id is refused by every route that would request it ([LABEL-8](labels.md#LABEL-8),
+[BACKEND-48](#BACKEND-48)). An entry reached in the Responses protocol keeps them. The list is
+`RETRIEVING_MODELS` in `crates/config/src/provider.rs`.
+
 **What is known of the exchange with OpenAI's own API.** [BACKEND-22](#BACKEND-22),
 [BACKEND-31](#BACKEND-31) and [BACKEND-32](#BACKEND-32) add what bears on the effort level, on usage and on cache marks.
 
@@ -1006,6 +1013,8 @@ token is not renewed for it.
 `verified-by: bravebot_aichat::models::an_openai_listing_is_not_offered_a_model_on_or_past_its_shutdown_date`
 `verified-by: bravebot_aichat::models::a_shutdown_date_takes_effect_at_the_start_of_its_day`
 `verified-by: bravebot_aichat::models::a_shutdown_date_is_read_at_openais_own_api_and_nowhere_else`
+`verified-by: bravebot_aichat::models::a_listing_is_not_offered_a_model_that_searches_the_web_over_chat_completions`
+`verified-by: bravebot_config::lib::a_model_that_searches_the_web_is_refused_over_chat_completions_only`
 `verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
 `verified-by: bravebot_config::provider::the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not`
 `verified-by: bravebot_config::provider::the_responses_only_list_holds_the_marked_ids_and_leaves_out_a_sample_that_stays_offered`
@@ -3539,6 +3548,14 @@ decides nothing, and an empty `deny` denies nothing, which `doctor` does not rep
 that is not a name is skipped. In a deny list it denies nothing; in an allow list it allows nothing,
 which is one fewer model requested rather than a list that decides nothing.
 
+A model that searches the web before it replies and is reached over chat completions
+([LABEL-8](labels.md#LABEL-8)) is refused as a model the layer excludes is, by the same check in
+`Config::model_refused`, but no file is named: nothing a person wrote refused it, so the reason is
+that the model searches the web before it replies. A model the layer also denies keeps its file. The
+same id reached in the Responses protocol is not refused. Every route above asks the one check: the
+start, a recorded pick, the picker, a definition's `model`, the summary, advisor, plan and processor
+models, and the goal judge.
+
 `verified-by: bravebot_config::managed::a_model_allow_list_requests_only_what_it_names`
 `verified-by: bravebot_config::managed::an_empty_model_allow_list_requests_nothing`
 `verified-by: bravebot_config::managed::a_denied_model_is_refused_even_where_the_allow_list_names_it`
@@ -3557,9 +3574,17 @@ which is one fewer model requested rather than a list that decides nothing.
 `verified-by: bravebot_tui::app::a_definition_naming_a_model_this_machine_may_not_request_is_refused`
 `verified-by: bravebot_tui::persist::a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file`
 `verified-by: bravebot_ui_bridge::models::the_window_neither_offers_nor_requests_a_model_this_machine_refuses`
+`verified-by: bravebot_ui_bridge::models::the_window_refuses_a_model_that_searches_the_web_without_naming_a_file`
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_the_managed_layer_denies_sends_nothing_and_names_the_file`
 `verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_the_managed_layer_denies_sends_nothing_and_names_the_file`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_the_managed_layer_denies_keeps_the_sessions_model_and_names_the_file`
+`verified-by: bravebot_agent::turn::a_delegate_whose_model_searches_the_web_sends_nothing_and_says_why`
+`verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_searches_the_web_sends_nothing_and_says_why`
+`verified-by: bravebot_agent::turn::a_summary_model_that_searches_the_web_sends_no_check`
+`verified-by: bravebot_agent::turn::an_advisor_model_that_searches_the_web_is_not_asked`
+`verified-by: bravebot_agent::compact::a_summary_model_that_searches_the_web_is_refused_over_chat_completions_only`
+`verified-by: bravebot_cli::plain::a_start_on_a_model_that_searches_the_web_is_ended_without_a_file`
+`verified-by: bravebot_config::lib::a_model_that_searches_the_web_is_refused_over_chat_completions_only`
 
 <a id="BACKEND-49"></a>
 ### BACKEND-49: a `google-vertex` entry is reached at a host built from its project and location

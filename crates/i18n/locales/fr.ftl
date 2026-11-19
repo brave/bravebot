@@ -4015,12 +4015,12 @@ delegate-model-needs-sign-in =
     { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
 delegate-model-substituted = { $definition } a demandé { $model } et un autre modèle a répondu
 plan-model-unavailable =
-    { $model } est défini comme modèle de planification mais ne peut pas être utilisé ici (aucun service configuré n'y répond, il exige une connexion, ou les paramètres gérés de cette machine l'interdisent) : ce tour utilise le modèle de la session
+    { $model } est défini comme modèle de planification mais ne peut pas être utilisé ici (aucun service configuré n'y répond, il exige une connexion, les paramètres gérés de cette machine l'interdisent, ou il cherche sur le web avant de répondre) : ce tour utilise le modèle de la session
 summary-model-needs-sign-in =
     { $model } est défini comme modèle de résumé et exige d'abord une connexion : rien n'a été envoyé
 summary-model-refused =
     { $model } est défini comme modèle de résumé et les réglages gérés de cette machine ne
-    l'autorisent pas : rien n'a été envoyé
+    l'autorisent pas, ou il cherche sur le web avant de répondre : rien n'a été envoyé
 summary-model-not-served =
     { $model } est défini comme modèle de résumé et aucun service configuré ne le sert : rien n'a
     été envoyé

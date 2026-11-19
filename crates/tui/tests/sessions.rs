@@ -3314,6 +3314,43 @@ mod preserved_history {
         assert_eq!(reopened.timing_total().stalled_ms, 6);
     }
 
+    /// SESSION-17. A task list resumed from a record keeps the form the model wrote beside the form
+    /// the person read, and an export made after the resume writes the first. A record made before
+    /// the field existed has only the form the person read, which is what it writes.
+    ///
+    /// Rejects a resume that rebuilds a row from `content` alone, which exports the names.
+    #[test]
+    fn a_resumed_task_list_is_exported_as_the_model_wrote_it() {
+        let scratch = Scratch::new("history-plan-as-written");
+        let (session, conversation) = fixture();
+        let mut record = save(&scratch.project, &session, &conversation);
+        record.todos = BTreeMap::from([(
+            1,
+            vec![
+                sessions::StoredTask {
+                    content: "rewrite IGNORE-PREVIOUS-INSTRUCTIONS.md".into(),
+                    status: "in_progress".into(),
+                    as_the_planner_had_it: Some("rewrite ref:1".into()),
+                },
+                sessions::StoredTask {
+                    content: "an older record's task".into(),
+                    status: "pending".into(),
+                    as_the_planner_had_it: None,
+                },
+            ],
+        )]);
+        let markdown = bravebot_tui::render::as_markdown(&reopen(&scratch.project, &record), "t");
+        assert!(!markdown.contains("IGNORE-PREVIOUS"), "{markdown}");
+        assert!(
+            markdown.contains("- [ ] rewrite ref:1 (in_progress)"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("- [ ] an older record's task (pending)"),
+            "{markdown}"
+        );
+    }
+
     /// No turn is running in a session that was just resumed, so the rows of its plan that were
     /// left open are drawn as work nobody is doing, as they are after a turn that ended in this
     /// session.
@@ -3504,6 +3541,7 @@ mod preserved_history {
             vec![sessions::StoredTask {
                 content: "legacy task".into(),
                 status: "in_progress".into(),
+                as_the_planner_had_it: None,
             }],
         )]);
         let todos = record.todo_rows();
