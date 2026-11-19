@@ -395,7 +395,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_workspace_whose_volume_cannot_be_asked_distrusts_folds_and_grants_none`
 `verified-by: bravebot_agent::workspace::a_trust_store_for_a_directory_that_cannot_be_asked_says_so`
 `verified-by: bravebot_agent::workspace::named_settings::a_spelling_in_another_case_reaches_a_file_not_made_yet_unless_the_volume_keeps_them_apart`
-`verified-by: bravebot_agent::workspace::a_real_directory_with_the_casefold_flag_folds_case_for_the_map`
+`verified-by: bravebot_agent::workspace::real_directories_with_the_casefold_flag_set_per_level_give_the_map_the_workspace_s_answer`
 `verified-by: bravebot_core::trust::a_volume_that_could_not_be_asked_reads_a_refusal_in_every_case_and_a_trust_in_one`
 `verified-by: bravebot_core::trust::an_undecided_boundary_reaches_the_other_case_where_the_volume_might_fold`
 `verified-by: bravebot_core::trust::a_probe_answer_is_read_as_the_case_folding_it_says`
