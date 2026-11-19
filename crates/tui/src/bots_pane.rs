@@ -895,18 +895,17 @@ fn boundary(text: &str, index: usize) -> usize {
 }
 
 fn previous(text: &str, index: usize) -> usize {
-    text[..index]
-        .char_indices()
-        .next_back()
+    text.char_indices()
         .map(|(at, _)| at)
+        .take_while(|at| *at < index)
+        .last()
         .unwrap_or(0)
 }
 
 fn next_boundary(text: &str, index: usize) -> usize {
-    text[index..]
-        .chars()
-        .next()
-        .map(|character| index + character.len_utf8())
+    text.char_indices()
+        .find(|(at, _)| *at >= index)
+        .map(|(at, character)| at + character.len_utf8())
         .unwrap_or(index)
 }
 
@@ -1118,6 +1117,10 @@ fn field_rows(
         .collect()
 }
 
+#[expect(
+    clippy::string_slice,
+    reason = "end was walked back to a char boundary, or is zero"
+)]
 fn inactive_preview(text: &str, width: usize) -> String {
     let width = width.max(1);
     let budget = width.saturating_mul(8).max(64);
@@ -1134,6 +1137,10 @@ fn inactive_preview(text: &str, width: usize) -> String {
     line
 }
 
+#[expect(
+    clippy::string_slice,
+    reason = "start and end were walked to char boundaries around the cursor"
+)]
 fn slice_around(text: &str, cursor: usize, budget: usize) -> (String, usize) {
     let cursor = boundary(text, cursor.min(text.len()));
     let mut start = cursor.saturating_sub(budget);
@@ -1172,6 +1179,10 @@ fn pictured(character: char) -> char {
     }
 }
 
+#[expect(
+    clippy::string_slice,
+    reason = "the caret index and the next boundary are both char boundaries of the row"
+)]
 fn line_with_caret(row: &str, index: usize, on: bool) -> Line<'static> {
     if !on {
         return Line::from(row.to_string());
