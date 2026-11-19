@@ -37,6 +37,9 @@ use crate::ambient::{CanonicalHost, canonical_host};
 use crate::trust::is_absolute_key;
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// The family of tools a rule names.
 ///
 /// Claude Code's own spellings, which are categories rather than tool names there too: its docs
@@ -95,6 +98,7 @@ impl fmt::Display for Subject {
 
 /// Which list a rule came from, which is what it does when it matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Ruling {
     /// The action is refused outright.
     Deny,
@@ -123,6 +127,7 @@ impl fmt::Display for Ruling {
 
 /// What the rules had to say about one action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Decision {
     /// A rule matched.
     Ruled(Ruling),

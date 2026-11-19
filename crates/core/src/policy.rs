@@ -549,39 +549,41 @@ pub enum Containment {
 
 /// What [`Policy::plan_needs_approval_held`] knows about a line, gathered before it decides.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is a separate fact about the line, and run_reason reads each on its own"
 )]
-struct RunFacts {
+pub(crate) struct RunFacts {
     /// Private input is fed to a program (RUN-6).
-    releases_private: bool,
+    pub(crate) releases_private: bool,
     /// The planner asked for a credential scope or a toolchain list (SANDBOX-26).
-    requested: bool,
+    pub(crate) requested: bool,
     /// The line names a file to write.
-    writes: bool,
+    pub(crate) writes: bool,
     /// The line runs in the workspace root.
-    at_root: bool,
+    pub(crate) at_root: bool,
     /// Every step is on the session's vouched list, in the tree the line runs in (RUN-8).
-    vouched: bool,
+    pub(crate) vouched: bool,
     /// A step carries an environment assignment.
-    assignment: bool,
+    pub(crate) assignment: bool,
     /// What the settings file's rules say about the line.
-    rule: crate::permissions::Decision,
+    pub(crate) rule: crate::permissions::Decision,
     /// The audited table proves every step reads only paths the person vouched for.
-    read_proven_trusted: bool,
+    pub(crate) read_proven_trusted: bool,
     /// The line is fed a reference.
-    fed: bool,
+    pub(crate) fed: bool,
     /// The line is held to a closed sandbox in the directory the person trusted, and their yes
     /// said such lines run without asking (RUN-5).
-    held: bool,
+    pub(crate) held: bool,
     /// The person asked for this exact line to be remembered past the session (RUN-19).
-    remembered: bool,
+    pub(crate) remembered: bool,
 }
 
 /// Which question decided whether a line is put to a person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RunReason {
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum RunReason {
     Private,
     Requested,
     Writes,
@@ -598,6 +600,10 @@ enum RunReason {
 
 impl RunReason {
     /// Whether the line is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::reason_asks(self),
+    ))]
     fn asks(self) -> bool {
         match self {
             Self::Private
@@ -607,7 +613,10 @@ impl RunReason {
             | Self::Assignment
             | Self::Fed
             | Self::Unanswered => true,
-            Self::Ruled(ruling) => ruling != crate::permissions::Ruling::Allow,
+            Self::Ruled(ruling) => {
+                let allowed = ruling == crate::permissions::Ruling::Allow;
+                !allowed
+            }
             Self::ReadProven | Self::DirectoryTrust | Self::Vouched | Self::Remembered => false,
         }
     }
@@ -620,6 +629,10 @@ impl RunReason {
 /// those is in either. A rule is read before the audited table and before any standing answer,
 /// so an `ask` rule is not overturned by one. A fed reference is asked about past the rules and
 /// the table and before the standing answers, none of which records what was fed.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::run_reason_is_sound(facts, r),
+))]
 fn run_reason(facts: RunFacts) -> RunReason {
     if facts.releases_private {
         return RunReason::Private;
@@ -659,21 +672,23 @@ fn run_reason(facts: RunFacts) -> RunReason {
 
 /// What [`Policy::measure_a_run`] knows about a line, gathered before it labels the output.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) struct OutputFacts {
     /// The line asked for `scopes` or `unconfined` (SANDBOX-26, SANDBOX-29).
-    requesting: bool,
+    pub(crate) requesting: bool,
     /// The label the audited table proves, where it proves a trusted one.
-    proven: Option<Label>,
+    pub(crate) proven: Option<Label>,
     /// Every step is on the session's vouched list, in the tree the line runs in (RUN-8).
-    vouched: bool,
+    pub(crate) vouched: bool,
     /// A step carries an environment assignment.
-    assignment: bool,
+    pub(crate) assignment: bool,
     /// The integrity of a reference fed to the line, where one is.
-    fed: Option<Integrity>,
+    pub(crate) fed: Option<Integrity>,
 }
 
 /// Which road a line's output label was taken by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) enum OutputRoad {
     Requested,
     Proven,
@@ -687,6 +702,12 @@ pub(crate) enum OutputRoad {
 /// A request gets `opaque` whatever covers the line. Otherwise a proof from the audited table
 /// gives the label it proved, a vouch for every step with no assignment gives `(T,priv)` unless
 /// the line is fed untrusted content, and everything else gets `opaque`.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    requires
+        opaque.integrity == Integrity::Untrusted,
+    ensures
+        crate::spec::output_label_is_sound(facts, opaque, r.0),
+))]
 pub(crate) fn output_label(facts: OutputFacts, opaque: Label) -> (Label, OutputRoad) {
     if facts.requesting {
         return (opaque, OutputRoad::Requested);
@@ -704,8 +725,17 @@ pub(crate) fn output_label(facts: OutputFacts, opaque: Label) -> (Label, OutputR
         // A `<` redirection is not in this and takes nothing away from it: it names a file, and
         // a file read under a vouched-for line is already what the vouch is an assertion about.
         return match facts.fed {
-            Some(Integrity::Untrusted) => (opaque, OutputRoad::VouchedButFed),
-            Some(Integrity::Trusted) | None => (Label::trusted_private(), OutputRoad::Vouched),
+            Some(Integrity::Untrusted) => {
+                let printed = opaque;
+                (printed, OutputRoad::VouchedButFed)
+            }
+            Some(Integrity::Trusted) | None => (
+                Label {
+                    integrity: Integrity::Trusted,
+                    confidentiality: Confidentiality::Private,
+                },
+                OutputRoad::Vouched,
+            ),
         };
     }
     (opaque, OutputRoad::Opaque)
