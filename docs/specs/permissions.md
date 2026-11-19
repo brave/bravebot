@@ -591,7 +591,14 @@ the rules cannot be matched against a spelling that is not the file's. A `run` r
 target, read or written, is held to the same refusal as a file tool's path, and the refusal is made
 again immediately before the run opens it, under the file the name lands on then and under each other
 name that file has, so a link or hard link an earlier part of the line left at the name is refused as
-the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A short name is
+the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A write by a file tool
+is checked again immediately before its bytes are released. What the destination lands on and the
+other names that file has are compared with what they were when the person was asked, and the write
+is refused when either differs, whichever rule would have covered the file it leads to now, since
+the answer given covered the file shown and not another. The deny rules are asked about the file
+the destination leads to then, under each other name that file has, as they are before the
+question. The refusal names the destination as the person was shown it and nothing is written; the
+person is not asked again. A short name is
 accepted only in the spelling of the open directory the target lands in, which names that one
 directory; in a target that reaches no open directory through an ancestor of its own it is refused
 wherever it appears.
@@ -779,6 +786,11 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::tools::tests::confinement::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
 `verified-by: bravebot_agent::tools::tests::confinement::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
 `verified-by: bravebot_agent::turn::a_reason_a_checkout_wrote_is_not_in_the_refusal_the_planner_is_given`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file`
+`verified-by: bravebot_agent::turn::a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else

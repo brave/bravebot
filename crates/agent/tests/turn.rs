@@ -5005,6 +5005,192 @@ fn a_write_whose_directory_leaves_the_workspace_while_asked_is_refused_at_the_wr
     );
 }
 
+/// Writes `notes/out.txt` while the confirmer, inside the question, replaces that name with a link
+/// to `target` (relative to `notes`) and approves, or leaves the name as it is where `target` is
+/// `None`. The rules are the given `deny` and `ask` lists. Returns what the planner was told.
+#[cfg(unix)]
+fn write_through_a_link_put_in_place_while_asked(
+    scratch: &Scratch,
+    target: Option<&'static str>,
+    deny: &[&str],
+    ask: &[&str],
+) -> String {
+    std::fs::create_dir_all(scratch.path.join("notes")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"notes/out.txt","contents":"approved bytes\n"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let named = scratch.path.join("notes/out.txt");
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            if let Some(target) = target {
+                std::os::unix::fs::symlink(target, &named).unwrap();
+            }
+        }),
+    };
+    let task = Task::new("write notes/out.txt").with_permissions(rules(deny, ask, &[]));
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    message_from(
+        &received.recv().expect("second request"),
+        "Result of write_file",
+    )
+    .to_string()
+}
+
+/// PERM-7, TRUST-10 (#4387): the rules are asked about the file a write opens and not only about
+/// the name the person was shown. A link put at the destination while the question was open leads
+/// to a file an `Edit` deny rule covers, and the approved bytes replaced it.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file()
+{
+    let scratch = Scratch::new("write-link-to-denied-while-asked");
+    std::fs::write(scratch.path.join("secret.txt"), "marker\n").unwrap();
+
+    let told = write_through_a_link_put_in_place_while_asked(
+        &scratch,
+        Some("../secret.txt"),
+        &["Edit(secret.txt)"],
+        &[],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("secret.txt")).unwrap(),
+        "marker\n",
+        "the write followed the link to a file a deny rule covers; the planner was told: {told}"
+    );
+    assert!(!told.contains("created"), "{told}");
+}
+
+/// The same swap where the file the link leads to is on the protected list (PERM-9), which no rule
+/// names and the deny walk does not read.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file()
+ {
+    let scratch = Scratch::new("write-link-to-protected-while-asked");
+    std::fs::create_dir(scratch.path.join(".husky")).unwrap();
+    std::fs::write(scratch.path.join(".husky/pre-commit"), "marker\n").unwrap();
+
+    let told = write_through_a_link_put_in_place_while_asked(
+        &scratch,
+        Some("../.husky/pre-commit"),
+        &[],
+        &[],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".husky/pre-commit")).unwrap(),
+        "marker\n",
+        "the write followed the link to a protected file; the planner was told: {told}"
+    );
+    assert!(!told.contains("created"), "{told}");
+}
+
+/// The controls for the tests above: with nothing put in place while the question is open, a
+/// create and a replace land, including when the person was shown a link to an allowed file as
+/// the landing. A refusal on any change of reach alone would also refuse these if the reach were
+/// read differently at the two moments.
+#[cfg(unix)]
+#[test]
+fn a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open() {
+    // A create: the destination does not exist when asked, and the write makes it.
+    let created = Scratch::new("write-create-no-swap");
+    let told = write_through_a_link_put_in_place_while_asked(&created, None, &[], &[]);
+    assert_eq!(
+        std::fs::read_to_string(created.path.join("notes/out.txt")).unwrap(),
+        "approved bytes\n",
+        "{told}"
+    );
+
+    // A replace: the file exists and is replaced in place.
+    let replaced = Scratch::new("write-replace-no-swap");
+    std::fs::create_dir(replaced.path.join("notes")).unwrap();
+    std::fs::write(replaced.path.join("notes/out.txt"), "old\n").unwrap();
+    let told = write_through_a_link_put_in_place_while_asked(&replaced, None, &[], &[]);
+    assert_eq!(
+        std::fs::read_to_string(replaced.path.join("notes/out.txt")).unwrap(),
+        "approved bytes\n",
+        "{told}"
+    );
+
+    // A link the person was shown as the landing: it was there when asked, so it is the file
+    // approved, and the write goes through it.
+    let linked = Scratch::new("write-through-shown-link");
+    std::fs::create_dir(linked.path.join("notes")).unwrap();
+    std::fs::write(linked.path.join("allowed.txt"), "old\n").unwrap();
+    std::os::unix::fs::symlink("../allowed.txt", linked.path.join("notes/out.txt")).unwrap();
+    let told = write_through_a_link_put_in_place_while_asked(&linked, None, &[], &[]);
+    assert_eq!(
+        std::fs::read_to_string(linked.path.join("allowed.txt")).unwrap(),
+        "approved bytes\n",
+        "{told}"
+    );
+}
+
+/// A link put at the destination while the question was open leads to a file no rule covers. The
+/// person was asked about a different file, so the write is refused too.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file()
+ {
+    let scratch = Scratch::new("write-link-to-allowed-while-asked");
+    std::fs::write(scratch.path.join("allowed.txt"), "old\n").unwrap();
+
+    let told =
+        write_through_a_link_put_in_place_while_asked(&scratch, Some("../allowed.txt"), &[], &[]);
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("allowed.txt")).unwrap(),
+        "old\n",
+        "the write followed a link the person was not shown; the planner was told: {told}"
+    );
+}
+
+/// PERM-7, TRUST-10 (#4387): the person approved the file the destination led to when they were
+/// asked. A link put at the destination while the question was open leads to a file an `Edit` ask
+/// rule covers, which the question did not name, and the approved bytes replaced it. No rule
+/// denies that file, so the deny walk alone lets the write through.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers()
+ {
+    let scratch = Scratch::new("write-link-to-asked-while-asked");
+    std::fs::write(scratch.path.join("careful.txt"), "marker\n").unwrap();
+
+    let told = write_through_a_link_put_in_place_while_asked(
+        &scratch,
+        Some("../careful.txt"),
+        &[],
+        &["Edit(careful.txt)"],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("careful.txt")).unwrap(),
+        "marker\n",
+        "the write followed the link to a file an ask rule covers; the planner was told: {told}"
+    );
+    assert!(!told.contains("created"), "{told}");
+}
+
 /// The write appears in the trail as a granted action, so an audit shows a person
 /// authorised it.
 #[test]

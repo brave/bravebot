@@ -2452,6 +2452,9 @@ fn write<S: Sink, C: Confirmer>(
     // What the step would change, compared inside the kernel and released once, exactly as a
     // turn's write does it.
     let landed = crate::tools::landing_of(workspace, &path);
+    // What the destination reaches as the step is put to the person, which the write compares with
+    // what it reaches when the bytes are released.
+    let reach = workspace.reach_of(&path);
     let reviewed = crate::tools::review_a_write(
         policy,
         "write_file",
@@ -2513,6 +2516,7 @@ fn write<S: Sink, C: Confirmer>(
             &Labelled::trusted(path.clone()),
             &body,
             Some(approved_at),
+            Some(&reach),
         )
         .map_err(|e| e.to_string())?;
 

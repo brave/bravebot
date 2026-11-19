@@ -1079,7 +1079,19 @@ declining rather than that the path is out of reach and what the person can do. 
 as the refusal of the same destination at the end of the write is, about the reference where the
 path came from one, and is recorded in the trail as a path refused for leaving the workspace. The
 write resolves the destination again after the answer, since a directory on the way can have become
-a link while the person read the question.
+a link while the person read the question. It compares what the destination lands on and the other
+names of that file with what they were when the question was drawn, and refuses the write, naming
+the destination as the person was shown it, when either differs. The answer covered the file
+shown, so a file an ask rule or the protected list covers, or one no rule covers, is refused the
+same way. It also asks the deny rules ([PERM-7](permissions.md#PERM-7)) about what the destination
+resolves to then. A destination that did not exist when asked and a link that was there when asked
+are written as shown.
+
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file`
+`verified-by: bravebot_agent::turn::a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open`
 
 A `write` step of a manifest ([manifest.md](manifest.md)) confines its destination only when it
 writes, after its question. Plan validation refuses a path that names a root, a home directory or a
