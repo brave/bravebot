@@ -150,10 +150,14 @@ A tool of an MCP server is not a tool of this schema. It is the `tool` field of 
 `mcp_read` step, whose handlers call only a tool on a list a person vouched for, so the schema still
 names every handler ([MANIFEST-15](#MANIFEST-15)).
 
+Neither planning request carries a tool list, and a tool list among the options of the model the
+plan is asked of does not add one ([BACKEND-15](backends.md#BACKEND-15)).
+
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 `verified-by: bravebot_agent::manifest::injected_text_in_a_file_cannot_add_a_step`
 `verified-by: bravebot_agent::manifest::the_planner_is_shown_capabilities_and_no_tool_names`
+`verified-by: bravebot_agent::manifest::the_planning_requests_through_a_gateway_carry_no_tool_list_the_models_options_state`
 `verified-by: bravebot_agent::manifest::the_registry_and_the_kernel_schema_describe_the_same_tools`
 `verified-by: bravebot_core::manifest::no_action_in_the_schema_fills_a_slot`
 `verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`

@@ -4554,6 +4554,7 @@ commit-message-ready = le brouillon est dans la zone de saisie. Modifiez-le, pui
 commit-message-partial = les changements dépassaient ce qu'une lecture prend, donc le brouillon décrit la partie lue
 commit-message-failed = le message de commit n'a pas pu être rédigé : { $problem }
 commit-message-stopped = la rédaction du message de commit a été arrêtée
+commit-message-untrusted = aucun brouillon n'a été rédigé : le diff touchait un chemin que personne n'a approuvé, donc il n'a pas été envoyé à un modèle
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
 
 enhance-ready = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Échap remet ce que vous aviez écrit

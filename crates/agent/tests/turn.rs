@@ -29625,6 +29625,233 @@ fn a_chosen_variant_is_merged_into_the_planners_request() {
     );
 }
 
+/// The keys a gateway model's `options` state to hand a request a tool list, which no request that
+/// offers none may carry and no request that offers some may have replaced.
+const OPTION_TOOL_KEYS: [&str; 5] = [
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "parallel_tool_calls",
+];
+
+/// `config` with a provider `gw` whose model `a-model` states, in its own `options`, every key of
+/// [`OPTION_TOOL_KEYS`] and a tool the service would run, and whose endpoint is `endpoint`. A
+/// request sent to `gw/a-model` goes through the gateway client, which merges those options into
+/// the body, where `config_for`'s endpoint merges none.
+fn with_a_gateway_whose_model_states_tools(mut config: Config, endpoint: &str) -> Config {
+    let root = serde_json::json!({"provider": {"gw": {
+        "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+        "models": {"a-model": {"options": {
+            "tools": [{"type": "function", "function": {
+                "name": "OPTION-SUPPLIED-TOOL",
+                "parameters": {"type": "object"}
+            }}],
+            "tool_choice": "required",
+            "functions": [{"name": "OPTION-SUPPLIED-FUNCTION"}],
+            "function_call": "auto",
+            "parallel_tool_calls": true,
+            "top_k": 7
+        }}}
+    }}});
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    config
+}
+
+/// What a request with no tool list of its own may not hold, whichever of the five keys a model's
+/// options named.
+fn assert_no_tool_keys(request: &serde_json::Value, who: &str) {
+    for key in OPTION_TOOL_KEYS {
+        assert!(
+            request.get(key).is_none(),
+            "{who}'s request carried `{key}` from the model's options: {request}"
+        );
+    }
+    assert!(
+        !request.to_string().contains("OPTION-SUPPLIED"),
+        "{who}'s request carried a tool its model's options named: {request}"
+    );
+    assert_eq!(
+        request["top_k"],
+        serde_json::json!(7),
+        "{who}'s request lost an option that names no tool, so the options were dropped whole: {request}"
+    );
+}
+
+/// PROC-1 and BACKEND-15 at the request that goes out through a gateway: a processor is sent with
+/// no tool list even when its model's `options` state one, while the planner's own rounds keep the
+/// tools the turn built and gain none of the option's. The regression it rejects is a gateway
+/// client that adds every option key the body lacks, which gives a request built with no tools the
+/// tool list a service would run on quarantined text. `config_for` merges no options, so the test
+/// of the processor's request beside this one cannot see it.
+#[test]
+fn a_processors_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("processor-gateway-options");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"PROCESSOR-INSTRUCTION"}"#,
+        ),
+        processor_reply("REWRITTEN"),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = with_a_gateway_whose_model_states_tools(config_for(&endpoint), &endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config").with_model(Some("gw/a-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<serde_json::Value> = received
+        .try_iter()
+        .map(|body| serde_json::from_str(&body).expect("a JSON request"))
+        .collect();
+    let (processors, others): (Vec<_>, Vec<_>) = bodies.iter().partition(|body| {
+        body["messages"][0]
+            .to_string()
+            .contains("You are an isolated processor")
+    });
+    assert_eq!(processors.len(), 1, "the processor is asked once");
+    assert_no_tool_keys(processors[0], "the processor");
+
+    // The check that runs before the planner's write is a request with no tools of its own, so it
+    // is held to the same rule and the rest are the planner's rounds.
+    let (checks, planners): (Vec<_>, Vec<_>) = others
+        .into_iter()
+        .partition(|body| is_a_side_request(&body.to_string()));
+    for check in checks {
+        assert_no_tool_keys(check, "a check");
+    }
+    assert!(!planners.is_empty(), "the planner was never asked");
+    for planner in planners {
+        let names: Vec<&str> = planner["tools"]
+            .as_array()
+            .expect("the planner's request carries the turn's tools")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"read_file") && names.contains(&"spawn_processor"),
+            "the planner's own tools did not reach the wire: {names:?}"
+        );
+        assert!(
+            !planner.to_string().contains("OPTION-SUPPLIED"),
+            "an option replaced or joined the planner's tools: {planner}"
+        );
+        assert_eq!(
+            planner["top_k"],
+            serde_json::json!(7),
+            "the planner's request lost an option that names no tool: {planner}"
+        );
+    }
+}
+
+/// CHECK-1 and BACKEND-15 at the request that goes out through a gateway: a check, whose content
+/// is quarantined, is sent with no tool list even when its model's `options` state one. The
+/// regression it rejects is the same as the processor's: a gateway client that adds each option key
+/// the body lacks.
+#[test]
+fn a_checks_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("vet-gateway-options");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = with_a_gateway_whose_model_states_tools(config_for(&endpoint), &endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find the path").with_model(Some("gw/a-model".to_string())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut ShownAfterAVet::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_no_tool_keys(&the_check_sent(&sent), "the check");
+}
+
+/// COMPACT-2 and BACKEND-15 at the request that goes out through a gateway: the summariser is
+/// sent with no tool list even when its model's `options` state one, and the planner's round after
+/// it keeps the tools the turn built.
+#[test]
+fn the_summarisers_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("compact-gateway-options");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("a summary"), reply_with("done")]);
+    let config =
+        with_a_gateway_whose_model_states_tools(config_with_budget(&endpoint, 1_000), &endpoint);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it").with_model(Some("gw/a-model".to_string())),
+    )
+    .expect("turn runs");
+
+    let summarising: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("the summariser's request"))
+            .expect("a JSON request");
+    assert!(
+        summarising.to_string().contains(A_SUMMARY_ASKING),
+        "the first request was not the summariser's: {summarising}"
+    );
+    assert_no_tool_keys(&summarising, "the summariser");
+
+    let planning: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("the planner's request"))
+            .expect("a JSON request");
+    assert!(
+        planning["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+            && !planning.to_string().contains("OPTION-SUPPLIED"),
+        "the planner's tools were lost or replaced by the option's: {planning}"
+    );
+}
+
 /// A turn nobody asked a level of must send the request it always sent, so adding the field
 /// changes nothing for an endpoint that has never seen it.
 #[test]
@@ -77026,9 +77253,21 @@ mod usage {
 
         fn with_confirmer<C: bravebot_agent::Confirmer + Send + 'static>(
             name: &str,
+            conversation: bravebot_agent::Conversation,
+            compact: bool,
+            confirmer: C,
+        ) -> Self {
+            Self::with_vetting(name, conversation, compact, confirmer, false)
+        }
+
+        /// As [`Self::with_confirmer`], with auto-vetting as given. A delegate inherits it, and a
+        /// `run` that asks to read its output is only checked where it is on.
+        fn with_vetting<C: bravebot_agent::Confirmer + Send + 'static>(
+            name: &str,
             mut conversation: bravebot_agent::Conversation,
             compact: bool,
             mut confirmer: C,
+            auto_vetting: bool,
         ) -> Self {
             let scratch = Scratch::new(name);
             std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
@@ -77052,7 +77291,7 @@ mod usage {
                     &config,
                     &bravebot_net::Egress::new(),
                     &workspace,
-                    &Task::new("PARENT-TASK: inspect input.txt"),
+                    &Task::new("PARENT-TASK: inspect input.txt").with_auto_vetting(auto_vetting),
                     &mut conversation,
                     &mut confirmer,
                     &mut reporter,
@@ -78355,6 +78594,311 @@ mod usage {
             timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
             "overlapping categories: {timing:?}"
         );
+    }
+
+    fn silent(content: &str) -> String {
+        reply_with_usage(content, 0, 0)
+    }
+
+    fn silent_call(tool: &str, arguments: &str) -> String {
+        tool_request_with_usage(tool, arguments, 0, 0)
+    }
+
+    /// The check's reply, stating that it wrote `completion` tokens.
+    fn a_check_that_wrote(completion: u64) -> String {
+        reply_with_usage(
+            r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+            0,
+            completion,
+        )
+    }
+
+    /// Run a delegate of `kind` bounded to `budget` tokens through `calls`, the last of which
+    /// makes a check that is answered with `completion` tokens, and return the delegate's request
+    /// after that check with the parent's outcome. Every planner reply states no tokens, so the
+    /// only spend in the turn is the check's.
+    fn after_a_check(
+        name: &str,
+        kind: &str,
+        budget: u64,
+        calls: &[(&str, &str)],
+        completion: u64,
+    ) -> (String, turn::Outcome) {
+        after_a_check_with(name, kind, budget, calls, completion, false)
+    }
+
+    /// As [`after_a_check`], in a turn whose auto-vetting is `auto_vetting`, which a delegate
+    /// inherits.
+    fn after_a_check_with(
+        name: &str,
+        kind: &str,
+        budget: u64,
+        calls: &[(&str, &str)],
+        completion: u64,
+        auto_vetting: bool,
+    ) -> (String, turn::Outcome) {
+        let run = Run::with_vetting(
+            name,
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+            auto_vetting,
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            &format!(r#"{{"kind":"{kind}","task":"CHILD-TASK","budget":{budget}}}"#),
+        ));
+        let (parent, mut child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        for (tool, arguments) in calls {
+            child.answer(&silent_call(tool, arguments));
+            child = run.request();
+        }
+        assert!(
+            child.body.contains(A_CHECK_ASKING),
+            "expected the check, got: {}",
+            child.body
+        );
+        child.answer(&a_check_that_wrote(completion));
+        let next = run.request();
+        let body = next.body.clone();
+        next.answer(&silent("child done"));
+        run.request().answer(&silent("done"));
+        (body, run.finish().expect("the turn ends"))
+    }
+
+    /// DELEGATE-29: the check a released command output makes is the turn's spend and not part of
+    /// the figure a delegate's budget is compared with. What the check wrote depends on the
+    /// content it read, which the delegate cannot, so it must not decide what the delegate is told
+    /// or when it loses its tools.
+    ///
+    /// Rejects: a delegate's token figure that includes its checks, which here is 9000 of 10000
+    /// and brings the warning, and a figure with the check's tokens taken out of the turn's spend
+    /// as well.
+    #[test]
+    fn a_checks_tokens_do_not_warn_a_delegate_that_read_its_command_output() {
+        let (next, outcome) = after_a_check(
+            "delegate-check-read-output",
+            "checker",
+            10_000,
+            &[
+                ("run", r#"{"command":"sed -n p vet.txt"}"#),
+                ("read_output", r#"{"ref":"ref:1"}"#),
+            ],
+            9_000,
+        );
+        assert!(
+            !next.contains("You have spent 9000 of your 10000 tokens."),
+            "a check's tokens set the figure the delegate was told: {next}"
+        );
+        assert!(carried_tools(&next), "a check removed the delegate's tools");
+        assert_eq!(
+            outcome.tokens, 9_000,
+            "the check's tokens were left out of the turn's spend"
+        );
+        assert_eq!(
+            outcome.budgeted_tokens, 0,
+            "the check's tokens reached a figure a budget is compared with"
+        );
+    }
+
+    /// DELEGATE-29: the check a read of an unvouched file makes does not take a delegate's tools
+    /// away, however much it wrote.
+    ///
+    /// Rejects: a check that is counted against the budget, here 1000 of 1000, which removes the
+    /// tools and says the budget is spent.
+    #[test]
+    fn a_checks_tokens_do_not_end_a_delegate_that_read_an_unvouched_file() {
+        let (next, outcome) = after_a_check(
+            "delegate-check-read-file",
+            "reader",
+            1_000,
+            &[("read_file", r#"{"path":"vet.txt"}"#)],
+            1_000,
+        );
+        assert!(
+            !next.contains("You have spent your budget of 1000"),
+            "a check's tokens ended the delegate's budget: {next}"
+        );
+        assert!(carried_tools(&next), "a check removed the delegate's tools");
+        assert_eq!(outcome.tokens, 1_000, "the turn's spend lost the check");
+        assert_eq!(outcome.budgeted_tokens, 0);
+    }
+
+    /// DELEGATE-29, RUN-22: the check a `run` makes when asked to read its own output is the
+    /// turn's spend and not part of the figure a delegate's budget is compared with.
+    ///
+    /// Rejects: counting the check a `read: true` run makes (made before the delegate's next
+    /// request, not by a tool call) with `add_usage`, which here is 9000 of 10000 and brings the
+    /// warning.
+    #[test]
+    fn a_checks_tokens_do_not_warn_a_delegate_whose_run_read_its_own_output() {
+        let (next, outcome) = after_a_check_with(
+            "delegate-check-run-read",
+            "checker",
+            10_000,
+            &[("run", r#"{"command":"sed -n p vet.txt","read":true}"#)],
+            9_000,
+            true,
+        );
+        assert!(
+            !next.contains("You have spent 9000 of your 10000 tokens."),
+            "the check of a run's own output set the figure the delegate was told: {next}"
+        );
+        assert!(carried_tools(&next), "a check removed the delegate's tools");
+        assert_eq!(
+            outcome.tokens, 9_000,
+            "the check's tokens were left out of the turn's spend"
+        );
+        assert_eq!(outcome.budgeted_tokens, 0);
+    }
+
+    /// DELEGATE-29: the round after a check is limited from the figure the budget counts, so a
+    /// delegate that answered a check's size is not stopped by it.
+    ///
+    /// Rejects: the call that limits the tools after a round being given the turn's whole spend
+    /// instead of the budgeted one, which here is 1000 of 1000 and removes the tools from the
+    /// request that follows the delegate's next call.
+    #[test]
+    fn the_tools_a_delegate_is_left_after_a_round_do_not_depend_on_a_check() {
+        let run = Run::with_confirmer(
+            "delegate-check-limit-the-tools",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"CHILD-TASK","budget":1000}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        child.answer(&silent_call("read_file", r#"{"path":"vet.txt"}"#));
+        let check = run.request();
+        assert!(check.body.contains(A_CHECK_ASKING), "{}", check.body);
+        check.answer(&a_check_that_wrote(1_000));
+        let next = run.request();
+        next.answer(&silent_call("list_files", r#"{"directory":"."}"#));
+        let after = run.request();
+        assert!(
+            carried_tools(&after.body),
+            "a check's tokens removed the tools after the round that followed it: {}",
+            after.body
+        );
+        after.answer(&silent("child done"));
+        run.request().answer(&silent("done"));
+        run.finish().expect("the turn ends");
+    }
+
+    /// DELEGATE-29: a delegate's own requests still count against its budget, and a check's do
+    /// not add to them.
+    ///
+    /// Rejects: a split that stops counting the delegate's rounds, and one that counts a check
+    /// once more in the figure that removes the tools.
+    #[test]
+    fn a_delegates_own_rounds_still_spend_its_budget_beside_a_check() {
+        let run = Run::with_confirmer(
+            "delegate-check-and-rounds",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"CHILD-TASK","budget":1000}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        child.answer(&tool_request_with_usage(
+            "read_file",
+            r#"{"path":"vet.txt"}"#,
+            400,
+            100,
+        ));
+        let check = run.request();
+        check.answer(&a_check_that_wrote(5_000));
+        let next = run.request();
+        assert!(carried_tools(&next.body), "500 of 1000 removed the tools");
+        next.answer(&tool_request_with_usage(
+            "list_files",
+            r#"{"directory":"."}"#,
+            400,
+            100,
+        ));
+        let last = run.request();
+        assert!(
+            !carried_tools(&last.body) && last.body.contains("You have spent your budget of 1000"),
+            "the delegate's own 1000 tokens did not spend its budget: {}",
+            last.body
+        );
+        last.answer(&silent("child done"));
+        run.request().answer(&silent("done"));
+        let outcome = run.finish().expect("the turn ends");
+        assert_eq!(outcome.tokens, 6_000);
+        assert_eq!(outcome.budgeted_tokens, 1_000);
+    }
+
+    /// DELEGATE-29: what a delegate hands its own child is what it has left of the figure its
+    /// budget is compared with, so a check the delegate made does not shrink the child's budget.
+    ///
+    /// The delegate spends 9000 of 10000 on a check and starts a child with no budget of its own
+    /// named, which then spends 2000. A child given 1000 loses its tools at once.
+    ///
+    /// Rejects: `budget_left` that subtracts a check's tokens.
+    #[test]
+    fn a_delegates_check_does_not_shrink_the_budget_it_hands_its_child() {
+        let run = Run::with_confirmer(
+            "delegate-check-budget-left",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"checker","task":"CHILD-TASK","budget":10000}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        child.answer(&silent_call("run", r#"{"command":"sed -n p vet.txt"}"#));
+        run.request()
+            .answer(&silent_call("read_output", r#"{"ref":"ref:1"}"#));
+        run.request().answer(&a_check_that_wrote(9_000));
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"NESTED-TASK"}"#,
+        ));
+        // Five requests are left: the delegate's two, the parent's one and the nested delegate's
+        // two. Each is answered by whose it is, since which arrives first is not settled.
+        let mut nested_offered_tools = Vec::new();
+        let (mut delegate_asked, mut nested_asked) = (0, 0);
+        for _ in 0..5 {
+            let request = run.request();
+            if request.body.contains("PARENT-TASK") {
+                request.answer(&silent("done"));
+            } else if request.body.contains("CHILD-TASK") {
+                delegate_asked += 1;
+                request.answer(&silent(if delegate_asked == 1 {
+                    "waiting"
+                } else {
+                    "child done"
+                }));
+            } else {
+                assert!(request.body.contains("NESTED-TASK"), "{}", request.body);
+                nested_asked += 1;
+                nested_offered_tools.push(carried_tools(&request.body));
+                request.answer(&if nested_asked == 1 {
+                    tool_request_with_usage("list_files", r#"{"directory":"."}"#, 1_500, 500)
+                } else {
+                    silent("nested done")
+                });
+            }
+        }
+        assert_eq!(
+            nested_offered_tools,
+            [true, true],
+            "the nested delegate was given what a check took from its parent"
+        );
+        run.finish().expect("the turn ends");
     }
 
     /// Cancellation cleanup must not charge a child request that ended before the parent stopped.

@@ -5048,6 +5048,58 @@ fn a_models_options_reach_the_anthropic_body_and_cannot_overwrite_what_the_turn_
     assert_eq!(body["max_tokens"], 32_000);
 }
 
+/// BACKEND-15: the keys naming a request's tools are the request's. A model's `options` and the
+/// variant a request names cannot add `tools`, `tool_choice` or `mcp_servers` to a request that
+/// offers none, which would let the service run a tool beside text nobody vouched for, and cannot
+/// replace the tools a turn did offer. A key that is not one of those still reaches the body.
+#[test]
+fn options_and_a_variant_cannot_supply_the_anthropic_tool_keys() {
+    let provider_for = |endpoint: &str| {
+        anthropic_with(
+            endpoint,
+            r#", "models": {"claude-test": {
+                "options": {
+                    "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}],
+                    "tool_choice": {"type": "any"},
+                    "top_k": 5
+                },
+                "variants": {"deep": {
+                    "mcp_servers": [{"type": "url", "url": "https://mcp.example.invalid", "name": "m"}]
+                }}
+            }}"#,
+        )
+    };
+    let sent = |request: ChatRequest| {
+        let (endpoint, received) = serve(MESSAGES_REPLY);
+        let config = config_for(&endpoint);
+        let provider = provider_for(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .complete(&mut policy, &request)
+            .expect("the reply was read");
+        json_of(&received.recv().expect("the request arrived"))
+    };
+    let request = || ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]);
+
+    let tool_less = sent(request().with_variant(Some("deep".to_string())));
+    for key in ["tools", "tool_choice", "mcp_servers"] {
+        assert!(tool_less.get(key).is_none(), "{key} reached {tool_less}");
+    }
+    assert_eq!(tool_less["top_k"], 5);
+
+    let offered = sent(
+        request()
+            .with_tools(reading_tool())
+            .with_variant(Some("deep".to_string())),
+    );
+    assert_eq!(offered["tools"].as_array().map(Vec::len), Some(1));
+    assert_eq!(offered["tools"][0]["name"], "read_file");
+    assert!(offered.get("tool_choice").is_none(), "{offered}");
+    assert!(offered.get("mcp_servers").is_none(), "{offered}");
+}
+
 /// BACKEND-66: a chosen variant reaches the Anthropic body as `options` do, wins over an option of
 /// the same name, and cannot overwrite what the turn built.
 #[test]
@@ -6829,6 +6881,62 @@ fn a_models_options_reach_the_google_express_body_and_cannot_overwrite_what_the_
     let body = json_of(&received.recv().expect("the request arrived"));
     assert_eq!(body["safetySettings"][0]["threshold"], "BLOCK_NONE");
     assert_eq!(body["contents"][0]["parts"][0]["text"], "hello");
+}
+
+/// BACKEND-15: the keys naming a request's tools are the request's. A model's `options` and the
+/// variant a request names cannot add `tools`, `toolConfig` or `tool_config` to a request that
+/// offers none, which would let the service run a tool of its own beside text nobody vouched for,
+/// and cannot replace the tools a turn did offer. A key that is not one of those still reaches the
+/// body.
+#[test]
+fn options_and_a_variant_cannot_supply_the_google_express_tool_keys() {
+    let sent = |request: ChatRequest| {
+        let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+        let text = format!(
+            r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex", "options": {{"baseURL": "{endpoint}/v1"}},
+                "models": {{"gemini-options": {{
+                    "options": {{
+                        "tools": [{{"googleSearch": {{}}}}],
+                        "toolConfig": {{"functionCallingConfig": {{"mode": "ANY"}}}},
+                        "safetySettings": [{{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}}]
+                    }},
+                    "variants": {{"deep": {{
+                        "tool_config": {{"functionCallingConfig": {{"mode": "ANY"}}}}
+                    }}}}
+                }}}}}}}}}}"#
+        );
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        express_client(&egress, &provider, "gemini-options")
+            .complete(&mut policy, &request)
+            .expect("the reply was read");
+        json_of(&received.recv().expect("the request arrived"))
+    };
+    let request = || ChatRequest::new("gemini-options", vec![Message::user("hello")]);
+
+    let tool_less = sent(request().with_variant(Some("deep".to_string())));
+    for key in ["tools", "toolConfig", "tool_config"] {
+        assert!(tool_less.get(key).is_none(), "{key} reached {tool_less}");
+    }
+    assert_eq!(tool_less["safetySettings"][0]["threshold"], "BLOCK_NONE");
+
+    let offered = sent(
+        request()
+            .with_tools(reading_tool())
+            .with_variant(Some("deep".to_string())),
+    );
+    let tools = offered["tools"].to_string();
+    assert!(tools.contains("read_file"), "{offered}");
+    assert!(!tools.contains("googleSearch"), "{offered}");
+    assert!(offered.get("toolConfig").is_none(), "{offered}");
+    assert!(offered.get("tool_config").is_none(), "{offered}");
 }
 
 /// A stop that lands before a request is built sends nothing: spending a key on a reply nobody
@@ -10406,6 +10514,49 @@ fn an_ollama_request_asks_the_server_for_the_window_the_session_budgets_for() {
     assert_eq!(completion.content.label(), Label::untrusted_public());
     let proof = policy.authorise_display_release("test reads the reply");
     assert_eq!(revealed(&proof, completion.content), "hello from ollama");
+}
+
+/// BACKEND-15: the keys naming a request's tools are the request's. A model's `options` and the
+/// variant a request names cannot add `tools` or `tool_choice` to a request that offers none, and
+/// cannot replace the tools a turn did offer. A key that is not one of those still reaches the body.
+#[test]
+fn options_and_a_variant_cannot_supply_the_ollama_tool_keys() {
+    let sent = |request: ChatRequest| {
+        let (endpoint, received) = serve(OLLAMA_REPLY);
+        let provider = ollama_at(
+            &endpoint,
+            r#", "models": {"qwen3:8b": {
+                "options": {
+                    "tools": [{"type": "function", "function": {"name": "web_search"}}],
+                    "keep_alive": "30m"
+                },
+                "variants": {"deep": {"tool_choice": "required"}}
+            }}"#,
+        );
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        ollama_client(&egress, &provider)
+            .complete(&mut policy, &request)
+            .expect("the reply was read");
+        json_of(&received.recv().expect("the request arrived"))
+    };
+    let request = || ChatRequest::new("ollama/qwen3:8b", vec![Message::user("hello")]);
+
+    let tool_less = sent(request().with_variant(Some("deep".to_string())));
+    for key in ["tools", "tool_choice"] {
+        assert!(tool_less.get(key).is_none(), "{key} reached {tool_less}");
+    }
+    assert_eq!(tool_less["keep_alive"], "30m");
+
+    let offered = sent(
+        request()
+            .with_tools(reading_tool())
+            .with_variant(Some("deep".to_string())),
+    );
+    assert_eq!(offered["tools"].as_array().map(Vec::len), Some(1));
+    assert_eq!(offered["tools"][0]["function"]["name"], "read_file");
+    assert!(offered.get("tool_choice").is_none(), "{offered}");
 }
 
 /// A setting a model's block adds to `options` joins the window rather than replacing it, and a

@@ -29,6 +29,11 @@ use std::collections::HashMap;
 /// Why a reply stopped where the ceiling stopped it rather than the model.
 pub const DONE_LENGTH: &str = "length";
 
+/// The body fields that say which tools an `/api/chat` request offers. A model's `options` are not
+/// a source of tool lists, so a request built without tools offers none. `tool_choice` is held with
+/// `tools` for a server that reads it.
+pub const TOOL_KEYS: [&str; 2] = ["tools", "tool_choice"];
+
 /// The media types this API takes, which are the images its multimodal models read.
 const IMAGE_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
 

@@ -43,7 +43,6 @@ fr:command-outputs
 fr:command-plugin
 fr:command-sessions
 fr:command-unfinished
-fr:commit-message-untrusted
 fr:configured-start-heading
 fr:desktop-model-retrieves
 fr:doctor-embeddings

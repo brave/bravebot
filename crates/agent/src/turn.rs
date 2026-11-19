@@ -1742,7 +1742,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
-                account.add_usage(delegated.usage);
+                // The whole of what the delegate cost is the turn's spend. Only what its own budget
+                // counted is added to what this run's budget counts (DELEGATE-29).
+                account.add_unbudgeted(delegated.usage);
+                account.budgeted_tokens += delegated.budgeted_tokens;
                 account.requests += delegated.requests;
 
                 let kind = delegated.kind;
@@ -3510,7 +3513,7 @@ where
         ..Default::default()
     };
     if let Some((_, usage)) = &mcp {
-        account.add_usage(*usage);
+        account.add_unbudgeted(*usage);
     }
     // Reported before the rounds begin, so a turn stopped or failed at the question, before any
     // round closes, still carries the wait in its record.
@@ -3759,6 +3762,7 @@ where
         asked_about,
         exposed,
         tokens: state.account.tokens,
+        budgeted_tokens: state.account.budgeted_tokens,
         output_tokens: state.account.output_tokens,
         context_tokens: state.account.context_tokens,
         cached: state.account.cached,
@@ -4051,7 +4055,7 @@ where
             &mut state.may_call_tools,
             task,
             state.steps,
-            state.account.tokens,
+            state.account.budgeted_tokens,
             reporter,
             conversation,
         );
@@ -4728,7 +4732,7 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        state.account.add_call(released.usage, released.completed);
+                        state.account.add_check(released.usage, released.completed);
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.
@@ -5890,6 +5894,7 @@ mod tests {
                         report,
                         kind: "one-round".to_string(),
                         usage: Default::default(),
+                        budgeted_tokens: 0,
                         requests: 0,
                     }),
                 };
@@ -6106,6 +6111,7 @@ mod tests {
                             report,
                             kind: "one-round".to_string(),
                             usage: Default::default(),
+                            budgeted_tokens: 0,
                             requests: 0,
                         }),
                         vouched: handed,
@@ -6203,6 +6209,7 @@ mod tests {
                                 completion_tokens: 200,
                                 cached: Default::default(),
                             },
+                            budgeted_tokens: 1100,
                             requests: 1,
                         }),
                         vouched: handed,
@@ -6303,6 +6310,7 @@ mod tests {
                                     report,
                                     kind: "one-round".to_string(),
                                     usage: Default::default(),
+                                    budgeted_tokens: 0,
                                     requests: 0,
                                 }),
                                 vouched: handed,
@@ -6422,6 +6430,7 @@ mod tests {
                                         report,
                                         kind: "one-round".to_string(),
                                         usage: Default::default(),
+                                        budgeted_tokens: 0,
                                         requests: 0,
                                     }),
                                     vouched: handed,
@@ -6583,6 +6592,7 @@ mod tests {
                                 report,
                                 kind: "one-round".to_string(),
                                 usage: Default::default(),
+                                budgeted_tokens: 0,
                                 requests: 0,
                             }),
                             vouched: handed,
@@ -6751,6 +6761,7 @@ mod tests {
                                     completion_tokens: 100,
                                     ..Default::default()
                                 },
+                                budgeted_tokens: 500,
                                 requests: 1,
                             }),
                             vouched: handed,
@@ -6869,6 +6880,7 @@ mod tests {
                                     ..Default::default()
                                 },
                             },
+                            budgeted_tokens: 1230,
                             requests: 1,
                         }),
                         vouched: handed,

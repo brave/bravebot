@@ -54,6 +54,7 @@ which is the thing this design refuses. A loop would give a reply something to s
 `verified-by: bravebot_core::policy::only_the_slots_it_was_given_reach_a_processor`
 `verified-by: bravebot_agent::turn::a_tool_call_from_a_processor_does_nothing`
 `verified-by: bravebot_agent::turn::a_processors_request_has_no_tool_list_no_history_and_no_second_round`
+`verified-by: bravebot_agent::turn::a_processors_request_through_a_gateway_carries_no_tool_list_its_models_options_state`
 `verified-by: bravebot_core::policy::a_reference_to_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_processor_with_nothing_to_read_is_refused`
 `verified-by: bravebot_core::policy::naming_the_same_reference_twice_is_refused`
@@ -368,18 +369,23 @@ driver's own fixed words and the format the person typed after the command, both
 
 What differs from a call a planner makes is where the output goes. The document is released by the
 display gate to the person's input box, and the remark is never released. The driver reads two
-counts of the reader's own answer, whether it showed no file and whether it stopped at a cap, and,
-for a diff nobody vouched for, one yes or no from a credential scan of its text. It reads nothing
-else of the diff and nothing of the draft. A diff that holds what looks like a credential is not given to the
-processor, whether or not its files are vouched for, since nobody is at a prompt to agree to it as
-for a planner's read ([CRED-15](credential-protection.md#CRED-15)).
+counts of the reader's own answer, whether it showed no file and whether it stopped at a cap. It
+reads nothing else of the diff and nothing of the draft. A diff that names a path nobody vouched
+for is not given to a processor and is not scanned: the driver reads only the label the read gave
+the diff, which the paths shown fix, and answers with a note before anything is sent, so the bytes
+of such a file decide neither whether a request is made nor which note the person reads. A diff of
+vouched paths that holds what looks like a credential is not given to the processor either, since
+nobody is at a prompt to agree to it as for a planner's read
+([CRED-15](credential-protection.md#CRED-15)).
 
 **Why.** The diff and the draft stay out of both contexts, as they do for a processor a planner
-starts, and the person is the only reader of the draft before they decide what to send.
+starts, and the person is the only reader of the draft before they decide what to send. A draft
+about an unvouched diff is never offered ([CMD-23](commands.md#CMD-23)), so requesting one would
+charge usage for nothing and would need a scan of bytes the driver may not branch on.
 
 `verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
-`verified-by: bravebot_agent::commit_message::an_untrusted_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::an_unvouched_diff_gives_no_draft_and_no_request_whatever_its_text_holds`
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 `verified-by: bravebot_tui::app::a_draft_answered_by_another_model_than_the_configured_one_says_so`
