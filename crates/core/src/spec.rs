@@ -6,6 +6,8 @@
 
 use crate::command::{Asked, Plan, Route, Step, Steps};
 use crate::label::{Confidentiality, Integrity, Label};
+use crate::permissions::{Decision, Ruling};
+use crate::policy::{OutputFacts, RunFacts, RunReason};
 use std::path::PathBuf;
 use vstd::prelude::*;
 
@@ -189,6 +191,75 @@ pub open spec fn plan_is_its_entries(plan: Plan) -> bool {
 pub open spec fn request_is_its_entries(plan: Plan, asked: Asked) -> bool {
     let Asked { scopes, unconfined, protected } = asked;
     plan_is_its_entries(plan) && !scopes && !unconfined && !protected
+}
+
+/// A line is let through only by one of the four standing answers or by the audited table or a
+/// rule, never by nothing.
+pub(crate) open spec fn reason_asks(reason: RunReason) -> bool {
+    match reason {
+        RunReason::Ruled(ruling) => ruling != Ruling::Allow,
+        RunReason::ReadProven | RunReason::DirectoryTrust | RunReason::Vouched
+            | RunReason::Remembered => false,
+        _ => true,
+    }
+}
+
+/// What deciding whether to ask has to hold, whatever order the questions are asked in.
+///
+/// Private input, a requested scope, a write and an assignment are asked about every time, and so
+/// is a line outside the root that no entry names (RUN-5, RUN-6, RUN-8, SANDBOX-26). A line goes
+/// unasked only on an answer that covers it: an `allow` rule, a proof from the audited table, the
+/// person's trust of the directory, a vouch, or a remembered line. An `ask` or `deny` rule is
+/// never overturned by a standing answer. A fed reference is never let through by a standing answer
+/// or the directory, none of which records what was fed (RUN-3).
+pub(crate) open spec fn run_reason_is_sound(facts: RunFacts, reason: RunReason) -> bool {
+    let RunFacts {
+        releases_private,
+        requested,
+        writes,
+        at_root,
+        vouched,
+        assignment,
+        rule,
+        read_proven_trusted,
+        fed,
+        held,
+        remembered,
+    } = facts;
+    let unasked = !reason_asks(reason);
+    (releases_private || requested || writes || assignment || (!at_root && !vouched)
+        ==> !unasked)
+        && (rule == Decision::Ruled(Ruling::Ask) || rule == Decision::Ruled(Ruling::Deny)
+        ==> !unasked)
+        && (unasked ==> match reason {
+            RunReason::Ruled(ruling) => rule == Decision::Ruled(ruling)
+                && ruling == Ruling::Allow,
+            RunReason::ReadProven => read_proven_trusted,
+            RunReason::DirectoryTrust => held && !fed,
+            RunReason::Vouched => vouched && !fed,
+            RunReason::Remembered => remembered && !fed,
+            _ => false,
+        })
+}
+
+/// What labelling a line's output has to hold.
+///
+/// Output is trusted only where the audited table proved it so or the person vouched for every
+/// step, and never for a line that asked for a scope or to run unconfined (SANDBOX-26,
+/// SANDBOX-29), and never on a vouch for a line carrying an assignment (RUN-8) or fed untrusted
+/// content (RUN-3). Output is always private unless the table proved the label.
+pub(crate) open spec fn output_label_is_sound(
+    facts: OutputFacts,
+    opaque: Label,
+    label: Label,
+) -> bool {
+    let OutputFacts { requesting, proven, vouched, assignment, fed } = facts;
+    (label.integrity == Integrity::Trusted ==> !requesting && (proven is Some || (vouched
+        && !assignment && fed != Some(Integrity::Untrusted))))
+        && (proven is None ==> label.confidentiality == Confidentiality::Private
+        || label == opaque)
+        && (requesting ==> label == opaque)
+        && (proven is Some && !requesting ==> label == proven->Some_0)
 }
 
 } // verus!

@@ -112,3 +112,47 @@ replace: self.can_be_remembered() && !scopes && !unconfined && !protected => sel
 mutation: Plan::can_be_remembered_as lets a line into a protected path be remembered
 file: crates/core/src/command.rs
 replace: self.can_be_remembered() && !scopes && !unconfined && !protected => self.can_be_remembered() && !scopes && !unconfined
+
+mutation: run_reason lets private input through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.releases_private { => if false {
+
+mutation: run_reason lets a requested scope through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.requested { => if false {
+
+mutation: run_reason lets a line that writes through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.writes { => if false {
+
+mutation: run_reason lets a line carrying an assignment through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.assignment { => if false {
+
+mutation: run_reason lets a line outside the root through to a rule
+file: crates/core/src/policy.rs
+replace: if !facts.at_root && !facts.vouched { => if false {
+
+mutation: run_reason reads the standing answers before a fed reference
+file: crates/core/src/policy.rs
+replace: if facts.fed { => if facts.fed && !facts.vouched && !facts.remembered && !facts.held {
+
+mutation: run_reason lets a line through on a vouch that does not cover it
+file: crates/core/src/policy.rs
+replace: if facts.vouched { => if true {
+
+mutation: RunReason::asks treats an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let allowed = ruling == crate::permissions::Ruling::Allow; => let allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: output_label gives a trusted proof's label to a line that asked for a scope
+file: crates/core/src/policy.rs
+replace: if facts.requesting { => if false {
+
+mutation: output_label trusts a vouched line carrying an assignment
+file: crates/core/src/policy.rs
+replace: if facts.vouched && !facts.assignment { => if facts.vouched {
+
+mutation: output_label trusts a vouched line fed untrusted content
+file: crates/core/src/policy.rs
+replace: let printed = opaque; => let printed = Label { integrity: Integrity::Trusted, confidentiality: Confidentiality::Private };
