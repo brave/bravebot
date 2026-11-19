@@ -214,6 +214,11 @@ can see, because a yes grants the whole file. It decides nothing: a yes writes t
 check said, and a no writes nothing whatever it said. It is there because the preview alone left you
 answering the question that grants the most with the least in front of you.
 
+**A character in the preview that draws as nothing is written out.** A zero-width character, a
+bidirectional control, a variation selector or a tag character is drawn as `‹U+XXXX›`, and a sentence
+above the preview says how many there are. Only the lines shown are written out and counted. The
+planner receives the file as it is.
+
 **What the file holds decides nothing about whether you are asked.** A file with nothing to show,
 because it is empty or does not read as text, is asked about like any other, and the prompt says so
 where the preview would be.

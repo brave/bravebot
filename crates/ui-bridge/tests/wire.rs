@@ -307,6 +307,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
                 preview: "part".into(),
                 label: bytes.into(),
                 truncated: false,
+                hidden: 0,
                 verdict: Verdict::Safe,
                 reason: Some("advice".into()),
                 reason_label: Some(said.into()),
@@ -440,6 +441,7 @@ fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: false,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             reason_label: None,
@@ -449,6 +451,42 @@ fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
     assert_eq!(vouch["rule"], json!("/work/note.md "));
     assert_eq!(vouch["shownPath"], json!("\"note.md\u{2423}\""));
     assert_eq!(vouch["shownRule"], json!("\"/work/note.md\u{2423}\""));
+}
+
+/// PROMPT-13: the window is handed how many characters of a vouch preview drew as nothing, the
+/// sentence in the catalog's words, and the preview with each one already written out. A preview
+/// with none carries no sentence. The fault it rejects: a vouch request that leaves the count and
+/// the sentence out, so the card draws the spelled tokens with nothing to say what they are.
+#[test]
+fn a_vouch_request_carries_how_many_characters_drew_as_nothing() {
+    use bravebot_agent::confirm::VouchRequest;
+    use bravebot_core::vetting::Verdict;
+    let request = |preview: &str, hidden| VouchRequest {
+        path: "note.md".into(),
+        rule: "/work/note.md".into(),
+        preview: preview.into(),
+        label: "(U,priv)".into(),
+        truncated: false,
+        hidden,
+        verdict: Verdict::Safe,
+        reason: None,
+        reason_label: None,
+    };
+    let spelled = "a\u{2039}U+E0064 d\u{203A}b\u{2039}U+200B\u{203A}";
+    let some = wire::vouch_request(5, &request(spelled, 2));
+    assert_eq!(some["hidden"], json!(2));
+    assert_eq!(
+        some["hiddenNote"],
+        json!(bravebot_i18n::t!(hidden_characters, count = 2usize).to_string())
+    );
+    assert_eq!(some["preview"], json!(spelled));
+    let none = wire::vouch_request(6, &request("plain", 0));
+    assert_eq!(none["hidden"], json!(0));
+    assert_eq!(
+        none["hiddenNote"],
+        Value::Null,
+        "a preview with nothing hidden in it was sent a sentence about some"
+    );
 }
 
 #[test]
@@ -1900,6 +1938,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: true,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: Some("advice".into()),
             reason_label: Some("(U,priv)".into()),

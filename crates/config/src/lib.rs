@@ -2258,19 +2258,38 @@ impl Config {
     /// Asked of every route to a model rather than at the moment a request goes out, for the reason
     /// [`Config::model_named`] is shared: a name means the same model wherever it was written down,
     /// and an answer that differed per route would be an answer per route to get wrong.
-    pub fn model_refused(&self, name: &str) -> Option<(&std::path::Path, managed::ModelRefusal)> {
+    pub fn model_refused(
+        &self,
+        name: &str,
+    ) -> Option<(Option<&std::path::Path>, managed::ModelRefusal)> {
         let name = self.model_named(name);
         // A gateway model has two spellings, the qualified one and the one the gateway is sent, and
         // an entry may name either whichever the model was asked for as. So does an account model,
         // `chatgpt/gpt-5` being sent to the account as `gpt-5`.
         let Some((provider, wire)) = self.provider_for(&name) else {
             return match self.chatgpt_model(&name).or_else(|| self.xai_model(&name)) {
-                Some(wire) => self.models.refuses_any(&[&name, wire]),
-                None => self.models.refuses(&name),
+                Some(wire) => self.managed_refusal_of(&[&name, wire]),
+                None => self.managed_refusal_of(&[&name]),
             };
         };
         let qualified = format!("{}/{wire}", provider.id);
-        self.models.refuses_any(&[&name, wire, &qualified])
+        // The machine-level layer answers first, since it names a file somebody can act on.
+        self.managed_refusal_of(&[&name, wire, &qualified])
+            .or_else(|| {
+                provider
+                    .retrieves(wire)
+                    .then_some((None, managed::ModelRefusal::Retrieves))
+            })
+    }
+
+    /// [`Models::refuses_any`] for `spellings`, with the file that refused as a path that is there.
+    fn managed_refusal_of(
+        &self,
+        spellings: &[&str],
+    ) -> Option<(Option<&std::path::Path>, managed::ModelRefusal)> {
+        self.models
+            .refuses_any(spellings)
+            .map(|(file, why)| (Some(file), why))
     }
 
     /// What to write down for a chosen model: the tier word where a tier variable named it, so the
@@ -4925,6 +4944,45 @@ mod tests {
         assert_eq!(source, Some(provider::Source::Stored));
     }
 
+    /// LABEL-8, BACKEND-19: a model that searches the web before it replies is refused over chat
+    /// completions with no file to name, and the machine-level layer's own refusal of it still
+    /// names its file. The same id over the Responses protocol is not refused, since search there
+    /// is a tool a request has to ask for. The regressions it rejects are a refusal that needs a
+    /// managed file, one that outranks the file's own, and one that applies to the Responses
+    /// route as well.
+    #[test]
+    fn a_model_that_searches_the_web_is_refused_over_chat_completions_only() {
+        let chat = Settings::parse(
+            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai-compatible",
+                "options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}, "gpt-5.5": {}}}}}"#,
+        );
+        let config = resolved(&chat, |_| None, complete_env).expect("configured");
+        assert_eq!(
+            config.model_refused("openai/gpt-5-search-api"),
+            Some((None, ModelRefusal::Retrieves))
+        );
+        assert_eq!(config.model_refused("openai/gpt-5.5"), None);
+
+        let denying = managed::scratch(
+            "resolve-retrieving-denied",
+            r#"{"models": {"deny": ["gpt-5-search-api"]}}"#,
+        );
+        let config = resolved_under(&denying, &chat, |_| None, complete_env).expect("configured");
+        assert_eq!(
+            config.model_refused("openai/gpt-5-search-api"),
+            Some((denying.path(), ModelRefusal::Denied)),
+            "the file a person can act on is named first"
+        );
+
+        let responses = Settings::parse(
+            r#"{"provider": {"openai": {"options": {"apiKey": "test-token"},
+                "models": {"gpt-5-search-api": {}}}}}"#,
+        );
+        let config = resolved(&responses, |_| None, complete_env).expect("configured");
+        assert_eq!(config.model_refused("openai/gpt-5-search-api"), None);
+    }
+
     /// The only way to say there are to be no gateways at all, which is half of what pinning a
     /// destination means.
     #[test]
@@ -5108,7 +5166,7 @@ mod tests {
         assert_eq!(config.model_refused("sonnet-arn"), None);
         // And the file that refused is named, since nobody at the machine can edit it.
         assert_eq!(
-            config.model_refused("opus").map(|(path, _)| path),
+            config.model_refused("opus").and_then(|(path, _)| path),
             managed.path()
         );
 

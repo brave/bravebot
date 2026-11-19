@@ -1048,6 +1048,7 @@ fn run_text(data: &Value) -> Option<String> {
             summary: text_of(data, "summary"),
             steps: &steps,
             writes: &strings(&data["shownWrites"]),
+            stdin: data["stdin"].as_str(),
             confinement: confinement.as_ref(),
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
@@ -1187,6 +1188,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
                 text("rule"),
                 check_of(data),
                 text("preview"),
+                hidden_of(data),
             )
             .join("\n"),
         ),
@@ -1510,6 +1512,7 @@ mod tests {
                 summary: &run.summary(),
                 steps: &steps,
                 writes: &writes,
+                stdin: run.stdin.as_deref(),
                 confinement: confinement.as_ref(),
                 ambient: &ambient,
                 releases_private: run.releases_private(),
@@ -1560,6 +1563,20 @@ mod tests {
         assert_eq!(
             run_text(&crate::wire::run_request(1, &run)).as_deref(),
             Some(confined.as_str())
+        );
+
+        // PROMPT-1: a reference the first program is fed is read to the editor as the terminal
+        // reads it, so a field the wire drops from the request shows as a difference.
+        run.stdin = Some("ref:1".to_string());
+        run.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        let fed = as_the_terminal_draws(&run);
+        assert!(
+            fed.contains("it is fed the contents of") && fed.contains("ref:1"),
+            "the fed fixture shows no reference: {fed}"
+        );
+        assert_eq!(
+            run_text(&crate::wire::run_request(1, &run)).as_deref(),
+            Some(fed.as_str())
         );
 
         let mut unknown = data.clone();
@@ -1929,7 +1946,7 @@ mod tests {
                 json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
                     {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls",
                      "shownBinary": "/bin/ls"}],
-                    "writes": ["raw-out"], "shownWrites": ["out"], "stdin": "file",
+                    "writes": ["raw-out"], "shownWrites": ["out"], "stdin": "ref:1",
                     "releasesPrivate": true,
                     "requestedScopes": ["aws"], "confinement": {"heading": "confined",
                     "directories": ["/raw"], "shownDirectories": ["/w"],
@@ -2033,6 +2050,36 @@ mod tests {
         );
     }
 
+    /// PROMPT-1, ACP-3, RUN-3: the editor is told the reference the first program is fed, in the
+    /// words the terminal uses and after the files the line writes, and a run fed none is told
+    /// nothing of one. The regression it rejects is a `run_text` that never reads `stdin` from the
+    /// request the wire sends, so a yes to `sh -s` runs a page the editor never named.
+    #[test]
+    fn the_editor_is_told_the_reference_a_run_is_fed() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        let pipeline = Pipeline::new(vec![Stage::new("sh", vec!["-s".into()])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/bin/sh".into()], "/w");
+        run.plan.writes = vec!["/w/out.txt".into()];
+        let unfed = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        assert!(!unfed.contains("it is fed the contents of"), "{unfed}");
+
+        run.stdin = Some("ref:1".to_string());
+        run.plan.stdin = Some(bravebot_core::label::Label::untrusted_public());
+        let fed = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        let rows: Vec<&str> = fed.lines().collect();
+        let sentence = rows
+            .iter()
+            .position(|row| *row == "it is fed the contents of:")
+            .unwrap_or_else(|| panic!("no sentence saying what it is fed: {fed}"));
+        assert_eq!(rows[sentence + 1], "  ref:1", "{fed}");
+        let written = rows
+            .iter()
+            .position(|row| row.contains("out.txt"))
+            .unwrap_or_else(|| panic!("no row for the file: {fed}"));
+        assert!(written < sentence, "{fed}");
+    }
+
     /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file
     /// for a write, a vouch and a credential read, and a name that would draw as nothing, or as
     /// another name, is spelled in it, as it is in the terminal.
@@ -2068,6 +2115,7 @@ mod tests {
                     preview: "a".into(),
                     label: "(U,priv)".into(),
                     truncated: false,
+                    hidden: 0,
                     verdict: bravebot_core::vetting::Verdict::Safe,
                     reason: None,
                     reason_label: None,
@@ -2376,9 +2424,21 @@ mod tests {
                 label: None,
                 reason_label: None,
             };
+            let vouch = bravebot_agent::confirm::VouchRequest {
+                path: "notes.md".to_string(),
+                rule: "/work/notes.md".to_string(),
+                preview: text.to_string(),
+                label: String::new(),
+                truncated: false,
+                hidden,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                reason_label: None,
+            };
             for (stem, wire) in [
                 ("output", crate::wire::output_request(4, &output)),
                 ("vet", crate::wire::vet_request(5, &vet)),
+                ("vouch", crate::wire::vouch_request(6, &vouch)),
             ] {
                 let (_, _, shown) = shown(stem, wire);
                 let rows: Vec<&str> = shown.lines().collect();

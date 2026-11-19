@@ -216,6 +216,7 @@ bound to the arguments as held.
 `verified-by: bravebot_approval::lib::a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another`
+`verified-by: bravebot_cli::plain::a_run_fed_a_reference_is_asked_about_with_the_reference_named`
 `verified-by: bravebot_cli::plain::the_question_in_lines_spells_the_file_a_yes_is_kept_in`
 `verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_is_not_text_to_the_editor`
@@ -951,6 +952,14 @@ the prompt says about the content ([PROMPT-4](#PROMPT-4)), and a text with none 
 sentence. The terminal, a session in lines, the editor bridge and the desktop window draw the same
 text and the same sentence.
 
+The vouch prompt does the same for the preview of a file, the head of it that the person is shown.
+The sentence above the preview counts the characters written out in the preview and no others,
+so a character after the cut is neither written out nor counted. The terminal and the desktop
+window say when the file is cut; a session in lines and the editor bridge do not. The sentence is
+one of the rows the answer waits on, and a preview with none has no such sentence. The terminal, a
+session in lines, the editor bridge and the desktop window draw the same preview and the same
+sentence.
+
 The write prompt does the same for the lines a write adds or removes, and every row of its change
 is written out, kept lines included. The sentence over them counts the characters in the added and
 removed lines, says the file is written with them as they are, and is one of the rows the answer
@@ -987,9 +996,10 @@ see is part of that text. Writing it out puts it among the rows the answer waits
 zero-width joiner, is written out and counted too, which makes it harder to read, and a file name
 holding one, such as an emoji with its variation selector, is quoted in a vouch prompt. Text that
 holds the written-out form itself draws like a character that was written out, and the count says
-how many were, except in the question about a call, which writes out the `‹`. A vouch prompt's preview is not written out: it is the head of a file and a yes
-covers everything beneath the path, so a character in the preview hides nothing that text after the
-cut does not already hide.
+how many were, except in the question about a call, which writes out the `‹`. A vouch prompt writes
+out and counts the preview only, and a yes covers the whole file, so a character after the cut is
+not written out. The cut marker and the check over the whole file are what tell the person there is
+more.
 
 `verified-by: bravebot_core::invisible::each_character_that_draws_as_nothing_is_written_out`
 `verified-by: bravebot_core::invisible::a_message_written_in_tag_characters_is_spelled_letter_by_letter`
@@ -1017,10 +1027,15 @@ cut does not already hide.
 `verified-by: bravebot_tui::confirm::vet::the_vet_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
 `verified-by: bravebot_tui::confirm::no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn`
 `verified-by: bravebot_cli::plain::the_plain_prompts_say_how_many_characters_of_the_text_draw_as_nothing`
+`verified-by: bravebot_cli::plain::the_plain_vouch_question_says_how_many_characters_of_the_preview_draw_as_nothing`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_told_how_many_characters_of_a_text_draw_as_nothing`
 `verified-by: bravebot_ui_bridge::wire::an_output_and_a_vet_request_carry_how_many_characters_drew_as_nothing`
 `verified-by: bravebot_ui_bridge::wire::a_write_request_carries_how_many_characters_drew_as_nothing`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs draws the write, output and vetting cards from requests carrying the spelled text and the agent's sentence, holds the spelled characters and the sentence to the rows each card marks as deciding, holds a request with no sentence to drawing none and a sentence to being drawn as sent, and make check-ui runs it)`
+`verified-by: bravebot_agent::turn::a_vouch_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
+`verified-by: bravebot_tui::confirm::vet::the_vouch_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
+`verified-by: bravebot_approval::lib::the_vouch_lines_say_how_many_characters_draw_as_nothing_above_the_preview`
+`verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_how_many_characters_drew_as_nothing`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs draws the write, output, vetting and vouch cards from requests carrying the spelled text and the agent's sentence, holds the spelled characters and the sentence to the rows each card marks as deciding, holds a request with no sentence to drawing none and a sentence to being drawn as sent, and make check-ui runs it)`
 
 <a id="PROMPT-14"></a>
 ### PROMPT-14: the write prompt may hand the body to an editor, and what comes back is not an answer

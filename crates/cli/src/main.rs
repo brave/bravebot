@@ -4137,6 +4137,7 @@ mod tests {
             rule: "notes.md".to_string(),
             preview: "text".to_string(),
             truncated: false,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             label: String::new(),
