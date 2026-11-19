@@ -433,7 +433,7 @@ function aHostHoldingALeftSession(answer: 'snapshot' | 'trust' | 'nothing' | 're
       const event = (name: string, data: unknown): void => client.receive(JSON.stringify({ event: name, session: 's7', data }) + '\n')
       if (request.method === 'agent.info') return reply({ ok: { capabilities: { sessionView: contract.capability } } })
       if (request.method === 'instance.info') {
-        return reply({ ok: { instance: 'run-1', inspection: 'refused', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }] } })
+        return reply({ ok: { instance: 'run-1', inspection: 'refused', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }], answers: ['confirm', 'trust'] } })
       }
       if (request.method === 'turn.send') return reply({ ok: { turn: 3, target: 9 } })
       if (request.method !== 'session.attach') return assert.fail(`unexpected method ${request.method}`)
@@ -449,7 +449,7 @@ function aHostHoldingALeftSession(answer: 'snapshot' | 'trust' | 'nothing' | 're
 
 test('a session taken over starts its view from the snapshot the host sends, and is driven from there', async () => {
   const { client, sent } = aHostHoldingALeftSession('snapshot')
-  assert.deepEqual(await client.instance(), { instance: 'run-1', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }] })
+  assert.deepEqual(await client.instance(), { instance: 'run-1', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }], answers: ['confirm', 'trust'] })
   const session = await client.attach('s7')
   assert.equal(session.id, 's7')
   assert.deepEqual(
@@ -488,7 +488,12 @@ test('a take-over answered before its snapshot, or refused, leaves no session be
 })
 
 test('an instance listing in a shape the host does not send is refused', async () => {
-  for (const ok of [{ sessions: [] }, { instance: 'run-1', sessions: [{ session: 's7', state: 'gone', working: false, controlled: false }] }]) {
+  for (const ok of [
+    { sessions: [], answers: [] },
+    { instance: 'run-1', sessions: [{ session: 's7', state: 'gone', working: false, controlled: false }], answers: [] },
+    { instance: 'run-1', sessions: [] },
+    { instance: 'run-1', sessions: [], answers: ['write'] },
+  ]) {
     const client: RpcAgentClient = new RpcAgentClient({
       write(line) {
         const request = JSON.parse(line) as { id: number }

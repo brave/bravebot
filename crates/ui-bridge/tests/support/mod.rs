@@ -137,7 +137,12 @@ pub struct Start<'a> {
     pub environment: &'a [(&'a str, &'a OsStr)],
     pub stdout: Stdio,
     pub stderr: Stdio,
+    /// The clients the host is given, each a name and its answers, and each this test binary.
+    pub clients: &'a [(&'a str, &'a str)],
 }
+
+/// One client that may give every answer the host offers.
+pub const ONE_CLIENT: &[(&str, &str)] = &[("test", "confirm,run,fetch,ask,trust")];
 
 /// A local host, ended and waited for when it is dropped.
 pub struct Host {
@@ -174,12 +179,17 @@ impl Host {
         if let Some(settings) = start.settings {
             command.arg("--settings").arg(settings);
         }
+        for (name, answers) in start.clients {
+            command
+                .args(["--client", name, "--answers", answers, "--program"])
+                // The program started is this test binary, the one that is already running.
+                // nosemgrep: rust.lang.security.current-exe.current-exe
+                .arg(std::env::current_exe().unwrap());
+            for argument in ["--ignored", "--exact", RELAY_TEST, "--nocapture"] {
+                command.args(["--arg", argument]);
+            }
+        }
         let mut child = command
-            .arg("--")
-            // The program started is this test binary, the one that is already running.
-            // nosemgrep: rust.lang.security.current-exe.current-exe
-            .arg(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", RELAY_TEST, "--nocapture"])
             .stdin(Stdio::piped())
             .stdout(start.stdout)
             .stderr(start.stderr)
@@ -196,15 +206,36 @@ impl Host {
 
     /// The client the host started, once it has connected to the relay.
     pub fn client(&self) -> Client {
-        let deadline = Instant::now() + PATIENCE;
+        self.client_within(PATIENCE)
+            .expect("the host never started its client")
+    }
+
+    /// The client the host starts within `limit`, if it starts one.
+    pub fn client_within(&self, limit: Duration) -> Option<Client> {
+        let deadline = Instant::now() + limit;
         loop {
             match self.relay.accept() {
-                Ok((stream, _)) => return Client::over(stream),
+                Ok((stream, _)) => return Some(Client::over(stream)),
                 Err(_) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                Err(error) => panic!("the host never started its client: {error}"),
+                Err(_) => return None,
             }
+        }
+    }
+
+    /// The client that `line`, a `launch`, starts. The host refuses a launch of a client until it
+    /// has dealt with the loss of that client's last connection, so the line is typed again until
+    /// a client connects. Once one is waiting to start, typing it again is refused, so one client
+    /// starts.
+    pub fn launched(&mut self, line: &str) -> Client {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            self.command(line);
+            if let Some(client) = self.client_within(Duration::from_millis(200)) {
+                return client;
+            }
+            assert!(Instant::now() < deadline, "`{line}` never started a client");
         }
     }
 

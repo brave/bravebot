@@ -7,7 +7,7 @@
  * It makes a scratch directory with an empty home, a workspace and a sessions root, starts a stub
  * model service on 127.0.0.1, and runs the host with the relay as its client in an environment
  * that holds only what the stub needs. Nothing reads or writes a real home, credential or session.
- * The host's standard input is this terminal, so `launch` and `quit` work as they do for the host.
+ * The host's standard input is this terminal, so `launch relay` and `quit` work as they do for the host.
  * The scratch directory is removed when the host stops.
  *
  * The stub answers by the plan named in a prompt: `plan:hello` replies, and `plan:write` asks to
@@ -44,7 +44,12 @@ const relay = join(dirname(fileURLToPath(import.meta.url)), 'dev-relay.js')
 process.stderr.write(`dev-relay-demo: workspace ${workspace}; try the prompts plan:hello and plan:write\n`)
 const host = spawn(
   values.host,
-  ['--sessions-root', join(scratch, 'sessions'), '--workspace', workspace, '--', process.execPath, relay, '--workspace', workspace],
+  [
+    '--sessions-root', join(scratch, 'sessions'), '--workspace', workspace,
+    // The relay answers trust in this scratch workspace until a host test client can.
+    '--client', 'relay', '--answers', 'confirm,run,fetch,ask,trust', '--program', process.execPath,
+    '--arg', relay, '--arg', '--workspace', '--arg', workspace,
+  ],
   { env: isolatedEnvironment(home, stub.endpoint), stdio: 'inherit' },
 )
 host.on('exit', async (code) => {

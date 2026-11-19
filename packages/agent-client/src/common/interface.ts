@@ -143,4 +143,9 @@ export interface InstanceInfo {
   /** Names this run of the host. A different value means the host restarted and its sessions are gone. */
   instance: string
   sessions: readonly HeldSession[]
+  /** The answers the person allowed this connection to give. They grant nothing. */
+  answers: readonly AnswerKind[]
 }
+
+/** A kind of answer a connection may be allowed to give. */
+export type AnswerKind = 'confirm' | 'run' | 'fetch' | 'ask' | 'trust'

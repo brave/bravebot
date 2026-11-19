@@ -2,7 +2,8 @@
  * The development relay: a client program for `bravebot-host` that hands its channel to one app
  * over a loopback WebSocket, for the stage-3d phone experiment.
  *
- *   bravebot-host --sessions-root <root> --workspace <dir> -- <node> dist/scripts/dev-relay.js --workspace <dir>
+ *   bravebot-host --sessions-root <root> --workspace <dir> --client relay --answers <kinds> \
+ *     --program <node> --arg dist/scripts/dev-relay.js --arg --workspace --arg <dir>
  *
  * Its standard input and output are the channel the host made for it. It listens on 127.0.0.1 on
  * a port the system picks and shows the port and a six-digit code made for this launch on standard
@@ -10,8 +11,8 @@
  * connection, and the first message on it must be the code: a wrong code, or none within a minute,
  * ends the relay. After the code it sends the workspaces it was given, the same `--workspace`
  * directories the host was given, and then passes text both ways without reading it. The relay
- * exits when either end closes, which ends the host's channel; typing `launch` to the host starts
- * a new relay with a new port and code.
+ * exits when either end closes, which ends the host's channel; typing `launch relay` to the host
+ * starts a new relay with a new port and code.
  *
  * This is a development transport. It is reachable by any program on the computer that can reach
  * 127.0.0.1, which the code alone stands between, and it does not decide U1 or authorize control

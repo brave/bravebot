@@ -74,7 +74,7 @@ A development build (`__DEV__`) shows a Port and a Code field on the "Nothing is
 2. Carry the port to the device. On Android, `adb reverse tcp:<port> tcp:<port>` for the device or emulator. The iOS simulator shares the computer's 127.0.0.1 and needs nothing. A physical iPhone has no such tunnel and is not supported.
 3. In the app, enter the port and the code and press Connect. The demo's workspace opens with a new session.
 
-The relay takes one connection per launch. A wrong code ends it, and so does closing the app's connection. Type `launch` in the demo's terminal for a new port and code (run `adb reverse` again for the new port), or `quit` to stop. When the connection ends the app returns to the form and says why.
+The relay takes one connection per launch. A wrong code ends it, and so does closing the app's connection. Type `launch relay` in the demo's terminal for a new port and code (run `adb reverse` again for the new port), or `quit` to stop. When the connection ends the app returns to the form and says why.
 
 ## How the iOS project was made
 
