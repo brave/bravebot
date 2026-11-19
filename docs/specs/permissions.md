@@ -610,7 +610,10 @@ workspace covers the workspace under its relative names too: with a session open
 `Read(~/**)`, `Read(~/)` and `Read(~/proj/)` refuse `secrets/canary.txt` as they refuse the full
 path of the file, and `Read(~/*/secrets/**)` refuses `secrets/canary.txt` and not a `secrets`
 nested under another directory. An ancestor's name is compared as written and in the canonical form
-of [PERM-7](#PERM-7)'s other names, and in the case the volume folds. A rule about a place that is
+of [PERM-7](#PERM-7)'s other names, and in the case the volume folds. Where the volume could not be
+asked, a `deny` or `ask` rule's ancestor is compared folded, as the rule itself is read
+([PERM-3](#PERM-3)), so `Read(//Volumes/**)` refuses `secrets/.env` in a workspace opened at
+`/Volumes/BravePoc`, and an `allow` rule is still compared byte for byte. A rule about a place that is
 neither the workspace, inside it nor above it is left as written. The rule stays one rule, and the name it
 reaches is covered at that place only, not wherever it appears as the written pattern may be
 ([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
@@ -743,6 +746,11 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::permissions::the_relative_name_of_a_rule_on_an_ancestor_is_covered_at_that_place_only`
 `verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_is_matched_in_the_case_the_volume_folds`
 `verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_is_matched_by_canonical_equivalence`
+`verified-by: bravebot_core::permissions::a_deny_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::an_ask_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_in_another_case_covers_the_workspace_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::an_allow_rule_on_an_ancestor_gains_no_relative_name_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_agent::permissions::a_rule_on_an_ancestor_covers_the_workspace_where_the_volume_could_not_be_asked`
 `verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
 `verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
