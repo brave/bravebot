@@ -26,6 +26,8 @@ interface Host {
   stderr(): string
   /** The port and code of the next relay the host starts, in the order they start. */
   launch(): Promise<Launch>
+  /** Answer no to the host's question about its workspace at startup, or wait for it to say it does not ask. */
+  startup(): Promise<void>
   /** Type `launch relay` once the host says the last relay ended, which is when it accepts one. */
   relaunch(): Promise<void>
   stop(): Promise<void>
@@ -37,6 +39,10 @@ after(async () => {
 })
 
 const ENDED = 'bravebot-host: client relay ended'
+/** How the host's question about its workspace at startup ends. It waits for the answer on the same line. */
+const STARTUP_QUESTION = 'trust this directory? [y/N] '
+/** What the host says about a workspace it does not ask about at startup. */
+const NOT_ASKED = ['start trusted, because', 'cannot be kept']
 const LISTENING = /dev-relay: listening on 127\.0\.0\.1 port (\d+); the code for this launch is (\d{6})\n/g
 
 async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
@@ -85,6 +91,22 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
         }),
         'a relay to start listening',
       ),
+    startup: () =>
+      within(
+        new Promise<void>((resolve) => {
+          const look = () => {
+            if (text.includes(STARTUP_QUESTION)) {
+              // A no, so each session the relay opens asks its client about trust.
+              child.stdin.write('n\n')
+              return resolve()
+            }
+            if (NOT_ASKED.some((said) => text.includes(said))) return resolve()
+            waiters.push(look)
+          }
+          look()
+        }),
+        'the host to ask about its workspace',
+      ),
     relaunch: () =>
       within(
         new Promise<void>((resolve) => {
@@ -107,6 +129,7 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
     },
   }
   hosts.push(made)
+  await made.startup()
   return made
 }
 

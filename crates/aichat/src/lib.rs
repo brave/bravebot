@@ -766,7 +766,8 @@ impl<'a> AichatClient<'a> {
     /// The options are merged at the top level of the body and never interpreted. They come from the
     /// settings file, which is the person's own configuration surface, so they are trusted exactly as
     /// far as a variable they exported would be. A key the request already set wins, because a
-    /// configuration must not rewrite the model or the messages a turn built.
+    /// configuration must not rewrite the model or the messages a turn built, and the keys in
+    /// [`protocol::TOOL_KEYS`] are the request's whether or not the turn set them.
     ///
     /// The model is the exception, and the one field a gateway rewrites. A request may name it
     /// qualified by the provider id, which is how it says which service is meant and is a name that
@@ -805,7 +806,9 @@ impl<'a> AichatClient<'a> {
                     .and_then(|model| model.request_options(request.variant.as_deref())),
             ) {
                 for (key, value) in &options {
-                    object.entry(key.clone()).or_insert_with(|| value.clone());
+                    if !protocol::TOOL_KEYS.contains(&key.as_str()) {
+                        object.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
                 }
             }
             let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
@@ -2338,6 +2341,72 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    /// BACKEND-15: the keys naming a request's tools are the request's. A model's options and the
+    /// variant a request names add none of them to a request that offers none, which would let a
+    /// service run a tool beside text nobody vouched for, and replace none of them in a request that
+    /// offers tools. Keys that are not those still reach the body.
+    #[test]
+    fn options_and_a_variant_cannot_supply_the_keys_naming_a_requests_tools() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider(
+            r#"{"m": {
+                "options": {
+                    "tools": [{"type": "function", "function": {"name": "web_search", "parameters": {"type": "object"}}}],
+                    "tool_choice": "required",
+                    "functions": [],
+                    "function_call": "auto",
+                    "parallel_tool_calls": false,
+                    "top_k": 5
+                },
+                "variants": {"v": {"tool_choice": "required", "seed": 7}}
+            }}"#,
+        );
+        let client = || AichatClient::new(&config, &egress);
+
+        for request in [
+            request("m"),
+            request("m").with_variant(Some("v".to_string())),
+        ] {
+            let http = client()
+                .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+                .prepare(&request)
+                .expect("prepared");
+            let body = body(&http);
+            for key in [
+                "tools",
+                "tool_choice",
+                "functions",
+                "function_call",
+                "parallel_tool_calls",
+            ] {
+                assert!(body.get(key).is_none(), "{key} reached {body}");
+            }
+            assert_eq!(body.get("top_k"), Some(&serde_json::json!(5)));
+        }
+
+        let offered = request("m").with_tools(vec![protocol::Tool::function(
+            "read_file",
+            "Read a file",
+            serde_json::json!({"type": "object"}),
+        )]);
+        let http = client()
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+            .prepare(&offered)
+            .expect("prepared");
+        let body = body(&http);
+        assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+        assert_eq!(body["tools"][0]["function"]["name"], "read_file");
+        for key in [
+            "tool_choice",
+            "functions",
+            "function_call",
+            "parallel_tool_calls",
+        ] {
+            assert!(body.get(key).is_none(), "{key} reached {body}");
+        }
     }
 
     /// BACKEND-66: the variant a request names reaches the body as `options` do, and a request that

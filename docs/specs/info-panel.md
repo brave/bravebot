@@ -242,7 +242,9 @@ and the hit rate, and the token total and the two cache rows are not drawn.
    name, as `Sonnet (Bedrock)`, and not by the request name, which for a tier is an inference-profile
    ARN. `/status` draws it the same way and keeps the request name on the line beneath, since an
    error from the service quotes that. A model the configuration does not name is drawn by its
-   request name. The model is the person's
+   request name. A pick made with `/model session` is drawn with a row under the model that says
+   `this session only`, and no other pick, nor the model `--model` named, has that row. The row goes
+   when a later pick is recorded. The model is the person's
    choice, never the name an endpoint replied with, so a reply
    that names another model changes nothing here. The effort row is left out where the model reads
    none. Both come from the session's settings, so the section is left out while the person has
@@ -291,6 +293,8 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_id_rows_count_toward_where_the_context_section_fits`
 `verified-by: bravebot_tui::panel::the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply`
 `verified-by: bravebot_tui::panel::the_model_section_names_a_tier_rather_than_the_tail_of_its_arn`
+`verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_pick_and_names_the_model_either_way`
+`verified-by: bravebot_tui::status::the_status_line_names_a_session_only_pick_as_it_names_a_recorded_one`
 `verified-by: bravebot_tui::status::the_model_line_names_a_tier_and_keeps_its_arn_beneath`
 `verified-by: bravebot_tui::status::a_name_a_provider_block_chose_is_shown_without_a_service_added`
 `verified-by: bravebot_config::lib::a_request_name_finds_its_entry_in_either_kind_of_account`

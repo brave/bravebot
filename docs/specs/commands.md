@@ -397,7 +397,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -561,7 +561,8 @@ does not read:
   ([TRUST-24](trust-map.md#TRUST-24)). The turn runs under the map this session opened with, which
   the command leaves alone.
 - **`/model`.** A turn is sent with the model in force when it begins and does not read the choice
-  again, so a model picked mid-turn is the next turn's. The turn is still compared with the model
+  again, so a model picked mid-turn is the next turn's, whether it was picked with the bare word or
+  with `/model session`. The turn is still compared with the model
   it was sent with when it ends, and not with the one picked meanwhile. What `/status` and the
   footer name, and the window the context gauge is read against, are the model picked from the
   moment it is picked, since the next request is the one that has to fit.
@@ -575,7 +576,7 @@ does not read:
 - **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
   the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
   it ([INPUT-24](terminal-input.md#INPUT-24)).
-- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config` opens a list. While a turn
+- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config`, and `/model session`, opens a list. While a turn
   runs the list is a mode of the session and not a loop of its own, so the turn goes on being drawn
   and asked about. The list takes every key the box would have taken, is drawn over the frame with
   the turn still drawn behind it, and is left with Escape or Ctrl-C, which stop nothing. A question
@@ -590,6 +591,8 @@ does not read:
   was and says why.
 
   `verified-by: bravebot_tui::app::the_model_command_opens_its_picker_before_the_listing_has_arrived`
+  `verified-by: bravebot_tui::app::model_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+  `verified-by: bravebot_tui::app::a_session_only_model_picked_mid_turn_applies_from_the_next_turn`
   `verified-by: bravebot_tui::app::a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why`
 - **`/sandbox`.** It sets the mode the programs `run` starts are held to
   ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn reads the mode again when each call begins, so a
@@ -880,12 +883,20 @@ is drawn. The skills are held while the line holds a slash word, and not only wh
 typed, because a finished word's name is what is checked. A turn running holds none, so a skill
 is not drawn as recognised then, while a command is.
 
+A space typed after `/model` offers the one word it takes, `session`, as the row `/model session`
+with a one-line description saying that it chooses a model for this session only and records
+nothing. Tab, or a click, finishes a started word to it, and a model name or another word offers
+nothing. Enter on `/model ` with nothing after the space opens the picker as the bare word does,
+and Enter on a started word takes the offered row. The hint drawn after the space is `[session]`,
+and `--help` lists `/model [session]`.
+
 `verified-by: bravebot_tui::render::a_word_that_names_a_command_or_skill_is_drawn_in_its_own_colour`
 `verified-by: bravebot_tui::render::nothing_is_drawn_as_recognised_in_shell_mode`
 `verified-by: bravebot_tui::render::a_command_shows_what_it_takes_once_it_is_typed`
 `verified-by: bravebot_tui::render::a_skill_shows_the_hint_its_file_gave`
 `verified-by: bravebot_tui::render::a_turn_running_draws_no_skill_as_recognised`
 `verified-by: bravebot_tui::render::a_hint_is_cut_to_the_row_and_holds_no_escape`
+`verified-by: bravebot_tui::command_table::typing_model_and_a_space_offers_the_session_word`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 
 ## Copying a reply
@@ -1249,11 +1260,30 @@ keys, are refused as a file that cannot be used is, since the box holds one form
 that has a `model` key is held to the same rule as one that has none: it may not begin with a
 command word.
 
-`/model <name>` is not a command. It stays a prompt (CMD-2), and the row under the box says so while
-the turn it begins runs, as it does for any command typed with words after it where it takes none.
-The picker is where a name is checked against the roster and where the person sees the row, and a
-command that took the name would apply it without that look. The box also keeps the file's text to
-send after the choice, which a `/model <name>` line has no room for.
+`/model` takes one word, `session`, and no model name. `/model session` opens the same picker as the
+bare word, with the same roster, search and rows, in the scope that records nothing: Enter puts the
+row in force for this session only and writes nothing to `~/.bravebot/model`, so the next session
+opens on the model it would have had without this one. The bare word opens the picker in the scope
+that records the pick for every session, and Tab in the open picker switches
+between the two scopes in both directions ([VIEW-14](terminal-transcript.md#VIEW-14)). The word is
+matched whole and in lower case, so `/model sessions`, `/model Session` and `/model session now` are
+prompts. In a session started under a definition that fixes the model, `/model session` opens no
+picker and says so, as the bare word does. An incognito session takes either pick and records
+nothing. A `model` key in a prompt file opens the picker in the scope of the bare word.
+
+A pick made with `/model session` belongs to the session that made it. `/clear` and `/handoff` begin
+a new conversation in the same session and keep the pick. `/branch` goes on in the same session and
+keeps it, and writes it into neither the copy's record nor `~/.bravebot/model`. `/resume` opens
+another session, which opens on the model a new session would have, the recorded pick, so it does
+not carry the pick. A session's record names the model that answered, not the model chosen, so a
+resume does not take a pick from it.
+
+Any other word after `/model`, a model name included, is not a command. `/model <name>` stays a
+prompt (CMD-2), and the row under the box says so while the turn it begins runs, as it does for any
+command typed with words after it where it takes none. The picker is where a name is checked against
+the roster and where the person sees the row, and a command that took the name would apply it
+without that look. A prompt file's `model` key also leaves the file's text in the box to send after
+the choice, which a `/model <name>` line has no room for.
 
 **Why.** A prompt used often should be a word, and the file is the person's own, so it is as trusted
 as their typing. Putting the text in the box before it is sent keeps what reaches the planner a line
@@ -1286,6 +1316,17 @@ put in force by a file, and `!` commands and `@` includes are not read from a fi
 `verified-by: bravebot_tui::prompt_files::a_name_a_command_claims_is_never_a_file`
 `verified-by: bravebot_tui::prompt_files::a_body_that_opens_with_a_command_is_refused`
 `verified-by: bravebot_tui::prompt_files::a_file_that_cannot_be_used_is_refused_rather_than_ignored`
+`verified-by: bravebot_tui::command_table::model_takes_exactly_the_word_session_and_nothing_else`
+`verified-by: bravebot_tui::app::model_session_asks_for_the_picker_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::the_bare_model_command_opens_the_picker_and_marks_nothing`
+`verified-by: bravebot_tui::app::a_model_taken_in_the_this_session_scope_is_not_recorded`
+`verified-by: bravebot_tui::app::a_model_taken_in_the_every_session_scope_is_recorded`
+`verified-by: bravebot_tui::app::model_session_under_a_definition_naming_a_model_is_refused_as_model_is`
+`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_pick_and_writes_nothing`
+`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_opens_the_picker_in_the_every_session_scope`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_pick_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::a_session_only_pick_survives_a_clear_and_a_handoff`
 
 <a id="CMD-19"></a>
 ### CMD-19: `/context` divides the measured count of the last request into fixed sections
@@ -1455,26 +1496,28 @@ being asked for one, through `run`, with the person asked about it as for any pr
 
 Nothing is drafted, and the line says which of these held, where the repository is not one
 `read_git` opens ([GIT-2](tools/read-git.md#GIT-2)), where the reader shows no file, where the diff
+names a path nobody has vouched for ([LABEL-8](labels.md#LABEL-8)), where the diff of vouched paths
 holds what looks like a credential ([CRED-15](credential-protection.md#CRED-15)), where the model
 could not be used ([PROC-13](processors.md#PROC-13)) or where the answer marks no message. A diff cut
 at the reader's cap is drafted from what was read and the line says so. Typed during a turn the
 line waits for the turn to end (CMD-8).
 
 A draft is put in the box only where every path the diff names is one the trust map vouches for
-([LABEL-8](labels.md#LABEL-8)). Where one is not, a model still writes the message, since the
-read that reaches it is the one the planner's own read would have kept back the same way, but the
-box is left as it was and a note says so instead: the box is sendable, and the next Enter would
-send a model's words about an unvouched path to the planner as the person's own typed line, which
-is not a line the person wrote. The same holds `/handoff`'s brief and an enhancement's rewrite to
+([LABEL-8](labels.md#LABEL-8)). Where one is not, the diff is not given to a model: the driver reads
+the label the read gave the diff, which is fixed by the paths shown and not by what they hold, and
+stops before the diff is scanned or any request is made. No usage is charged, the box is left as it
+was and a note says no draft was written. The box is sendable, and the next Enter would send a
+model's words about an unvouched path to the planner as the person's own typed line, which is not a
+line the person wrote. The same holds `/handoff`'s brief and an enhancement's rewrite to
 ([SESSION-34](sessions.md#SESSION-34), [INPUT-48](terminal-input.md#INPUT-48)).
 
 **Why.** A message is written from a diff the planner may not be allowed to read, and the answer to
 that elsewhere is a processor. The draft is derived from that diff, so its integrity is the diff's,
-and the one place it is released is a surface the person edits and a key the person presses, which
-is why that surface gets nothing where the diff's is not trusted: a processor's own output carries
-no provenance of its own that vouching could promote it by, so reading the diff's label is the only
-way to tell whether the draft may go where a press sends it. A credential in a diff is refused
-where the planner's own read would ask, because nobody is at a prompt to agree.
+and the one place it is released is a surface the person edits and a key the person presses. A
+draft that would be discarded for that reason is not requested, so the bytes of a file nobody
+vouched for decide neither whether a request is made nor which note is shown. A credential in a
+diff of vouched paths is refused where the planner's own read would ask, because nobody is at a
+prompt to agree.
 
 `verified-by: bravebot_agent::commit_message::a_range_is_two_written_out_revisions`
 `verified-by: bravebot_tui::app::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
@@ -1499,8 +1542,8 @@ where the planner's own read would ask, because nobody is at a prompt to agree.
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
-`verified-by: bravebot_agent::commit_message::a_diff_of_an_unvouched_path_gives_no_sendable_draft`
-`verified-by: bravebot_tui::app::a_draft_that_met_something_untrusted_is_held_back_with_a_note`
+`verified-by: bravebot_agent::commit_message::an_unvouched_diff_gives_no_draft_and_no_request_whatever_its_text_holds`
+`verified-by: bravebot_tui::app::an_answer_with_no_message_leaves_the_box_alone_and_says_no_draft_was_written`
 
 ## Answering from what this program carries
 

@@ -118,11 +118,11 @@ pub use error::{Remedy, WorkspaceError};
 use named_settings::{
     landed_path, lexically_clean, named_settings_names, names_one_path, same_file,
 };
-pub(crate) use other_names::OtherKeys;
 #[cfg(unix)]
 use other_names::directory_identity;
 #[cfg(unix)]
 use other_names::distinct_identity;
+pub(crate) use other_names::{Aimed, OtherKeys};
 
 /// How a directory is told from another: the device and inode it is, or `None` where they cannot
 /// be read.
@@ -1815,6 +1815,20 @@ impl Workspace {
         expected: &str,
         read_at: Stamp,
     ) -> Result<PathBuf, WorkspaceError> {
+        self.write_endorsed_if_unchanged_reaching(policy, path, contents, expected, read_at, None)
+    }
+
+    /// [`Workspace::write_endorsed_if_unchanged`] for a write whose question was drawn when the
+    /// destination reached `asked`: the write is refused if it reaches something else now.
+    pub(crate) fn write_endorsed_if_unchanged_reaching<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        contents: &Labelled<String>,
+        expected: &str,
+        read_at: Stamp,
+        asked: Option<&Aimed>,
+    ) -> Result<PathBuf, WorkspaceError> {
         // Checked before the write gates so a stale edit is reported as staleness rather than
         // consuming the single-use endorsement. Reading the path is itself gated, below. The stamp
         // is compared here for the same reason, and again in the write, where it is atomic with
@@ -1832,7 +1846,7 @@ impl Workspace {
             }
             Ok(())
         })?;
-        self.write_endorsed_at_revision(policy, path, contents, Some(read_at))
+        self.write_endorsed_at_revision(policy, path, contents, Some(read_at), asked)
     }
 
     /// The path as a plain string, for a check made on the user's behalf.
@@ -1868,15 +1882,18 @@ impl Workspace {
         path: &Labelled<String>,
         contents: &Labelled<String>,
     ) -> Result<PathBuf, WorkspaceError> {
-        self.write_endorsed_at_revision(policy, path, contents, None)
+        self.write_endorsed_at_revision(policy, path, contents, None, None)
     }
 
+    /// `asked` is what the destination reached when the person was asked, for a write that was put
+    /// to a person. The write is refused if it reaches something else now (TRUST-10, PERM-7).
     pub(crate) fn write_endorsed_at_revision<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         contents: &Labelled<String>,
         expected: Option<Stamp>,
+        asked: Option<&Aimed>,
     ) -> Result<PathBuf, WorkspaceError> {
         policy.before_capability(Capability::FileWrite)?;
 
@@ -1885,8 +1902,41 @@ impl Workspace {
         // routed anywhere.
         let relative = policy.before_endorsed_destination("file_write", "path", path)?;
         policy.before_action("file_write", "contents", Role::Content, contents)?;
+        self.refuse_if_redirected(policy, &relative, asked)?;
 
         self.write_after_gates(policy, relative, contents, expected)
+    }
+
+    /// Refuse a write that does not reach the file the person was asked about. A link or a hard
+    /// link can have been put at the name while the question was open, and the person approved
+    /// the name they were shown (PERM-7, TRUST-10).
+    ///
+    /// Where `asked` is given, what `relative` lands on and the hard links of that file are
+    /// compared with what they were when the question was drawn. The approval covered the typed
+    /// name, which the grant fixes, and those two are all the approval and protected-path
+    /// questions read beside it, so an unchanged reach gets the same answers and a changed one is
+    /// refused whichever rule would have covered it, without a second question. The deny rules
+    /// are asked about the file reached now in every case, the same walk the write tools make
+    /// before the question, so the two cannot differ. A name that no longer resolves is left to
+    /// the write's own confinement check, which refuses it with its own reason. Only the names
+    /// the file system gives and the person's rules are read, never file contents. The write of a
+    /// trusted path
+    /// ([`Workspace::write`]) is not asked: the person's own restores and the memory writes are
+    /// not a planner's destination.
+    fn refuse_if_redirected<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        relative: &str,
+        asked: Option<&Aimed>,
+    ) -> Result<(), WorkspaceError> {
+        let redirected = || WorkspaceError::Redirected {
+            path: relative.to_string(),
+        };
+        let now = self.reach_of(relative);
+        if now.resolves() && asked.is_some_and(|asked| *asked != now) {
+            return Err(redirected());
+        }
+        crate::tools::refuse_write_by_rules(policy, self, relative).map_err(|_| redirected())
     }
 
     /// Write a file. The path is routing; the contents are content.
@@ -1945,6 +1995,7 @@ impl Workspace {
         path: &Labelled<String>,
         label: bravebot_core::label::Label,
         expected: Option<Stamp>,
+        asked: Option<&Aimed>,
         fill: impl FnOnce(
             &mut std::fs::File,
             &bravebot_core::policy::Declassification,
@@ -1959,6 +2010,10 @@ impl Workspace {
             Role::Content,
             &Labelled::new(String::new(), label),
         )?;
+        // The file replaces the name by a rename, which does not follow a link at it. The same
+        // question is asked as for any other write, so the answer does not depend on how the bytes
+        // arrive.
+        self.refuse_if_redirected(policy, &relative, asked)?;
 
         self.write_released(policy, relative, label, expected, |resolved, proof| {
             let parent = resolved
@@ -5393,9 +5448,6 @@ mod tests {
     #[test]
     fn the_trust_map_the_writer_reservation_and_the_memory_record_follow_the_workspace_s_own_casefold_flag()
      {
-        use bravebot_core::Integrity;
-        use bravebot_core::file_authority::FileAuthority;
-
         let layouts: [(&str, &'static [&'static str], bool); 4] = [
             (
                 "ordinary parent, workspace with the flag",
@@ -5419,54 +5471,71 @@ mod tests {
             let answer = folds_case_by(Path::new(WORKSPACE), &id, &flag);
             assert_eq!(answer, Some(folds), "{layout}");
 
-            let mut store = bravebot_core::TrustStore::new(key_of(Path::new(WORKSPACE)))
+            let store = bravebot_core::TrustStore::new(key_of(Path::new(WORKSPACE)))
                 .folding_case(folds_case_by(Path::new(WORKSPACE), &id, &flag).unwrap_or(false));
-            store.distrust(".env");
-            store.trust("Docs");
-            assert_eq!(
-                store.integrity_of(".ENV"),
-                folds.then_some(Integrity::Untrusted),
-                "the map reads .ENV as the file distrusted as .env: {layout}"
-            );
-            assert_eq!(
-                store.integrity_of("docs"),
-                folds.then_some(Integrity::Trusted),
-                "the map trusts docs on the strength of Docs only where they are one file: {layout}"
-            );
-
-            let authority = FileAuthority::new(store);
-            let capture = authority.capture();
-            let first = capture.begin(".env");
-            assert!(first.is_some(), "{layout}");
-            assert_eq!(
-                capture.begin(".ENV").is_none(),
-                folds,
-                "a second writer under the other spelling is refused only where they are one file: {layout}"
-            );
-            drop(first);
-            drop(capture);
-
-            let home = crate::testutil::scratch_dir(&format!("trust-case-answer-memory-{number}"));
-            let _ = std::fs::remove_dir_all(&home);
-            std::fs::create_dir_all(&home).unwrap();
-            let key = format!("{WORKSPACE}/.Bravebot/memory/NOTES.md");
-            crate::memory::record_before_write(Some(&home), &key, folds).unwrap();
-            // The record is kept under the directory as the volume spells it through every link,
-            // which differs from the literal path where a parent is a link, as `/home` is on macOS.
-            let spelled =
-                crate::workspace::on_disk(WORKSPACE).unwrap_or_else(|| WORKSPACE.to_string());
-            let recorded = crate::memory::Record::new(&home, &spelled).paths();
-            let _ = std::fs::remove_dir_all(&home);
-            assert_eq!(
-                recorded,
-                if folds {
-                    vec![format!("{spelled}/.bravebot/memory/notes.md")]
-                } else {
-                    Vec::new()
-                },
-                "a memory is recorded under another case only where they are one file: {layout}"
-            );
+            assert_consumers_follow(store, WORKSPACE, folds, layout, number);
         }
+    }
+
+    /// What TRUST-2 and TRUST-4 promise for a workspace at `workspace` whose map is `store`: a file
+    /// untrusted as `.env` is untrusted as `.ENV`, a trust of `Docs` reaches `docs`, a second
+    /// writer under the other spelling is refused, and a memory written under one spelling is
+    /// recorded under the other, each exactly where `folds` says the workspace holds the two as one
+    /// file. `folds` is written from the layout and not read from the code under test.
+    fn assert_consumers_follow(
+        mut store: bravebot_core::TrustStore,
+        workspace: &str,
+        folds: bool,
+        layout: &str,
+        number: usize,
+    ) {
+        use bravebot_core::Integrity;
+        use bravebot_core::file_authority::FileAuthority;
+
+        store.distrust(".env");
+        store.trust("Docs");
+        assert_eq!(
+            store.integrity_of(".ENV"),
+            folds.then_some(Integrity::Untrusted),
+            "the map reads .ENV as the file distrusted as .env: {layout}"
+        );
+        assert_eq!(
+            store.integrity_of("docs"),
+            folds.then_some(Integrity::Trusted),
+            "the map trusts docs on the strength of Docs only where they are one file: {layout}"
+        );
+
+        let authority = FileAuthority::new(store);
+        let capture = authority.capture();
+        let first = capture.begin(".env");
+        assert!(first.is_some(), "{layout}");
+        assert_eq!(
+            capture.begin(".ENV").is_none(),
+            folds,
+            "a second writer under the other spelling is refused only where they are one file: {layout}"
+        );
+        drop(first);
+        drop(capture);
+
+        let home = crate::testutil::scratch_dir(&format!("trust-case-answer-memory-{number}"));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let key = format!("{workspace}/.Bravebot/memory/NOTES.md");
+        crate::memory::record_before_write(Some(&home), &key, folds).unwrap();
+        // The record is kept under the directory as the volume spells it through every link,
+        // which differs from the literal path where a parent is a link, as `/home` is on macOS.
+        let spelled = crate::workspace::on_disk(workspace).unwrap_or_else(|| workspace.to_string());
+        let recorded = crate::memory::Record::new(&home, &spelled).paths();
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(
+            recorded,
+            if folds {
+                vec![format!("{spelled}/.bravebot/memory/notes.md")]
+            } else {
+                Vec::new()
+            },
+            "a memory is recorded under another case only where they are one file: {layout}"
+        );
     }
 
     /// TRUST-2: where the filesystem cannot be asked, the trust map, the writer reservation and the
@@ -5543,63 +5612,99 @@ mod tests {
         assert!(store.case_folding().restricts());
     }
 
-    /// A real directory carrying the casefold flag inside an ordinary parent, which no stand-in for
-    /// the filesystem replaces: `.env` and `.ENV` are one file there, and the map, the writer
-    /// reservation and the answer all say so. The directory is the test's own, and the test returns
-    /// where the host cannot set the flag (it needs ext4 or f2fs with casefold, an empty directory
-    /// and the privilege `chattr +F` takes), as no host is assumed to have it.
+    /// Set or clear the casefold flag of the empty directory `directory`. `false` where the host
+    /// refuses. A flag that is already as wanted is not written, so a host that cannot hold the
+    /// flag still builds the layouts that need none.
     #[cfg(target_os = "linux")]
-    #[test]
-    fn a_real_directory_with_the_casefold_flag_folds_case_for_the_map() {
-        use bravebot_core::Integrity;
-        use bravebot_core::file_authority::FileAuthority;
+    fn set_casefold_flag(directory: &Path, on: bool) -> bool {
         use rustix::fs::{IFlags, Mode, OFlags};
-
-        let parent = crate::testutil::scratch_dir("casefold-parent");
-        let _ = std::fs::remove_dir_all(&parent);
-        let workspace = parent.join("Workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let held = rustix::fs::open(
-            &workspace,
+        /// `FS_CASEFOLD_FL`, which `IFlags` has no name for.
+        const FS_CASEFOLD_FL: u32 = 0x4000_0000;
+        let Ok(held) = rustix::fs::open(
+            directory,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
-        )
-        .unwrap();
-        // FS_CASEFOLD_FL, which `IFlags` has no name for.
-        let flags = IFlags::from_bits_retain(0x4000_0000);
-        if rustix::fs::ioctl_setflags(&held, flags).is_err() {
-            eprintln!("skipped: this filesystem cannot set the casefold flag on a directory");
-            let _ = std::fs::remove_dir_all(&parent);
-            return;
+        ) else {
+            return false;
+        };
+        let Ok(current) = rustix::fs::ioctl_getflags(&held) else {
+            return false;
+        };
+        let wanted = match on {
+            true => current.bits() | FS_CASEFOLD_FL,
+            false => current.bits() & !FS_CASEFOLD_FL,
+        };
+        wanted == current.bits()
+            || rustix::fs::ioctl_setflags(&held, IFlags::from_bits_retain(wanted)).is_ok()
+    }
+
+    /// Real directories with the casefold flag set on the workspace and on the directory above it in
+    /// each of the four ways, which no stand-in for the filesystem replaces. The filesystem is asked
+    /// about each layout before anything is read from the code under test, so a fixture that did not
+    /// produce the layout it names fails there. A layout the host cannot build is skipped: it needs
+    /// ext4 or f2fs with casefold, an empty directory and the privilege `chattr +F` takes, and no
+    /// host is assumed to have that. The one with no flag on either level runs everywhere.
+    ///
+    /// The faults this rejects: the answer of the workspace's name in its parent used for the names
+    /// inside it (wrong for the first and third layouts), a map that keeps `.env` and `.ENV` apart
+    /// where the workspace folds, and one that folds `Docs` into `docs` where it does not.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn real_directories_with_the_casefold_flag_set_per_level_give_the_map_the_workspace_s_answer() {
+        // (name, the parent has the flag, the workspace has it)
+        let layouts = [
+            ("ordinary-parent-casefold-workspace", false, true),
+            ("casefold-parent-casefold-workspace", true, true),
+            ("casefold-parent-ordinary-workspace", true, false),
+            ("ordinary-parent-ordinary-workspace", false, false),
+        ];
+        let base = crate::testutil::scratch_dir("casefold-real-layouts");
+        for (number, (name, parent_folds, folds)) in layouts.into_iter().enumerate() {
+            let top = base.join(name);
+            let _ = std::fs::remove_dir_all(&top);
+            let parent = top.join("Parent");
+            std::fs::create_dir_all(&parent).unwrap();
+            if !set_casefold_flag(&parent, parent_folds) {
+                eprintln!("skipped {name}: this filesystem cannot set the casefold flag");
+                let _ = std::fs::remove_dir_all(&top);
+                continue;
+            }
+            // A directory made inside one with the flag inherits it, so the flag is cleared as well
+            // as set, and only on the empty directory.
+            let workspace = parent.join("Workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            if !set_casefold_flag(&workspace, folds) {
+                eprintln!("skipped {name}: this filesystem cannot set the casefold flag");
+                let _ = std::fs::remove_dir_all(&top);
+                continue;
+            }
+            let root = workspace.canonicalize().unwrap();
+
+            // The oracle is the filesystem, asked with names of the test's own: inside the
+            // workspace for the names the map is about, and in its parent for the name the old
+            // probe asked about.
+            std::fs::write(root.join(".env"), b"").unwrap();
+            assert_eq!(
+                root.join(".ENV").exists(),
+                folds,
+                "{name}: the workspace did not fold as the layout says"
+            );
+            assert_eq!(
+                root.parent().unwrap().join("wORKSPACE").exists(),
+                parent_folds,
+                "{name}: the parent did not fold as the layout says"
+            );
+
+            assert_eq!(
+                volume_case_folding(&root),
+                bravebot_core::CaseFolding::from(folds),
+                "{name}"
+            );
+            let root_name = root.to_str().expect("a scratch path is text");
+            assert_consumers_follow(trust_store(&root), root_name, folds, name, 10 + number);
+            let _ = std::fs::remove_dir_all(&top);
         }
-        drop(held);
-        let root = workspace.canonicalize().unwrap();
-
-        // The oracle is the filesystem, asked with a file of the test's own.
-        std::fs::write(root.join(".env"), b"").unwrap();
-        assert!(
-            root.join(".ENV").exists(),
-            "the directory carries the flag and does not fold"
-        );
-        // The parent is ordinary, so its answer for the name of the workspace is the opposite one.
-        assert!(!root.parent().unwrap().join("wORKSPACE").exists());
-
-        assert_eq!(
-            volume_case_folding(&root),
-            bravebot_core::CaseFolding::Folds
-        );
-        let mut store = trust_store(&root);
-        store.distrust(".env");
-        assert_eq!(store.integrity_of(".ENV"), Some(Integrity::Untrusted));
-
-        let authority = FileAuthority::new(store);
-        let capture = authority.capture();
-        let first = capture.begin(".env");
-        assert!(first.is_some());
-        assert!(capture.begin(".ENV").is_none());
-        drop(first);
-        drop(capture);
-        let _ = std::fs::remove_dir_all(&parent);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A volume answering to either spelling of `Proj` is one whose rules have to fold.

@@ -203,7 +203,7 @@ fn a_double_click_in_place_takes_the_model_pointed_at_on_every_row_of_a_list_scr
                 "{count} models, row {slot}: the second press left it open"
             );
             match session.take_pick() {
-                Some(Picked::Model(model)) => assert_eq!(model.display_name, named),
+                Some(Picked::Model(model, _)) => assert_eq!(model.display_name, named),
                 other => panic!("{count} models, row {slot}: the row taken was {other:?}"),
             }
             assert_eq!(
@@ -379,13 +379,22 @@ fn the_release_of_a_press_that_closed_a_picker_clicks_nothing_in_the_session() {
     let (mut session, buffer) = panel_with_a_model();
     let (row, column) = find_on(&buffer, "claude-sonnet");
     // The click that opened the picker, which the session remembers.
-    assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+    assert_eq!(
+        click(&mut session, row, column),
+        Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+    );
     // The picker read the next press itself and closed on it, and says so.
     session.end_a_pickers_press();
     let release = drag(MouseEventKind::Up(MouseButton::Left), row, column);
-    assert_ne!(handle_mouse(&mut session, release), Action::ChooseModel);
+    assert_ne!(
+        handle_mouse(&mut session, release),
+        Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+    );
     // The next click is an ordinary one again.
-    assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+    assert_eq!(
+        click(&mut session, row, column),
+        Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+    );
 }
 
 fn a_roster() -> Vec<bravebot_aichat::models::Model> {
@@ -461,7 +470,7 @@ fn the_model_picker_opened_mid_turn_takes_a_press_the_wheel_and_a_press_outside(
     press(&mut session, row, column, KeyModifiers::NONE);
     assert!(session.picking().is_none(), "the second press left it open");
     match session.take_pick() {
-        Some(Picked::Model(model)) => assert_eq!(model.display_name, "third-model"),
+        Some(Picked::Model(model, _)) => assert_eq!(model.display_name, "third-model"),
         other => panic!("the row taken was {other:?}"),
     }
 
@@ -498,7 +507,7 @@ fn enter_on_a_folded_section_leaves_the_model_picker_open() {
     session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
     assert!(session.picking().is_none(), "Enter left the picker open");
     match session.take_pick() {
-        Some(Picked::Model(model)) => assert_eq!(model.display_name, "first-model"),
+        Some(Picked::Model(model, _)) => assert_eq!(model.display_name, "first-model"),
         other => panic!("the row taken was {other:?}"),
     }
 }

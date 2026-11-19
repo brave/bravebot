@@ -16,7 +16,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/cost` | | Show what each turn of this session has spent |
 | `/context` | | Show what fills the context window, by category |
 | `/request` | | Show the last request sent to the model, and where each part of it came from |
-| `/model` | | Choose which model to think with |
+| `/model` | `[session]` | Choose which model to think with, for every session or, with `session`, for this one only |
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
 | `/variant` | `[name \| off]` | Pick a named set of options the model offers, list them, or drop the pick |
@@ -213,25 +213,32 @@ here rather than measured. What is written stays comparable across turns and acr
 what it is read for.
 :::
 
-## `/model`
+## `/model [session]`
 
 Opens a picker on the model in use. The list comes from the endpoint rather than a set compiled in, so
 it is whatever the backend offers today. Google Vertex AI, which has no listing to ask, is the
-exception: it is offered a short Gemini list built in. The choice is written to `~/.bravebot`, so it
-outlives the session and applies in every directory, except one whose own settings name a
+exception: it is offered a short Gemini list built in. The title and the first footer row say what
+Enter does. After `/model` it records the choice in `~/.bravebot`, so it outlives the session and
+applies in every directory, except one whose own settings name a
 [`model`](../customize/configuration.md#model): that key outranks the choice, and the one in your own
 `~/.bravebot/settings.json` does not.
+
+`/model session` opens the same picker in the other scope: Enter puts the model in force for this
+session only and records nothing, so the next session opens on the model it would have had. Tab in the
+picker switches between the two scopes. A pick made this way is marked `this session only` in the info
+panel. `/clear`, `/handoff` and `/branch` keep it. `/resume` opens another session, which opens on the
+recorded pick. It is the only word `/model` takes.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
 them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
-every turn uses that model, so `/model` opens no picker and says so.
+every turn uses that model, so `/model` and `/model session` open no picker and say so.
 
-`/model` takes no argument, so `/model foo` is a prompt, and the row under the box says so while its
-turn runs. A [prompt file](#prompt-files) whose front
-matter has a `model` key opens this picker with the cursor on that model, and leaves the file's text
-in the box.
+Any other word after `/model` makes the line a prompt, so `/model foo` is a prompt, and the row under
+the box says so while its turn runs. A [prompt file](#prompt-files) whose front
+matter has a `model` key opens the picker as `/model` does, with the cursor on that model, and leaves
+the file's text in the box.
 
 ## `/theme [name]`
 
@@ -1164,8 +1171,9 @@ Nothing is committed by the command itself.
 
 Nothing is drafted for a repository you have not trusted, for changes that show no file, or for a diff
 that holds what looks like a credential, and the line says which. Where a changed path is one nobody
-has vouched for, the message is still written but the box is left as it was and a note says the draft
-was not offered, since Enter would send a model's words about that path as a line you wrote. The
+has vouched for, nothing is sent to a model and no draft is written, the box is left as it was and a
+note says so, so no usage is charged. Enter on such a draft would have sent a model's words about that
+path as a line you wrote. The
 [trust](../security/trust.md) page says how to vouch for a path. A diff longer than one read takes is
 drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
 or the session's. Typed while a turn runs it waits for the turn to end.

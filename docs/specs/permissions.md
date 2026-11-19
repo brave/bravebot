@@ -346,6 +346,8 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_core::permissions::a_copy_for_a_checkout_folds_a_refusal_and_not_a_grant_where_the_volume_could_not_be_asked`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
 `verified-by: bravebot_agent::workspace::a_workspace_that_folds_inside_a_parent_that_does_not_folds_case`
+`verified-by: bravebot_agent::tools::tests::confinement::a_path_rule_follows_the_casefold_flag_of_the_workspace_and_not_of_its_parent`
+`verified-by: bravebot_cli::running::permissions_check_follows_the_casefold_flag_of_the_directory_and_not_of_its_parent`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::permissions::a_pattern_written_with_the_hosts_own_separator_is_the_same_rule`
 `verified-by: bravebot_core::permissions::a_command_rule_keeps_a_backslash_where_a_path_rule_would_not`
@@ -589,7 +591,14 @@ the rules cannot be matched against a spelling that is not the file's. A `run` r
 target, read or written, is held to the same refusal as a file tool's path, and the refusal is made
 again immediately before the run opens it, under the file the name lands on then and under each other
 name that file has, so a link or hard link an earlier part of the line left at the name is refused as
-the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A short name is
+the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A write by a file tool
+is checked again immediately before its bytes are released. What the destination lands on and the
+other names that file has are compared with what they were when the person was asked, and the write
+is refused when either differs, whichever rule would have covered the file it leads to now, since
+the answer given covered the file shown and not another. The deny rules are asked about the file
+the destination leads to then, under each other name that file has, as they are before the
+question. The refusal names the destination as the person was shown it and nothing is written; the
+person is not asked again. A short name is
 accepted only in the spelling of the open directory the target lands in, which names that one
 directory; in a target that reaches no open directory through an ancestor of its own it is refused
 wherever it appears.
@@ -610,7 +619,10 @@ workspace covers the workspace under its relative names too: with a session open
 `Read(~/**)`, `Read(~/)` and `Read(~/proj/)` refuse `secrets/canary.txt` as they refuse the full
 path of the file, and `Read(~/*/secrets/**)` refuses `secrets/canary.txt` and not a `secrets`
 nested under another directory. An ancestor's name is compared as written and in the canonical form
-of [PERM-7](#PERM-7)'s other names, and in the case the volume folds. A rule about a place that is
+of [PERM-7](#PERM-7)'s other names, and in the case the volume folds. Where the volume could not be
+asked, a `deny` or `ask` rule's ancestor is compared folded, as the rule itself is read
+([PERM-3](#PERM-3)), so `Read(//Volumes/**)` refuses `secrets/.env` in a workspace opened at
+`/Volumes/BravePoc`, and an `allow` rule is still compared byte for byte. A rule about a place that is
 neither the workspace, inside it nor above it is left as written. The rule stays one rule, and the name it
 reaches is covered at that place only, not wherever it appears as the written pattern may be
 ([PERM-4](#PERM-4)). An `allow` rule is matched as written, so a grant does not reach further than
@@ -743,6 +755,11 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_core::permissions::the_relative_name_of_a_rule_on_an_ancestor_is_covered_at_that_place_only`
 `verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_is_matched_in_the_case_the_volume_folds`
 `verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_is_matched_by_canonical_equivalence`
+`verified-by: bravebot_core::permissions::a_deny_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::an_ask_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::a_rule_on_an_ancestor_in_another_case_covers_the_workspace_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::an_allow_rule_on_an_ancestor_gains_no_relative_name_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_agent::permissions::a_rule_on_an_ancestor_covers_the_workspace_where_the_volume_could_not_be_asked`
 `verified-by: bravebot_core::permissions::a_restricting_path_rule_is_followed_from_the_segments_before_its_first_star`
 `verified-by: bravebot_core::permissions::a_landing_is_read_in_the_spelling_a_path_is_matched_in`
 `verified-by: bravebot_agent::workspace::names_windows_reads_as_something_else_are_refused_there_only`
@@ -769,6 +786,16 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::tools::tests::confinement::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
 `verified-by: bravebot_agent::tools::tests::confinement::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
 `verified-by: bravebot_agent::turn::a_reason_a_checkout_wrote_is_not_in_the_refusal_the_planner_is_given`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file`
+`verified-by: bravebot_agent::turn::a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_hard_link_put_in_place_while_the_question_was_open_leads_to_another_file`
+`verified-by: bravebot_agent::turn::a_picture_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::an_edit_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::a_download_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else

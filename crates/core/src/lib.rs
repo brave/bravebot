@@ -35,6 +35,7 @@ mod canonical;
 pub mod capability;
 pub mod colour_codes;
 pub mod command;
+mod compare;
 pub mod credentials;
 pub mod delegate;
 pub mod event;

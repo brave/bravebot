@@ -259,9 +259,16 @@ pub struct Output {
     pub ran_git_in: Vec<std::path::PathBuf>,
     /// What the call spent at the model, where it called one.
     ///
-    /// Zero for every tool but the processor. A turn that reported only its own rounds would
-    /// understate what it cost by however much its processors wrote.
+    /// Zero for every tool but a processor, an advisor, a delegate and a check over content nobody
+    /// vouched for. A turn that reported only its own rounds would understate what it cost by
+    /// however much those wrote.
     pub usage: Usage,
+    /// Whether [`Output::usage`] is what a check over content nobody vouched for cost.
+    ///
+    /// Set by the tool that made the check, whether or not the check was made, so it is never
+    /// decided from what the check said. The turn counts such usage in what it spent and leaves it
+    /// out of what a delegate's budget counts (DELEGATE-29).
+    pub usage_is_a_check: bool,
     /// When the call waited on the model, where it called one.
     ///
     /// Travels beside [`Output::usage`] and for the same reason. A processor is a request like any
@@ -1914,8 +1921,11 @@ struct Produced {
     /// saying "the model has read it" about a sentence the driver wrote to explain a refusal is
     /// true, useless, and read by the person as a claim about their file.
     content: bool,
-    /// What the tool spent at the model. Only a processor spends anything.
+    /// What the tool spent at the model. Only a processor, an advisor, a delegate and a check spend
+    /// anything.
     usage: Usage,
+    /// Whether `usage` is a check's, which a delegate's token budget does not count.
+    usage_is_a_check: bool,
     /// Retained so a parent can clip delegate requests to its own waits.
     inference_interval: Option<crate::timing::Interval>,
     /// Set where the check waited on could not be made, so no request completed.
@@ -2021,6 +2031,7 @@ impl Produced {
             task_list: None,
             content: false,
             usage: Usage::default(),
+            usage_is_a_check: false,
             inference_interval: None,
             unanswered: false,
             printed_by: None,
@@ -2271,6 +2282,15 @@ impl Produced {
 
     fn costing(mut self, usage: Usage) -> Self {
         self.usage = usage;
+        self
+    }
+
+    /// Say what a check over content nobody vouched for cost. Set by the tool whether or not the
+    /// check was made, so the turn adds it to what it spent and never to what a delegate's token
+    /// budget counts (DELEGATE-29).
+    fn checking(mut self, usage: Usage) -> Self {
+        self.usage = usage;
+        self.usage_is_a_check = true;
         self
     }
 
@@ -3551,6 +3571,7 @@ fn output_of(
         run_may_change_files: produced.run_may_change_files,
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
+        usage_is_a_check: produced.usage_is_a_check,
         inference_interval: produced.inference_interval,
         unanswered: produced.unanswered,
         printed_by: produced.printed_by,
@@ -4480,7 +4501,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // not the read that followed handed anything over.
     let priced = |produced: Produced| {
         produced
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered)
             .respelling(respelled)
@@ -5038,6 +5059,19 @@ fn refuse_denied_path<S: Sink>(
     path: &str,
 ) -> Result<(), String> {
     refuse_denied_path_as(policy, workspace, purpose, path, path)
+}
+
+/// Whether a `deny` rule refuses a write to `path` now: the walk every write tool makes before
+/// it asks the person, asked again by the workspace right before the bytes are released, so a link
+/// put at the destination while the question was open is judged by the file it leads to
+/// (PERM-7, TRUST-10). The refusal text is not used: the workspace words its own, about the name
+/// the person was shown.
+pub(crate) fn refuse_write_by_rules<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &str,
+) -> Result<(), String> {
+    refuse_denied_path(policy, workspace, Purpose::Effect, path)
 }
 
 /// Whether a `deny` rule refuses a read of `path`, asked exactly as a read tool asks it, for a
@@ -6617,7 +6651,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // and the question is put again for.
     let mut edited_by_person = false;
 
-    let (scanned, reviewed) = loop {
+    let (scanned, reviewed, reach) = loop {
         let body_label = body.label();
 
         // What this would leave in the tree, before it is put to anybody and before a byte of it is
@@ -6675,6 +6709,10 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         // below is drawn from it and so is the line the person is told afterwards, which is the
         // same comparison and so is made once.
         let landed = landing_of(workspace, &proposed_path);
+        // What the destination reaches as the question is drawn, which the write compares with
+        // what it reaches when the bytes are released. Taken before the questions below, so a link
+        // put in place between them and the write is not read as what was asked.
+        let reach = workspace.reach_of(&proposed_path);
         let reviewed = review_a_write(
             policy,
             "write_file",
@@ -6767,7 +6805,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             }
             standing.keep(policy, answer);
         }
-        break (scanned, reviewed);
+        break (scanned, reviewed, reach);
     };
     // Read once the loop is done, since an edit replaced the body and its label with the person's.
     let body_label = body.label();
@@ -6776,7 +6814,13 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // this exact value. Issued for the path the question named, which an edit does not change.
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
-    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_at)) {
+    match workspace.write_endorsed_at_revision(
+        policy,
+        &path,
+        &body,
+        Some(approved_at),
+        Some(&reach),
+    ) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -6887,6 +6931,9 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         )
     });
     let intent = Intent::of_a_write(replaces);
+    // What the destination reaches as the question is drawn, which the write compares with what it
+    // reaches when the bytes are released.
+    let reach = workspace.reach_of(&proposed_path);
 
     // How many bytes the file will hold, counted where the URI is turned back into them and shown
     // to the person who is asked. A count, as a reference's byte count is.
@@ -6944,6 +6991,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         &path,
         label,
         Some(approved_at),
+        Some(&reach),
         |file, proof| {
             use std::io::Write;
             // No detail of why it did not decode: the error would name a byte of the URI.
@@ -7803,6 +7851,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // and inside the kernel. The pre-image is the labelled value the read produced rather than
     // the copy released to locate the passage in.
     let landed = landing_of(workspace, &proposed_path);
+    let reach = workspace.reach_of(&proposed_path);
     let reviewed = review_a_write(
         policy,
         "edit_file",
@@ -7868,7 +7917,14 @@ fn edit_file<S: Sink, C: Confirmer>(
     let occurrences = replaced.occurrences;
     // The path as the planner gave it, not the copy promoted above for the read. A write routed
     // on a promoted value would be routed by the model's own proposal.
-    match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current, read_at) {
+    match workspace.write_endorsed_if_unchanged_reaching(
+        policy,
+        &proposed,
+        &body,
+        &current,
+        read_at,
+        Some(&reach),
+    ) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -8607,12 +8663,12 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
                 released_note(format!("{lines}, read"), endorsed),
             )
             .of_content()
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered)
         }
         Err(refused) => (*refused)
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered),
     }
@@ -8868,7 +8924,7 @@ fn check_stopped(subject: impl std::fmt::Display, stopped: &crate::vet::Stopped)
         "stopped: the turn was stopped before the check on {subject} finished, so nothing was \
          decided about it. {subject} was not refused and can be asked for again."
     ))
-    .costing(stopped.usage);
+    .checking(stopped.usage);
     produced.cancelled = Some(crate::outcome::Cancellation {
         attempts: stopped.attempts,
     });
@@ -9556,11 +9612,11 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             tools.beside,
         ) {
             Ok((text, counted, endorsed)) => vetted_text(&slot, text, counted, endorsed)
-                .costing(spent)
+                .checking(spent)
                 .waiting(waited)
                 .unanswered(unanswered),
             Err(refusal) => (*refusal)
-                .costing(spent)
+                .checking(spent)
                 .waiting(waited)
                 .unanswered(unanswered),
         };
@@ -9624,7 +9680,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                         ),
                         detail,
                     )
-                    .costing(spent)
+                    .checking(spent)
                     .waiting(waited)
                     .unanswered(unanswered);
                 }
@@ -9683,7 +9739,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 pass_to_a_processor(tools.beside, &slot)
             );
             return kept_back(mode, tools.auto_vetting, text)
-                .costing(spent)
+                .checking(spent)
                 .waiting(waited)
                 .unanswered(unanswered);
         }
@@ -9711,7 +9767,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 released_note(format!("{kind}, attached"), endorsed),
             )
             .attaching(attached)
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered)
         }
@@ -13222,6 +13278,9 @@ fn download_url<S: Sink, C: Confirmer>(
         )
     });
     let intent = Intent::of_a_write(replaces);
+    // What the destination reaches as the question is drawn, which the write compares with what it
+    // reaches when the bytes are released.
+    let reach = workspace.reach_of(&proposed_path);
 
     // Always put to the person, whatever the trust map would have said about the path: the bytes
     // are nobody's and the file is somebody's, so the pair is the one thing they can answer for.
@@ -13297,6 +13356,7 @@ fn download_url<S: Sink, C: Confirmer>(
         &path,
         label,
         Some(approved_at),
+        Some(&reach),
         |file, proof| {
             use std::io::Write;
             loop {
@@ -15130,7 +15190,9 @@ fn propose_plan<S: Sink, C: Confirmer>(
     let outcome = match approval(answers.first()) {
         Approval::LeaveFor(mode) => {
             // Applies to the rest of this turn, as any change of mode does (MODE-8).
-            tools.permission_mode.set(mode);
+            tools
+                .permission_mode
+                .set_by(mode, crate::ModeCause::PlanApproval);
             "The user approved the plan and plan mode has ended. Carry the plan out now."
         }
         Approval::KeepPlanning => {

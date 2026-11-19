@@ -8,6 +8,8 @@
  * model service on 127.0.0.1, and runs the host with the relay as its client in an environment
  * that holds only what the stub needs. Nothing reads or writes a real home, credential or session.
  * The host's standard input is this terminal, so `launch relay` and `quit` work as they do for the host.
+ * Before it starts the relay, the host asks here whether to trust the workspace. A yes is kept in the
+ * scratch home, and the phone is then not asked about trust there; a no leaves the phone to answer.
  * The scratch directory is removed when the host stops.
  *
  * The stub answers by the plan named in a prompt: `plan:hello` replies, and `plan:write` asks to

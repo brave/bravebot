@@ -5005,6 +5005,242 @@ fn a_write_whose_directory_leaves_the_workspace_while_asked_is_refused_at_the_wr
     );
 }
 
+/// Writes `notes/out.txt` while the confirmer, inside the question, replaces that name with a link
+/// to `target` (relative to `notes`) and approves, or leaves the name as it is where `target` is
+/// `None`. The rules are the given `deny` and `ask` lists. Returns what the planner was told.
+#[cfg(unix)]
+fn write_through_a_link_put_in_place_while_asked(
+    scratch: &Scratch,
+    target: Option<&'static str>,
+    deny: &[&str],
+    ask: &[&str],
+) -> String {
+    let named = scratch.path.join("notes/out.txt");
+    write_notes_out_while_the_question_is_open(
+        scratch,
+        move || {
+            if let Some(target) = target {
+                std::os::unix::fs::symlink(target, &named).unwrap();
+            }
+        },
+        deny,
+        ask,
+    )
+}
+
+/// Writes `notes/out.txt` while the confirmer runs `change` inside the question and approves. The
+/// rules are the given `deny` and `ask` lists. Returns what the planner was told.
+#[cfg(unix)]
+fn write_notes_out_while_the_question_is_open(
+    scratch: &Scratch,
+    change: impl FnMut() + Send + 'static,
+    deny: &[&str],
+    ask: &[&str],
+) -> String {
+    std::fs::create_dir_all(scratch.path.join("notes")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"notes/out.txt","contents":"approved bytes\n"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(change),
+    };
+    let task = Task::new("write notes/out.txt").with_permissions(rules(deny, ask, &[]));
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    message_from(
+        &received.recv().expect("second request"),
+        "Result of write_file",
+    )
+    .to_string()
+}
+
+/// PERM-7, TRUST-10 (#4387): the rules are asked about the file a write opens and not only about
+/// the name the person was shown. A link put at the destination while the question was open leads
+/// to a file an `Edit` deny rule covers, and the approved bytes replaced it.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file()
+{
+    let scratch = Scratch::new("write-link-to-denied-while-asked");
+    std::fs::write(scratch.path.join("secret.txt"), "marker\n").unwrap();
+
+    let told = write_through_a_link_put_in_place_while_asked(
+        &scratch,
+        Some("../secret.txt"),
+        &["Edit(secret.txt)"],
+        &[],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("secret.txt")).unwrap(),
+        "marker\n",
+        "the write followed the link to a file a deny rule covers; the planner was told: {told}"
+    );
+    assert!(!told.contains("created"), "{told}");
+}
+
+/// The same swap where the file the link leads to is on the protected list (PERM-9), which no rule
+/// names and the deny walk does not read.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file()
+ {
+    let scratch = Scratch::new("write-link-to-protected-while-asked");
+    std::fs::create_dir(scratch.path.join(".husky")).unwrap();
+    std::fs::write(scratch.path.join(".husky/pre-commit"), "marker\n").unwrap();
+
+    let told = write_through_a_link_put_in_place_while_asked(
+        &scratch,
+        Some("../.husky/pre-commit"),
+        &[],
+        &[],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".husky/pre-commit")).unwrap(),
+        "marker\n",
+        "the write followed the link to a protected file; the planner was told: {told}"
+    );
+    assert!(!told.contains("created"), "{told}");
+}
+
+/// The controls for the tests above: with nothing put in place while the question is open, a
+/// create and a replace land, including when the person was shown a link to an allowed file as
+/// the landing. A refusal on any change of reach alone would also refuse these if the reach were
+/// read differently at the two moments.
+#[cfg(unix)]
+#[test]
+fn a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open() {
+    // A create: the destination does not exist when asked, and the write makes it.
+    let created = Scratch::new("write-create-no-swap");
+    let told = write_through_a_link_put_in_place_while_asked(&created, None, &[], &[]);
+    assert_eq!(
+        std::fs::read_to_string(created.path.join("notes/out.txt")).unwrap(),
+        "approved bytes\n",
+        "{told}"
+    );
+
+    // A replace: the file exists and is replaced in place.
+    let replaced = Scratch::new("write-replace-no-swap");
+    std::fs::create_dir(replaced.path.join("notes")).unwrap();
+    std::fs::write(replaced.path.join("notes/out.txt"), "old\n").unwrap();
+    let told = write_through_a_link_put_in_place_while_asked(&replaced, None, &[], &[]);
+    assert_eq!(
+        std::fs::read_to_string(replaced.path.join("notes/out.txt")).unwrap(),
+        "approved bytes\n",
+        "{told}"
+    );
+
+    // A link the person was shown as the landing: it was there when asked, so it is the file
+    // approved, and the write goes through it.
+    let linked = Scratch::new("write-through-shown-link");
+    std::fs::create_dir(linked.path.join("notes")).unwrap();
+    std::fs::write(linked.path.join("allowed.txt"), "old\n").unwrap();
+    std::os::unix::fs::symlink("../allowed.txt", linked.path.join("notes/out.txt")).unwrap();
+    let told = write_through_a_link_put_in_place_while_asked(&linked, None, &[], &[]);
+    assert_eq!(
+        std::fs::read_to_string(linked.path.join("allowed.txt")).unwrap(),
+        "approved bytes\n",
+        "{told}"
+    );
+}
+
+/// A link put at the destination while the question was open leads to a file no rule covers. The
+/// person was asked about a different file, so the write is refused too.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file()
+ {
+    let scratch = Scratch::new("write-link-to-allowed-while-asked");
+    std::fs::write(scratch.path.join("allowed.txt"), "old\n").unwrap();
+
+    let told =
+        write_through_a_link_put_in_place_while_asked(&scratch, Some("../allowed.txt"), &[], &[]);
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("allowed.txt")).unwrap(),
+        "old\n",
+        "the write followed a link the person was not shown; the planner was told: {told}"
+    );
+}
+
+/// PERM-7, TRUST-10 (#4387): the person approved the file the destination led to when they were
+/// asked. A link put at the destination while the question was open leads to a file an `Edit` ask
+/// rule covers, which the question did not name, and the approved bytes replaced it. No rule
+/// denies that file, so the deny walk alone lets the write through.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers()
+ {
+    let scratch = Scratch::new("write-link-to-asked-while-asked");
+    std::fs::write(scratch.path.join("careful.txt"), "marker\n").unwrap();
+
+    let told = write_through_a_link_put_in_place_while_asked(
+        &scratch,
+        Some("../careful.txt"),
+        &[],
+        &["Edit(careful.txt)"],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("careful.txt")).unwrap(),
+        "marker\n",
+        "the write followed the link to a file an ask rule covers; the planner was told: {told}"
+    );
+    assert!(!told.contains("created"), "{told}");
+}
+
+/// PERM-7, TRUST-10 (#4387): a hard link to another file put at the destination while the question
+/// was open lands where the name did, since a hard link has no target to follow, so only the other
+/// names of the file tell that the person was asked about a different one. The write is refused and
+/// the other file keeps its bytes. Rejects a comparison of what the destination lands on alone.
+#[cfg(unix)]
+#[test]
+fn a_write_is_refused_when_a_hard_link_put_in_place_while_the_question_was_open_leads_to_another_file()
+ {
+    let scratch = Scratch::new("write-hard-link-while-asked");
+    std::fs::create_dir(scratch.path.join("notes")).unwrap();
+    std::fs::write(scratch.path.join("notes/out.txt"), "old\n").unwrap();
+    std::fs::write(scratch.path.join("other.txt"), "marker\n").unwrap();
+
+    let named = scratch.path.join("notes/out.txt");
+    let other = scratch.path.join("other.txt");
+    let told = write_notes_out_while_the_question_is_open(
+        &scratch,
+        move || {
+            std::fs::remove_file(&named).unwrap();
+            std::fs::hard_link(&other, &named).unwrap();
+        },
+        &[],
+        &[],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("other.txt")).unwrap(),
+        "marker\n",
+        "the write went through a hard link the person was not shown; the planner was told: {told}"
+    );
+    assert!(told.contains(REDIRECTED), "{told}");
+}
+
 /// The write appears in the trail as a granted action, so an audit shows a person
 /// authorised it.
 #[test]
@@ -6317,6 +6553,215 @@ fn a_turn_records_the_mode_it_began_with() {
             [format!("the turn began in {} mode", mode.name())],
             "{mode:?}: the trail did not name the mode the turn began in exactly once"
         );
+    }
+}
+
+/// The details of the entries a trail holds under the three mode gates, in the order written.
+fn mode_entries(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "permission_mode" | "permission_mode_opened" | "permission_mode_changed",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// TRACE-12: the mode a session opened in is written once, by the first turn, with what chose it,
+/// ahead of the line naming the mode that turn began in. A second turn of the same sitting does not
+/// repeat it.
+#[test]
+fn a_session_records_the_mode_it_opened_in() {
+    use bravebot_agent::{LiveMode, ModeCause, PermissionMode};
+    let scratch = Scratch::new("records-the-opening-mode");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![reply_with("one"), reply_with("two")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    let live = LiveMode::new(PermissionMode::Auto).opened_by(ModeCause::Flag);
+    let task = Task::new("what is 2 + 2?").with_permission_mode(live.clone());
+    let mut sink = RecordingSink::new();
+    for _ in 0..2 {
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::Unattended,
+            &mut sink,
+        )
+        .expect("turn runs");
+    }
+
+    assert_eq!(
+        mode_entries(&sink),
+        [
+            "the session opened in auto mode by a command-line flag",
+            "the turn began in auto mode",
+            "the turn began in auto mode",
+        ]
+    );
+}
+
+/// TRACE-12: a change made between two turns is written by the next one, with the mode before it
+/// and what caused it, ahead of the line naming the mode that turn began in.
+#[test]
+fn a_change_of_mode_between_turns_is_recorded() {
+    use bravebot_agent::{LiveMode, ModeCause, PermissionMode};
+    let scratch = Scratch::new("records-a-change-between-turns");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![reply_with("one"), reply_with("two")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    let live = LiveMode::new(PermissionMode::Ask);
+    let task = Task::new("what is 2 + 2?").with_permission_mode(live.clone());
+    let mut sink = RecordingSink::new();
+    let run = |sink: &mut RecordingSink| {
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::Unattended,
+            sink,
+        )
+        .expect("turn runs");
+    };
+    run(&mut sink);
+    live.set_by(PermissionMode::Plan, ModeCause::Command);
+    // Setting the mode it is already in is not a change.
+    live.set_by(PermissionMode::Plan, ModeCause::Key);
+    run(&mut sink);
+
+    assert_eq!(
+        mode_entries(&sink),
+        [
+            "the session opened in ask mode by default",
+            "the turn began in ask mode",
+            "the permission mode changed from ask to plan by the /plan command",
+            "the turn began in plan mode",
+        ]
+    );
+}
+
+/// TRACE-12: a mode chosen while a turn runs is written once and in order, between the line naming
+/// the mode the turn began in and the refusal the new mode causes.
+#[test]
+fn a_change_of_mode_during_a_turn_is_recorded_once_and_in_order() {
+    use bravebot_agent::PermissionMode;
+    let scratch = Scratch::new("records-a-change-during-a-turn");
+    std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"second"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let live = bravebot_agent::LiveMode::new(PermissionMode::Ask);
+    let task = Task::new("rewrite the notes").with_permission_mode(live.clone());
+    let mut recording =
+        RecordingConfirmer::approving_while_the_mode_changes(&live, PermissionMode::Plan);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let order: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "permission_mode" | "permission_mode_opened" | "permission_mode_changed",
+                detail,
+            } => Some(detail.clone()),
+            Event::GateBlocked {
+                gate: "permission_mode",
+                ..
+            } => Some("refused".to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "the session opened in ask mode by default",
+            "the turn began in ask mode",
+            "the permission mode changed from ask to plan without a cause being given",
+            "refused",
+        ]
+    );
+}
+
+/// TRACE-12: approving a plan the planner proposed ends plan mode, and the trail words the change as
+/// `by approving a plan` for each mode the choice names. A plan that is not approved changes nothing
+/// and writes no change. The faults it rejects are `propose_plan` giving another cause (the key's or
+/// the command's, or none), and a change written for a plan the person declined.
+#[test]
+fn approving_a_plan_is_recorded_as_the_cause_of_leaving_plan_mode() {
+    use bravebot_agent::{LiveMode, PermissionMode};
+    use bravebot_core::ask::Answer;
+    let rows: [(Answer, Option<&str>); 3] = [
+        (
+            Answer::Chosen(vec![0]),
+            Some("the permission mode changed from plan to accept-edits by approving a plan"),
+        ),
+        (
+            Answer::Chosen(vec![1]),
+            Some("the permission mode changed from plan to ask by approving a plan"),
+        ),
+        (Answer::Declined, None),
+    ];
+    for (at, (reply, change)) in rows.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("records-plan-approval-{at}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2("propose_plan", r#"{"plan":"1. edit a.rs"}"#),
+            reply_with("understood"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let live = LiveMode::new(PermissionMode::Plan);
+        let task = Task::new("plan the work").with_permission_mode(live.clone());
+        let mut person = AnswersWith::new(vec![reply]);
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        assert_eq!(
+            person.asked.len(),
+            1,
+            "{at}: the plan was not put to the person"
+        );
+
+        let mut expected = vec![
+            "the session opened in plan mode by default",
+            "the turn began in plan mode",
+        ];
+        expected.extend(change);
+        assert_eq!(mode_entries(&sink), expected, "{at}");
     }
 }
 
@@ -11320,6 +11765,191 @@ fn a_run_that_started_while_an_edit_was_being_asked_voids_the_yes() {
 fn an_edit_is_made_when_no_run_started_while_it_was_being_asked() {
     let (kept, told) = edit_while_a_program_starts(false);
     assert_eq!(kept, "replaced\n", "the approved edit did not land");
+    assert!(!told.contains("may have changed"), "{told}");
+}
+
+/// What the planner is told when a write is refused because its destination leads to a different
+/// file than it did when the person was asked (TRUST-10).
+#[cfg(unix)]
+const REDIRECTED: &str = "leads to a different file than it did when the user was asked about it";
+
+/// TRUST-10 (#4387) for a picture written by reference: the name the person was asked about is
+/// replaced by a link to another file while the question is open, and the approved bytes would
+/// land in that file. Returns what the other file holds afterwards and what the planner was told.
+#[cfg(unix)]
+fn picture_write_while_a_link_is_put_in_place() -> (Vec<u8>, String) {
+    let scratch = Scratch::new("picture-link-while-asked");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    std::fs::write(scratch.path.join("copy.png"), b"original").unwrap();
+    std::fs::write(scratch.path.join("other.png"), b"other").unwrap();
+    let named = scratch.path.join("copy.png");
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            std::fs::remove_file(&named).unwrap();
+            std::os::unix::fs::symlink("other.png", &named).unwrap();
+        }),
+    };
+    let task = Task::new("keep a copy of the screenshot");
+
+    let (bodies, _sink) = a_turn_that_reads_a_picture_for(
+        &scratch,
+        &task,
+        bravebot_core::trust::TrustStore::new("/work"),
+        "shot.png",
+        vec![tool_request(
+            "write_file",
+            r#"{"path":"copy.png","contents_ref":"ref:1"}"#,
+        )],
+        &mut confirmer,
+    );
+    (
+        std::fs::read(scratch.path.join("other.png")).unwrap(),
+        bodies.last().expect("the planner was told").clone(),
+    )
+}
+
+/// A link put at the destination of a picture write while the question was open is refused at the
+/// write, and the file it leads to keeps its bytes. Rejects a picture write that passes no reach
+/// to the write, since the picture is written by a rename and the typed name alone would look
+/// unchanged.
+#[cfg(unix)]
+#[test]
+fn a_picture_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere()
+{
+    let (other, told) = picture_write_while_a_link_is_put_in_place();
+    assert_eq!(
+        other, b"other",
+        "the write reached the file the link led to"
+    );
+    assert!(told.contains(REDIRECTED), "{told}");
+}
+
+/// TRUST-10 (#4387) for a download. Returns what the other file holds afterwards, what the planner
+/// was told and the names left in the directory.
+#[cfg(unix)]
+fn download_while_a_link_is_put_in_place() -> (Vec<u8>, String, Vec<String>) {
+    let scratch = Scratch::new("download-link-while-asked");
+    std::fs::write(scratch.path.join("data.bin"), b"original").unwrap();
+    std::fs::write(scratch.path.join("other.bin"), b"other").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, _count) = serve_raw(raw_reply("application/octet-stream", b"new"));
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "download_url",
+            &format!(r#"{{"url":"{site}/data","path":"data.bin"}}"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let named = scratch.path.join("data.bin");
+    let mut confirmer = ApprovesFetchesAndWrites {
+        on_write: Some(Box::new(move || {
+            std::fs::remove_file(&named).unwrap();
+            std::os::unix::fs::symlink("other.bin", &named).unwrap();
+        })),
+        ..Default::default()
+    };
+    let task = Task::new("refresh the data");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read(scratch.path.join("other.bin")).unwrap(),
+        told,
+        names_in(&scratch.path),
+    )
+}
+
+/// A link put at the destination of a download while the question was open is refused when the
+/// body is about to be released, the file it leads to keeps its bytes and no staging file is left.
+#[cfg(unix)]
+#[test]
+fn a_download_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere() {
+    let (other, told, names) = download_while_a_link_is_put_in_place();
+    assert_eq!(
+        other, b"other",
+        "the download reached the file the link led to"
+    );
+    assert!(told.contains(REDIRECTED), "{told}");
+    assert_eq!(
+        names,
+        ["data.bin", "other.bin"],
+        "a staging file was left behind"
+    );
+}
+
+/// TRUST-10 (#4387) for an edit. The name is replaced while the question is open by a link to a
+/// file with the same bytes, so the edit is not stale: its content and stamp comparisons pass, and
+/// only the comparison of what the destination reaches can refuse it. Returns what the other file
+/// holds afterwards and what the planner was told.
+#[cfg(unix)]
+fn edit_while_a_link_is_put_in_place() -> (String, String) {
+    let scratch = Scratch::new("edit-link-while-asked");
+    std::fs::write(scratch.path.join("a.txt"), "original\n").unwrap();
+    std::fs::write(scratch.path.join("other.txt"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"original","new_text":"replaced"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let named = scratch.path.join("a.txt");
+    let mut confirmer = ChangesTheFileWhenAsked {
+        change: Box::new(move || {
+            std::fs::remove_file(&named).unwrap();
+            std::os::unix::fs::symlink("other.txt", &named).unwrap();
+        }),
+    };
+    let task = Task::new("edit a.txt").with_permissions(rules(&[], &["Edit(a.txt)"], &[]));
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().unwrap();
+    let told = received.recv().unwrap();
+    (
+        std::fs::read_to_string(scratch.path.join("other.txt")).unwrap(),
+        told,
+    )
+}
+
+/// A link put at the file of an edit while the question was open, to a file holding the same
+/// bytes, is refused as a redirect and not as a stale edit, and the file it leads to is not edited.
+#[cfg(unix)]
+#[test]
+fn an_edit_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere() {
+    let (other, told) = edit_while_a_link_is_put_in_place();
+    assert_eq!(
+        other, "original\n",
+        "the edit reached the file the link led to"
+    );
+    assert!(told.contains(REDIRECTED), "{told}");
     assert!(!told.contains("may have changed"), "{told}");
 }
 
@@ -29413,6 +30043,233 @@ fn a_chosen_variant_is_merged_into_the_planners_request() {
         !sent[1].contains("textVerbosity"),
         "a variant nobody chose was requested: {}",
         sent[1]
+    );
+}
+
+/// The keys a gateway model's `options` state to hand a request a tool list, which no request that
+/// offers none may carry and no request that offers some may have replaced.
+const OPTION_TOOL_KEYS: [&str; 5] = [
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "parallel_tool_calls",
+];
+
+/// `config` with a provider `gw` whose model `a-model` states, in its own `options`, every key of
+/// [`OPTION_TOOL_KEYS`] and a tool the service would run, and whose endpoint is `endpoint`. A
+/// request sent to `gw/a-model` goes through the gateway client, which merges those options into
+/// the body, where `config_for`'s endpoint merges none.
+fn with_a_gateway_whose_model_states_tools(mut config: Config, endpoint: &str) -> Config {
+    let root = serde_json::json!({"provider": {"gw": {
+        "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+        "models": {"a-model": {"options": {
+            "tools": [{"type": "function", "function": {
+                "name": "OPTION-SUPPLIED-TOOL",
+                "parameters": {"type": "object"}
+            }}],
+            "tool_choice": "required",
+            "functions": [{"name": "OPTION-SUPPLIED-FUNCTION"}],
+            "function_call": "auto",
+            "parallel_tool_calls": true,
+            "top_k": 7
+        }}}
+    }}});
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    config
+}
+
+/// What a request with no tool list of its own may not hold, whichever of the five keys a model's
+/// options named.
+fn assert_no_tool_keys(request: &serde_json::Value, who: &str) {
+    for key in OPTION_TOOL_KEYS {
+        assert!(
+            request.get(key).is_none(),
+            "{who}'s request carried `{key}` from the model's options: {request}"
+        );
+    }
+    assert!(
+        !request.to_string().contains("OPTION-SUPPLIED"),
+        "{who}'s request carried a tool its model's options named: {request}"
+    );
+    assert_eq!(
+        request["top_k"],
+        serde_json::json!(7),
+        "{who}'s request lost an option that names no tool, so the options were dropped whole: {request}"
+    );
+}
+
+/// PROC-1 and BACKEND-15 at the request that goes out through a gateway: a processor is sent with
+/// no tool list even when its model's `options` state one, while the planner's own rounds keep the
+/// tools the turn built and gain none of the option's. The regression it rejects is a gateway
+/// client that adds every option key the body lacks, which gives a request built with no tools the
+/// tool list a service would run on quarantined text. `config_for` merges no options, so the test
+/// of the processor's request beside this one cannot see it.
+#[test]
+fn a_processors_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("processor-gateway-options");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"PROCESSOR-INSTRUCTION"}"#,
+        ),
+        processor_reply("REWRITTEN"),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = with_a_gateway_whose_model_states_tools(config_for(&endpoint), &endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config").with_model(Some("gw/a-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<serde_json::Value> = received
+        .try_iter()
+        .map(|body| serde_json::from_str(&body).expect("a JSON request"))
+        .collect();
+    let (processors, others): (Vec<_>, Vec<_>) = bodies.iter().partition(|body| {
+        body["messages"][0]
+            .to_string()
+            .contains("You are an isolated processor")
+    });
+    assert_eq!(processors.len(), 1, "the processor is asked once");
+    assert_no_tool_keys(processors[0], "the processor");
+
+    // The check that runs before the planner's write is a request with no tools of its own, so it
+    // is held to the same rule and the rest are the planner's rounds.
+    let (checks, planners): (Vec<_>, Vec<_>) = others
+        .into_iter()
+        .partition(|body| is_a_side_request(&body.to_string()));
+    for check in checks {
+        assert_no_tool_keys(check, "a check");
+    }
+    assert!(!planners.is_empty(), "the planner was never asked");
+    for planner in planners {
+        let names: Vec<&str> = planner["tools"]
+            .as_array()
+            .expect("the planner's request carries the turn's tools")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"read_file") && names.contains(&"spawn_processor"),
+            "the planner's own tools did not reach the wire: {names:?}"
+        );
+        assert!(
+            !planner.to_string().contains("OPTION-SUPPLIED"),
+            "an option replaced or joined the planner's tools: {planner}"
+        );
+        assert_eq!(
+            planner["top_k"],
+            serde_json::json!(7),
+            "the planner's request lost an option that names no tool: {planner}"
+        );
+    }
+}
+
+/// CHECK-1 and BACKEND-15 at the request that goes out through a gateway: a check, whose content
+/// is quarantined, is sent with no tool list even when its model's `options` state one. The
+/// regression it rejects is the same as the processor's: a gateway client that adds each option key
+/// the body lacks.
+#[test]
+fn a_checks_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("vet-gateway-options");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = with_a_gateway_whose_model_states_tools(config_for(&endpoint), &endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find the path").with_model(Some("gw/a-model".to_string())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut ShownAfterAVet::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_no_tool_keys(&the_check_sent(&sent), "the check");
+}
+
+/// COMPACT-2 and BACKEND-15 at the request that goes out through a gateway: the summariser is
+/// sent with no tool list even when its model's `options` state one, and the planner's round after
+/// it keeps the tools the turn built.
+#[test]
+fn the_summarisers_request_through_a_gateway_carries_no_tool_list_its_models_options_state() {
+    let scratch = Scratch::new("compact-gateway-options");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("a summary"), reply_with("done")]);
+    let config =
+        with_a_gateway_whose_model_states_tools(config_with_budget(&endpoint, 1_000), &endpoint);
+    let mut conversation = a_long_conversation();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("finish it").with_model(Some("gw/a-model".to_string())),
+    )
+    .expect("turn runs");
+
+    let summarising: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("the summariser's request"))
+            .expect("a JSON request");
+    assert!(
+        summarising.to_string().contains(A_SUMMARY_ASKING),
+        "the first request was not the summariser's: {summarising}"
+    );
+    assert_no_tool_keys(&summarising, "the summariser");
+
+    let planning: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("the planner's request"))
+            .expect("a JSON request");
+    assert!(
+        planning["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+            && !planning.to_string().contains("OPTION-SUPPLIED"),
+        "the planner's tools were lost or replaced by the option's: {planning}"
     );
 }
 
@@ -76817,9 +77674,21 @@ mod usage {
 
         fn with_confirmer<C: bravebot_agent::Confirmer + Send + 'static>(
             name: &str,
+            conversation: bravebot_agent::Conversation,
+            compact: bool,
+            confirmer: C,
+        ) -> Self {
+            Self::with_vetting(name, conversation, compact, confirmer, false)
+        }
+
+        /// As [`Self::with_confirmer`], with auto-vetting as given. A delegate inherits it, and a
+        /// `run` that asks to read its output is only checked where it is on.
+        fn with_vetting<C: bravebot_agent::Confirmer + Send + 'static>(
+            name: &str,
             mut conversation: bravebot_agent::Conversation,
             compact: bool,
             mut confirmer: C,
+            auto_vetting: bool,
         ) -> Self {
             let scratch = Scratch::new(name);
             std::fs::write(scratch.path.join("input.txt"), "private input").unwrap();
@@ -76843,7 +77712,7 @@ mod usage {
                     &config,
                     &bravebot_net::Egress::new(),
                     &workspace,
-                    &Task::new("PARENT-TASK: inspect input.txt"),
+                    &Task::new("PARENT-TASK: inspect input.txt").with_auto_vetting(auto_vetting),
                     &mut conversation,
                     &mut confirmer,
                     &mut reporter,
@@ -78146,6 +79015,311 @@ mod usage {
             timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
             "overlapping categories: {timing:?}"
         );
+    }
+
+    fn silent(content: &str) -> String {
+        reply_with_usage(content, 0, 0)
+    }
+
+    fn silent_call(tool: &str, arguments: &str) -> String {
+        tool_request_with_usage(tool, arguments, 0, 0)
+    }
+
+    /// The check's reply, stating that it wrote `completion` tokens.
+    fn a_check_that_wrote(completion: u64) -> String {
+        reply_with_usage(
+            r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+            0,
+            completion,
+        )
+    }
+
+    /// Run a delegate of `kind` bounded to `budget` tokens through `calls`, the last of which
+    /// makes a check that is answered with `completion` tokens, and return the delegate's request
+    /// after that check with the parent's outcome. Every planner reply states no tokens, so the
+    /// only spend in the turn is the check's.
+    fn after_a_check(
+        name: &str,
+        kind: &str,
+        budget: u64,
+        calls: &[(&str, &str)],
+        completion: u64,
+    ) -> (String, turn::Outcome) {
+        after_a_check_with(name, kind, budget, calls, completion, false)
+    }
+
+    /// As [`after_a_check`], in a turn whose auto-vetting is `auto_vetting`, which a delegate
+    /// inherits.
+    fn after_a_check_with(
+        name: &str,
+        kind: &str,
+        budget: u64,
+        calls: &[(&str, &str)],
+        completion: u64,
+        auto_vetting: bool,
+    ) -> (String, turn::Outcome) {
+        let run = Run::with_vetting(
+            name,
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+            auto_vetting,
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            &format!(r#"{{"kind":"{kind}","task":"CHILD-TASK","budget":{budget}}}"#),
+        ));
+        let (parent, mut child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        for (tool, arguments) in calls {
+            child.answer(&silent_call(tool, arguments));
+            child = run.request();
+        }
+        assert!(
+            child.body.contains(A_CHECK_ASKING),
+            "expected the check, got: {}",
+            child.body
+        );
+        child.answer(&a_check_that_wrote(completion));
+        let next = run.request();
+        let body = next.body.clone();
+        next.answer(&silent("child done"));
+        run.request().answer(&silent("done"));
+        (body, run.finish().expect("the turn ends"))
+    }
+
+    /// DELEGATE-29: the check a released command output makes is the turn's spend and not part of
+    /// the figure a delegate's budget is compared with. What the check wrote depends on the
+    /// content it read, which the delegate cannot, so it must not decide what the delegate is told
+    /// or when it loses its tools.
+    ///
+    /// Rejects: a delegate's token figure that includes its checks, which here is 9000 of 10000
+    /// and brings the warning, and a figure with the check's tokens taken out of the turn's spend
+    /// as well.
+    #[test]
+    fn a_checks_tokens_do_not_warn_a_delegate_that_read_its_command_output() {
+        let (next, outcome) = after_a_check(
+            "delegate-check-read-output",
+            "checker",
+            10_000,
+            &[
+                ("run", r#"{"command":"sed -n p vet.txt"}"#),
+                ("read_output", r#"{"ref":"ref:1"}"#),
+            ],
+            9_000,
+        );
+        assert!(
+            !next.contains("You have spent 9000 of your 10000 tokens."),
+            "a check's tokens set the figure the delegate was told: {next}"
+        );
+        assert!(carried_tools(&next), "a check removed the delegate's tools");
+        assert_eq!(
+            outcome.tokens, 9_000,
+            "the check's tokens were left out of the turn's spend"
+        );
+        assert_eq!(
+            outcome.budgeted_tokens, 0,
+            "the check's tokens reached a figure a budget is compared with"
+        );
+    }
+
+    /// DELEGATE-29: the check a read of an unvouched file makes does not take a delegate's tools
+    /// away, however much it wrote.
+    ///
+    /// Rejects: a check that is counted against the budget, here 1000 of 1000, which removes the
+    /// tools and says the budget is spent.
+    #[test]
+    fn a_checks_tokens_do_not_end_a_delegate_that_read_an_unvouched_file() {
+        let (next, outcome) = after_a_check(
+            "delegate-check-read-file",
+            "reader",
+            1_000,
+            &[("read_file", r#"{"path":"vet.txt"}"#)],
+            1_000,
+        );
+        assert!(
+            !next.contains("You have spent your budget of 1000"),
+            "a check's tokens ended the delegate's budget: {next}"
+        );
+        assert!(carried_tools(&next), "a check removed the delegate's tools");
+        assert_eq!(outcome.tokens, 1_000, "the turn's spend lost the check");
+        assert_eq!(outcome.budgeted_tokens, 0);
+    }
+
+    /// DELEGATE-29, RUN-22: the check a `run` makes when asked to read its own output is the
+    /// turn's spend and not part of the figure a delegate's budget is compared with.
+    ///
+    /// Rejects: counting the check a `read: true` run makes (made before the delegate's next
+    /// request, not by a tool call) with `add_usage`, which here is 9000 of 10000 and brings the
+    /// warning.
+    #[test]
+    fn a_checks_tokens_do_not_warn_a_delegate_whose_run_read_its_own_output() {
+        let (next, outcome) = after_a_check_with(
+            "delegate-check-run-read",
+            "checker",
+            10_000,
+            &[("run", r#"{"command":"sed -n p vet.txt","read":true}"#)],
+            9_000,
+            true,
+        );
+        assert!(
+            !next.contains("You have spent 9000 of your 10000 tokens."),
+            "the check of a run's own output set the figure the delegate was told: {next}"
+        );
+        assert!(carried_tools(&next), "a check removed the delegate's tools");
+        assert_eq!(
+            outcome.tokens, 9_000,
+            "the check's tokens were left out of the turn's spend"
+        );
+        assert_eq!(outcome.budgeted_tokens, 0);
+    }
+
+    /// DELEGATE-29: the round after a check is limited from the figure the budget counts, so a
+    /// delegate that answered a check's size is not stopped by it.
+    ///
+    /// Rejects: the call that limits the tools after a round being given the turn's whole spend
+    /// instead of the budgeted one, which here is 1000 of 1000 and removes the tools from the
+    /// request that follows the delegate's next call.
+    #[test]
+    fn the_tools_a_delegate_is_left_after_a_round_do_not_depend_on_a_check() {
+        let run = Run::with_confirmer(
+            "delegate-check-limit-the-tools",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"CHILD-TASK","budget":1000}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        child.answer(&silent_call("read_file", r#"{"path":"vet.txt"}"#));
+        let check = run.request();
+        assert!(check.body.contains(A_CHECK_ASKING), "{}", check.body);
+        check.answer(&a_check_that_wrote(1_000));
+        let next = run.request();
+        next.answer(&silent_call("list_files", r#"{"directory":"."}"#));
+        let after = run.request();
+        assert!(
+            carried_tools(&after.body),
+            "a check's tokens removed the tools after the round that followed it: {}",
+            after.body
+        );
+        after.answer(&silent("child done"));
+        run.request().answer(&silent("done"));
+        run.finish().expect("the turn ends");
+    }
+
+    /// DELEGATE-29: a delegate's own requests still count against its budget, and a check's do
+    /// not add to them.
+    ///
+    /// Rejects: a split that stops counting the delegate's rounds, and one that counts a check
+    /// once more in the figure that removes the tools.
+    #[test]
+    fn a_delegates_own_rounds_still_spend_its_budget_beside_a_check() {
+        let run = Run::with_confirmer(
+            "delegate-check-and-rounds",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"CHILD-TASK","budget":1000}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        child.answer(&tool_request_with_usage(
+            "read_file",
+            r#"{"path":"vet.txt"}"#,
+            400,
+            100,
+        ));
+        let check = run.request();
+        check.answer(&a_check_that_wrote(5_000));
+        let next = run.request();
+        assert!(carried_tools(&next.body), "500 of 1000 removed the tools");
+        next.answer(&tool_request_with_usage(
+            "list_files",
+            r#"{"directory":"."}"#,
+            400,
+            100,
+        ));
+        let last = run.request();
+        assert!(
+            !carried_tools(&last.body) && last.body.contains("You have spent your budget of 1000"),
+            "the delegate's own 1000 tokens did not spend its budget: {}",
+            last.body
+        );
+        last.answer(&silent("child done"));
+        run.request().answer(&silent("done"));
+        let outcome = run.finish().expect("the turn ends");
+        assert_eq!(outcome.tokens, 6_000);
+        assert_eq!(outcome.budgeted_tokens, 1_000);
+    }
+
+    /// DELEGATE-29: what a delegate hands its own child is what it has left of the figure its
+    /// budget is compared with, so a check the delegate made does not shrink the child's budget.
+    ///
+    /// The delegate spends 9000 of 10000 on a check and starts a child with no budget of its own
+    /// named, which then spends 2000. A child given 1000 loses its tools at once.
+    ///
+    /// Rejects: `budget_left` that subtracts a check's tokens.
+    #[test]
+    fn a_delegates_check_does_not_shrink_the_budget_it_hands_its_child() {
+        let run = Run::with_confirmer(
+            "delegate-check-budget-left",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"checker","task":"CHILD-TASK","budget":10000}"#,
+        ));
+        let (parent, child) = parent_and_child(&run);
+        parent.answer(&silent("waiting"));
+        child.answer(&silent_call("run", r#"{"command":"sed -n p vet.txt"}"#));
+        run.request()
+            .answer(&silent_call("read_output", r#"{"ref":"ref:1"}"#));
+        run.request().answer(&a_check_that_wrote(9_000));
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"NESTED-TASK"}"#,
+        ));
+        // Five requests are left: the delegate's two, the parent's one and the nested delegate's
+        // two. Each is answered by whose it is, since which arrives first is not settled.
+        let mut nested_offered_tools = Vec::new();
+        let (mut delegate_asked, mut nested_asked) = (0, 0);
+        for _ in 0..5 {
+            let request = run.request();
+            if request.body.contains("PARENT-TASK") {
+                request.answer(&silent("done"));
+            } else if request.body.contains("CHILD-TASK") {
+                delegate_asked += 1;
+                request.answer(&silent(if delegate_asked == 1 {
+                    "waiting"
+                } else {
+                    "child done"
+                }));
+            } else {
+                assert!(request.body.contains("NESTED-TASK"), "{}", request.body);
+                nested_asked += 1;
+                nested_offered_tools.push(carried_tools(&request.body));
+                request.answer(&if nested_asked == 1 {
+                    tool_request_with_usage("list_files", r#"{"directory":"."}"#, 1_500, 500)
+                } else {
+                    silent("nested done")
+                });
+            }
+        }
+        assert_eq!(
+            nested_offered_tools,
+            [true, true],
+            "the nested delegate was given what a check took from its parent"
+        );
+        run.finish().expect("the turn ends");
     }
 
     /// Cancellation cleanup must not charge a child request that ended before the parent stopped.

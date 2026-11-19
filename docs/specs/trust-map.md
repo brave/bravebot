@@ -395,7 +395,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::a_workspace_whose_volume_cannot_be_asked_distrusts_folds_and_grants_none`
 `verified-by: bravebot_agent::workspace::a_trust_store_for_a_directory_that_cannot_be_asked_says_so`
 `verified-by: bravebot_agent::workspace::named_settings::a_spelling_in_another_case_reaches_a_file_not_made_yet_unless_the_volume_keeps_them_apart`
-`verified-by: bravebot_agent::workspace::a_real_directory_with_the_casefold_flag_folds_case_for_the_map`
+`verified-by: bravebot_agent::workspace::real_directories_with_the_casefold_flag_set_per_level_give_the_map_the_workspace_s_answer`
 `verified-by: bravebot_core::trust::a_volume_that_could_not_be_asked_reads_a_refusal_in_every_case_and_a_trust_in_one`
 `verified-by: bravebot_core::trust::an_undecided_boundary_reaches_the_other_case_where_the_volume_might_fold`
 `verified-by: bravebot_core::trust::a_probe_answer_is_read_as_the_case_folding_it_says`
@@ -1079,7 +1079,24 @@ declining rather than that the path is out of reach and what the person can do. 
 as the refusal of the same destination at the end of the write is, about the reference where the
 path came from one, and is recorded in the trail as a path refused for leaving the workspace. The
 write resolves the destination again after the answer, since a directory on the way can have become
-a link while the person read the question.
+a link while the person read the question. It compares what the destination lands on and the other
+names of that file with what they were when the question was drawn, and refuses the write, naming
+the destination as the person was shown it, when either differs. The answer covered the file
+shown, so a file an ask rule or the protected list covers, or one no rule covers, is refused the
+same way. It also asks the deny rules ([PERM-7](permissions.md#PERM-7)) about what the destination
+resolves to then. A destination that did not exist when asked and a link that was there when asked
+are written as shown.
+
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file`
+`verified-by: bravebot_agent::turn::a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_hard_link_put_in_place_while_the_question_was_open_leads_to_another_file`
+`verified-by: bravebot_agent::turn::a_picture_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::an_edit_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::a_download_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
 
 A `write` step of a manifest ([manifest.md](manifest.md)) confines its destination only when it
 writes, after its question. Plan validation refuses a path that names a root, a home directory or a
@@ -1864,7 +1881,9 @@ terminal interface and the desktop interface read and write one record, under th
 resolves the directory to, so a yes kept in either is honoured by the other and taken back from
 either. A session in lines reads the same record, puts the same lines before its question, and keeps
 a yes on the same terms ([cli.md](cli.md#CLI-14)). A line that is not yes there declines, and keeps
-nothing.
+nothing. The local host puts the same lines and question on its own terminal about each workspace it
+was given, before it starts a client, and keeps a yes on the same terms for the sessions it opens
+there to honour ([local-host.md](local-host.md#HOST-1)).
 A yes is kept only where the answer may be kept and later honoured: there is a state directory, the
 working directory is not a filesystem root, not the user's home and not a directory holding it
 (compared both as named and with links resolved, since `$HOME` is often named through a link the
@@ -1893,7 +1912,8 @@ the path's own bytes, so a key is at most 200 bytes, and two long directories th
 `-` would join have two files. A key of up to 200 bytes is unchanged. The line names the
 directory in full, which directory is at that path (when it was made and, where the platform has one,
 its number on the volume), the session and when. A desktop session is named on its first turn, so a
-line kept before one names no session; the name decides nothing. A line that cannot be written
+line kept before one names no session, and nor does a line the local host keeps at startup; the name
+decides nothing. A line that cannot be written
 leaves the answer as a yes for this session, and the session says so and names the file. A yes to a
 question that said confined lines run without asking ([RUN-5](tools/run.md#RUN-5)) also writes
 `confined_lines`, and a line without it, as every line kept before the field is, says nothing of it: a session

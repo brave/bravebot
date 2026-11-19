@@ -638,6 +638,47 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_ui_bridge::audit::the_live_audit_event_writes_out_a_bidirectional_control_in_a_field`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/turn-details.test.mjs calls the inspector's own auditDescription with the words the bridge sent for a name holding an escape and a bell and asserts the sentence is those words, and that a field with no words is drawn as nothing; make check-ui runs it)`
 
+<a id="TRACE-12"></a>
+### TRACE-12: the trail names the mode a session opened in and each change of mode after it
+
+The first turn or manifest run a session takes after it opens or resumes writes one entry under
+`permission_mode_opened`, ahead of its `permission_mode` entry ([TRACE-7](#TRACE-7)). It reads `the
+session opened in <mode> mode <cause>`. A later turn does not repeat it. Each change of mode is one
+entry under `permission_mode_changed` that reads `the permission mode changed from <mode> to <mode>
+<cause>`. A change is written once, in the order the changes were made, by the turn that follows it,
+or by the next request of the turn that was running when it was made, so it comes before any
+refusal or prompt the new mode causes. Setting the mode a session is already in is not a change. A
+delegate writes none of these: the entries of its parent's session are the parent's.
+
+The cause is a fixed phrase the driver chose where it set the mode: `by default`, `by a
+command-line flag`, `by the startInAuto setting`, `by the mode key`, `by a click on the mode`, `by
+the /plan command`, `by approving a plan`, `because settings made bypass unreachable`, `by a request
+from the client`, or `without a cause being given` where a caller did not say. The modes are named as
+in [TRACE-7](#TRACE-7).
+
+A session that is kept out of the trail ([INCOG-4](incognito.md#INCOG-4)) writes none of these,
+since it writes no trail. A session that takes no turn writes nothing, so a mode opened in and
+changed before the first turn is written by that turn as the opening mode followed by each change.
+The mode is not saved in the session record ([MODE-10](permission-modes.md#MODE-10)); the trail is
+where a person reads it back.
+
+**Why.** The mode decides what a prompt asks and who answers it, and nothing else in the trail says
+which mode a session was in at a given decision: the entries of [TRACE-7](#TRACE-7) name it only
+for the turn and only where a prompt was drawn. A person asking why a session asked about a program
+while it was in auto has to be able to read what mode it opened in and when it left it. Every part
+of an entry is the driver's own static text, so it holds no content ([TRACE-2](#TRACE-2)).
+
+`verified-by: bravebot_agent::turn::a_session_records_the_mode_it_opened_in`
+`verified-by: bravebot_agent::turn::a_change_of_mode_between_turns_is_recorded`
+`verified-by: bravebot_agent::turn::a_change_of_mode_during_a_turn_is_recorded_once_and_in_order`
+`verified-by: bravebot_core::policy::a_permission_mode_opening_and_change_leave_a_trail`
+`verified-by: bravebot_cli::running::a_traced_run_names_the_mode_it_opened_in_and_what_chose_it`
+`verified-by: bravebot_tui::mode_trail_tests::the_key_a_click_and_the_plan_command_each_name_themselves_in_the_trail`
+`verified-by: bravebot_tui::mode_trail_tests::a_session_the_terminal_opens_names_what_chose_its_mode_in_the_trail`
+`verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
+`verified-by: bravebot_ui_bridge::permission_mode::the_trail_of_a_window_session_names_what_opened_it_in_its_mode_and_each_request_to_change_it`
+`verified-by: bravebot_agent::turn::approving_a_plan_is_recorded_as_the_cause_of_leaving_plan_mode`
+
 ## Known costs
 
 - **A message restored from a saved session is `unrecorded`.** The origin is kept in memory beside

@@ -82,6 +82,9 @@ pub enum WorkspaceError {
     Stale { path: String },
     /// Another effect already holds the path, so this write was refused rather than interleaved.
     Contended { path: String },
+    /// The destination leads to a different file now than when the person was asked, or a rule
+    /// refuses the file it leads to now, so the write was refused (TRUST-10, PERM-7).
+    Redirected { path: String },
     /// The file is not text, so there is nothing useful to return.
     Binary { path: String },
     /// The file is text in an encoding other than UTF-8. [`Workspace::read_page`] shows it
@@ -248,6 +251,11 @@ impl WorkspaceError {
             Self::Contended { .. } => {
                 format!("another write to '{named}' is still in progress, so nothing was written")
             }
+            Self::Redirected { .. } => format!(
+                "'{named}' leads to a different file than it did when the user was asked about it, \
+                 so nothing was written. Do not retry, and do not look for another way to the same \
+                 file: work without it, or say in your reply what you needed it for"
+            ),
             Self::Protected { .. } => format!(
                 "'{named}' is a protected path and the restore was not approved, so nothing was written"
             ),
@@ -312,6 +320,7 @@ impl WorkspaceError {
             | Self::Unreadable { path, .. }
             | Self::Stale { path }
             | Self::Contended { path }
+            | Self::Redirected { path }
             | Self::Protected { path }
             | Self::Binary { path }
             | Self::NotUtf8 { path }

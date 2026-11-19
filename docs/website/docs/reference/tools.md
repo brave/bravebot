@@ -1062,8 +1062,9 @@ tools for its next request and answers with what it has, and the report arrives 
 saying the budget was spent and the work may not be finished. A call's figure never raises the
 budget its definition sets, and in a fan-out it applies to each delegate separately. A delegate that
 starts delegates of its own gives them at most what it has left, divided between the ones one call
-starts, and what a child spends counts against it. One with nothing left starts none. A request that has started finishes, so a delegate can pass its budget by one request.
-The figure is tokens only, never credits.
+starts, and what a child spends counts against it. One with nothing left starts none. A request that
+has started finishes, so a delegate can pass its budget by one request. A check of unvouched content
+does not count. The figure is tokens only, never credits.
 
 **`isolation: checkout` keeps delegates out of your working tree.** Each delegate works in a new
 checkout of the last commit, so delegates writing at the same time do not edit or build in one tree.
