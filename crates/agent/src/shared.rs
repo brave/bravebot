@@ -592,9 +592,24 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
         self.asked(
-            |unasked| unasked.manifest(),
+            |unasked| unasked.manifest().map(|(answer, _)| answer),
             |held| held.confirm_manifest(request),
             |refuse| refuse.confirm_manifest(request),
+        )
+    }
+
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.asked(
+            |unasked| {
+                unasked
+                    .manifest()
+                    .map(|(answer, mode)| (answer, Some(mode)))
+            },
+            |held| held.confirm_manifest_noting_the_mode(request),
+            |refuse| refuse.confirm_manifest_noting_the_mode(request),
         )
     }
 
@@ -719,6 +734,32 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    /// MANIFEST-15. A plan bypassing approved through a lent handle is still noted as the mode's
+    /// answer, so it answers no call's question for a person. The regression it rejects is a
+    /// handle that drops the mode and lets bypass pass for a person's approval.
+    #[test]
+    fn a_lent_handle_keeps_the_mode_that_answered_a_plan() {
+        let mut person = crate::confirm::ChoosesFirst;
+        let mut confining = crate::permission_mode::Confining::new(
+            &mut person,
+            crate::PermissionMode::Bypass,
+            false,
+        );
+        let lent = Lent::new(&mut confining);
+        let mut handle = lent.delegate(DelegateId::nth(1));
+        let request = crate::confirm::ManifestRequest {
+            task: "organise my bookmarks".to_string(),
+            steps: vec!["1. read".to_string()],
+        };
+        assert_eq!(
+            handle.confirm_manifest_noting_the_mode(&request),
+            (
+                Decision::Approve,
+                Some(crate::PermissionMode::Bypass.name())
+            )
+        );
     }
 
     /// A delegate the person stopped is not asked about anything further, and one beside it still

@@ -619,14 +619,15 @@ fn attempt_of(error: bravebot_agent::TurnError) -> bravebot_agent::manifest::Att
     }
 }
 
-/// A step calls a tool with the arguments the plan fixed, each call is put to the person as its
-/// step comes up, and the plan the person approved shows the alias, the tool and the arguments in
-/// full. What the server answered is drawn for the person and reaches no later request.
+/// A step calls a tool with the arguments the plan fixed, the plan the person approved shows the
+/// alias, the tool and the arguments in full, and approving it answers each call, so no call is put
+/// to the person again at its step. What the server answered is drawn for the person and reaches no
+/// later request.
 ///
 /// Rejects an implementation that shows a plan line without its arguments or cuts a long one, that
-/// sends the server arguments other than the plan's, that runs the calls out of order, that skips
-/// the question of a call because the plan was approved, and that lets what a call returned reach
-/// a model.
+/// sends the server arguments other than the plan's, that runs the calls out of order, that asks
+/// again at the step about a call the approved line showed, that leaves the trail silent about what
+/// answered it, and that lets what a call returned reach a model.
 #[test]
 fn a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed() {
     let scratch = Scratch::new("fixed");
@@ -677,13 +678,20 @@ fn a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed() {
         "{}",
         lines[1]
     );
-    // Approving the plan was not approving the calls: each was put to the person.
-    let asked: Vec<String> = ran.asked.calls.iter().map(McpCallRequest::name).collect();
-    assert_eq!(asked, ["brave:open_tab", "brave:read_page"]);
-    assert_eq!(
-        ran.asked.calls[0].arguments,
-        [("url".to_string(), json!(long).to_string())]
-    );
+    // Approving the plan answered the calls: neither was put to the person at its step, and the
+    // trail says what covered each.
+    assert!(ran.asked.calls.is_empty(), "{:?}", ran.asked.calls);
+    for tool in ["open_tab", "read_page"] {
+        let covered = format!("approving the plan covered brave:{tool}, no prompt at the step");
+        assert!(
+            ran.events.iter().any(|event| matches!(
+                event,
+                bravebot_core::event::Event::GatePassed { gate: "approval", detail }
+                    if *detail == covered
+            )),
+            "{covered}"
+        );
+    }
     // What a call returned is drawn for the person, behind the margin, and goes to no model: the
     // chat server saw the goal and the fit and nothing after.
     assert_eq!(ran.chat.len(), 2, "{:?}", ran.chat);
@@ -1014,6 +1022,55 @@ fn bypassing_does_not_answer_a_planned_call_to_a_server_asked_every_call() {
     assert!(asking.called.is_empty(), "{:?}", asking.called);
 }
 
+/// A plan bypass mode approved was seen by nobody, so its approval answers no call for a person:
+/// the mode answers each call as it does in a turn, and the trail never credits the plan.
+///
+/// Rejects an implementation that takes the mode's approval of a plan for a person's, which would
+/// let the calls of a plan nobody read go unasked after a switch to asking.
+#[test]
+fn a_plan_bypass_approved_answers_no_call_for_a_person() {
+    let scratch = Scratch::new("bypass-plan");
+    let (url, mcp) = serve_browser();
+    let ran = ran(
+        PermissionMode::Bypass,
+        session(&url, &scratch, false, true),
+        &mcp,
+        vec![call("open_tab", json!({"url": "https://example.com"}))],
+    );
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.called.len(), 1);
+    assert!(
+        !ran.events.iter().any(|event| matches!(
+            event,
+            bravebot_core::event::Event::GatePassed { gate: "approval", detail }
+                if detail.starts_with("approving the plan covered")
+        )),
+        "the trail credited a plan nobody saw"
+    );
+}
+
+/// A call whose arguments hold a character the step's question writes out (PROMPT-13) is asked at
+/// its step, since the line the person approved could not show it.
+///
+/// Rejects an implementation that lets approving a plan answer arguments the person could not read.
+#[test]
+fn a_planned_call_holding_a_hidden_character_is_asked_at_its_step() {
+    let scratch = Scratch::new("hidden");
+    let (url, mcp) = serve_browser();
+    let ran = ran(
+        PermissionMode::Ask,
+        session(&url, &scratch, false, true),
+        &mcp,
+        vec![call(
+            "open_tab",
+            json!({"url": "https://example.com/\u{E0041}\u{200B}"}),
+        )],
+    );
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    let asked: Vec<String> = ran.asked.calls.iter().map(McpCallRequest::name).collect();
+    assert_eq!(asked, ["brave:open_tab"]);
+}
+
 /// Plan mode does not refuse a plan for a call, and asks at the step as it does in a turn.
 ///
 /// Rejects an implementation that refuses the plan as it does one that writes, and one that lets
@@ -1044,17 +1101,24 @@ fn plan_mode_runs_a_plan_that_calls_a_server_and_asks_at_the_step() {
 }
 
 /// A call that is refused ends the run: the steps after it do not run, and the record holds the
-/// step that failed and none after it.
+/// step that failed and none after it. An `ask` rule is what puts each call to the person here,
+/// since approving the plan answers a call nothing else decides.
 ///
 /// Rejects an implementation that goes on to the next step after a refusal.
 #[test]
 fn a_refused_call_does_not_run_the_next_step() {
     let scratch = Scratch::new("refused-call");
     let (url, mcp) = serve_browser();
+    let (permissions, _) = bravebot_core::permissions::Permissions::parse(
+        &[],
+        &["Mcp(brave:open_tab)".to_string()],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
     let walked = walk(Walk {
         session: session(&url, &scratch, false, true),
         mode: PermissionMode::Ask,
-        task: Task::new("open three pages"),
+        task: Task::new("open three pages").with_permissions(permissions),
         replies: vec![
             shape(),
             plan(vec![
@@ -1075,6 +1139,52 @@ fn a_refused_call_does_not_run_the_next_step() {
     assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
     assert!(attempt.steps[0].contains("replied"));
     assert!(attempt.steps[1].contains("FAILED"));
+}
+
+/// An `ask` rule about a tool puts a planned call to it to the person at its step, though the plan
+/// was approved, and a declined call is not made. A call to another tool of the same plan is
+/// answered by the plan.
+///
+/// Rejects an implementation that reads approving a plan as an `allow` rule, which would silence a
+/// rule somebody wrote.
+#[test]
+fn an_ask_rule_puts_a_planned_call_to_the_person_at_its_step() {
+    let scratch = Scratch::new("ask-rule");
+    let (url, mcp) = serve_browser();
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &[],
+        &["Mcp(brave:open_tab)".to_string()],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "{rejected:?}");
+    let walked = walk(Walk {
+        session: session(&url, &scratch, false, true),
+        mode: PermissionMode::Ask,
+        task: Task::new("read a page, then open one").with_permissions(permissions),
+        replies: vec![
+            shape(),
+            plan(vec![
+                call("read_page", json!({"url": "https://example.com/a"})),
+                call("open_tab", json!({"url": "https://example.com/b"})),
+            ]),
+        ],
+        mcp: &mcp,
+        confirmer: Calls::answering(vec![CallDecision::reject()]),
+        grants: None,
+    });
+    walked
+        .outcome
+        .expect_err("the person declined the call the rule asked about");
+    let asked: Vec<String> = walked
+        .asked
+        .calls
+        .iter()
+        .map(McpCallRequest::name)
+        .collect();
+    assert_eq!(asked, ["brave:open_tab"]);
+    assert_eq!(walked.called.len(), 1, "{:?}", walked.called);
+    assert_eq!(walked.called[0].0, "read_page");
 }
 
 /// A tool that reports a failure is drawn in the margin and decides nothing: the next step runs,
@@ -1329,7 +1439,8 @@ fn a_declined_or_denied_read_ends_the_run_before_the_steps_after_it() {
 }
 
 /// A server only a manifest run calls, such as one in an OpenShell sandbox, has its list put to the
-/// person before the plan as any other server's is, and a plan may call its tools.
+/// person before the plan as any other server's is, and a plan may call its tools, the plan's
+/// approval answering a call whose arguments its line shows.
 #[test]
 fn a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls() {
     let scratch = Scratch::new("manifest-only");
@@ -1364,7 +1475,7 @@ fn a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls() {
         grants: None,
     });
     assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
-    assert_eq!(ran.asked.order, ["list", "plan", "call"]);
+    assert_eq!(ran.asked.order, ["list", "plan"]);
     assert_eq!(
         ran.called,
         [(
@@ -1376,8 +1487,8 @@ fn a_plan_puts_and_calls_the_list_of_a_server_only_a_manifest_run_calls() {
 
 /// A plan started in a session whose lists nobody has been asked about puts them to the person
 /// before it plans, as the start of a turn does, so a step can call a vouched tool at once. The
-/// person is asked once, before the plan and before the call, and the plan they are shown is the
-/// one a session that vouched for the list earlier is shown.
+/// person is asked about the list before the plan, and approving the plan answers the call; the
+/// plan they are shown is the one a session that vouched for the list earlier is shown.
 ///
 /// Rejects an implementation that leaves a fresh session's lists unasked (the planner is offered no
 /// call and the plan is refused), one that asks only after the plan is made, one that plans from a
@@ -1405,7 +1516,7 @@ fn a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plan
     });
 
     assert!(fresh.outcome.is_ok(), "{:?}", fresh.outcome.err());
-    assert_eq!(fresh.asked.order, ["list", "plan", "call"]);
+    assert_eq!(fresh.asked.order, ["list", "plan"]);
     let [list] = fresh.asked.lists.as_slice() else {
         panic!("one list was to be put: {:?}", fresh.asked.lists);
     };
@@ -1997,8 +2108,8 @@ fn a_plan_reads_a_tool_marked_read_only_into_a_slot_and_answers_from_it() {
         "{}",
         lines[0]
     );
-    let asked: Vec<String> = ran.asked.calls.iter().map(McpCallRequest::name).collect();
-    assert_eq!(asked, ["brave:read_page"]);
+    // Approving the plan answered the read, as it answers any call the plan fixed.
+    assert!(ran.asked.calls.is_empty(), "{:?}", ran.asked.calls);
     // Quarantined, not drawn: what was shown is the answer, and the reply went to the processor.
     assert!(ran.reporter.shown.is_empty(), "{:?}", ran.reporter.shown);
     assert_eq!(ran.chat.len(), 3, "shape, plan and one processor call");
@@ -2223,9 +2334,8 @@ fn an_apply_step_makes_the_calls_the_person_approved_as_one_list() {
         ]
     );
     assert_eq!(request.calls[2].after, Some(0));
-    // The read was asked about, and the apply's calls were not asked about one by one.
-    let asked: Vec<String> = ran.asked.calls.iter().map(McpCallRequest::name).collect();
-    assert_eq!(asked, ["brave:list_marks"]);
+    // Approving the plan answered the read, and the apply's calls were not asked about one by one.
+    assert!(ran.asked.calls.is_empty(), "{:?}", ran.asked.calls);
     assert_eq!(
         ran.called,
         vec![
