@@ -21865,9 +21865,9 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
 #[cfg(target_os = "linux")]
 #[test]
 fn permissions_check_follows_the_casefold_flag_of_the_directory_and_not_of_its_parent() {
-    let set_flag = |directory: &Path| {
+    let set_flag = |directory: &Path, wanted: bool| {
         Command::new("chattr")
-            .arg("+F")
+            .arg(if wanted { "+F" } else { "-F" })
             .arg(directory)
             .stderr(Stdio::null())
             .status()
@@ -21884,8 +21884,12 @@ fn permissions_check_follows_the_casefold_flag_of_the_directory_and_not_of_its_p
         let parent = scratch.path.join("Parent");
         let directory = parent.join("Workspace");
         std::fs::create_dir_all(&directory).expect("create the directory");
-        let flagged = |place: &Path, wanted: bool| !wanted || set_flag(place);
-        // The flag can only be set on an empty directory, so the parent's goes on first.
+        // A directory made inside a flagged parent inherits the flag, so the flag is cleared as
+        // well as set, and it is changed only on an empty directory: the parent's goes first. A
+        // clear that fails where the parent is not flagged has nothing to undo, since a filesystem
+        // that cannot hold the flag has not inherited it.
+        let flagged =
+            |place: &Path, wanted: bool| set_flag(place, wanted) || (!wanted && !parent_folds);
         std::fs::remove_dir(&directory).expect("empty the parent");
         if !flagged(&parent, parent_folds) {
             eprintln!("skipped {name}: this filesystem cannot set the casefold flag");
