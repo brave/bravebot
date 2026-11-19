@@ -597,7 +597,8 @@ fn exchange<S: Sink>(
         .collect();
     let messages = vec![Message::system(system), Message::user_parts(parts)];
 
-    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
+    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty, and a client
+    // never takes the keys that name a tool list from a model's `options` (BACKEND-15), so nothing
     // below adds to it.
     policy.record_processor_model(spec.id(), model);
     // The content is given up once this answers, so nothing asks for a cache of it: a processor

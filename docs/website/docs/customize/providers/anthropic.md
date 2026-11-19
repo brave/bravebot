@@ -87,10 +87,11 @@ without them, and `/status` reports how much of each prompt was read from the ca
 written to it.
 
 **Options of your own.** A model's `options` are put in the request as written. bravebot does not
-read them, and they cannot replace the model or the messages a turn built. Leave `thinking` out of
-them: bravebot does not send a model's thinking back to it, so a request that asks for thinking and
-carries a tool call from an earlier round is refused, and a model that no longer accepts a thinking
-budget refuses it from the first round.
+read them, and they cannot replace the model or the messages a turn built. They cannot add a tool
+list either: `tools`, `tool_choice` and `mcp_servers` are left out, so a request that offers no
+tools offers none. Leave `thinking` out of them: bravebot does not send a model's thinking back to
+it, so a request that asks for thinking and carries a tool call from an earlier round is refused,
+and a model that no longer accepts a thinking budget refuses it from the first round.
 
 ## A gateway that is called `anthropic`
 

@@ -1894,6 +1894,48 @@ mod tests {
         }
     }
 
+    /// PERM-7: a rule on an ancestor of the workspace covers it by its relative names where the
+    /// workspace's volume could not be asked about case. The answer is handed to the rules as
+    /// `None`, as [`crate::workspace::case_answer`] gives it for a workspace at a mount root, so a
+    /// refusal is stored folded and the workspace is read the same way when `follow_links` covers
+    /// it. The name the file tools ask by is refused for `Read` and asked about for `Edit`.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_on_an_ancestor_covers_the_workspace_where_the_volume_could_not_be_asked() {
+        let scratch = crate::testutil::scratch_dir("Permissions-Ancestor-Case-Unknown");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("Home");
+        let root = home.join("Proj");
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        let (home, root) = (home.canonicalize().unwrap(), root.canonicalize().unwrap());
+        for (subject, family, list, ruling) in [
+            (Subject::Read, "Read", "deny", Ruling::Deny),
+            (Subject::Edit, "Edit", "ask", Ruling::Ask),
+        ] {
+            let settings = Settings::parse(&format!(
+                r#"{{"permissions": {{"{list}": ["{family}(~/**)"]}}}}"#
+            ));
+            let lists = settings.permissions();
+            let anchors = anchors(Some(&home), Some(&root), None);
+            assert!(anchors.case_unknown && !anchors.folds_case);
+            let (mut permissions, rejected) =
+                Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            follow_links(&mut permissions, &root);
+            let absolute = root.join("secrets").join(".env");
+            assert_eq!(
+                permissions.for_path(subject, &absolute.display().to_string()),
+                Decision::Ruled(ruling),
+                "{family}(~/**) in {list} stopped covering the absolute name"
+            );
+            assert_eq!(
+                permissions.for_path(subject, "secrets/.env"),
+                Decision::Ruled(ruling),
+                "{family}(~/**) in {list} did not cover the relative name where the volume could not be asked"
+            );
+        }
+    }
+
     /// PERM-7: a rule on an ancestor covers the workspace and nothing beside it. A sibling of the
     /// workspace under the same ancestor is not named by a relative path, an `allow` rule on the
     /// ancestor grants no relative name, and a rule about a place inside the workspace is not

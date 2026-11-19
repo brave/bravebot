@@ -495,7 +495,8 @@ pub fn ask<S: Sink>(
     question: Question,
     mut watching: impl FnMut(&str),
 ) -> Result<Answered, AsideError> {
-    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
+    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty, and a client
+    // never takes the keys that name a tool list from a model's `options` (BACKEND-15), so nothing
     // below adds to it. A question that could call a tool would be a turn, and a turn is the
     // thing this exists to avoid being.
     let model = chat.model.unwrap_or(&chat.config.default_model);

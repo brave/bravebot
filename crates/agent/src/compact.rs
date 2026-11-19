@@ -284,7 +284,8 @@ pub fn compact<S: Sink>(
     let mut messages = conversation.to_summarise(boundary, SYSTEM_PROMPT);
     messages.push(Message::user(instruction(focus)));
 
-    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
+    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty, and a client
+    // never takes the keys that name a tool list from a model's `options` (BACKEND-15), so nothing
     // below adds to it. A summariser with a tool would be a second planner, and a second planner
     // is a second thing to reason about rather than a shorter conversation.
     // The model this runs on: the `summaryModel` setting where it names one, and the session's own

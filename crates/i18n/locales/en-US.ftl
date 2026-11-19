@@ -132,6 +132,11 @@ cli-plain-trust-kept =
 cli-plain-trust-remember-where =
     To take it back, run /forget-trust in bravebot without --plain, or delete the lines naming
     this directory from this file:
+# Said in the lines before the local host's startup question about a workspace (HOST-1). The host
+# has no /forget-trust of its own, so it names the command in bravebot.
+local-host-trust-remember-where =
+    To take it back, run /forget-trust in bravebot in this directory, or delete the lines naming
+    this directory from this file:
 
 # Said when a background session is started again and its earlier conversation was read back from
 # its record (BG-1).
@@ -2284,8 +2289,11 @@ granted-rules-too-small = y grants nothing: a rule is taller than this box
 
 theme-picker-title = themes
 theme-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
-model-picker-heading = Select model
-model-picker-keys = ↑↓ PgUp PgDn choose  ·  ←→ fold  ·  Enter select  ·  Esc keep current
+model-picker-heading-every-session = Select model · every session
+model-picker-heading-this-session = Select model · this session only
+model-picker-scope-every-session = Enter: every session  ·  Tab: this session only
+model-picker-scope-this-session = Enter: this session only  ·  Tab: every session
+model-picker-keys = ↑↓ PgUp PgDn choose  ·  ←→ fold  ·  Esc keep current
 model-picker-search-placeholder = Search
 model-picker-nothing-matches = nothing matches that
 model-picker-loading = loading models…
@@ -3525,6 +3533,9 @@ panel-more-references = +{ $count } more
 # Left in the transcript when a click on the session's name in the info panel finds the line in
 # use, so /rename was not put in it.
 panel-rename-line-in-use = The line is in use, so the session's name was not put in it. Clear the line and click the name again, or type /rename.
+# Under the model in the info panel where it was picked with /model session, so the next session
+# does not open on it.
+panel-model-this-session = this session only
 # The reasoning effort and the session's token total in the info panel, one to a row.
 panel-effort = effort { $level }
 panel-spent = { $tokens } this session
@@ -3727,6 +3738,7 @@ command-open = List the links in the latest reply, and open one by its number
 command-limit = Show the session's spend limit, set it in tokens or credits, or remove it
 command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
+command-model-session = Choose a model for this session only, and record nothing
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-variant = Pick a named set of options the model offers, list them, or drop the pick
@@ -4902,7 +4914,7 @@ commit-message-ready = the draft is in the box. Edit it, then Enter sends it to 
 commit-message-partial = the changes were longer than one read takes, so the draft describes the part that was read
 commit-message-failed = the commit message could not be drafted: { $problem }
 commit-message-stopped = the commit message was stopped
-commit-message-untrusted = the draft was not offered: the diff touched a path nobody has vouched for, so the message would not be words the planner could have held
+commit-message-untrusted = no draft was written: the diff touched a path nobody has vouched for, so it was not sent to a model
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 enhance-ready = the enhanced line is in the box. Edit it, then Enter sends it, or Esc puts back what you wrote
@@ -5627,6 +5639,14 @@ sessions-screen-keys-unreadable = sessionsKeys.{ $name }: "{ $spelling }" is not
 sessions-screen-keys-kept = sessionsKeys.{ $name }: "{ $spelling }" is a key the screen keeps, so { $name } stays on { $key }
 sessions-screen-keys-contested = sessionsKeys.{ $name }: "{ $spelling }" is wanted by another action, so { $name } stays on { $key }
 sessions-screen-keys-more = and { $count } more keys refused
+# Said at startup where a chord a settings file asked for is one this terminal cannot send, which
+# a chord on Escape is unless the terminal reports keys the disambiguation protocol's way.
+keybindings-undeliverable = keybindings.{ $name }: "{ $spelling }" cannot be delivered by this terminal, so { $name } stays on { $key }
+keybindings-undeliverable-more =
+    { $count ->
+        [one] and { $count } more chord this terminal cannot send
+       *[other] and { $count } more chords this terminal cannot send
+    }
 sessions-screen-hint-help = help
 sessions-screen-hint-back = back
 sessions-screen-hint-move = move

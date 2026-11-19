@@ -43,7 +43,8 @@ pub enum Picking {
 /// What a person picked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picked {
-    Model(Model),
+    /// The row, and how long the pick lasts.
+    Model(Model, model_prompt::Scope),
     Theme(Theme),
     Effort(effort_prompt::Row),
     Editing(config_prompt::Row),
@@ -70,7 +71,10 @@ impl Picking {
                     model_prompt::Outcome::Cancel => Outcome::Cancel,
                     model_prompt::Outcome::Select => Outcome::Select,
                 };
-                step(outcome, picker.chosen().cloned(), Picked::Model)
+                let scope = picker.scope();
+                step(outcome, picker.chosen().cloned(), |model| {
+                    Picked::Model(model, scope)
+                })
             }
             Picking::Theme(picker) => {
                 let outcome = theme_prompt::press(picker, code, modifiers);
@@ -127,7 +131,10 @@ impl Picking {
                         model_prompt::Outcome::Cancel => Outcome::Cancel,
                         model_prompt::Outcome::Select => Outcome::Select,
                     };
-                step(outcome, picker.chosen().cloned(), Picked::Model)
+                let scope = picker.scope();
+                step(outcome, picker.chosen().cloned(), |model| {
+                    Picked::Model(model, scope)
+                })
             }
             Picking::Theme(picker) => {
                 let outcome = theme_prompt::click(picker, placed, mouse, last, now, wheel);

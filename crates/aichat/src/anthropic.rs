@@ -323,7 +323,8 @@ impl<'a> AnthropicClient<'a> {
     /// interpreted. They come from the settings file, which is the person's own configuration
     /// surface, so they are trusted exactly as far as a variable they exported would be. A key the
     /// request already set wins, because a configuration must not rewrite the model or the messages
-    /// a turn built.
+    /// a turn built, and the keys in [`protocol::TOOL_KEYS`] are the request's whether or not the
+    /// turn set them.
     fn build(&self, request: &ChatRequest, streaming: bool) -> Result<Request, ChatError> {
         let messages = self.messages_for(request, streaming);
         let bound = reply_bound(messages.max_tokens);
@@ -336,7 +337,9 @@ impl<'a> AnthropicClient<'a> {
                 .and_then(|model| model.request_options(request.variant.as_deref())),
         ) {
             for (key, value) in &options {
-                object.entry(key.clone()).or_insert_with(|| value.clone());
+                if !protocol::TOOL_KEYS.contains(&key.as_str()) {
+                    object.entry(key.clone()).or_insert_with(|| value.clone());
+                }
             }
         }
         let body =

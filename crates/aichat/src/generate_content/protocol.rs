@@ -33,6 +33,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// The finish reason of a reply that hit the ceiling rather than finishing.
 pub const FINISH_MAX_TOKENS: &str = "MAX_TOKENS";
 
+/// The body fields that say which tools a `generateContent` request offers, which a service may
+/// run itself (`googleSearch`, `urlContext`, `codeExecution`), and how the model may call them.
+/// A model's `options` are not a source of tool lists, so a request built without tools offers
+/// none. The service reads a field by either of its spellings, so both are held.
+pub const TOOL_KEYS: [&str; 3] = ["tools", "toolConfig", "tool_config"];
+
 /// The media types this API takes inline.
 const INLINE_TYPES: [&str; 6] = [
     "image/png",

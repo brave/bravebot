@@ -1517,7 +1517,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 |---|---|
 | `/status` | Report this session, what it may touch, and what it has spent |
 | `/cost` | Show what each turn of this session has spent |
-| `/model` | Choose which model to think with |
+| `/model [session]` | Choose which model to think with, for every session or, with `session`, for this one only |
 | `/theme [name]` | Choose which theme paints the interface |
 | `/effort [low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |

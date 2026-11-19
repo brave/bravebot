@@ -827,7 +827,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         cancel,
     ) {
         Ok(settling) => {
-            accounting.spent.add_usage(settling.usage);
+            accounting.spent.add_unbudgeted(settling.usage);
             accounting.elapsed.stalled += settling.waited;
             accounting.publish(reporter);
         }
@@ -1019,6 +1019,7 @@ fn plan<S: Sink, R: Reporter>(
         sink,
     )
     .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    task.permission_mode.record_into(&mut policy);
     policy.record_manifest_permission_mode(task.permission_mode.get().name());
 
     reporter.phase(Phase::Planning);
@@ -1326,7 +1327,8 @@ fn ask<S: Sink, R: Reporter>(
         .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
     // No tools on the request. There is nothing for a planner to call, and no result for a
-    // reply to be steered by.
+    // reply to be steered by. A client never takes the keys that name a tool list from a model's
+    // `options` (BACKEND-15), so none is added below.
     let request = ChatRequest::new(chosen, history.with_system(system)).with_effort(effort);
 
     let written_before = accounting.spent.output_tokens;
@@ -1673,6 +1675,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         asked_about,
         exposed,
         tokens: accounting.spent.tokens,
+        budgeted_tokens: accounting.spent.budgeted_tokens,
         output_tokens: accounting.spent.output_tokens,
         cached: accounting.spent.cached,
         context_tokens: 0,

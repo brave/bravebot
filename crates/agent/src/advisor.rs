@@ -105,7 +105,8 @@ pub(crate) fn request_for(model: &str, context: &[Message], question: &str) -> C
     messages.push(Message::user(format!(
         "{BRIEF}\n\nThe question:\n{question}"
     )));
-    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
+    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty, and a client
+    // never takes the keys that name a tool list from a model's `options` (BACKEND-15), so nothing
     // below adds to it. An advisor with a tool would be a third planner.
     ChatRequest::new(model, messages).giving_up_its_conversation()
 }

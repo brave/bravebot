@@ -4,6 +4,78 @@ use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::policy::{ReleasePlan, Routing};
 
+/// PERM-3 on real directories, at the gate `read_file` asks. A `deny` rule for `.env` refuses the
+/// spelling `.ENV` where the workspace folds case and the directory above it does not (and where
+/// both do), and leaves it alone where the workspace keeps the spellings apart, whatever the
+/// directory above it does. An `allow` rule for `Docs/**` grants `docs/a.md` under the same
+/// condition and no other. The filesystem is asked about each layout when it is made, so a fixture
+/// that did not produce the layout it names fails there. A layout the host cannot build is skipped.
+///
+/// The faults this rejects: the parent's answer used for the workspace, which gets the first and
+/// third layouts wrong; a refusal compared byte for byte where the workspace folds; a grant that
+/// folds where the workspace keeps the spellings apart.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_path_rule_follows_the_casefold_flag_of_the_workspace_and_not_of_its_parent() {
+    use crate::testutil::casefold_layouts::{LAYOUTS, build};
+    use bravebot_core::permissions::{Decision, Ruling, Subject};
+
+    let base = crate::testutil::scratch_dir("casefold-layouts-rules");
+    let settings = bravebot_config::Settings::parse(
+        r#"{"permissions": {"deny": ["Read(.env)"], "allow": ["Edit(Docs/**)"]}}"#,
+    );
+    for layout in &LAYOUTS {
+        let name = layout.name;
+        let Some(root) = build(&base, layout) else {
+            eprintln!(
+                "skipped {name}: this filesystem cannot set the casefold flag on a directory"
+            );
+            continue;
+        };
+        let folds = layout.workspace_folds;
+        let (permissions, rejected) = crate::permissions::from_settings(&settings, None, &root);
+        assert!(rejected.is_empty(), "{name}: a rule did not parse");
+
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow),
+            "{name}: the grant does not cover the name it is written with"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "docs/a.md") == Decision::Ruled(Ruling::Allow),
+            folds,
+            "{name}: Edit(Docs/**) and docs/a.md"
+        );
+
+        let workspace = Workspace::new(&root).expect("workspace");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read a file");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_permissions(permissions);
+        let mut refused =
+            |file: &str| refuse_denied_path(&mut policy, &workspace, Purpose::Read, file).is_err();
+
+        assert!(
+            refused(".env"),
+            "{name}: Read(.env) does not refuse the name it is written with"
+        );
+        assert_eq!(
+            refused(".ENV"),
+            folds,
+            "{name}: Read(.env) and .ENV, which {} the file .env names",
+            if folds { "opens" } else { "is not" }
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A rule in the settings file is anchored at the home directory, so it never matches the
 /// spelling `~/secret.txt`. Until the home is opened there is no landing to ask about
 /// either, and the refusal would offer `/add-dir` for a file the rule refuses once it is.

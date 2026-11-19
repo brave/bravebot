@@ -7,6 +7,12 @@ use crate::state::{Bound, Session, Status};
 
 /// The line that opens the model picker instead of starting a turn.
 pub(crate) const MODEL_COMMAND: &str = "/model";
+/// The one word `/model` takes: it opens the picker in the scope that records nothing. No model
+/// name is accepted, so `/model <name>` stays a prompt (CMD-17).
+pub(crate) const MODEL_SESSION_WORD: &str = "session";
+/// The line the one word makes with the command, which the completion list offers once `/model `
+/// is typed (CMD-10).
+pub(crate) const MODEL_SESSION_LINE: &str = "/model session";
 
 /// The line that opens the theme picker, or applies a theme named after the word.
 pub(crate) const THEME_COMMAND: &str = "/theme";
@@ -369,6 +375,7 @@ impl Command {
     /// stays narrow.
     pub fn typed_hint(&self) -> String {
         match self.name {
+            MODEL_COMMAND => format!("[{MODEL_SESSION_WORD}]"),
             EFFORT_COMMAND => format!("[{}]", effort_words().join(" | ")),
             SANDBOX_COMMAND => format!("[{}]", sandbox_words().join(" | ")),
             LIMIT_COMMAND => format!("[<n>[k|m] | <n> credits | {LIMIT_OFF}]"),
@@ -883,6 +890,19 @@ pub fn commands() -> Vec<Command> {
 /// line that is not a command at all completes to nothing, which is what closes the list.
 pub fn completions(line: &str) -> Vec<Command> {
     let trimmed = line.trim_start();
+    // The one word `/model` takes, offered as a row of its own once the command is settled by a
+    // space, with its own description. Only while what follows the space is the start of the word,
+    // so `/model gpt-5`, which is a prompt, is offered nothing.
+    if let Some(typed) = trimmed
+        .strip_prefix(MODEL_COMMAND)
+        .and_then(|rest| rest.strip_prefix(' '))
+    {
+        return if MODEL_SESSION_WORD.starts_with(typed) {
+            vec![model_session_row()]
+        } else {
+            Vec::new()
+        };
+    }
     if !trimmed.starts_with('/') || trimmed.contains(char::is_whitespace) {
         return Vec::new();
     }
@@ -896,6 +916,25 @@ pub fn completions(line: &str) -> Vec<Command> {
     offered
 }
 
+/// The row the list offers after `/model `: the line `/model session` and what it does. It is not
+/// a command of the table, which has `/model` once, but it is carried out as `/model` is.
+fn model_session_row() -> Command {
+    Command {
+        name: MODEL_SESSION_LINE,
+        argument: "",
+        description: t!(command_model_session),
+        mid_turn: MidTurn::Changes,
+    }
+}
+
+/// Whether Enter on `line`, with `offered` the row the list has under the cursor, takes the row
+/// before doing what the line says. Not for `/model ` with nothing after the space, which is still
+/// the bare command and opens the picker; Tab and a click take the row there.
+pub(crate) fn enter_takes_the_row(line: &str, offered: &Command) -> bool {
+    let line = line.trim();
+    offered.name != line && line != MODEL_COMMAND
+}
+
 /// The line `/effort `, `/sandbox ` or `/mode ` plus the start of one of its words becomes, or
 /// `None` where Tab has nothing to add.
 ///
@@ -905,6 +944,10 @@ pub fn completions(line: &str) -> Vec<Command> {
 /// they agree.
 pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     let line = line.trim_start();
+    // Before `/mode`, which is a prefix of `/model`.
+    if let Some(typed) = line.strip_prefix(MODEL_COMMAND) {
+        return complete_word(MODEL_COMMAND, typed, &[MODEL_SESSION_WORD]);
+    }
     if let Some(typed) = line.strip_prefix(MODE_COMMAND) {
         return complete_exact_word(MODE_COMMAND, typed, skills);
     }
@@ -996,9 +1039,19 @@ fn row_typed(line: &str) -> Option<Command> {
     commands()
         .into_iter()
         .find(|command| match argument_to(line, command.name) {
-            Some(argument) => !command.argument.is_empty() || argument.is_empty(),
+            Some(argument) => {
+                !command.argument.is_empty()
+                    || argument.is_empty()
+                    || is_the_word_a_command_takes(command.name, argument)
+            }
             None => false,
         })
+}
+
+/// Whether `argument` is the one fixed word a command that takes no argument accepts: `/model
+/// session`. Only that exact word, so `/model <name>` and `/model session now` are prompts.
+fn is_the_word_a_command_takes(command: &str, argument: &str) -> bool {
+    command == MODEL_COMMAND && argument == MODEL_SESSION_WORD
 }
 
 /// Whether the line is a command that takes no argument, followed by words.
@@ -1011,7 +1064,9 @@ fn row_typed(line: &str) -> Option<Command> {
 pub(crate) fn is_a_command_given_words(line: &str) -> bool {
     commands().into_iter().any(|command| {
         command.argument.is_empty()
-            && argument_to(line, command.name).is_some_and(|words| !words.is_empty())
+            && argument_to(line, command.name).is_some_and(|words| {
+                !words.is_empty() && !is_the_word_a_command_takes(command.name, words)
+            })
     })
 }
 
@@ -1442,6 +1497,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// R6. `/model` takes exactly one fixed word, `session`, and no model name. `/model session`
+    /// is the command and is carried out at once; every other line with words after `/model` is a
+    /// prompt, so `/model gpt-5`, `/model sessions`, `/model session now`, `/model Session` and
+    /// `/models` stay sent to the model. The faults it rejects are a prefix match on the word, a
+    /// case-insensitive one, trailing words ignored, and any word accepted as a model name.
+    #[test]
+    fn model_takes_exactly_the_word_session_and_nothing_else() {
+        for line in ["/model", "/model session", "/model   session  "] {
+            assert!(command_typed(line).is_some(), "{line:?} is not a command");
+            assert!(!is_a_command_given_words(line), "{line:?} is a prompt");
+        }
+        for line in [
+            "/model gpt-5",
+            "/model sessions",
+            "/model sess",
+            "/model Session",
+            "/model session now",
+            "/model now session",
+            "/models",
+            "/modelsession",
+        ] {
+            assert!(command_typed(line).is_none(), "{line:?} is a command");
+        }
+        for line in [
+            "/model gpt-5",
+            "/model sessions",
+            "/model Session",
+            "/model session now",
+        ] {
+            assert!(is_a_command_given_words(line), "{line:?} is not a prompt");
+        }
+        assert!(!is_a_command_given_words("/models"));
+        assert!(command_typed("/models").is_none());
+    }
+
+    /// R17, R18, R53. Typing `/model ` offers `session` as a row with its own description, Tab
+    /// finishes a start of the word, the hint after the word is `[session]`, and a model name
+    /// after the space is offered nothing. Enter on the bare `/model ` keeps opening the picker,
+    /// while Enter on the offered row of a longer line takes the row. The faults it rejects are
+    /// no row offered, a row offered for any word after `/model`, a missing description, no Tab
+    /// completion (or `/mode` swallowing `/model`), and Enter on `/model ` taking the row.
+    #[test]
+    fn typing_model_and_a_space_offers_the_session_word() {
+        let rows = completions("/model ");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, MODEL_SESSION_LINE);
+        assert_eq!(rows[0].description, t!(command_model_session));
+        assert!(!rows[0].description.is_empty());
+        assert_eq!(rows[0].mid_turn, MidTurn::Changes);
+        assert_eq!(completions("/model ses").len(), 1);
+        assert!(completions("/model gpt-5").is_empty());
+        assert!(completions("/model sessions").is_empty());
+
+        assert_eq!(
+            complete_argument("/model s", &[]),
+            Some("/model session".to_string())
+        );
+        assert_eq!(complete_argument("/model session", &[]), None);
+        assert_eq!(complete_argument("/model x", &[]), None);
+
+        let model = commands()
+            .iter()
+            .find(|command| command.name == MODEL_COMMAND)
+            .copied()
+            .expect("/model is in the table");
+        assert_eq!(model.typed_hint(), "[session]");
+
+        assert!(!enter_takes_the_row("/model ", &rows[0]));
+        assert!(enter_takes_the_row("/model ses", &rows[0]));
+        assert!(!enter_takes_the_row("/model session", &rows[0]));
     }
 
     /// The hint drawn for `/mcp` after its word names every subcommand the command takes, in the

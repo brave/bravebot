@@ -157,7 +157,10 @@ impl Open {
     /// This session opened in `mode`, which the three ways a window opens one choose from the
     /// person's own settings (AUTO-1).
     fn starting_in(mut self, mode: PermissionMode) -> Self {
-        self.permission_mode = LiveMode::new(mode);
+        self.permission_mode = LiveMode::new(mode).opened_by(match mode {
+            PermissionMode::Auto => bravebot_agent::ModeCause::Setting,
+            _ => bravebot_agent::ModeCause::Default,
+        });
         self
     }
 
@@ -1672,7 +1675,8 @@ impl Bridge {
             .open
             .get_mut(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        open.permission_mode.set(mode);
+        open.permission_mode
+            .set_by(mode, bravebot_agent::ModeCause::Request);
         Ok(json!({ "permissionMode": wire::permission_mode_name(mode) }))
     }
 

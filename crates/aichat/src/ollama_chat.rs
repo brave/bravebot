@@ -187,7 +187,8 @@ impl<'a> OllamaChatClient<'a> {
     /// The options a model's block carries are merged into the body and never interpreted, one
     /// level down for `options`, which the request also writes into. A key the request already set
     /// wins, so a block's `num_ctx` is overridden by the window the session budgets for: the two
-    /// differing is the silent truncation this client exists to prevent.
+    /// differing is the silent truncation this client exists to prevent. The keys in
+    /// [`protocol::TOOL_KEYS`] are the request's whether or not the turn set them.
     fn build(&self, request: &ChatRequest, streaming: bool) -> Result<Request, ChatError> {
         let mut body = serde_json::to_value(self.contents_for(request, streaming))
             .map_err(|error| ChatError::Encode(error.to_string()))?;
@@ -198,6 +199,9 @@ impl<'a> OllamaChatClient<'a> {
                 .and_then(|model| model.request_options(request.variant.as_deref())),
         ) {
             for (key, value) in &options {
+                if protocol::TOOL_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
                 match (object.get_mut(key), value) {
                     (Some(Value::Object(built)), Value::Object(added)) => {
                         for (name, setting) in added {

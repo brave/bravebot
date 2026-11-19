@@ -633,6 +633,9 @@ directories that sitting held, since the mode answered for them ([TRUST-6](trust
 `verified-by: bravebot_session::sessions::a_resumed_session_asks_about_writes_whatever_the_record_says`
 `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode`
 
+The trail names the mode of the sitting and each change of it ([TRACE-12](trace.md#TRACE-12)), so a
+person can read back what the record does not keep.
+
 <a id="MODE-11"></a>
 ### MODE-11: the desktop offers asking, accepting edits, planning and auto, one mode per open session
 
