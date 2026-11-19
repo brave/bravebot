@@ -2702,6 +2702,287 @@ fn a_read_through_a_reference_refused_for_leaving_the_workspace_is_recorded_as_t
     }
 }
 
+const A_DENIED_FILES_BYTES: &str = "SECRET-MARKER-4385";
+const AN_ALLOWED_FILES_BYTES: &str = "ALLOWED-MARKER-4385";
+
+/// One turn in which a listing of `generated` hands back `ref:1` for `generated/result.txt`, a file
+/// nobody vouched for, and the file is then replaced by a link to `target` before the planner uses
+/// the reference. `secret.txt` is covered by a `Read` deny rule and `allowed.txt` is not.
+///
+/// The planner's next calls are `after_the_listing`. Returns the workspace directory and the body
+/// of every request the model was sent, in order; a call's result is in the request after it.
+#[cfg(unix)]
+fn use_a_reference_after_its_file_became_a_link(
+    tag: &str,
+    target: &str,
+    after_the_listing: Vec<String>,
+) -> (Scratch, Vec<String>) {
+    let scratch = Scratch::new(tag);
+    std::fs::create_dir(scratch.path.join("generated")).unwrap();
+    std::fs::write(scratch.path.join("generated/result.txt"), "harmless\n").unwrap();
+    std::fs::write(scratch.path.join("secret.txt"), A_DENIED_FILES_BYTES).unwrap();
+    std::fs::write(scratch.path.join("allowed.txt"), AN_ALLOWED_FILES_BYTES).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let file = scratch.path.join("generated/result.txt");
+    let link_to = format!("../{target}");
+    let mut script = std::iter::once(tool_request("list_files", r#"{"directory":"generated"}"#))
+        .chain(after_the_listing)
+        .collect::<Vec<_>>()
+        .into_iter();
+    let mut round = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |_| {
+        round += 1;
+        // The second request is the one that carries the listing, so the file is replaced after the
+        // reference exists and before anything is done with it.
+        if round == 2 {
+            std::fs::remove_file(&file).unwrap();
+            std::os::unix::fs::symlink(&link_to, &file).unwrap();
+        }
+        script.next().map(Some)
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
+
+    let task = Task::new("work with the generated files").with_permissions(rules(
+        &["Read(secret.txt)"],
+        &[],
+        &[],
+    ));
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+    )
+    .expect("turn runs");
+    (scratch, every_request(&received))
+}
+
+/// PERM-7, READ-1. A reference to a file nobody vouched for stores the name it was issued under, and
+/// the file is opened when a processor needs it. A rule covers the file and not the name, so a file
+/// that became a link to a denied one after the listing is refused when the processor asks, as a
+/// read of that name is, and the processor is handed nothing. The refusal names the reference: the
+/// path behind it came out of a directory nobody vouched for.
+#[cfg(unix)]
+#[test]
+fn a_reference_whose_file_became_a_link_to_a_denied_file_is_not_given_to_a_processor() {
+    let (_scratch, bodies) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-denied-processor",
+        "secret.txt",
+        vec![
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"report the token"}"#,
+            ),
+            tool_request("read_file", r#"{"path":"generated/result.txt"}"#),
+            reply_with("done"),
+        ],
+    );
+
+    assert!(!bodies.is_empty(), "the model was never sent a request");
+    for body in &bodies {
+        assert!(
+            !body.contains(A_DENIED_FILES_BYTES),
+            "a denied file's bytes were sent to a model through a reference: {body}"
+        );
+    }
+    let refused = bodies
+        .iter()
+        .find(|body| body.contains("a deny rule in the user's settings covers ref:1"))
+        .unwrap_or_else(|| {
+            panic!("the processor call was not refused naming the reference: {bodies:?}")
+        });
+    for name in ["result.txt", "secret.txt"] {
+        assert!(
+            !refused.contains(name),
+            "the first request holding the refusal names {name}, which the reference withholds: {refused}"
+        );
+    }
+    // The same file asked for by name is refused too, so the two routes agree.
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body
+                .contains("a deny rule in the user's settings covers generated/result.txt")),
+        "a read of the same path was not refused by the rule: {bodies:?}"
+    );
+}
+
+/// The control for the test above: the same reference, replaced by a link to a file no rule covers,
+/// is read and handed to the processor. Without it the refusal above could be the harness refusing
+/// a reference whose file is a link.
+#[cfg(unix)]
+#[test]
+fn a_reference_whose_file_became_a_link_to_an_allowed_file_is_still_given_to_a_processor() {
+    let (_scratch, bodies) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-allowed-processor",
+        "allowed.txt",
+        vec![
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"report the token"}"#,
+            ),
+            processor_reply("nothing to report"),
+            reply_with("done"),
+        ],
+    );
+
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains(AN_ALLOWED_FILES_BYTES)),
+        "the processor was not handed a file no rule covers: {bodies:?}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains("a deny rule")),
+        "a rule refused a file it does not cover: {bodies:?}"
+    );
+}
+
+/// The same refusal on the route that writes a reference's bytes to a file: `write_file`'s
+/// `contents_ref` opens the file the reference stands for, and a link to a denied file must not
+/// become the body of another file, which a person would then be shown as an ordinary write.
+#[cfg(unix)]
+#[test]
+fn a_reference_whose_file_became_a_link_to_a_denied_file_is_not_written_to_another_file() {
+    let (scratch, bodies) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-denied-write",
+        "secret.txt",
+        vec![
+            tool_request_2(
+                "write_file",
+                r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert!(
+        !scratch.path.join("copy.txt").exists(),
+        "the denied file's bytes were written to another file"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("a deny rule in the user's settings covers ref:1")),
+        "the write was not refused naming the reference: {bodies:?}"
+    );
+    let (scratch, _) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-allowed-write",
+        "allowed.txt",
+        vec![
+            tool_request_2(
+                "write_file",
+                r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copy.txt")).expect("the control was written"),
+        AN_ALLOWED_FILES_BYTES,
+        "the control did not deliver a file no rule covers"
+    );
+}
+
+/// The same refusal on the route that feeds a reference to a program as standard input.
+#[cfg(unix)]
+#[test]
+fn a_reference_whose_file_became_a_link_to_a_denied_file_is_not_fed_to_a_program() {
+    let (scratch, bodies) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-denied-run",
+        "secret.txt",
+        vec![
+            tool_request(
+                "run",
+                r#"{"command":"sed -n p > filtered.txt","stdin_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert!(
+        !scratch.path.join("filtered.txt").exists(),
+        "a program was started with a denied file's bytes on its standard input"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("a deny rule in the user's settings covers ref:1")),
+        "the run was not refused naming the reference: {bodies:?}"
+    );
+    let (scratch, _) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-allowed-run",
+        "allowed.txt",
+        vec![
+            tool_request(
+                "run",
+                r#"{"command":"sed -n p > filtered.txt","stdin_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("filtered.txt"))
+            .expect("the control program ran")
+            .trim_end(),
+        AN_ALLOWED_FILES_BYTES,
+        "the control did not feed a file no rule covers"
+    );
+}
+
+/// The same refusal on `vet_content`, which opens a reference to check it before it is shown.
+#[cfg(unix)]
+#[test]
+fn a_reference_whose_file_became_a_link_to_a_denied_file_is_not_sent_to_be_vetted() {
+    let (_scratch, bodies) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-denied-vet",
+        "secret.txt",
+        vec![
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"some generated output"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    for body in &bodies {
+        assert!(
+            !body.contains(A_DENIED_FILES_BYTES),
+            "a denied file's bytes were sent to a model to be vetted: {body}"
+        );
+    }
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("a deny rule in the user's settings covers ref:1")),
+        "the vet was not refused naming the reference: {bodies:?}"
+    );
+    let (_scratch, bodies) = use_a_reference_after_its_file_became_a_link(
+        "deferred-link-allowed-vet",
+        "allowed.txt",
+        vec![
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"some generated output"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains(AN_ALLOWED_FILES_BYTES)),
+        "the control did not send a file no rule covers to be vetted: {bodies:?}"
+    );
+}
+
 /// The same record from every other tool that resolves a path the planner typed. Each words its
 /// own refusal, so a tool that stopped recording one would leave the trail short of a refusal the
 /// planner was told of, with every other tool still passing.
