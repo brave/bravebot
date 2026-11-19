@@ -549,4 +549,84 @@ pub open spec fn remembered_covers(remembered: Remembered, plan: Plan) -> bool {
         0 <= i < scopes.len() && some_line_covers(#[trigger] scopes[i].scope.lines@, plan))
 }
 
+/// Which list decides a single action, given which lists hold a matching rule: a deny decides
+/// over everything, an ask over an allow, and an allow only where nothing restricts (PERM-2).
+pub open spec fn ruling_of(denied: bool, asked: bool, allowed: bool) -> Option<Ruling> {
+    if denied {
+        Some(Ruling::Deny)
+    } else if asked {
+        Some(Ruling::Ask)
+    } else if allowed {
+        Some(Ruling::Allow)
+    } else {
+        None
+    }
+}
+
+pub open spec fn some_stage_is(each: Seq<Decision>, decision: Decision) -> bool {
+    exists|i: int| 0 <= i < each.len() && #[trigger] each[i] == decision
+}
+
+pub open spec fn every_stage_is(each: Seq<Decision>, decision: Decision) -> bool {
+    forall|i: int| 0 <= i < each.len() ==> #[trigger] each[i] == decision
+}
+
+/// What the rules say about a pipeline (PERM-6). A deny on any stage denies it, an ask on any stage
+/// asks, and it is allowed only where it has stages and every one is allowed. Everything else,
+/// including an empty pipeline, is unmatched.
+pub open spec fn pipeline_decision(each: Seq<Decision>) -> Decision {
+    if each.len() == 0 {
+        Decision::Unmatched
+    } else if some_stage_is(each, Decision::Ruled(Ruling::Deny)) {
+        Decision::Ruled(Ruling::Deny)
+    } else if some_stage_is(each, Decision::Ruled(Ruling::Ask)) {
+        Decision::Ruled(Ruling::Ask)
+    } else if every_stage_is(each, Decision::Ruled(Ruling::Allow)) {
+        Decision::Ruled(Ruling::Allow)
+    } else {
+        Decision::Unmatched
+    }
+}
+
+/// Taking one stage more adds exactly that stage to what is known.
+pub proof fn a_stage_more_is_one_more_stage(each: Seq<Decision>, at: int)
+    requires
+        0 <= at < each.len(),
+    ensures
+        forall|d: Decision|
+            #[trigger] some_stage_is(each.take(at + 1), d) == (some_stage_is(each.take(at), d)
+                || each[at] == d),
+        forall|d: Decision|
+            #[trigger] every_stage_is(each.take(at + 1), d) == (every_stage_is(each.take(at), d)
+                && each[at] == d),
+{
+    assert forall|d: Decision| #[trigger]
+        some_stage_is(each.take(at + 1), d)
+            == (some_stage_is(each.take(at), d) || each[at] == d) by {
+        if some_stage_is(each.take(at + 1), d) {
+            let i = choose|i: int| 0 <= i < at + 1 && #[trigger] each.take(at + 1)[i] == d;
+            if i < at {
+                assert(each.take(at)[i] == d);
+            }
+        }
+        if some_stage_is(each.take(at), d) {
+            let i = choose|i: int| 0 <= i < at && #[trigger] each.take(at)[i] == d;
+            assert(each.take(at + 1)[i] == d);
+        }
+        if each[at] == d {
+            assert(each.take(at + 1)[at] == d);
+        }
+    }
+    assert forall|d: Decision| #[trigger]
+        every_stage_is(each.take(at + 1), d)
+            == (every_stage_is(each.take(at), d) && each[at] == d) by {
+        if every_stage_is(each.take(at + 1), d) {
+            assert(each.take(at + 1)[at] == each[at]);
+            assert forall|i: int| 0 <= i < at implies #[trigger] each.take(at)[i] == d by {
+                assert(each.take(at + 1)[i] == each.take(at)[i]);
+            }
+        }
+    }
+}
+
 } // verus!
