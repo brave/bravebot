@@ -4,10 +4,12 @@
 //! specifies, so a contract holds the code to the meaning. docs/development/verification.md says
 //! how a contract is written and run.
 
-use crate::command::{Asked, Plan, Route, Step, Steps};
+use crate::command::{Asked, Expansion, Plan, Route, Step, Steps, ValuePart};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::permissions::{Decision, Ruling};
 use crate::policy::{OutputFacts, RunFacts, RunReason};
+use crate::programs::Command;
+use crate::remembered::{Remembered, RememberedArg, RememberedLine, RememberedStep, Shape};
 use std::path::PathBuf;
 use vstd::prelude::*;
 
@@ -335,6 +337,216 @@ pub open spec fn strength(decision: Option<Integrity>) -> u8 {
 /// `strength` that ranked an undecided boundary above a trust fails the contract on it.
 pub open spec fn grants_no_more(a: Option<Integrity>, b: Option<Integrity>) -> bool {
     a == Some(Integrity::Untrusted) || a == b || (a is None && b == Some(Integrity::Trusted))
+}
+
+/// Whether two held paths are the same bytes. Uninterpreted, and `compare::same_path_buf` is
+/// assumed to answer it.
+pub uninterp spec fn same_path_buf(held: PathBuf, seen: PathBuf) -> bool;
+
+/// Two argument lists of one length, equal one for one.
+pub open spec fn same_texts(a: Seq<String>, b: Seq<String>) -> bool {
+    a.len() == b.len() && forall|i: int| 0 <= i < a.len() ==> (#[trigger] a[i])@ == b[i]@
+}
+
+/// A vouched entry covers a step exactly where all four of its fields are the step's: the file,
+/// the path that starts it, the arguments and the tree (RUN-8). Every field is named, so a field
+/// added to `Command` stops the build here.
+pub open spec fn command_is(
+    command: Command,
+    program: PathBuf,
+    started_as: PathBuf,
+    args: Seq<String>,
+    directory: PathBuf,
+) -> bool {
+    let Command {
+        program: held_program,
+        started_as: held_started_as,
+        args: held_args,
+        directory: held_directory,
+    } = command;
+    same_path_buf(held_program, program) && same_path_buf(held_started_as, started_as)
+        && same_texts(held_args@, args) && same_path_buf(held_directory, directory)
+}
+
+/// An entry is a step, in a tree, exactly where `command_is` says so of the step's resolved file,
+/// the path that starts it and its arguments. A step's assignments and routes are no entry's.
+pub open spec fn entry_is_step(command: Command, step: Step, directory: PathBuf) -> bool {
+    let Step {
+        program: _,
+        resolved,
+        started_as,
+        args,
+        // The person vouched for the expanded arguments, whichever a pattern produced.
+        matched: _,
+        // Refused before an entry is consulted, by `Plan::carries_an_assignment` and the write
+        // question, which `run_reason_is_sound` states.
+        environment: _,
+        expansions: _,
+        routes: _,
+    } = step;
+    command_is(command, resolved, started_as, args@, directory)
+}
+
+pub open spec fn some_entry_is(listed: Seq<Command>, step: Step, directory: PathBuf) -> bool {
+    exists|i: int| 0 <= i < listed.len() && entry_is_step(#[trigger] listed[i], step, directory)
+}
+
+/// Every step a plan runs is an entry, in the plan's tree: each step of each pipeline, part for
+/// part, and each step inside a `$(...)`, which runs before the step it feeds.
+pub open spec fn steps_vouched(listed: Seq<Command>, steps: Steps, directory: PathBuf) -> bool
+    decreases steps, 1nat,
+{
+    match steps {
+        Steps::Pipeline(list) => forall|i: int|
+            0 <= i < list@.len() ==> step_vouched(listed, #[trigger] list@[i], directory),
+        Steps::Join { left, joiner: _, right } => steps_vouched(listed, *left, directory)
+            && steps_vouched(listed, *right, directory),
+        Steps::Group(inner) => steps_vouched(listed, *inner, directory),
+    }
+}
+
+pub open spec fn step_vouched(listed: Seq<Command>, step: Step, directory: PathBuf) -> bool
+    decreases step, 1nat,
+{
+    some_entry_is(listed, step, directory) && forall|i: int|
+        0 <= i < step.expansions@.len() ==> expansion_vouched(
+            listed,
+            #[trigger] step.expansions@[i],
+            directory,
+        )
+}
+
+pub open spec fn expansion_vouched(
+    listed: Seq<Command>,
+    expansion: Expansion,
+    directory: PathBuf,
+) -> bool
+    decreases expansion, 1nat,
+{
+    forall|i: int|
+        0 <= i < expansion.parts@.len() ==> part_vouched(
+            listed,
+            #[trigger] expansion.parts@[i],
+            directory,
+        )
+}
+
+pub open spec fn part_vouched(listed: Seq<Command>, part: ValuePart, directory: PathBuf) -> bool
+    decreases part, 1nat,
+{
+    match part {
+        ValuePart::Substitution { source: _, steps } => steps_vouched(listed, *steps, directory),
+        ValuePart::Text(_) | ValuePart::Variable(_) => true,
+    }
+}
+
+/// Whether a text is a number a slot admits. Uninterpreted, and `compare::is_number` is assumed
+/// to answer it.
+pub uninterp spec fn is_number(text: Seq<char>) -> bool;
+
+pub open spec fn same_environment(a: Seq<(String, String)>, b: Seq<(String, String)>) -> bool {
+    a.len() == b.len() && forall|i: int|
+        0 <= i < a.len() ==> (#[trigger] a[i]).0@ == b[i].0@ && a[i].1@ == b[i].1@
+}
+
+/// Two routes are the same stream, the same way of writing it, and the same path.
+pub open spec fn same_route(a: Route, b: Route) -> bool {
+    match (a, b) {
+        (Route::Stdout { path, append }, Route::Stdout { path: other, append: other_append })
+            => append == other_append && same_path_buf(path, other),
+        (Route::Stderr { path, append }, Route::Stderr { path: other, append: other_append })
+            => append == other_append && same_path_buf(path, other),
+        (Route::Stdin { path }, Route::Stdin { path: other }) => same_path_buf(path, other),
+        (Route::Both { path }, Route::Both { path: other }) => same_path_buf(path, other),
+        (Route::StderrToStdout, Route::StderrToStdout) => true,
+        _ => false,
+    }
+}
+
+pub open spec fn same_routes(a: Seq<Route>, b: Seq<Route>) -> bool {
+    a.len() == b.len() && forall|i: int| 0 <= i < a.len() ==> same_route(#[trigger] a[i], b[i])
+}
+
+/// A held argument admits exactly its own text, or a number where it is a slot.
+pub open spec fn arg_admits(held: RememberedArg, seen: Seq<char>) -> bool {
+    match held {
+        RememberedArg::Literal(text) => text@ == seen,
+        RememberedArg::Number => is_number(seen),
+    }
+}
+
+pub open spec fn args_admit(held: Seq<RememberedArg>, seen: Seq<String>) -> bool {
+    held.len() == seen.len() && forall|i: int|
+        0 <= i < held.len() ==> arg_admits(#[trigger] held[i], seen[i]@)
+}
+
+/// A remembered step covers a step exactly where every field it holds is the step's, the
+/// arguments one for one, and the step carries no expansion, which no entry holds (RUN-19). Both
+/// structs are named field by field, so a field added to either stops the build here.
+pub open spec fn remembered_step_matches(held: RememberedStep, step: Step) -> bool {
+    let Step {
+        program,
+        resolved,
+        started_as,
+        args,
+        // Which arguments a pattern produced. The arguments themselves are compared.
+        matched: _,
+        environment,
+        expansions,
+        routes,
+    } = step;
+    let RememberedStep {
+        program: held_program,
+        resolved: held_resolved,
+        started_as: held_started_as,
+        args: held_args,
+        environment: held_environment,
+        routes: held_routes,
+    } = held;
+    expansions@.len() == 0 && held_program@ == program@ && same_path_buf(held_resolved, resolved)
+        && same_path_buf(held_started_as, started_as)
+        && same_environment(held_environment@, environment@)
+        && same_routes(held_routes@, routes@) && args_admit(held_args@, args@)
+}
+
+pub open spec fn steps_match(held: Seq<RememberedStep>, seen: Seq<Step>) -> bool {
+    held.len() == seen.len() && forall|i: int|
+        0 <= i < held.len() ==> remembered_step_matches(#[trigger] held[i], seen[i])
+}
+
+/// A remembered line covers a line exactly where both are joined the same way, part for part, and
+/// each step matches the step in its place.
+pub open spec fn shape_matches(held: Shape, seen: Steps) -> bool
+    decreases held,
+{
+    match (held, seen) {
+        (Shape::Pipeline(held), Steps::Pipeline(seen)) => steps_match(held@, seen@),
+        (
+            Shape::Join { left: held_left, joiner: held_joiner, right: held_right },
+            Steps::Join { left, joiner, right },
+        ) => held_joiner == joiner && shape_matches(*held_left, *left) && shape_matches(
+            *held_right,
+            *right,
+        ),
+        (Shape::Group(held), Steps::Group(seen)) => shape_matches(*held, *seen),
+        _ => false,
+    }
+}
+
+/// Some line of a list covers a plan exactly where one of them matches it.
+pub open spec fn some_line_covers(lines: Seq<RememberedLine>, plan: Plan) -> bool {
+    exists|i: int| 0 <= i < lines.len() && shape_matches(#[trigger] lines[i].steps, plan.steps)
+}
+
+/// The remembered lines cover a plan exactly where an entry, or a line in a scope, matches it
+/// (RUN-19, RUN-20). The files a write may create a credential in say nothing about a line.
+pub open spec fn remembered_covers(remembered: Remembered, plan: Plan) -> bool {
+    let entries = crate::remembered::spec_entries(remembered);
+    let scopes = crate::remembered::spec_scopes(remembered);
+    (exists|i: int|
+        0 <= i < entries.len() && shape_matches(#[trigger] entries[i].line.steps, plan.steps))
+        || (exists|i: int|
+        0 <= i < scopes.len() && some_line_covers(#[trigger] scopes[i].scope.lines@, plan))
 }
 
 } // verus!

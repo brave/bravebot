@@ -7838,29 +7838,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
-        self.root.is_some()
-            && plan.steps().iter().all(|step| {
-                // Destructured so that a field added to `Step` stops the build here. This key holds
-                // four of the six deliberately, and the two it leaves out are only safe because
-                // something else refuses them first: an assignment is refused by
-                // `Plan::carries_an_assignment`, which every gate consulting this one has to ask
-                // separately, and a route by the write question. A seventh field would have no
-                // such refusal behind it, and left out of this key silently it would be a line
-                // differing from the one that was answered for.
-                let crate::command::Step {
-                    program: _,
-                    resolved,
-                    started_as,
-                    args,
-                    // The person vouched for the expanded arguments, whichever a pattern produced.
-                    matched: _,
-                    environment: _,
-                    expansions: _,
-                    routes: _,
-                } = step;
-                self.programs
-                    .contains(resolved, started_as, args, &plan.directory)
-            })
+        self.root.is_some() && self.programs.covers_every_step(plan)
     }
 
     /// Whether the person's trust of the workspace root said that lines held to a closed sandbox
