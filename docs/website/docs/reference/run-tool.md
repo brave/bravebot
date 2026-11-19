@@ -436,8 +436,9 @@ and the label do not tell whether a name exists. A line where a matched name sta
 an option and is asked about too. Quoting the pattern, as in `basename 'incoming/*'`, passes it as
 written and keeps the line proven by what it reads.
 
-Expansion is bounded in both directions: a word standing for more than 100 arguments is refused with
-the count, and the walk gives up after 4,096 directories. An approval prompt nobody reads grants
+Expansion is bounded in both directions: a word standing for more than 100 arguments is refused, and
+the refusal says the cap and not how many names a pattern matched, because the planner may not learn
+that from a directory nobody vouched for. The walk gives up after 4,096 directories. An approval prompt nobody reads grants
 everything and asks nothing.
 
 ## A redirection is a write

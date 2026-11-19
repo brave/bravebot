@@ -275,6 +275,12 @@ pub enum Reason {
     WithheldVariable(String),
     /// A word standing for more arguments than a person can be shown at one prompt.
     TooMany { found: usize, cap: usize },
+    /// A word whose patterns matched more names than a person can be shown at one prompt. It
+    /// carries the cap and no count: how many names a pattern matched is read from a directory
+    /// nobody may have vouched for, and the sentence reaches the planner ([CMDLINE-4]).
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    TooManyMatched { cap: usize },
     /// A walk that read more directories than the ceiling allows.
     TooDeep { cap: usize },
     /// A `~` where this user has no home directory.
@@ -324,6 +330,33 @@ fn write_shell_builtin(f: &mut fmt::Formatter<'_>, word: &str) -> fmt::Result {
             "It only means something between commands of one shell. Where a script needs it, write the whole script as `sh -c '...'`, which is approved as one line"
         }
     })
+}
+
+/// The sentence for a word whose braces stand for `found` arguments, more than the `cap`.
+fn write_too_many(f: &mut fmt::Formatter<'_>, found: usize, cap: usize) -> fmt::Result {
+    write!(
+        f,
+        "stands for {found} arguments, and at most {cap} can be put to a person at one prompt"
+    )
+}
+
+/// The sentence for a word whose patterns matched more than `cap` names. It carries the cap and
+/// no count ([CMDLINE-4]).
+///
+/// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+fn write_too_many_matched(f: &mut fmt::Formatter<'_>, cap: usize) -> fmt::Result {
+    write!(
+        f,
+        "stands for more than the {cap} arguments that can be put to a person at one prompt. Name a narrower pattern"
+    )
+}
+
+/// The sentence for a pattern that would read more than `cap` directories.
+fn write_too_deep(f: &mut fmt::Formatter<'_>, cap: usize) -> fmt::Result {
+    write!(
+        f,
+        "would read more than {cap} directories to work out what it matches. Name a narrower pattern"
+    )
 }
 
 impl fmt::Display for Reason {
@@ -390,14 +423,9 @@ impl fmt::Display for Reason {
                 f,
                 "`{name}` is withheld from the programs this agent starts, so its value cannot be put in a command's environment"
             ),
-            Self::TooMany { found, cap } => write!(
-                f,
-                "stands for {found} arguments, and at most {cap} can be put to a person at one prompt"
-            ),
-            Self::TooDeep { cap } => write!(
-                f,
-                "would read more than {cap} directories to work out what it matches. Name a narrower pattern"
-            ),
+            Self::TooMany { found, cap } => write_too_many(f, *found, *cap),
+            Self::TooManyMatched { cap } => write_too_many_matched(f, *cap),
+            Self::TooDeep { cap } => write_too_deep(f, *cap),
             Self::NoHome => f.write_str("this user has no home directory to stand for"),
             Self::NotOneProgram => f.write_str(
                 "a step's program has to be one named thing, so that the plan can say what will run. A program worked out from what is on disk is a program that changes when the tree does",
@@ -1812,11 +1840,10 @@ fn expand_marked(
         out.extend(matched.into_iter().map(|name| (name, true)));
     }
 
+    // What the patterns matched comes from directories nobody may have vouched for, and the
+    // refusal is told to the planner, so it states the cap and no count ([CMDLINE-4]).
     if out.len() > MAX_ARGUMENTS {
-        return Err(refused(Reason::TooMany {
-            found: out.len(),
-            cap: MAX_ARGUMENTS,
-        }));
+        return Err(refused(Reason::TooManyMatched { cap: MAX_ARGUMENTS }));
     }
     Ok(out)
 }
@@ -4012,9 +4039,10 @@ mod tests {
     }
 
     /// An approval prompt long enough that nobody reads it is a prompt that grants everything and
-    /// asks nothing. The count is in the refusal so the planner knows how much narrower to be.
+    /// asks nothing. The count of alternatives comes from the planner's own word, so the refusal
+    /// may say it and the planner knows how much narrower to be.
     #[test]
-    fn expansion_is_bounded_and_the_refusal_says_the_count() {
+    fn a_brace_count_past_the_bound_is_refused_with_the_count() {
         let tree = Tree::new("bounded");
         let refusal = expansion_refused("echo {1..500}", 1, &tree.root);
         assert_eq!(
@@ -4027,29 +4055,87 @@ mod tests {
         assert!(refusal.to_string().contains("500"));
     }
 
-    /// A pattern that matches more names than the bound is refused with the number of names the
-    /// walk found, which is recorded under Known costs in labels.md because the names of a
-    /// directory nobody vouched for decide it. The refusal names the word as written and no name.
-    /// The wrong implementation puts a name in the sentence or leaves the number out without the
-    /// spec saying so.
+    /// The digit runs of a sentence, in order.
+    fn numbers_in(text: &str) -> Vec<&str> {
+        text.split(|c: char| !c.is_ascii_digit())
+            .filter(|run| !run.is_empty())
+            .collect()
+    }
+
+    /// What a pattern matched is read from a directory nobody may have vouched for, and the
+    /// refusal is told to the planner, so it states the cap and no count ([CMDLINE-4]). The
+    /// padded form `{p*,{1..99}}` is the one that recovered the count of a prefix by
+    /// subtraction.
+    ///
+    /// The wrong implementation spells how many names matched, which the planner reads back as 150
+    /// for `*` and as 189, hence 90, for the padded word. The 101st and the 150th name give the
+    /// same sentence, so what is told does not vary with how many matched.
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
     #[test]
-    fn a_pattern_matching_more_than_the_bound_is_refused_with_the_number_of_names() {
-        let tree = Tree::new("bounded-by-names");
-        for number in 0..=MAX_ARGUMENTS {
-            tree.file(&format!("name-{number:03}.txt"));
+    fn names_past_the_bound_are_refused_without_a_count() {
+        let tree = Tree::new("bounded-matches");
+        for n in 1..=90 {
+            tree.file(&format!("incoming/p{n:03}"));
         }
-        let refusal = expansion_refused("ls *.txt", 1, &tree.root);
+        for n in 1..=60 {
+            tree.file(&format!("incoming/q{n:03}"));
+        }
+        let all = expansion_refused("echo incoming/*", 1, &tree.root);
+        assert_eq!(all.reason, Reason::TooManyMatched { cap: MAX_ARGUMENTS });
+        assert_eq!(numbers_in(&all.reason.to_string()), ["100"]);
+
+        let padded = expansion_refused("echo incoming/{p*,{1..99}}", 1, &tree.root);
+        assert_eq!(padded.reason, all.reason);
+        assert_eq!(padded.reason.to_string(), all.reason.to_string());
+
+        // 101 names, one over the bound, is told as 150 names are.
+        let barely = Tree::new("bounded-matches-barely");
+        for n in 1..=101 {
+            barely.file(&format!("d/f{n:03}"));
+        }
+        let one_over = expansion_refused("echo d/*", 1, &barely.root);
+        assert_eq!(one_over.reason.to_string(), all.reason.to_string());
+    }
+
+    /// The bound is on the names a word stands for, so a line at or under it still expands and
+    /// is run. The wrong implementation moves the bound to every pattern, or refuses a word that
+    /// the padded form brings to exactly the cap.
+    #[test]
+    fn names_up_to_the_bound_still_expand() {
+        let tree = Tree::new("bounded-matches-under");
+        for n in 1..=90 {
+            tree.file(&format!("incoming/p{n:03}"));
+        }
+        assert_eq!(expanded("echo incoming/p*", 1, &tree.root).len(), 90);
+        let at_the_cap = Tree::new("bounded-matches-at");
+        for n in 1..=MAX_ARGUMENTS {
+            at_the_cap.file(&format!("f{n:03}"));
+        }
+        assert_eq!(
+            expanded("echo f*", 1, &at_the_cap.root).len(),
+            MAX_ARGUMENTS
+        );
+    }
+
+    /// The ceiling on directories read is pinned: `*/*` reads the root and then each directory
+    /// under it. The refusal states the cap, which is a constant, and the count of directories read
+    /// is not in it. The wrong implementation never refuses, so a pattern over a large tree holds
+    /// the turn open.
+    #[test]
+    fn a_walk_past_the_directory_ceiling_is_refused_with_the_cap_only() {
+        let tree = Tree::new("ceiling");
+        for n in 0..=MAX_DIRECTORIES {
+            std::fs::create_dir(tree.root.join(format!("d{n}"))).expect("a scratch directory");
+        }
+        let refusal = expansion_refused("echo */*", 1, &tree.root);
         assert_eq!(
             refusal.reason,
-            Reason::TooMany {
-                found: MAX_ARGUMENTS + 1,
-                cap: MAX_ARGUMENTS
+            Reason::TooDeep {
+                cap: MAX_DIRECTORIES
             }
         );
-        let said = refusal.said(true);
-        assert!(said.contains("101"), "{said}");
-        assert!(said.contains("`*.txt`"), "{said}");
-        assert!(!said.contains("name-"), "{said}");
+        assert_eq!(numbers_in(&refusal.reason.to_string()), ["4096"]);
     }
 
     /// The same names a listing steps over, so that one idea of what the tree contains serves

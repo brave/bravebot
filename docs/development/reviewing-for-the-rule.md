@@ -196,6 +196,15 @@ or a submodule. It never opens the `.git` file: the `gitdir:` line it holds is t
 content, and a change that read it, or named the directory it points to, would be a violation of
 shape 1.
 
+The same holds for whether a `run` line is refused for standing for more than 100 names, or for
+reading more than 4,096 directories (CMDLINE-4). The compile compares how many names the patterns
+matched with the bound, and the refusal states the cap and no count taken from the directory, so
+no number out of a directory nobody vouched for is spelled into a sentence the driver writes. What
+remains is one bit per call, whether the count passed the bound, which
+[specs/labels.md](../specs/labels.md) lists under Known costs. A change that spelled the count, or
+chose the sentence from a name, would be a violation of shape 1 or 3 and is not covered by this
+paragraph.
+
 A measurement of file names, lengths and modification times that the driver compares and reduces to
 one bool is not a branch on untrusted content, for the same reason an exit status is not. The work
 record's write signal for a `run` line (`crates/agent/src/workspace/tree_mark.rs`) is one: the

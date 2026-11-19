@@ -1420,6 +1420,27 @@ arrives at all.
   it, a reason outside the closed set, or a different sentence chosen from the entry for any other
   purpose is a violation and not covered here.
 
+- **Whether a `run` line is refused for standing for too many names, or for reading too many
+  directories, is not one of the ten, and is one bit per call about a directory nobody vouched
+  for.** [CMDLINE-4](tools/command-line.md#CMDLINE-4) bounds a word at 100 arguments and a walk at
+  4,096 directories. The compile compares the number of names the patterns matched with the first,
+  and the number of directories it read with the second, and a line past either is refused. The
+  refusal states the cap, which is a constant, and states no count taken from the directory's
+  entries, so no number out of the directory is spelled into a sentence the driver writes. The
+  brace bound is counted from the planner's own word before anything is read and its count is
+  still spelled. What remains is that a line is accepted or refused according to whether the count
+  passes the bound. A planner that pads a pattern with `k` literal alternatives, as in
+  `dir/{p*,{1..k}}`, learns from one call whether the names starting with `p` number more than
+  `100 - k`, and finds a count by about seven calls. The comparison reads no name and no byte of a
+  file: it reads how many entries a directory listing held, and the planner learns one bit per call
+  from the answer, as it learns whether a path exists from whether a read of it succeeds. The
+  bit is bounded by the calls the planner makes, each of which a person may be asked about when
+  it is not covered by a rule, and no name is revealed by it. The same kind of bit is in the
+  reason a checkout's refused filesystem entry is named, when the wildcard visits more paths
+  than a pattern may, which is the entry above this one. The refusal carries no name, no
+  count and no fact about which pattern matched. A change that spells the count, or a name, or
+  chooses the sentence from either, is a violation of shape 1 or 3 and is not covered here.
+
 - **A model that searches the web is kept out by a list of ids, and a model nobody listed is not.**
   Whether a model adds retrieved pages to its context is not something a request or a reply states,
   so `RETRIEVING_MODELS` is a list a developer writes from a provider's documentation

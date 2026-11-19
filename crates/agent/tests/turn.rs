@@ -34818,6 +34818,82 @@ fn a_pattern_matching_nothing_in_an_unvouched_directory_is_treated_as_one_that_m
     );
 }
 
+/// CMDLINE-4, LABEL-3: the refusal of a word standing for more names than the bound states the
+/// bound and no count taken from the directory. `echo incoming/*` over 150 files and the padded
+/// `echo incoming/{p*,{1..99}}`, which stands for the 90 names starting with `p` and 99 literals,
+/// are told in the same words, so the planner cannot subtract the padding to recover a number. A
+/// line over 90 names still runs.
+///
+/// The wrong implementation spells how many names matched, which the planner reads as 150 for the
+/// first line and as 189 for the second.
+#[test]
+fn the_refusal_of_too_many_matched_names_does_not_state_how_many_matched() {
+    let scratch = Scratch::new("run-pattern-too-many");
+    std::fs::create_dir(scratch.path.join("incoming")).unwrap();
+    for n in 1..=90 {
+        std::fs::write(scratch.path.join(format!("incoming/p{n:03}")), "x\n").unwrap();
+    }
+    for n in 1..=60 {
+        std::fs::write(scratch.path.join(format!("incoming/q{n:03}")), "x\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"echo incoming/*"}"#),
+        tool_request("run", r#"{"command":"echo incoming/{p*,{1..99}}"}"#),
+        tool_request("run", r#"{"command":"echo incoming/p*"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut trust = trusting_the_workspace();
+    trust.distrust("incoming");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("list them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after_the_first = &sent[1];
+    let after_the_second = &sent[2];
+    let said = "stands for more than the 100 arguments";
+    assert!(after_the_first.contains(said), "{after_the_first}");
+    assert!(after_the_second.contains(said), "{after_the_second}");
+    for (request, count) in [
+        (after_the_first, "150 arguments"),
+        (after_the_second, "189 arguments"),
+    ] {
+        assert!(
+            !request.contains(count),
+            "the count of names a pattern matched reached the planner: {request}"
+        );
+    }
+    assert!(
+        !after_the_second.contains("90 arguments"),
+        "{after_the_second}"
+    );
+    // 90 names are under the bound, so the line was put to the person and run.
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "the 90-name line was not run"
+    );
+}
+
 /// A result that no command produced says nothing about vouching, which would be advice about a
 /// tool the planner did not call.
 #[test]
