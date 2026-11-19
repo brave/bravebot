@@ -7794,7 +7794,13 @@ fn edit_file<S: Sink, C: Confirmer>(
         // `read_file` asks before it does, from the path, the map, the mode and the turn's list.
         // A run with nobody to ask outside bypass gets no question from a read, so it is not sent
         // to one.
-        let read = if !nobody_to_ask
+        //
+        // Not named for a reference. Whether a read would put the question depends on the
+        // extension of the name and on what the file system says of it, and the name behind a
+        // reference came out of a directory nobody vouched for, so the sentence would differ by
+        // a name the planner was not shown. A reference gets the vouch as the person's to give.
+        let read = if destination == Destination::Named
+            && !nobody_to_ask
             && policy.reading_files_is_offered()
             && bravebot_filetype::by_name::media_for(&proposed_path).is_none()
             && workspace.names_a_file(&proposed_path)

@@ -549,7 +549,9 @@ sentence names the routes that are open: the whole file with `write_file`, an ed
 your vouching for the path. It names `write_file` and `run` only when the session offers them.
 Where a `read_file` of the file would ask you to vouch for it, the sentence names that read and then
 `edit_file`. In bypass mode the read is vouched for without asking anybody, so the sentence names
-the read and does not send the agent to you.
+the read and does not send the agent to you. A file the agent names with `path_ref` is never sent to
+a `read_file` by this sentence, because whether that read would ask you depends on the name behind
+the reference, which the agent was not shown. It is told that vouching for the path is yours to do.
 
 ### Notebook cells
 

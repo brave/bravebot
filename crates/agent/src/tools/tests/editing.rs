@@ -350,8 +350,35 @@ fn edit_by_reference(
     )
 }
 
-/// EDIT-8, EDIT-2. A `cell` edit by `path_ref` of a file nobody vouched for gets the same
-/// refusal whatever the name behind the reference is. The name came out of a directory nobody
+/// EDIT-2. The refusal of an edit by `path_ref` of a file nobody vouched for is the same whether
+/// the name behind the reference has a picture extension or not. The hint that a `read_file`
+/// would put the vouch question is chosen from the extension of the name for a typed `path`,
+/// and the name behind a reference came out of a directory nobody vouched for, so a hint that
+/// differs tells the planner a fact about it. The regression it rejects is choosing the hint from
+/// that name, which sends a `.png` to "ask the person" and any other name to "read it with
+/// read_file".
+#[test]
+fn an_edit_by_reference_of_an_untrusted_file_gives_the_same_hint_whatever_its_extension() {
+    let arguments = json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"});
+    let mut told = Vec::new();
+    for name in ["zqxleak.png", "zqxleak.txt", "zqxleak"] {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_vouching_nothing(&mut sink);
+        let (said, after) = edit_by_reference(&mut policy, name, "old\n", &arguments);
+        assert_eq!(after, "old\n", "{name} was written");
+        assert!(
+            said.starts_with("refused: this file is closed to edit_file"),
+            "{name} was not refused as an untrusted file: {said}"
+        );
+        assert!(!said.contains("zqxleak"), "{name} was named: {said}");
+        told.push(said);
+    }
+    assert_eq!(told[0], told[1], "the hint depends on the hidden name");
+    assert_eq!(told[1], told[2], "the hint depends on the hidden name");
+}
+
+/// EDIT-8, EDIT-2. A `cell` edit by `path_ref` of a file nobody vouched for gets the same refusal
+/// whatever the name behind the reference is. The name came out of a directory nobody
 /// vouched for, so a sentence that differs between a `.ipynb` and any other name tells the
 /// planner a fact about it. The regression it rejects is testing the extension of the hidden
 /// name before the trust check, which refuses a `.txt` as "not a notebook" and a `.ipynb` as
