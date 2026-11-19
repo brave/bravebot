@@ -2507,11 +2507,13 @@ impl Compiler<'_, '_> {
                 // An operand naming the terminal device, judged after expansion so that a pattern
                 // or a `~` working out to the device is caught as the plain spelling is. The
                 // operand is quoted back rather than the program, since the program is usually an
-                // ordinary one and the device is the word that has to change.
+                // ordinary one and the device is the word that has to change. Worded from the
+                // operand the planner wrote, not the name a pattern matched in `/dev`, which
+                // nobody vouched for (CMDLINE-4).
                 if names_a_terminal(Path::new(&expanded)) {
                     return Err(Refused {
                         span: operand.span,
-                        text: expanded,
+                        text: render(&operand.pieces),
                         reason: Reason::Interactive(TERMINAL_DEVICE),
                     }
                     .into());
@@ -5052,12 +5054,18 @@ mod tests {
         // is refused as the plain spelling is. Guarded on the device, because the pattern is matched
         // against this machine's `/dev` and a build container need not have one.
         if Path::new("/dev/tty").exists() {
+            let refusal = compile_refused("cat /dev/tt?", &tree.root);
             assert!(
-                matches!(
-                    compile_refused("cat /dev/tt?", &tree.root).reason,
-                    Reason::Interactive(_)
-                ),
+                matches!(refusal.reason, Reason::Interactive(_)),
                 "a pattern working out to the device was not refused"
+            );
+            // `/dev` is a directory nobody vouched for (CMDLINE-4): the refusal is decided from
+            // the name the pattern matched there, but it is worded from the operand the planner
+            // wrote, not the name read out of `/dev`, which could differ from it.
+            assert_eq!(
+                refusal.text, "/dev/tt?",
+                "the refusal quoted the device name the pattern matched rather than the \
+                 planner's own operand: {refusal}"
             );
         }
     }
