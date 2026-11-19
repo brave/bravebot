@@ -115,7 +115,7 @@ A change to this skill is a separate pull request from its own worktree, never p
 The pull request is not finished when it is opened. It is finished when its checks have passed and netzenbot-reviewer has reviewed the current head and asks for nothing, or one of the limits below ends the wait. Use [pr-fix](../pr-fix/SKILL.md) for each step, from the worktree. Below, `...` stands for `python3 agents/skills/pr-fix/pr-fix.py`, and the `run` arguments are the ones pr-fix gives for each step.
 
 1. `... review <pr>` asks netzenbot-reviewer for a review of the head.
-2. `... ci <pr> --wait` with `deadline_seconds: 600`. Repeat it until no check is pending.
+2. `... ci <pr> --wait` with `deadline_seconds: 600`. Repeat it until no check is pending. Exit 3 means a reviewer wrote feedback while it waited: run `... comments <pr>` and do a fix round before waiting again.
 3. Read the verdict with `gh pr view <pr> --repo brave/bravebot --json state,isDraft,headRefOid,reviews,reviewRequests`. Only a review by netzenbot-reviewer made at `headRefOid` counts, since a push makes every earlier review a review of different code. A `PENDING` or `DISMISSED` review is ignored. The verdict is:
    - approved: `APPROVED`, or `COMMENTED` with none of the reviewer's threads open in `... comments <pr>`. The wait is over.
    - changes: `CHANGES_REQUESTED`, or `COMMENTED` with a thread of the reviewer's open. Do a fix round.
