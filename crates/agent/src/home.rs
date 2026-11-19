@@ -437,7 +437,9 @@ pub(crate) fn replace_private(directory: &Path, file: &str, text: &str) -> std::
 /// Write `contents` to a file that is not there yet, readable only by this user.
 ///
 /// Refuses, with `AlreadyExists`, a name that is taken, a link included, so a writer that must
-/// never replace a file asks for this and not for [`write_file`].
+/// never replace a file asks for this and not for [`write_file`]. A write that fails removes the
+/// file, so the name is not left half written. A failure of that removal is discarded, and the
+/// write's error is the one returned.
 pub fn create_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let mut file = open_private(
         std::fs::OpenOptions::new().write(true).create_new(true),
@@ -445,7 +447,7 @@ pub fn create_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     )?;
     if let Err(error) = file.write_all(contents) {
         drop(file);
-        let _ = std::fs::remove_file(path);
+        std::fs::remove_file(path).unwrap_or_default();
         return Err(error);
     }
     Ok(())
