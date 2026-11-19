@@ -768,6 +768,9 @@ doctor-sandbox-filesystem = système de fichiers du bac à sable
 doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
 doctor-sandbox-filesystem-refused = { $key } { $path } n'est pas appliqué : { $reason } ({ $source })
 doctor-sandbox-filesystem-source-flag = une option de la ligne de commande
+doctor-sandbox-hosts = réseau du bac à sable
+doctor-sandbox-hosts-denied-not-a-host =
+    sandbox.network.deniedHosts { $entry } ({ $source }) n'est pas un nom d'hôte, donc une étape avec accès au réseau est refusée tant qu'il n'est pas retiré
 doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } dans { $path } n'est pas suivi : une copie de travail peut refuser un accès, jamais en ajouter, donc il est lu seulement dans ~/.bravebot/settings.json, le fichier nommé par --settings et le fichier géré
 doctor-settings-sandbox-misshapen =

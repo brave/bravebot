@@ -5513,6 +5513,410 @@ fn a_symlink_out_of_an_added_directory_is_refused() {
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }
 
+/// TRUST-10: a path a link carries out of an added directory is refused with nothing offered,
+/// whatever the link leads to. The directory a remedy would name is not the one the path is
+/// written in, and opening it would not make the typed path work. Choosing the sentence from the
+/// link's target would let a link planted in the directory decide which sentence the planner
+/// reads, so every target kind gets the one sentence: a directory, a file in an ordinary
+/// directory, a file in a credential location, a file and a directory holding the working
+/// directory, a link with nothing at its other end, and a name nothing is at yet behind a link
+/// to a directory. Reads, writes and listings of each are asked.
+///
+/// The regression it rejects: the remedy chosen from where the link lands, which names
+/// `/add-dir`, a drop or the checkout warning for a path that none of them cures.
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_an_added_directory_is_refused_with_nothing_offered_whatever_it_leads_to() {
+    let base = Scratch::new("added-link-remedy");
+    let base_path = base.path.canonicalize().expect("canonical base");
+    let home = base_path.join("home");
+    let project = base_path.join("project");
+    let downloads = base_path.join("downloads");
+    let other = base_path.join("other");
+    for made in [
+        home.join(".ssh"),
+        project.clone(),
+        downloads.clone(),
+        other.clone(),
+    ] {
+        std::fs::create_dir_all(made).unwrap();
+    }
+    std::fs::write(home.join(".ssh/config"), "Host *\n").unwrap();
+    std::fs::write(other.join("notes.txt"), "notes\n").unwrap();
+    std::fs::write(base_path.join("notes.txt"), "beside the project\n").unwrap();
+
+    let links = [
+        ("to-directory", home.clone()),
+        ("to-file", other.join("notes.txt")),
+        ("to-credential-file", home.join(".ssh/config")),
+        ("to-credential-directory", home.join(".ssh")),
+        ("to-file-holding-the-project", base_path.join("notes.txt")),
+        ("to-directory-holding-the-project", base_path.clone()),
+        ("to-nothing", other.join("missing.txt")),
+        ("through", other.clone()),
+    ];
+    for (name, target) in &links {
+        std::os::unix::fs::symlink(target, downloads.join(name)).unwrap();
+    }
+
+    let mut workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+    let added = workspace
+        .add_directory(downloads.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut typed_names: Vec<String> = links
+        .iter()
+        .map(|(name, _)| added.join(name).display().to_string())
+        .collect();
+    typed_names.push(added.join("through/fresh.txt").display().to_string());
+
+    for typed in &typed_names {
+        let refused = [
+            (
+                "read",
+                workspace
+                    .read(&mut policy, &Labelled::trusted(typed.clone()))
+                    .map(|_| ()),
+            ),
+            (
+                "write",
+                workspace
+                    .write(
+                        &mut policy,
+                        &Labelled::trusted(typed.clone()),
+                        &Labelled::trusted("text".to_string()),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "list",
+                workspace
+                    .list(&mut policy, &Labelled::trusted(typed.clone()), None, None)
+                    .map(|_| ()),
+            ),
+        ];
+        for (call, result) in refused {
+            let error = result.expect_err("a path a link carries out is refused");
+            assert!(
+                matches!(
+                    error,
+                    WorkspaceError::Escapes {
+                        remedy: Remedy::Nothing,
+                        ..
+                    }
+                ),
+                "{call} {typed}: the remedy followed the link's target: {error:?}"
+            );
+            assert_eq!(
+                error.describe(typed),
+                format!("'{typed}' resolves outside the workspace; refusing to touch it"),
+                "{call} {typed}"
+            );
+        }
+    }
+    assert!(
+        !other.join("fresh.txt").exists(),
+        "a refused write landed beside the link's target"
+    );
+}
+
+/// TRUST-10: an absolute path typed from the top of the file system, under no opened directory, is
+/// still offered the directory to open, so the refusal of a link does not take that away. The
+/// same file reached through a link in an added directory is not offered it.
+#[cfg(unix)]
+#[test]
+fn a_file_typed_outside_every_directory_is_offered_what_a_link_to_it_is_not() {
+    let base = Scratch::new("added-link-versus-typed");
+    let base_path = base.path.canonicalize().expect("canonical base");
+    let project = base_path.join("project");
+    let downloads = base_path.join("downloads");
+    let other = base_path.join("other");
+    for made in [project.clone(), downloads.clone(), other.clone()] {
+        std::fs::create_dir_all(made).unwrap();
+    }
+    std::fs::write(other.join("notes.txt"), "notes\n").unwrap();
+    std::os::unix::fs::symlink(other.join("notes.txt"), downloads.join("n")).unwrap();
+
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(downloads.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = other.join("notes.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("the file is in no opened directory");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenOrDrop,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.describe(&typed).contains("/add-dir"));
+
+    let through = downloads.join("n").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(through.clone()))
+        .expect_err("the link leaves the directory");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Nothing,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(!error.describe(&through).contains("/add-dir"));
+}
+
+/// TRUST-10: a path written in an added directory is refused the same way whether the link leads
+/// into the working directory or outside every opened directory, and two links of different kinds
+/// give the same refusal once the name typed is set aside. A path written in a directory that is
+/// not opened is still told it is inside the workspace when it lands there, which is how a path
+/// typed from the top of the file system to a file in the root is told.
+///
+/// The regression it rejects: the landing in the root choosing the sentence for a link in an added
+/// directory, so that a link planted there decides whether the planner reads "is inside the
+/// workspace" or "resolves outside it".
+#[cfg(unix)]
+#[test]
+fn a_link_from_an_added_directory_into_the_root_is_refused_as_every_other_link_is() {
+    let base = Scratch::new("added-link-to-root");
+    let base_path = base.path.canonicalize().expect("canonical base");
+    let project = base_path.join("project");
+    let downloads = base_path.join("downloads");
+    let other = base_path.join("other");
+    let holder = base_path.join("holder");
+    for made in [
+        project.clone(),
+        downloads.clone(),
+        other.clone(),
+        holder.clone(),
+    ] {
+        std::fs::create_dir_all(made).unwrap();
+    }
+    std::fs::write(project.join("inside.txt"), "in the root\n").unwrap();
+    std::fs::write(other.join("notes.txt"), "notes\n").unwrap();
+    std::os::unix::fs::symlink(project.join("inside.txt"), downloads.join("to-root-file")).unwrap();
+    std::os::unix::fs::symlink(&project, downloads.join("to-root")).unwrap();
+    std::os::unix::fs::symlink(other.join("notes.txt"), downloads.join("to-other-file")).unwrap();
+    std::os::unix::fs::symlink(&other, downloads.join("to-other")).unwrap();
+    std::os::unix::fs::symlink(project.join("inside.txt"), holder.join("to-root-file")).unwrap();
+
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    let added = workspace
+        .add_directory(downloads.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut told_of = Vec::new();
+    for name in ["to-root-file", "to-root", "to-other-file", "to-other"] {
+        let typed = added.join(name).display().to_string();
+        for (call, result) in [
+            (
+                "read",
+                workspace
+                    .read(&mut policy, &Labelled::trusted(typed.clone()))
+                    .map(|_| ()),
+            ),
+            (
+                "list",
+                workspace
+                    .list(&mut policy, &Labelled::trusted(typed.clone()), None, None)
+                    .map(|_| ()),
+            ),
+        ] {
+            let error = result.expect_err("a path a link carries out is refused");
+            let WorkspaceError::Escapes { remedy, .. } = &error else {
+                panic!("{call} {name}: not a refusal for leaving: {error:?}");
+            };
+            assert_eq!(*remedy, Remedy::Nothing, "{call} {name}");
+            told_of.push((
+                call,
+                *remedy,
+                error.describe(&typed).replace(&typed, "<path>"),
+            ));
+        }
+    }
+    for call in ["read", "list"] {
+        let kinds: Vec<_> = told_of.iter().filter(|told| told.0 == call).collect();
+        assert!(
+            kinds.windows(2).all(|pair| pair[0] == pair[1]),
+            "{call}: links of different kinds were told differently: {kinds:?}"
+        );
+    }
+
+    // From a directory nothing opened, the same file is still told it is inside the workspace.
+    let typed = holder.join("to-root-file").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("a link to the root from an unopened directory is refused as typed");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Inside,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// TRUST-10: a name written under the working directory that a link carries out is refused with
+/// nothing offered, whether it is spelled from the top or relative, and a file typed from the top
+/// outside every opened directory keeps the directory to open. A path typed under the root that
+/// lands in it is told it is inside.
+///
+/// The regression it rejects: every absolute refusal becoming `Nothing`, which takes the directory
+/// to open from a file nothing opened, or choosing the sentence for a link in the root from where
+/// it leads.
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_root_is_refused_with_nothing_and_a_file_typed_outside_keeps_its_remedy() {
+    let scratch = Scratch::new("root-link-remedy");
+    let elsewhere = outside("root-link-remedy");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("escape-dir")).unwrap();
+    std::fs::write(scratch.path.join("here.txt"), "in the root").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let root = workspace.root().display().to_string();
+    for (typed, expected) in [
+        (format!("{root}/escape-dir/todo.txt"), Remedy::Nothing),
+        ("escape-dir/todo.txt".to_string(), Remedy::Nothing),
+        (
+            elsewhere.path.join("todo.txt").display().to_string(),
+            Remedy::OpenOrDrop,
+        ),
+        (format!("{root}/here.txt"), Remedy::Inside),
+    ] {
+        let error = workspace
+            .read(&mut policy, &Labelled::trusted(typed.clone()))
+            .expect_err("each of these is refused as typed");
+        assert!(
+            matches!(&error, WorkspaceError::Escapes { remedy, .. } if *remedy == expected),
+            "{typed}: expected {expected:?}: {error:?}"
+        );
+    }
+}
+
+/// PERM-16: where the file tools are kept inside the workspace, a directory opened earlier is not
+/// reached, so a path typed under it is written outside every reached directory and gets the
+/// sentence that names the key, whatever its link leads to. A name written under the root that a
+/// link carries out is still refused with nothing offered, since the root is reached.
+///
+/// The regression it rejects: counting an unreached added directory as a place a path is written
+/// in, which gives a path typed under it the sentence for a link and never names the key.
+#[cfg(unix)]
+#[test]
+fn a_link_in_an_added_directory_names_the_key_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("kept-link-remedy");
+    let added_target = outside("kept-link-remedy-added");
+    let elsewhere = outside("kept-link-remedy-else");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("escape-dir")).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path.join("todo.txt"),
+        added_target.path.join("link.txt"),
+    )
+    .unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(added_target.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let workspace = workspace.with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = added.join("link.txt").display().to_string();
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(typed.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("the directory is not reached");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Kept,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .describe(&typed)
+            .contains("permissions.readsStayInWorkspace")
+    );
+
+    let root = workspace.root().display().to_string();
+    let through_root = format!("{root}/escape-dir/todo.txt");
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(through_root.clone()))
+        .expect_err("a link out of the root is refused");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Nothing,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
 /// The added-directory resolver has the same job as the primary one, so a write that creates a
 /// file is confined there too. A directory opened by name is somewhere a person said this session
 /// may work, not somewhere it may write through.

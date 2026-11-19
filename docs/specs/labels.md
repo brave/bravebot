@@ -97,7 +97,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 293
+      - crates/agent/tests/workspace.rs: 306
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -724,7 +724,7 @@ and the content has no say in it.
 | what a capability observed | the capability's own, one per capability, and an effect has none to give | `verified-by: bravebot_core::policy::observation_labels_come_from_the_capability` |
 | a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
-| the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
+| the file names a language server reported, and the file the question was asked at for the operations that start from one | private, and trusted only where every path it names is and, for `goToDefinition`, `findReferences`, `goToImplementation`, `incomingCalls`, `outgoingCalls` and `documentSymbol`, the file the planner asked at is too, so one nobody vouched for quarantines the answer even where it names only vouched files or none; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` `verified-by: bravebot_agent::lsp::a_location_answer_asked_in_a_distrusted_file_is_untrusted` `verified-by: bravebot_agent::lsp::a_position_asked_in_an_unvouched_file_is_not_in_the_planners_context` |
 | the severities and line numbers a language server reported for a file it was asked about | trusted and private, from the capability's own label and not from the queried file's entry, because a severity is a fixed enumeration and a line is an integer and the sentence carries no word the server wrote; the numbers are still computed from bytes nobody may have vouched for, which is the fifth entry of [Known costs](#known-costs) | `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages` |
 | the lines of a file a person clicked a path to see | untrusted and private whatever the trust map says of the path, from the label a write's review reads the file it replaces under, because the lines go to a screen as a quarantined block and a click has not asked for the file to be read by anything that acts on it ([MOUSE-42](mouse.md#MOUSE-42)) | `verified-by: bravebot_agent::file_preview::a_path_the_map_vouches_for_is_still_shown_as_untrusted` |
 | what a connector's authority says about a call besides its payload and detail: the outcome, the standing, reason codes, counts withheld and a link | none, because none of it reaches a model: each field has a fixed form, an outcome or standing from a closed list, a count, a reason in lower-case kebab and one `https://` URL, and a value out of form is replaced or dropped rather than shown. The payload and the detail are the capability's, the first row | `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form` `verified-by: bravebot_agent::manifest::an_accepted_acts_link_is_shown_only_when_it_is_well_formed` `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service` |
@@ -1406,3 +1406,27 @@ arrives at all.
   that a gateway routes to a search backend are requested and labelled from the context this program
   built, which is the label the pages did not earn. The list is compared with the name a request
   carries and with nothing a reply says, so no byte from outside decides it.
+
+- **The line count and the byte count a reference states for a line's output depend on whether, and
+  on how many names, a pattern in a position the program does not read as a file matched.**
+  `basename incoming/a*` is asked about and its output is untrusted whether or not a name begins
+  with `a` ([CMDLINE-4](tools/command-line.md#CMDLINE-4)), so neither the question nor the label
+  depends on the names in `incoming/`. The reference states the number of lines and the number of
+  bytes of what the program printed. Where no name matched, the program prints the pattern, so
+  the reference states one line and the pattern's length. Where names matched, the program prints
+  its result for each of them, so the reference states a line for each name printed and the total
+  of their lengths. A planner that knows the pattern's length can tell from a different line count
+  or byte count that some name matched, and from the line count how many were printed. The two
+  numbers are the ones the planner is shown for any untrusted output ([LABEL-3](#LABEL-3)). The
+  driver carries them and does not branch on them, and no name is spelled to the planner, only the
+  lengths. Quoting the pattern passes it to the program unmatched.
+
+- **The refusal of a word that stands for more than 100 arguments states how many names a pattern
+  matched.** Where an unquoted pattern matches more names than a person can be shown at one
+  prompt, the compile is refused and the sentence the planner is told carries the count of names
+  the walk found ([CMDLINE-4](tools/command-line.md#CMDLINE-4)). The sentence names the word as
+  the planner wrote it and no name. In a directory nobody vouched for, the names are chosen by
+  whoever wrote it, so the planner can learn from the refusal, and from the count in it, how many
+  names match a pattern it chose. The count is a number and the bound is fixed, so the comparison
+  with 100 is the only decision the driver takes from it. Quoting the pattern passes it to the
+  program unmatched and is not refused.

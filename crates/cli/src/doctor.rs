@@ -347,6 +347,36 @@ fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)
         .collect()
 }
 
+/// The `deniedHosts` entries that are not host names, each as the line `doctor` says, where the
+/// session holds a host list.
+///
+/// A stage that has network access is refused while one is set, and the sentence the planner reads
+/// for that names no entry (SANDBOX-24), so this is where the person finds which entry to fix. The
+/// entry is a checkout's own text where a checkout wrote it, so it is written with control
+/// characters made visible and nothing here decides on it beyond whether it is a host name, as the
+/// stage's own check does. Without `allowedHosts` no list is held and no stage is refused, so
+/// nothing is said.
+pub(crate) fn sandbox_hosts_lines(hosts: &bravebot_config::sandbox_network::Hosts) -> Vec<String> {
+    if hosts.allowed.is_none() {
+        return Vec::new();
+    }
+    hosts
+        .denied
+        .iter()
+        .filter(|denied| bravebot_sandbox::hosts::HostRule::parse(&denied.entry).is_none())
+        .map(|denied| {
+            t!(
+                doctor_sandbox_hosts_denied_not_a_host,
+                entry = progress::printable(&denied.entry),
+                source = match &denied.by {
+                    Some(path) => progress::printable_path(path),
+                    None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
+                }
+            )
+        })
+        .collect()
+}
+
 /// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
 /// that wrote it, and the ones that are not in force with why.
 ///
@@ -1212,6 +1242,13 @@ pub(crate) fn doctor() -> ExitCode {
             // file that wrote each, so a person finds what to edit; and each way an entry was not
             // obeyed, since a refusal that is not in force holds back nothing and says nothing.
             doctor_sandbox_filesystem(&settings, &managed);
+
+            let hosts = bravebot_config::sandbox_network::settled()
+                .cloned()
+                .unwrap_or_else(|| bravebot_config::sandbox_network::resolve(&settings, &managed));
+            for line in sandbox_hosts_lines(&hosts.hosts) {
+                fact(t!(doctor_sandbox_hosts), line);
+            }
 
             let granted = report_allow_rules(&settings);
             report_mcp_declared(&settings, &mut ending);
@@ -4868,6 +4905,40 @@ mod tests {
         let report = development(&scratch.path, Some(&path), false).join("\n");
         assert!(report.contains("available on PATH"));
         assert!(!report.contains("brew install"));
+    }
+
+    /// SANDBOX-24: `doctor` names a `deniedHosts` entry that is not a host name, with control
+    /// characters made visible and the file that wrote it, and says nothing where no `allowedHosts`
+    /// list is held or the entry is a host name. The regressions it rejects are the entry printed
+    /// with its newline (a second line a checkout wrote), the entry left out, and an entry reported
+    /// where no stage is refused for it.
+    #[test]
+    fn doctor_names_a_denied_host_that_is_no_host_name_with_controls_visible() {
+        use bravebot_config::sandbox_network::{HostEntry, Hosts};
+        let entry = |text: &str| HostEntry {
+            entry: text.to_string(),
+            by: Some(PathBuf::from("/work/.bravebot/settings.json")),
+        };
+        let held = Hosts {
+            allowed: Some(vec![entry("a.example")]),
+            denied: vec![entry("bad.example"), entry("two words\nsecond line")],
+            on_unlisted: None,
+        };
+        let lines = sandbox_hosts_lines(&held);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("two words"), "{lines:?}");
+        assert!(!lines[0].contains('\n'), "{lines:?}");
+        assert!(
+            lines[0].contains("/work/.bravebot/settings.json"),
+            "{lines:?}"
+        );
+        assert!(!lines[0].contains("bad.example"), "{lines:?}");
+
+        let unlisted = Hosts {
+            allowed: None,
+            ..held
+        };
+        assert!(sandbox_hosts_lines(&unlisted).is_empty());
     }
 
     /// SANDBOX-25: where the backend cannot hold a path back from the session directory, `doctor`

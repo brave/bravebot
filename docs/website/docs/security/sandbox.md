@@ -105,7 +105,10 @@ settings file chosen there, does not change it.
 Holds the programs the agent runs to a list of hosts while the network stays open for everything
 else. `allowedHosts` names the hosts a program may reach, with GitHub added for a `git` or `gh`
 command that talks to a remote and a toolchain's own registry added for `cargo`, `npm`, `pip` and
-`go`. `deniedHosts` refuses hosts whatever else allows them. `onUnlisted` is `refuse` or `ask`: a host
+`go`. `deniedHosts` refuses hosts whatever else allows them. A `deniedHosts` entry that is not a host
+name refuses every program that has network access, since leaving it out would let the host through.
+The message the model reads says only that an entry is not a host name; the entry is shown to you in
+the session and by `bravebot doctor`, which also names the file that wrote it. `onUnlisted` is `refuse` or `ask`: a host
 no list names is refused, or put to you. With `ask`, the program is refused at once and the hosts it
 was refused are put to you after that run has stopped, up to eight at a time, one per row. A yes adds
 them to the allowed set until the session ends and writes nothing to disk, so you run the line again;

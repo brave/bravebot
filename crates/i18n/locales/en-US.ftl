@@ -899,6 +899,11 @@ doctor-sandbox-filesystem = sandbox filesystem
 doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
 doctor-sandbox-filesystem-refused = { $key } { $path } is not in force: { $reason } ({ $source })
 doctor-sandbox-filesystem-source-flag = a command-line flag
+doctor-sandbox-hosts = sandbox network
+# The entry is as written, with control characters made visible, and the source is the file that
+# wrote it or the command line. The sentence a model reads for this refusal names no entry.
+doctor-sandbox-hosts-denied-not-a-host =
+    sandbox.network.deniedHosts { $entry } ({ $source }) is not a host name, so a stage with network access is refused until it is removed
 doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } in { $path } is not obeyed: a checkout can refuse reach and never add it, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
 doctor-settings-sandbox-misshapen =

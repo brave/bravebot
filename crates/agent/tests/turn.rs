@@ -6646,6 +6646,82 @@ fn a_full_path_rule_through_a_link_to_an_added_directory_covers_its_files() {
     );
 }
 
+/// TRUST-10, TRACE-1: a link in a subdirectory of an added directory that the trust map distrusts is
+/// refused with the sentence that offers nothing, whatever it leads to, as one planted directly
+/// in the added directory is. The planner reads no `/add-dir`, no drop and no checkout warning, and
+/// the sentence is the same for a file in an ordinary directory, a directory and a credential file.
+///
+/// The regression it rejects: the remedy chosen from where the link lands, so a link planted in a
+/// directory decides which route the planner is told of.
+#[cfg(unix)]
+#[test]
+fn a_link_in_a_distrusted_subdirectory_of_an_added_directory_is_refused_with_nothing_offered() {
+    let scratch = Scratch::new("added-link-distrusted-subdirectory");
+    let outside = Scratch::new("added-link-distrusted-subdirectory-outside");
+    let home = Scratch::new("added-link-distrusted-subdirectory-home");
+    let other = Scratch::new("added-link-distrusted-subdirectory-other");
+    std::fs::create_dir_all(outside.path.join("sub")).unwrap();
+    std::fs::create_dir_all(home.path.join(".ssh")).unwrap();
+    std::fs::write(home.path.join(".ssh/config"), "Host *\n").unwrap();
+    std::fs::write(other.path.join("notes.txt"), "notes\n").unwrap();
+    let home_path = home.path.canonicalize().unwrap();
+    let targets = [
+        (
+            "ordinary",
+            other.path.canonicalize().unwrap().join("notes.txt"),
+        ),
+        ("directory", home_path.clone()),
+        ("credential", home_path.join(".ssh/config")),
+    ];
+    for (name, target) in &targets {
+        std::os::unix::fs::symlink(target, outside.path.join("sub").join(name)).unwrap();
+    }
+
+    let mut workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_home(Some(home_path));
+    let added = workspace
+        .add_directory(outside.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+    trust.distrust(&added.join("sub").display().to_string());
+
+    let typed: Vec<String> = targets
+        .iter()
+        .map(|(name, _)| added.join("sub").join(name).display().to_string())
+        .collect();
+    let calls: Vec<(&str, String)> = typed
+        .iter()
+        .map(|path| ("read_file", format!(r#"{{"path":"{path}"}}"#)))
+        .collect();
+    let calls: Vec<(&str, &str)> = calls
+        .iter()
+        .map(|(tool, arguments)| (*tool, arguments.as_str()))
+        .collect();
+    let bodies = run_calls_under(&workspace, rules(&[], &[], &[]), trust, &calls);
+
+    let (first, last) = (
+        bodies.first().expect("a request"),
+        bodies.last().expect("a request after the calls"),
+    );
+    for path in &typed {
+        assert!(
+            last.contains(&format!(
+                "'{path}' resolves outside the workspace; refusing to touch it"
+            )),
+            "the planner was not told the sentence that offers nothing for {path}: {last}"
+        );
+    }
+    for route in ["/add-dir", "drop the file", "ends checkouts"] {
+        assert_eq!(
+            last.matches(route).count(),
+            first.matches(route).count(),
+            "a link was told of {route}, which the request before any call did not carry: {last}"
+        );
+    }
+}
+
 /// An `ask` rule spelled through a link still asks for a write to the file the link reaches, named
 /// by its own name, in a workspace the user trusted at startup.
 #[cfg(unix)]
@@ -34480,9 +34556,21 @@ fn a_run_beside_an_unvouched_directory(
     name: &str,
     decision: bravebot_agent::RunDecision,
 ) -> (usize, String) {
+    a_run_beside_an_unvouched_directory_holding(tag, command, &[name], decision)
+}
+
+/// [`a_run_beside_an_unvouched_directory`] with `incoming/` holding one file for each of `names`.
+fn a_run_beside_an_unvouched_directory_holding(
+    tag: &str,
+    command: &str,
+    names: &[&str],
+    decision: bravebot_agent::RunDecision,
+) -> (usize, String) {
     let scratch = Scratch::new(tag);
     std::fs::create_dir(scratch.path.join("incoming")).unwrap();
-    std::fs::write(scratch.path.join("incoming").join(name), "planted\n").unwrap();
+    for name in names {
+        std::fs::write(scratch.path.join("incoming").join(name), "planted\n").unwrap();
+    }
     std::fs::create_dir(scratch.path.join("docs")).unwrap();
     std::fs::write(scratch.path.join("docs/notes.txt"), "vouched words\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -34596,6 +34684,137 @@ fn a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quaran
     assert!(
         second.contains("vouched words"),
         "the planner was not shown the vouched file: {second}"
+    );
+}
+
+/// CMDLINE-4, CMDLINE-8: whether `incoming/a*` matches a name in a directory nobody vouched for is
+/// decided by names whoever created the files chose. `basename incoming/a*` reads no file, so the
+/// line is asked about and its output reaches the planner as a reference whether or not a name
+/// begins with `a`. The two outcomes are the same, so the planner cannot learn from the question or
+/// from the label whether a name starts with a given prefix.
+///
+/// The wrong implementation marks only the names a pattern matched, so with no name beginning with
+/// `a` the word reaches `basename` as written, the line runs unasked and the planner is shown `a*`
+/// as text, which differs from the matching case.
+#[test]
+fn a_pattern_matching_nothing_in_an_unvouched_directory_is_treated_as_one_that_matched() {
+    let planted = "planted-name-4c1e9";
+    let matching = "apple-4c1e9";
+
+    let (asked_without, second_without) = a_run_beside_an_unvouched_directory(
+        "run-pattern-basename-unmatched",
+        "basename -a incoming/a*",
+        planted,
+        bravebot_agent::RunDecision::approve(),
+    );
+    let (asked_with, second_with) = a_run_beside_an_unvouched_directory(
+        "run-pattern-basename-matched-prefix",
+        "basename -a incoming/a*",
+        matching,
+        bravebot_agent::RunDecision::approve(),
+    );
+
+    assert_eq!(
+        asked_without, 1,
+        "`basename incoming/a*` ran without the Run question when no name matched"
+    );
+    assert_eq!(
+        asked_with, 1,
+        "`basename incoming/a*` ran without the Run question when a name matched"
+    );
+    for (second, name) in [(&second_without, planted), (&second_with, matching)] {
+        assert!(
+            second.contains("ref:"),
+            "the output was not handed back as a reference: {second}"
+        );
+        assert!(
+            !second.contains(name),
+            "a name out of an unvouched directory reached the planner: {second}"
+        );
+    }
+    assert!(
+        !second_without.contains("a*\\n"),
+        "the unmatched pattern's output was shown as text: {second_without}"
+    );
+    // The requests differ in the scratch directory's name, which the preamble states, and in the
+    // size a reference carries for what the line printed: its line count and its byte count,
+    // which are those of the names written back, one to a line, or of the pattern. That size is
+    // recorded under Known costs in labels.md. Each request is checked to state the size of what
+    // was printed, so the size removed below is the one the spec names.
+    let same = |second: &str, tag: &str, printed: &str| {
+        let size = format!("{} lines, {} bytes", printed.lines().count(), printed.len());
+        assert!(
+            second.contains(&size),
+            "the reference did not state `{size}`: {second}"
+        );
+        second
+            .replace(tag, "TAG")
+            .replace(&size, "L lines, N bytes")
+    };
+    let without = same(&second_without, "run-pattern-basename-unmatched", "a*\n");
+    let with = same(
+        &second_with,
+        "run-pattern-basename-matched-prefix",
+        &format!("{matching}\n"),
+    );
+    assert_eq!(
+        without, with,
+        "what the planner is sent depends on the names in the directory"
+    );
+
+    // Several names match: the line count and the byte count of the reference both differ from
+    // the unmatched case, and nothing else in what the planner is sent does.
+    let several = ["apple-4c1e9", "avocado-4c1e9", "acorn-4c1e9"];
+    let (asked_several, second_several) = a_run_beside_an_unvouched_directory_holding(
+        "run-pattern-basename-several",
+        "basename -a incoming/a*",
+        &several,
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert_eq!(
+        asked_several, 1,
+        "`basename incoming/a*` ran without the Run question when several names matched"
+    );
+    for name in several {
+        assert!(
+            !second_several.contains(name),
+            "a name out of an unvouched directory reached the planner: {second_several}"
+        );
+    }
+    let printed: String = several.iter().map(|name| format!("{name}\n")).collect();
+    assert_eq!(
+        printed.lines().count(),
+        3,
+        "the case prints one name a line"
+    );
+    let several_size = same(&second_several, "run-pattern-basename-several", &printed);
+    assert_eq!(
+        without, several_size,
+        "what the planner is sent depends on how many names matched"
+    );
+
+    // Where the program reads the word as a file, the trust map answers for the path whether or
+    // not anything matched: a vouched directory runs unasked, an unvouched one asks.
+    let (asked, _) = a_run_beside_an_unvouched_directory(
+        "run-pattern-cat-vouched-unmatched",
+        "cat docs/zz*",
+        planted,
+        bravebot_agent::RunDecision::reject(),
+    );
+    assert_eq!(
+        asked, 0,
+        "a read of a vouched path a pattern did not match was asked about"
+    );
+    let (asked, second) = a_run_beside_an_unvouched_directory(
+        "run-pattern-cat-unvouched-unmatched",
+        "cat incoming/a*",
+        planted,
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert_eq!(asked, 1, "a read of an unvouched path ran unasked");
+    assert!(
+        !second.contains(planted),
+        "a name out of an unvouched directory reached the planner: {second}"
     );
 }
 

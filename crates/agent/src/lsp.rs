@@ -520,13 +520,15 @@ pub fn describe(operation: Operation, answer: &Answer, root: &Path) -> String {
     body
 }
 
-/// The label a locations-only answer carries: the trust map's reading of the files it names.
+/// The label a locations-only answer carries: the trust map's reading of the files it names and of
+/// the file it was asked at.
 ///
 /// A location's name is bytes out of a tree nobody need have vouched for, so the answer is labelled
 /// from where those bytes came from, the way a listing is: each reported path is looked up in the
 /// trust map by the kernel, and one path nobody vouched for makes the whole answer untrusted, so it
 /// is quarantined and the planner is handed a reference. An answer whose every path is vouched for
-/// is trusted and read as written, and an answer naming nothing carries no taint.
+/// is trusted and read as written, and an answer naming nothing, asked at no file or at a vouched
+/// one, carries no taint.
 ///
 /// **Private** either way. `Labelled::trusted` is `(T,pub)`, which is routing-safe, and a path
 /// marked routing-safe on the strength of a server having reported it is exactly what
@@ -547,6 +549,15 @@ pub fn describe(operation: Operation, answer: &Answer, root: &Path) -> String {
 /// other names can lower the label and never raise it. Where the lookup of a file's other names
 /// could not finish, the file reads as untrusted.
 ///
+/// **The file the question was asked at is one of the files the answer is a function of.** Which
+/// symbol a position resolves to, and so which locations come back and how many, is decided by that
+/// file's bytes. `asked` is the name the planner typed for it, for an operation that starts from a
+/// position in a file, and it is looked up in the trust map under the name `read_file` would use
+/// and under every other name the file has, as a reported path is. A file nobody vouched for takes
+/// the whole answer with it, an answer naming nothing included. `None` for an operation with no
+/// queried file, and for `hover` and `diagnostics`, whose results the queried file's entry does not
+/// label (LSP-3, LSP-13).
+///
 /// Apart from that, the paths are handed to the kernel and the label comes back.
 /// [`pictured`] and [`MAX_LOCATIONS`] still bound the shape of the answer, which matters for a
 /// person reading it and for a tree the user has vouched for.
@@ -554,6 +565,7 @@ pub fn label_for_locations<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &crate::Workspace,
     answer: &Answer,
+    asked: Option<&str>,
 ) -> Result<Label, bravebot_core::policy::Denial> {
     // A name the server composed is not a file: one no entry on disk backs, or one beneath a file,
     // has no trust-map entry of its own and would be read under the rule of an ancestor. Such a
@@ -580,12 +592,44 @@ pub fn label_for_locations<S: Sink>(
         };
         named.push((&location.path, workspace.other_trust_keys(&looked_up)));
     }
+    // The queried file is asked under the name a read of the typed path is asked under, not under
+    // the absolute name the server was handed.
+    let queried = asked.map(|typed| {
+        (
+            workspace.trust_key(typed),
+            workspace.other_trust_keys(typed),
+        )
+    });
     policy.observe_paths_under_names(
         bravebot_core::capability::Capability::LanguageServer,
         named
             .iter()
-            .map(|(own, others)| (*own, others.keys.as_slice(), others.complete)),
+            .map(|(own, others)| (*own, others.keys.as_slice(), others.complete))
+            .chain(
+                queried
+                    .iter()
+                    .map(|(own, others)| (own.as_str(), others.keys.as_slice(), others.complete)),
+            ),
     )
+}
+
+/// The name of the queried file that labels an answer, for the operations whose answer is a
+/// function of the file they start from (LSP-3).
+///
+/// `workspaceSymbol` has no file. `hover` is labelled as text and borrows no entry, and
+/// `diagnostics` is labelled from the capability's own label (LSP-13). The rest start from a
+/// position, or from the whole document, in the file the planner typed.
+pub fn asked_file(operation: bravebot_lsp::Operation, typed: &str) -> Option<&str> {
+    use bravebot_lsp::Operation;
+    match operation {
+        Operation::Definition
+        | Operation::References
+        | Operation::Implementation
+        | Operation::IncomingCalls
+        | Operation::OutgoingCalls
+        | Operation::DocumentSymbol => Some(typed),
+        Operation::Hover | Operation::WorkspaceSymbol | Operation::Diagnostics => None,
+    }
 }
 
 /// The label the text in an answer carries: untrusted, on the capability's own footing.
@@ -699,7 +743,7 @@ mod tests {
                 locations: vec![location(&path, 1)],
                 ..Answer::default()
             };
-            label_for_locations(&mut policy, &workspace_of(&ws), &answer).expect("labelled")
+            label_for_locations(&mut policy, &workspace_of(&ws), &answer, None).expect("labelled")
         };
         let vouched_tree = || {
             let mut store = bravebot_core::trust::TrustStore::new(&ws);
@@ -766,7 +810,7 @@ mod tests {
                 locations: vec![location(&path, 1)],
                 ..Answer::default()
             };
-            label_for_locations(&mut policy, &workspace_of(&ws), &answer).expect("labelled")
+            label_for_locations(&mut policy, &workspace_of(&ws), &answer, None).expect("labelled")
         };
 
         assert!(label_of(format!("{ws}/src/a.rs")).is_trusted(), "control");
@@ -797,7 +841,7 @@ mod tests {
             locations: vec![location(path, 1)],
             ..Answer::default()
         };
-        label_for_locations(&mut policy, workspace, &answer).expect("labelled")
+        label_for_locations(&mut policy, workspace, &answer, None).expect("labelled")
     }
 
     /// LSP-3, TRUST-2: a server that reports a symbolic link to a distrusted file has reported that
@@ -1173,6 +1217,120 @@ mod tests {
         assert!(described.contains(&(MAX_LOCATIONS + 50).to_string()));
     }
 
+    /// LSP-3: the file a position was asked at decides which locations come back, so its entry is
+    /// one of the label's inputs. The answer here names only a vouched file. The wrong
+    /// implementation labels from the reported names alone and reads it as trusted. Cases: a
+    /// distrusted queried file, a vouched one (control), a link in a vouched directory to the
+    /// distrusted file, and an answer naming nothing, which is a bit the queried file decided.
+    #[test]
+    fn a_location_answer_asked_in_a_distrusted_file_is_untrusted() {
+        let ws = tree("lsp-asked-in-a-distrusted-file");
+        let workspace = workspace_of(&ws);
+        let label_of = |asked: Option<&str>, answer: &Answer| {
+            let mut sink = RecordingSink::new();
+            let mut store = bravebot_core::trust::TrustStore::new(&ws);
+            store.trust(".");
+            store.distrust("vendor");
+            let mut policy =
+                Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+                    .expect("policy")
+                    .with_trust(store);
+            label_for_locations(&mut policy, &workspace, answer, asked).expect("labelled")
+        };
+        let names_a_vouched_file = Answer {
+            locations: vec![location(&format!("{ws}/src/a.rs"), 1)],
+            ..Answer::default()
+        };
+
+        let control = label_of(Some("src/a.rs"), &names_a_vouched_file);
+        assert!(control.is_trusted(), "control: a vouched queried file");
+        assert!(!control.is_public(), "a reported path is not routing-safe");
+        let asked_in_vendor = label_of(Some("vendor/b.rs"), &names_a_vouched_file);
+        assert!(
+            !asked_in_vendor.is_trusted(),
+            "an answer selected by a distrusted file was trusted"
+        );
+        assert!(!asked_in_vendor.is_public());
+
+        let nothing = Answer::default();
+        assert!(label_of(Some("src/a.rs"), &nothing).is_trusted());
+        assert!(
+            !label_of(Some("vendor/b.rs"), &nothing).is_trusted(),
+            "an empty answer from a distrusted file is a bit that file decided"
+        );
+        assert!(
+            label_of(None, &nothing).is_trusted(),
+            "no queried file, no taint"
+        );
+
+        #[cfg(unix)]
+        {
+            let root = Path::new(&ws);
+            std::os::unix::fs::symlink(root.join("vendor/b.rs"), root.join("src/to-vendor.rs"))
+                .expect("link to the distrusted file");
+            assert!(
+                !label_of(Some("src/to-vendor.rs"), &names_a_vouched_file).is_trusted(),
+                "a queried link to a distrusted file was trusted"
+            );
+            std::fs::hard_link(root.join("vendor/b.rs"), root.join("src/hard-vendor.rs"))
+                .expect("hard link to the distrusted file");
+            assert!(
+                !label_of(Some("src/hard-vendor.rs"), &names_a_vouched_file).is_trusted(),
+                "a queried hard link to a distrusted file was trusted"
+            );
+            // A lookup that cannot finish reads as untrusted. The walk is held to one file, so
+            // it gives up for a file with two links. The answer names nothing, so only the queried
+            // file decides, and the control has one link and needs no walk.
+            std::fs::hard_link(root.join("src/a.rs"), root.join("src/hard-src.rs"))
+                .expect("hard link to the vouched file");
+            let capped = workspace_of(&ws).with_search_caps(Some(1), None);
+            let capped_label = |asked: &str| {
+                let mut sink = RecordingSink::new();
+                let mut store = bravebot_core::trust::TrustStore::new(&ws);
+                store.trust(".");
+                store.distrust("vendor");
+                let mut policy =
+                    Policy::begin(routing(), ReleasePlan::new(), capabilities(), &mut sink)
+                        .expect("policy")
+                        .with_trust(store);
+                label_for_locations(&mut policy, &capped, &Answer::default(), Some(asked))
+                    .expect("labelled")
+            };
+            assert!(
+                capped_label("README.md").is_trusted(),
+                "control: one link needs no walk"
+            );
+            assert!(
+                !capped_label("src/a.rs").is_trusted(),
+                "a lookup that gave up was read as no other name"
+            );
+        }
+    }
+
+    /// LSP-3: only the operations that start from a position or a document in the typed file take
+    /// it as a label input. `hover` is untrusted text whatever the file's entry is, `diagnostics`
+    /// is labelled from the capability (LSP-13), and `workspaceSymbol` has no file.
+    #[test]
+    fn the_queried_file_labels_only_the_operations_that_start_from_it() {
+        for operation in [
+            Operation::Definition,
+            Operation::References,
+            Operation::Implementation,
+            Operation::IncomingCalls,
+            Operation::OutgoingCalls,
+            Operation::DocumentSymbol,
+        ] {
+            assert_eq!(asked_file(operation, "src/a.rs"), Some("src/a.rs"));
+        }
+        for operation in [
+            Operation::Hover,
+            Operation::WorkspaceSymbol,
+            Operation::Diagnostics,
+        ] {
+            assert_eq!(asked_file(operation, "src/a.rs"), None);
+        }
+    }
+
     /// LSP-3 and LSP-9: a locations-only answer is labelled from the trust map's entry for the files
     /// it names, and is never routing-safe whichever way that falls.
     ///
@@ -1195,7 +1353,7 @@ mod tests {
             ..Answer::default()
         };
         let workspace = workspace_of(&ws);
-        let label = label_for_locations(&mut policy, &workspace, &vouched).expect("labelled");
+        let label = label_for_locations(&mut policy, &workspace, &vouched, None).expect("labelled");
         assert!(label.is_trusted(), "a vouched-for file's name is readable");
         assert!(!label.is_public(), "a reported path is not routing-safe");
 
@@ -1206,7 +1364,8 @@ mod tests {
             )],
             ..Answer::default()
         };
-        let label = label_for_locations(&mut policy, &workspace, &unvouched).expect("labelled");
+        let label =
+            label_for_locations(&mut policy, &workspace, &unvouched, None).expect("labelled");
         assert!(!label.is_trusted(), "a distrusted file's name is content");
         assert!(!label.is_public());
 
@@ -1218,12 +1377,12 @@ mod tests {
             ],
             ..Answer::default()
         };
-        let label = label_for_locations(&mut policy, &workspace, &mixed).expect("labelled");
+        let label = label_for_locations(&mut policy, &workspace, &mixed, None).expect("labelled");
         assert!(!label.is_trusted(), "one unvouched name taints the answer");
 
         // An answer that names nothing is the driver's own sentence.
-        let empty =
-            label_for_locations(&mut policy, &workspace, &Answer::default()).expect("labelled");
+        let empty = label_for_locations(&mut policy, &workspace, &Answer::default(), None)
+            .expect("labelled");
         assert!(
             empty.is_trusted(),
             "an answer naming nothing carries no taint"
@@ -1231,9 +1390,9 @@ mod tests {
 
         // The presentation gate acts on the label: the planner is shown the first and not the second.
         let vouched_label =
-            label_for_locations(&mut policy, &workspace, &vouched).expect("labelled");
+            label_for_locations(&mut policy, &workspace, &vouched, None).expect("labelled");
         let unvouched_label =
-            label_for_locations(&mut policy, &workspace, &unvouched).expect("labelled");
+            label_for_locations(&mut policy, &workspace, &unvouched, None).expect("labelled");
         let mut slots = SlotStore::new();
         let shown = policy
             .present(

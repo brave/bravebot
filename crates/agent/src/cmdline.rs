@@ -1750,11 +1750,13 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         .collect())
 }
 
-/// [`expand`], with each argument paired with whether a pattern matched it on disk.
+/// [`expand`], with each argument paired with whether a pattern produced it.
 ///
-/// `true` only for a name [`walk`] found. A word with no pattern, an option carrying its value and
-/// a pattern that matched nothing and is passed through as written are `false`. Decided from
-/// whether the walk matched, never from the names it returned ([CMDLINE-4]).
+/// `true` for a word that came from an unquoted pattern: a name [`walk`] found, and the pattern
+/// itself where it matched nothing and is passed through as written. A word with no pattern and an
+/// option carrying its value are `false`. Decided from the shape of the word, never from whether
+/// the walk matched or from the names it returned, so the mark does not depend on what a directory
+/// holds ([CMDLINE-4]).
 ///
 /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
 fn expand_marked(
@@ -1801,8 +1803,10 @@ fn expand_marked(
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
             // As a shell without failglob does, so `find . -name *.md` reaches `find` as written
-            // when no file here matches. The plan shows the word the program receives.
-            out.push((render(&candidate), false));
+            // when no file here matches. The plan shows the word the program receives. It is
+            // marked as a pattern's word all the same, so that whether a name exists where the
+            // pattern points does not decide whether the proof of a read is refused.
+            out.push((render(&candidate), true));
             continue;
         }
         out.extend(matched.into_iter().map(|name| (name, true)));
@@ -2524,7 +2528,8 @@ impl Compiler<'_, '_> {
                 matched.push(from_a_pattern);
             }
         }
-        // Empty where no pattern matched, which is what a step built anywhere else holds.
+        // Empty where no word came from a pattern, which is what a step built anywhere else
+        // holds. A pattern that matched nothing is a word from a pattern, so it keeps the list.
         if !matched.contains(&true) {
             matched.clear();
         }
@@ -4022,6 +4027,31 @@ mod tests {
         assert!(refusal.to_string().contains("500"));
     }
 
+    /// A pattern that matches more names than the bound is refused with the number of names the
+    /// walk found, which is recorded under Known costs in labels.md because the names of a
+    /// directory nobody vouched for decide it. The refusal names the word as written and no name.
+    /// The wrong implementation puts a name in the sentence or leaves the number out without the
+    /// spec saying so.
+    #[test]
+    fn a_pattern_matching_more_than_the_bound_is_refused_with_the_number_of_names() {
+        let tree = Tree::new("bounded-by-names");
+        for number in 0..=MAX_ARGUMENTS {
+            tree.file(&format!("name-{number:03}.txt"));
+        }
+        let refusal = expansion_refused("ls *.txt", 1, &tree.root);
+        assert_eq!(
+            refusal.reason,
+            Reason::TooMany {
+                found: MAX_ARGUMENTS + 1,
+                cap: MAX_ARGUMENTS
+            }
+        );
+        let said = refusal.said(true);
+        assert!(said.contains("101"), "{said}");
+        assert!(said.contains("`*.txt`"), "{said}");
+        assert!(!said.contains("name-"), "{said}");
+    }
+
     /// The same names a listing steps over, so that one idea of what the tree contains serves
     /// both. Otherwise `**` would sweep a vendored dependency into a plan a person then endorses.
     #[test]
@@ -4205,11 +4235,12 @@ mod tests {
         }
     }
 
-    /// Each argument of a compiled step records whether a pattern produced it, from whether the
-    /// pattern matched on disk. The proof that a line reads only vouched files depends on it, since
-    /// a name a pattern matched is text out of a directory listing ([CMDLINE-4]). The wrong
-    /// implementation marks nothing, marks a quoted pattern, marks a pattern passed through because
-    /// it matched nothing, or loses which argument is which.
+    /// Each argument of a compiled step records whether an unquoted pattern produced it, whether
+    /// the pattern matched a name or was passed through as written because nothing matched. The
+    /// proof that a line reads only vouched files depends on it, since a name a pattern matched is
+    /// text out of a directory listing and whether a name exists there is decided by the names in
+    /// it ([CMDLINE-4]). The wrong implementation marks nothing, marks a quoted pattern, leaves a
+    /// pattern that matched nothing unmarked, or loses which argument is which.
     ///
     /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
     #[test]
@@ -4221,22 +4252,59 @@ mod tests {
             panic!("one step");
         };
         assert_eq!(step.args, ["-n", "a.rs", "b.rs", "*.rs", "*.zzz", "a.rs"]);
-        assert_eq!(step.matched, [false, true, true, false, false, false]);
+        assert_eq!(step.matched, [false, true, true, false, true, false]);
         assert_eq!(
             (0..step.args.len())
                 .map(|index| step.from_a_pattern(index))
                 .collect::<Vec<_>>(),
-            [false, true, true, false, false, false]
+            [false, true, true, false, true, false]
         );
 
-        // A line no pattern of which matched anything holds no record at all, as a step built
-        // anywhere else does.
+        // A line whose only pattern matched nothing still marks that argument and no other.
         let plan = compiled("./bin/cmd '*.rs' *.zzz a.rs", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(step.args, ["*.rs", "*.zzz", "a.rs"]);
+        assert_eq!(step.matched, [false, true, false]);
+        assert_eq!(
+            (0..step.args.len())
+                .map(|index| step.from_a_pattern(index))
+                .collect::<Vec<_>>(),
+            [false, true, false]
+        );
+
+        // A line with no unquoted pattern holds no record at all, as a step built anywhere else
+        // does, and an option carrying a pattern value is no pattern.
+        let plan = compiled("./bin/cmd '*.rs' --include=*.zzz a.rs", &tree.root);
         let [step] = plan.steps.steps()[..] else {
             panic!("one step");
         };
         assert!(step.matched.is_empty(), "{:?}", step.matched);
         assert!((0..step.args.len()).all(|index| !step.from_a_pattern(index)));
+    }
+
+    /// Braces multiply a word into alternatives and each is marked by its own shape: in `{a*,b}`
+    /// the pattern alternative is marked whether or not it matched and the literal one never is.
+    /// The wrong implementation marks the whole word from one alternative, or marks a literal
+    /// alternative because a pattern sits beside it.
+    #[test]
+    fn brace_alternatives_are_marked_one_by_one() {
+        let tree = Tree::new("marked-braces");
+        tree.executable("bin/cmd").file("a1");
+        let plan = compiled("./bin/cmd {a*,b}", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(step.args, ["a1", "b"]);
+        assert_eq!(step.matched, [true, false]);
+
+        let plan = compiled("./bin/cmd {z*,b}", &tree.root);
+        let [step] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(step.args, ["z*", "b"]);
+        assert_eq!(step.matched, [true, false]);
     }
 
     /// Outside bypass mode every spelling of a computed assignment value is the refusal it always
