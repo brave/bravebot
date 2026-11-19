@@ -365,8 +365,9 @@ fn carry_out_while_working(
         Action::Export(path) => session.answer_while_working(|session| {
             export_session(session, beside.stored, beside.root, path.as_deref());
         }),
-        Action::ChooseModel => {
-            session.answer_while_working(|session| open_model_picker(session, beside.config));
+        Action::ChooseModel(scope) => {
+            session
+                .answer_while_working(|session| open_model_picker(session, beside.config, scope));
         }
         // The sessions beside this one can be looked at, stopped, named, archived and deleted while
         // a turn runs. Opening one ends this session, which a turn in flight does not allow
@@ -426,7 +427,7 @@ fn carry_out_held_pick(session: &mut Session, config: &mut Config) {
 fn carry_out_pick(session: &mut Session, config: &mut Config, picked: crate::picking::Picked) {
     use crate::picking::Picked;
     match picked {
-        Picked::Model(model) => model_picked(session, config, model),
+        Picked::Model(model, scope) => model_picked(session, config, model, scope),
         Picked::Theme(theme) => theme_picked(session, &theme.name),
         Picked::Effort(row) => effort_picked(session, row.0),
         Picked::Editing(row) => config_picked(session, row),
@@ -506,7 +507,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return Action::Quit;
     }
     if line.trim() == MODEL_COMMAND {
-        return ask_which_model(session);
+        return ask_which_model(session, crate::model_prompt::Scope::EverySession);
+    }
+    if argument_to(line, MODEL_COMMAND) == Some(crate::command_table::MODEL_SESSION_WORD) {
+        return ask_which_model(session, crate::model_prompt::Scope::ThisSession);
     }
     if let Some(name) = argument_to(line, THEME_COMMAND) {
         return if name.is_empty() {
@@ -2209,8 +2213,9 @@ fn opened_scratch(session: &mut Session, workspace: &mut Workspace) -> Option<Se
 }
 
 /// What asking for the model picker does: the picker, or the note that the definition in force
-/// has already named the model. Shared by `/model` and a click on the panel's model row.
-pub(crate) fn ask_which_model(session: &mut Session) -> Action {
+/// has already named the model. Shared by `/model`, `/model session` and a click on the panel's
+/// model row, which differ only in the scope the picker opens in.
+pub(crate) fn ask_which_model(session: &mut Session, scope: crate::model_prompt::Scope) -> Action {
     // Every turn asks for the definition's model, so a pick would change what `/status` says
     // and not what any turn asks for (CLI-17).
     if let Some(refused) = session.standing_definition().and_then(|standing| {
@@ -2226,7 +2231,7 @@ pub(crate) fn ask_which_model(session: &mut Session) -> Action {
         session.take_model_to_offer();
         return Action::Redraw;
     }
-    Action::ChooseModel
+    Action::ChooseModel(scope)
 }
 
 /// What the idle loop does with one event it has read.
@@ -3216,7 +3221,7 @@ fn event_loop(
             Action::Hunks(argument) => held
                 .asking_about_a_restore(terminal, |held, ask| held.hunks_command(ask, &argument)),
             Action::Show => show_transcript(terminal, held.session)?,
-            Action::ChooseModel => open_model_picker(held.session, config),
+            Action::ChooseModel(scope) => open_model_picker(held.session, config, scope),
             Action::ChooseTheme => choose_theme(terminal, held.session),
             Action::SetTheme(name) => set_theme(held.session, &name),
             Action::ChooseEffort => choose_effort(terminal, held.session),
@@ -4730,7 +4735,12 @@ mod tests {
         brave_model.key = "gpt-5.5".to_string();
         gateway_model.key = "openrouter/z-ai/glm-4.6".to_string();
 
-        model_picked(&mut session, &mut config, gateway_model);
+        model_picked(
+            &mut session,
+            &mut config,
+            gateway_model,
+            crate::model_prompt::Scope::EverySession,
+        );
         let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
         assert!(
             said.iter()
@@ -4739,7 +4749,12 @@ mod tests {
         );
 
         let mut session = Session::new("none");
-        model_picked(&mut session, &mut config, brave_model);
+        model_picked(
+            &mut session,
+            &mut config,
+            brave_model,
+            crate::model_prompt::Scope::EverySession,
+        );
         let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
         assert!(said.iter().any(|text| text.contains("GPT-5.5")), "{said:?}");
         assert!(
@@ -4842,7 +4857,12 @@ mod tests {
         let mut other = account.clone();
         other.key = "openrouter/a-model".to_string();
 
-        model_picked(&mut session, &mut config, account);
+        model_picked(
+            &mut session,
+            &mut config,
+            account,
+            crate::model_prompt::Scope::EverySession,
+        );
         let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
         assert!(
             said.iter()
@@ -4852,7 +4872,12 @@ mod tests {
         assert_eq!(session.effort_in_force(), Some(Effort::Low));
 
         let before = session.transcript.len();
-        model_picked(&mut session, &mut config, other);
+        model_picked(
+            &mut session,
+            &mut config,
+            other,
+            crate::model_prompt::Scope::EverySession,
+        );
         assert_eq!(
             session.effort_in_force(),
             Some(Effort::High),
@@ -5624,7 +5649,11 @@ mod tests {
         assert_eq!(config.providers.len(), 5, "a block configured no gateway");
 
         let mut session = Session::new("none");
-        open_model_picker(&mut session, &config);
+        open_model_picker(
+            &mut session,
+            &config,
+            crate::model_prompt::Scope::EverySession,
+        );
         session.settle_picking();
 
         let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
@@ -5841,7 +5870,12 @@ mod tests {
 
         let mut config = a_config_with_a_named_roster();
         let mut session = Session::new("none");
-        model_picked(&mut session, &mut config, listed("opus-arn", Some(65_536)));
+        model_picked(
+            &mut session,
+            &mut config,
+            listed("opus-arn", Some(65_536)),
+            crate::model_prompt::Scope::EverySession,
+        );
 
         assert_eq!(config.context_budget, 65_536);
         assert!(said_budget(&session), "the pick did not say the budget");
@@ -6176,7 +6210,11 @@ mod tests {
         offer(the_accounts_listing());
 
         let mut session = Session::new("none");
-        open_model_picker(&mut session, &config);
+        open_model_picker(
+            &mut session,
+            &config,
+            crate::model_prompt::Scope::EverySession,
+        );
         session.settle_picking();
 
         assert_eq!(asked(), 1, "the picker did not ask");
@@ -6218,7 +6256,11 @@ mod tests {
         offer_chatgpt(the_accounts_listing());
 
         let mut session = Session::new("none");
-        open_model_picker(&mut session, &config);
+        open_model_picker(
+            &mut session,
+            &config,
+            crate::model_prompt::Scope::EverySession,
+        );
         session.settle_picking();
 
         assert_eq!(asked(), 1, "the picker did not ask");
@@ -6340,7 +6382,11 @@ mod tests {
         let said_after_opening = |script: &dyn Fn()| -> (Vec<String>, Vec<String>) {
             script();
             let mut session = Session::new("none");
-            open_model_picker(&mut session, &config);
+            open_model_picker(
+                &mut session,
+                &config,
+                crate::model_prompt::Scope::EverySession,
+            );
             session.settle_picking();
             let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
                 panic!("no model picker is open");
@@ -6375,7 +6421,11 @@ mod tests {
         let fresh = std::thread::spawn(|| {
             let config = a_config_with_a_named_roster();
             let mut session = Session::new("none");
-            open_model_picker(&mut session, &config);
+            open_model_picker(
+                &mut session,
+                &config,
+                crate::model_prompt::Scope::EverySession,
+            );
             session.settle_picking();
             (session.transcript.len(), models::scripted_xai::asked())
         })
@@ -6419,7 +6469,11 @@ mod tests {
         );
 
         let mut session = Session::new("none");
-        open_model_picker(&mut session, &config);
+        open_model_picker(
+            &mut session,
+            &config,
+            crate::model_prompt::Scope::EverySession,
+        );
         session.settle_picking();
         for letter in "opus".chars() {
             session.press_in_picking(KeyCode::Char(letter), KeyModifiers::NONE);
@@ -6446,7 +6500,12 @@ mod tests {
         let (answer, listing) = std::sync::mpsc::channel();
         let mut session = Session::new("none");
 
-        open_model_picker_awaiting(&mut session, &config, listing);
+        open_model_picker_awaiting(
+            &mut session,
+            &config,
+            listing,
+            crate::model_prompt::Scope::EverySession,
+        );
 
         assert!(session.picking_is_loading(), "the picker was not open");
         let Some(Picking::Model(picker)) = session.picking() else {
@@ -6527,7 +6586,12 @@ mod tests {
         let config = a_config_with_a_named_roster();
         let (answer, listing) = std::sync::mpsc::channel();
         let mut session = a_turn_running_on("first");
-        open_model_picker_awaiting(&mut session, &config, listing);
+        open_model_picker_awaiting(
+            &mut session,
+            &config,
+            listing,
+            crate::model_prompt::Scope::EverySession,
+        );
 
         assert!(
             !settle_picking_during_a_turn(&mut session),
@@ -6565,7 +6629,12 @@ mod tests {
         let config = a_config_with_a_named_roster();
         let (answer, listing) = std::sync::mpsc::channel();
         let mut session = a_turn_running_on("first");
-        open_model_picker_awaiting(&mut session, &config, listing);
+        open_model_picker_awaiting(
+            &mut session,
+            &config,
+            listing,
+            crate::model_prompt::Scope::EverySession,
+        );
         answer
             .send(Err("no route to host".to_string()))
             .expect("the picker dropped its listing");
@@ -6587,7 +6656,12 @@ mod tests {
         let config = a_config_with_a_named_roster();
         let (answer, listing) = std::sync::mpsc::channel();
         let mut session = Session::new("none");
-        open_model_picker_awaiting(&mut session, &config, listing);
+        open_model_picker_awaiting(
+            &mut session,
+            &config,
+            listing,
+            crate::model_prompt::Scope::EverySession,
+        );
         answer
             .send(Err("no route to host".to_string()))
             .expect("the picker dropped its listing");
@@ -6601,7 +6675,12 @@ mod tests {
         assert_eq!(session.model(), None);
 
         let (answer, listing) = std::sync::mpsc::channel();
-        open_model_picker_awaiting(&mut session, &config, listing);
+        open_model_picker_awaiting(
+            &mut session,
+            &config,
+            listing,
+            crate::model_prompt::Scope::EverySession,
+        );
         drop(answer);
         assert!(session.settle_picking());
         assert!(session.picking().is_none(), "the picker stayed open");
@@ -6609,7 +6688,7 @@ mod tests {
 
     /// The row the picker's cursor opens on and the rows it marks as current, for a session as it stands.
     fn picker_opened(session: &mut Session, config: &Config) -> (Option<String>, Vec<String>) {
-        open_model_picker(session, config);
+        open_model_picker(session, config, crate::model_prompt::Scope::EverySession);
         session.settle_picking();
         let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
             panic!("no model picker is open");
@@ -6977,7 +7056,11 @@ mod tests {
         let said_after_opening = |script: &dyn Fn()| -> (Vec<String>, Vec<String>) {
             script();
             let mut session = Session::new("none");
-            open_model_picker(&mut session, &config);
+            open_model_picker(
+                &mut session,
+                &config,
+                crate::model_prompt::Scope::EverySession,
+            );
             session.settle_picking();
             let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
                 panic!("no model picker is open");
@@ -9694,7 +9777,10 @@ mod tests {
     fn a_click_on_the_panels_model_or_effort_row_opens_that_picker() {
         let (mut session, buffer) = panel_with_a_model();
         let (row, column) = find_on(&buffer, "claude-sonnet");
-        assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+        );
         assert!(session.selection.is_none());
 
         let (row, column) = find_on(&buffer, "effort");
@@ -9750,7 +9836,10 @@ mod tests {
         assert_eq!(handle_mouse(&mut session, up), Action::Copy);
 
         session.last_click = None;
-        assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+        );
         assert_eq!(click(&mut session, row, column), Action::None);
         assert!(session.selection.is_none(), "the second click selected");
     }
@@ -9761,7 +9850,10 @@ mod tests {
         let (mut session, buffer) = panel_with_a_model();
         let (row, column) = find_on(&buffer, "claude-sonnet");
         session.open_scroller();
-        assert_ne!(click(&mut session, row, column), Action::ChooseModel);
+        assert_ne!(
+            click(&mut session, row, column),
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+        );
     }
 
     /// A press that began in the transcript and was let go over the model row is not a click on it.
@@ -17267,6 +17359,424 @@ mod tests {
         }
     }
 
+    /// A model picker open in `scope` over `session`, with the rows a listing of two models gave.
+    fn a_model_picker_open_in(
+        session: &mut Session,
+        config: &Config,
+        scope: crate::model_prompt::Scope,
+    ) {
+        let (answer, listing) = std::sync::mpsc::channel();
+        open_model_picker_awaiting(session, config, listing, scope);
+        answer
+            .send(Ok((
+                vec![listed("opus-arn", None), listed("some-model", None)],
+                Vec::new(),
+            )))
+            .unwrap();
+        assert!(session.settle_picking());
+        assert!(session.picking().is_some(), "the picker did not open");
+    }
+
+    fn the_scope_of_the_open_picker(session: &Session) -> crate::model_prompt::Scope {
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        picker.scope()
+    }
+
+    /// R1, R6. `/model session` opens the picker in the this-session scope, at rest and under a
+    /// turn, and the bare command opens it in the every-session one. The faults it rejects are a
+    /// word ignored, so both open the same scope, and a command that is only recognised at rest.
+    #[test]
+    fn model_session_asks_for_the_picker_in_the_this_session_scope() {
+        use crate::model_prompt::Scope;
+        let mut session = Session::new("none");
+        assert_eq!(
+            enter_line(&mut session, "/model session"),
+            Action::ChooseModel(Scope::ThisSession)
+        );
+        assert!(!session.command_sent_as_prompt, "the command was marked");
+        assert_eq!(
+            enter_line(&mut session, "/model"),
+            Action::ChooseModel(Scope::EverySession)
+        );
+
+        let mut working = a_turn_running_on("first");
+        for c in "/model session".chars() {
+            handle_key_while_working(&mut working, key(KeyCode::Char(c)));
+        }
+        let action = handle_key_while_working(&mut working, key(KeyCode::Enter));
+        assert_eq!(action, Action::ChooseModel(Scope::ThisSession));
+
+        let config = a_config_with_a_named_roster();
+        let mut opened = Session::new("none");
+        a_model_picker_open_in(&mut opened, &config, Scope::ThisSession);
+        assert_eq!(the_scope_of_the_open_picker(&opened), Scope::ThisSession);
+    }
+
+    /// R6. `/model` takes the one word `session` and no model name: every other line with words
+    /// after `/model`, and `/models`, is sent as a prompt and opens no picker. The faults it
+    /// rejects are a prefix match, a case-insensitive match, trailing words ignored, and a model
+    /// name taken as the argument.
+    #[test]
+    fn model_takes_no_word_but_session_and_no_model_name() {
+        for line in [
+            "/model gpt-5",
+            "/model sessions",
+            "/model Session",
+            "/model session now",
+            "/models",
+        ] {
+            let mut session = Session::new("none");
+            let action = enter_line(&mut session, line);
+            assert!(
+                matches!(action, Action::Submit(_)),
+                "{line:?} did not become a prompt: {action:?}"
+            );
+            assert!(session.picking().is_none(), "{line:?} opened a picker");
+        }
+    }
+
+    /// R2, R3, R4. Enter on a row of the `/model session` picker puts that model in force for this
+    /// session and writes nothing: the model file still holds the earlier pick, which is the model
+    /// the next session opens on. The faults it rejects are a session-only pick that is recorded,
+    /// one that is not applied, and one that leaves the model file empty.
+    #[test]
+    fn a_model_taken_in_the_this_session_scope_is_not_recorded() {
+        use crate::model_prompt::Scope;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut config = a_config_with_a_named_roster();
+        bravebot_session::store::save_model("the-earlier-pick");
+        let mut session = Session::new("none").with_stored_history();
+
+        a_model_picker_open_in(&mut session, &config, Scope::ThisSession);
+        session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+        let picked = session.take_pick().expect("Enter took no row");
+        let crate::picking::Picked::Model(model, scope) = &picked else {
+            panic!("the row taken was {picked:?}");
+        };
+        let key = model.key.clone();
+        assert_eq!(*scope, Scope::ThisSession);
+        carry_out_pick(&mut session, &mut config, picked);
+
+        assert_eq!(
+            session.model(),
+            Some(key.as_str()),
+            "the pick was not applied"
+        );
+        assert!(session.model_is_for_this_session());
+        assert_eq!(
+            bravebot_session::store::load_model().as_deref(),
+            Some("the-earlier-pick"),
+            "the pick was recorded"
+        );
+    }
+
+    /// R5. The same pick taken in the every-session scope, which the bare `/model` opens, is
+    /// recorded as before and is not marked as this session's alone. It rejects a change that
+    /// stops recording every pick.
+    #[test]
+    fn a_model_taken_in_the_every_session_scope_is_recorded() {
+        use crate::model_prompt::Scope;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut config = a_config_with_a_named_roster();
+        bravebot_session::store::save_model("the-earlier-pick");
+        let mut session = Session::new("none").with_stored_history();
+
+        a_model_picker_open_in(&mut session, &config, Scope::EverySession);
+        session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+        let picked = session.take_pick().expect("Enter took no row");
+        let crate::picking::Picked::Model(model, scope) = &picked else {
+            panic!("the row taken was {picked:?}");
+        };
+        let key = model.key.clone();
+        assert_eq!(*scope, Scope::EverySession);
+        carry_out_pick(&mut session, &mut config, picked);
+
+        assert_eq!(session.model(), Some(key.as_str()));
+        assert!(!session.model_is_for_this_session());
+        assert_eq!(
+            bravebot_session::store::load_model().as_deref(),
+            Some(config.name_to_record(&key)),
+            "the pick was not recorded"
+        );
+    }
+
+    /// R20, R3, R4. A model picked for this session only is the one the next turn is asked for,
+    /// over a recorded pick and over a settings file's key, and records nothing: the file still
+    /// holds the earlier pick, and a second session opens on it. The faults it rejects are a pick
+    /// that goes through `choose_model` and so rewrites the file, a settings key or a recorded pick
+    /// that is read again after the pick, and a task built from anything but the session's model.
+    #[test]
+    fn a_session_only_pick_is_asked_for_over_every_other_source_and_the_next_session_ignores_it() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let config = a_config_needing_no_sign_in();
+        let settings = bravebot_config::Settings::parse(r#"{"model": "the-files-model"}"#);
+        bravebot_session::store::save_model("the-recorded-pick");
+
+        let mut session = Session::new("none").with_stored_history();
+        session.adopt_model(&settings, &config);
+        assert_eq!(session.model(), Some("the-recorded-pick"));
+
+        session.choose_model_for_this_session("only-this-time");
+
+        assert_eq!(session.model(), Some("only-this-time"));
+        let run_settings = RunSettings::from_settings(&settings);
+        let task = run_settings.task("it", &session, &Permissions::new());
+        assert_eq!(
+            task.model.as_deref(),
+            Some("only-this-time"),
+            "the turn was not asked for the session-only pick"
+        );
+        assert_eq!(
+            bravebot_session::store::load_model().as_deref(),
+            Some("the-recorded-pick"),
+            "the session-only pick was recorded"
+        );
+
+        let mut next = Session::new("none").with_stored_history();
+        next.adopt_model(&settings, &config);
+        assert_eq!(
+            next.model(),
+            Some("the-recorded-pick"),
+            "the next session did not open on the model it would have had"
+        );
+        assert!(!next.model_is_for_this_session());
+    }
+
+    /// R21. A session-only pick ranks as a recorded one does against the models that outrank the
+    /// session's: `planModel` in plan mode and the model a definition names. The fault it rejects
+    /// is a session-only pick that is given the command line's rank, so it answers a plan turn
+    /// or a definition's turn.
+    #[test]
+    fn a_session_only_pick_is_outranked_by_the_plan_model_and_a_definitions_as_a_recorded_one_is() {
+        use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Plan};
+
+        let config = a_config_naming_a_plan_model_with_a_window();
+        let egress = bravebot_net::Egress::new();
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let permissions = Permissions::new();
+
+        for every_session in [true, false] {
+            let mut session = Session::new("none");
+            if every_session {
+                session.choose_model("a-picked-model", &config);
+            } else {
+                session.choose_model_for_this_session("a-picked-model");
+            }
+            let task = run_settings.task("it", &session, &permissions);
+            assert_eq!(task.model.as_deref(), Some("a-picked-model"));
+            let answering = |mode, definition| {
+                model_answering_the_turn(&config, &egress, mode, &task, definition)
+            };
+
+            assert_eq!(
+                answering(Plan, None).as_deref(),
+                Some(A_PLAN_MODEL),
+                "the pick answered a plan turn (every session: {every_session})"
+            );
+            for mode in [Ask, AcceptEdits] {
+                assert_eq!(
+                    answering(mode, None),
+                    None,
+                    "{mode:?} (every session: {every_session})"
+                );
+            }
+            for mode in [Plan, Ask] {
+                assert_eq!(
+                    answering(mode, Some("a-definition-model")).as_deref(),
+                    Some("a-definition-model"),
+                    "{mode:?} (every session: {every_session})"
+                );
+            }
+        }
+    }
+
+    /// R22, R4. A record written by a session that held a session-only pick does not hold it, and
+    /// a session resumed from it opens on the model a new session opens on: the recorded pick.
+    /// The faults it rejects are a record that is written with the model in force, and a resume
+    /// that puts a model back from the record.
+    #[test]
+    fn a_resume_after_a_session_only_pick_opens_on_the_recorded_pick() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-model-session-resumed");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let config = a_config_needing_no_sign_in();
+        let settings = bravebot_config::Settings::default();
+        bravebot_session::store::save_model("the-recorded-pick");
+
+        let mut session = Session::new("none").with_stored_history();
+        session.adopt_model(&settings, &config);
+        session.choose_model_for_this_session("only-this-time");
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        with_standing(
+            &session,
+            &Conversation::new(),
+            &TrustStore::new(&root),
+            &TrustedPrograms::new(),
+            &workspace,
+            |standing| stored.save("a session", standing),
+        );
+        let record = sessions::load(&root, stored.id()).expect("the record");
+        assert_eq!(record.model, None, "the record holds the session-only pick");
+
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(stored);
+        let mut resumed = Session::new("none").with_stored_history();
+        resumed.adopt_model(&settings, &config);
+        restore_resumed(&mut resumed, &config, &mut workspace, &record)
+            .expect("the record is free");
+
+        assert_eq!(resumed.model(), Some("the-recorded-pick"));
+        assert!(!resumed.model_is_for_this_session());
+        assert_eq!(resumed.served_model(), None);
+        assert_eq!(
+            bravebot_session::store::load_model().as_deref(),
+            Some("the-recorded-pick")
+        );
+    }
+
+    /// R23. `/branch` goes on in the same session, so the pick is still in force in the copy, and
+    /// is still the session's alone: the copy's record does not name it and the saved pick is not
+    /// rewritten. The fault it rejects is a branch that writes the model in force into the copy's
+    /// record or into the saved pick.
+    #[test]
+    fn a_branch_keeps_a_session_only_pick_and_records_it_nowhere() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-model-session-branched");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        bravebot_session::store::save_model("the-recorded-pick");
+        session.choose_model_for_this_session("only-this-time");
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_eq!(session.model(), Some("only-this-time"));
+        assert!(session.model_is_for_this_session());
+        let copy = sessions::load(&root, stored.id()).expect("the copy's record");
+        assert_eq!(copy.model, None, "the copy's record holds the pick");
+        assert_eq!(
+            bravebot_session::store::load_model().as_deref(),
+            Some("the-recorded-pick"),
+            "the branch recorded the pick"
+        );
+    }
+
+    /// R54. `/clear` and a handoff begin a new conversation in the same session, and the model in
+    /// force is the person's and not the conversation's, so a session-only pick stays in force
+    /// and stays marked as the session's alone. The fault it rejects is a clear that drops the
+    /// pick, or that keeps the model and loses the mark the panel reads.
+    #[test]
+    fn a_session_only_pick_survives_a_clear_and_a_handoff() {
+        let root = crate::testutil::scratch_dir("bravebot-clear-session-only-pick-test");
+        std::fs::create_dir_all(&root).expect("scratch");
+
+        for handed_from in [None, Some("an-earlier-id")] {
+            let mut workspace = Workspace::new(&root).expect("workspace");
+            let mut session = Session::new("none");
+            session.choose_model_for_this_session("only-this-time");
+
+            let _ = clear_session(&mut session, &mut workspace, handed_from);
+
+            assert_eq!(session.model(), Some("only-this-time"), "{handed_from:?}");
+            assert!(session.model_is_for_this_session(), "{handed_from:?}");
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// R26. An incognito session takes a session-only pick, as it takes a recorded one, and
+    /// writes nothing: the directory holds what it held before. The faults it rejects are a pick
+    /// refused because the session does not persist, and a write that goes around the store's own
+    /// gate.
+    #[test]
+    fn an_incognito_session_takes_a_session_only_pick_and_writes_nothing() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_model("the-recorded-pick");
+        let directory = bravebot_session::store::directory().expect("a home");
+        let listing = || {
+            let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&directory)
+                .expect("the directory")
+                .map(|entry| {
+                    let path = entry.expect("an entry").path();
+                    (
+                        path.file_name().unwrap().to_string_lossy().into_owned(),
+                        std::fs::read(&path).unwrap_or_default(),
+                    )
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let before = listing();
+        assert!(!before.is_empty(), "nothing was seeded to compare with");
+        bravebot_core::incognito::engage();
+
+        let mut session = Session::new("none").with_stored_history();
+        session.choose_model_for_this_session("only-this-time");
+
+        assert_eq!(session.model(), Some("only-this-time"));
+        assert!(session.model_is_for_this_session());
+        assert_eq!(listing(), before, "an incognito session wrote");
+        assert_eq!(
+            bravebot_session::store::load_model().as_deref(),
+            Some("the-recorded-pick")
+        );
+    }
+
+    /// R19, R52. Tab pressed with the picker open reaches the picker and switches its scope, at
+    /// rest and under a turn, and edits nothing else: the line stays empty and no suggestion or
+    /// completion takes the key first. Shift-Tab switches it back. It rejects a Tab taken by the
+    /// box, by a suggestion, or by the turn's own loop.
+    #[test]
+    fn tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn() {
+        use crate::model_prompt::Scope;
+        let config = a_config_with_a_named_roster();
+
+        let mut session = Session::new("none");
+        a_model_picker_open_in(&mut session, &config, Scope::EverySession);
+        handle_key(&mut session, key(KeyCode::Tab));
+        assert_eq!(the_scope_of_the_open_picker(&session), Scope::ThisSession);
+        handle_key(&mut session, key(KeyCode::Tab));
+        assert_eq!(the_scope_of_the_open_picker(&session), Scope::EverySession);
+        handle_key(&mut session, key(KeyCode::BackTab));
+        assert_eq!(the_scope_of_the_open_picker(&session), Scope::ThisSession);
+        assert!(session.input().is_empty(), "Tab edited the line");
+
+        let mut working = a_turn_running_on("first");
+        a_model_picker_open_in(&mut working, &config, Scope::EverySession);
+        handle_key_while_working(&mut working, key(KeyCode::Tab));
+        assert_eq!(the_scope_of_the_open_picker(&working), Scope::ThisSession);
+        assert!(working.input().is_empty(), "Tab edited the line");
+    }
+
     /// The bare command is still the command: the picker opens and nothing is sent, so there is no
     /// turn for the note to describe.
     #[test]
@@ -17276,7 +17786,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::ChooseModel
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
         );
         assert!(!session.command_sent_as_prompt, "the command was marked");
     }
@@ -17305,7 +17815,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::ChooseModel
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
         );
         assert!(session.input().is_empty(), "the command stayed on the line");
         assert!(
@@ -18692,7 +19202,7 @@ mod tests {
 
         assert_eq!(
             enter_line(&mut session, "/audit the parser"),
-            Action::ChooseModel
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
         );
         assert_eq!(session.input(), "Audit the parser");
         assert_eq!(session.model(), None, "the expansion chose the model");
@@ -18702,7 +19212,12 @@ mod tests {
         // The loop opens the picker, which takes the name once and puts the cursor on its row.
         let config = a_config_with_a_named_roster();
         let (answer, listing) = std::sync::mpsc::channel();
-        open_model_picker_awaiting(&mut session, &config, listing);
+        open_model_picker_awaiting(
+            &mut session,
+            &config,
+            listing,
+            crate::model_prompt::Scope::EverySession,
+        );
         assert!(
             !session.has_model_to_offer(),
             "the name would open a second picker"
@@ -18722,6 +19237,36 @@ mod tests {
         assert_eq!(session.input(), "Audit the parser");
     }
 
+    /// CMD-17 (R32). A prompt file naming a `model` opens the picker in the scope of a bare `/model`
+    /// (every session), also where a session-only pick is already in force. Rejects: the offer
+    /// inheriting the this-session scope from the pick in force, which would apply the file's model
+    /// to this session only without anybody asking for that.
+    #[test]
+    fn a_prompt_file_naming_a_model_opens_the_picker_in_the_every_session_scope() {
+        use crate::model_prompt::Scope;
+        let mut session = with_prompt_files(
+            "prompt-files-model-scope",
+            &[(
+                "audit.md",
+                "---\nmodel: some-model\n---\nAudit $ARGUMENTS\n",
+            )],
+        );
+        session.choose_model_for_this_session("only-this-time");
+
+        assert_eq!(
+            enter_line(&mut session, "/audit the parser"),
+            Action::ChooseModel(Scope::EverySession)
+        );
+        let config = a_config_with_a_named_roster();
+        let (answer, listing) = std::sync::mpsc::channel();
+        open_model_picker_awaiting(&mut session, &config, listing, Scope::EverySession);
+        answer
+            .send(Ok((vec![listed("some-model", None)], Vec::new())))
+            .unwrap();
+        assert!(session.settle_picking());
+        assert_eq!(the_scope_of_the_open_picker(&session), Scope::EverySession);
+    }
+
     /// CMD-17: Esc on the picker a file's `model` opened leaves the model as it was, closes the
     /// picker and keeps the file's text in the box. The regression it rejects is a cancel that takes
     /// the row under the cursor, which is the model the file named.
@@ -18731,10 +19276,18 @@ mod tests {
             "prompt-files-model-escape",
             &[("audit.md", "---\nmodel: some-model\n---\nAudit\n")],
         );
-        assert_eq!(enter_line(&mut session, "/audit"), Action::ChooseModel);
+        assert_eq!(
+            enter_line(&mut session, "/audit"),
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+        );
         let config = a_config_with_a_named_roster();
         let (answer, listing) = std::sync::mpsc::channel();
-        open_model_picker_awaiting(&mut session, &config, listing);
+        open_model_picker_awaiting(
+            &mut session,
+            &config,
+            listing,
+            crate::model_prompt::Scope::EverySession,
+        );
         answer
             .send(Ok((
                 vec![listed("opus-arn", None), listed("some-model", None)],
@@ -18794,7 +19347,7 @@ mod tests {
         }
         assert_eq!(
             handle_key_while_working(&mut session, key(KeyCode::Enter)),
-            Action::ChooseModel
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
         );
         assert_eq!(session.input(), "Audit");
         assert!(session.queued.is_empty(), "the expansion was queued unread");
@@ -22590,7 +23143,10 @@ mod tests {
         session.choose_model("the-sessions-model", &config);
         session.work_under(standing());
         assert_eq!(session.model(), Some("the-sessions-model"));
-        assert_eq!(open_the_picker(&mut session), Action::ChooseModel);
+        assert_eq!(
+            open_the_picker(&mut session),
+            Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+        );
 
         let config = a_config_needing_no_sign_in();
         let mut session = Session::new("none");
@@ -22615,6 +23171,36 @@ mod tests {
                 "every turn is addressed to rule-reviewer, which asks for the-definitions-model, \
                  so /model has nothing to change; start bravebot without --agent to pick a model"
             )
+        );
+    }
+
+    /// R25. `/model session` under a definition that names a model is refused as `/model` is: no
+    /// picker, the same note, and the model in force is the definition's and is not marked as a
+    /// session-only pick. The fault it rejects is a refusal made only for the bare command.
+    #[test]
+    fn model_session_under_a_definition_naming_a_model_is_refused_as_model_is() {
+        let said_after = |line: &str| {
+            let config = a_config_needing_no_sign_in();
+            let mut session = Session::new("none");
+            session.choose_model("the-sessions-model", &config);
+            session.work_under(crate::state::Addressed {
+                model: Some("the-definitions-model".to_string()),
+                ..standing()
+            });
+            let action = enter_line(&mut session, line);
+            assert_eq!(action, Action::Redraw, "{line}");
+            assert!(session.picking().is_none(), "{line}: a picker opened");
+            assert_eq!(session.model(), Some("the-definitions-model"), "{line}");
+            assert!(!session.model_is_for_this_session(), "{line}");
+            said_in_the_transcript(&session)
+        };
+
+        let said = said_after("/model session");
+        assert_eq!(said, said_after(MODEL_COMMAND));
+        assert!(
+            said.last()
+                .is_some_and(|note| note.contains("the-definitions-model")),
+            "{said:?}"
         );
     }
 
@@ -29989,6 +30575,73 @@ mod tests {
             "the pick said something other than its two lines"
         );
         assert_eq!(session.input(), "", "a letter reached the box");
+        assert!(session.picking().is_none());
+
+        session.complete("answered", Vec::new(), 0);
+        assert_eq!(session.model_of_the_turn(), Some("sonnet-arn"));
+    }
+
+    /// CMD-8, CMD-17 (R27). `/model session` typed mid-turn lists what the endpoints offer as it is
+    /// typed, in the this-session scope, and is neither queued nor handed to the turn. Rejects: the
+    /// words read as a prompt while a turn runs, which queues them or hands them to the turn, and a
+    /// mid-turn picker that opens in the every-session scope whatever was typed.
+    #[test]
+    fn model_session_typed_mid_turn_opens_its_list_in_the_this_session_scope() {
+        use crate::model_prompt::Scope;
+        use crate::picking::Picking;
+        let mut config = a_config_offering_three_tiers();
+        let mut session = a_turn_running_on("first");
+
+        beside_holding(&mut config, |beside| {
+            typed_during_a_turn(&mut session, "/model session", key(KeyCode::Enter), beside)
+        });
+        session.settle_picking();
+
+        let Some(Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker opened: {:?}", session.picking());
+        };
+        assert_eq!(picker.matching().len(), 3, "the roster was not offered");
+        assert_eq!(picker.scope(), Scope::ThisSession);
+        assert!(session.queued.is_empty(), "/model session waited");
+        assert_eq!(
+            session.interjections().take(),
+            None,
+            "the running turn was handed /model session"
+        );
+        assert_eq!(session.input(), "", "/model session was left in the box");
+        assert!(crate::command_table::runs_while_working("/model session"));
+        assert!(!crate::command_table::runs_while_working("/model sessions"));
+    }
+
+    /// CMD-8, CMD-17 (R28). A model picked in the `/model session` list mid-turn is the next turn's
+    /// and the running turn keeps its own, as a recorded pick does, and it is marked as session-only.
+    /// Rejects: a pick that moves the model of the turn in flight, one that waits for the turn to end
+    /// before it applies, and one that is applied but not marked.
+    #[test]
+    fn a_session_only_model_picked_mid_turn_applies_from_the_next_turn() {
+        let mut config = a_config_offering_three_tiers();
+        let mut session = a_turn_running_on("first");
+        let cancel = Cancel::new();
+
+        beside_holding(&mut config, |beside| {
+            typed_during_a_turn(&mut session, "/model session", key(KeyCode::Enter), beside);
+            session.settle_picking();
+            for c in "son".chars() {
+                turn_key(&mut session, key(KeyCode::Char(c)), &cancel, beside);
+            }
+            turn_key(&mut session, key(KeyCode::Enter), &cancel, beside);
+        });
+
+        assert_eq!(session.model(), Some("sonnet-arn"), "the pick waited");
+        assert!(
+            session.model_is_for_this_session(),
+            "the pick was not marked"
+        );
+        assert_eq!(
+            session.model_of_the_turn(),
+            None,
+            "the running turn was moved to the model picked for the next"
+        );
         assert!(session.picking().is_none());
 
         session.complete("answered", Vec::new(), 0);

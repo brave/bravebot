@@ -896,6 +896,11 @@ fn head(session: &Session, text: usize, refs_room: usize) -> Body {
             ending(&crate::render::printable(chosen), text),
             Style::default(),
         ));
+        // A pick made with `/model session` is not the one the next session opens on, and nothing
+        // else on the screen says so (PANEL-9).
+        if session.model_is_for_this_session() {
+            model.push(row(t!(panel_model_this_session).to_string(), dim()));
+        }
     }
     if let Some(level) = session.effort_in_force() {
         model_targets.push((model.len(), Target::Effort));
@@ -1372,6 +1377,54 @@ mod tests {
             "the panel did not open at {width} columns"
         );
         session
+    }
+
+    /// PANEL-9 (R30, R31). The model row names the model in force whatever scope it was picked in,
+    /// and a pick made with `/model session` has a row under it saying so, which a recorded pick
+    /// and a pick the command line named do not. Rejects: a marker drawn for a recorded pick, no
+    /// marker for a session-only pick, a marker that replaces the model's name, and a marker that
+    /// stays after a later recorded pick.
+    #[test]
+    fn the_info_panel_marks_a_session_only_pick_and_names_the_model_either_way() {
+        let marker = t!(panel_model_this_session).to_string();
+        let rows = |session: &Session| {
+            lines(session, WIDTH, 40)
+                .iter()
+                .map(|line| line.to_string().trim().to_string())
+                .collect::<Vec<_>>()
+        };
+
+        let mut session = Session::new("none");
+        session.choose_model("claude-sonnet".to_string(), &model_config());
+        let drawn = rows(&session);
+        assert!(drawn.iter().any(|row| row == "claude-sonnet"), "{drawn:?}");
+        assert!(
+            !drawn.contains(&marker),
+            "a recorded pick was marked: {drawn:?}"
+        );
+
+        let mut named = Session::new("none");
+        named.name_model("claude-sonnet".to_string());
+        assert!(!rows(&named).contains(&marker), "--model's pick was marked");
+
+        session.choose_model_for_this_session("claude-haiku");
+        let drawn = rows(&session);
+        let at = drawn
+            .iter()
+            .position(|row| row == "claude-haiku")
+            .unwrap_or_else(|| panic!("the model in force is not named: {drawn:?}"));
+        assert_eq!(
+            drawn[at + 1],
+            marker,
+            "no marker under the model: {drawn:?}"
+        );
+        assert_eq!(drawn.iter().filter(|row| **row == marker).count(), 1);
+
+        session.choose_model("claude-sonnet".to_string(), &model_config());
+        assert!(
+            !rows(&session).contains(&marker),
+            "the marker outlived the pick"
+        );
     }
 
     /// MOUSE-11. Rejects: a target on the heading above the rows, one on the border column, one on

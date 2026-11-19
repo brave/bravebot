@@ -848,9 +848,13 @@ pub(super) fn advertised_inputs<'a>(
 /// The list is content and the choice is routing. Nothing here is quarantined, because there is no
 /// planner context to keep it out of: the names are drawn for a person, and their pick is the
 /// endorsement for the request field it lands in.
-pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
+pub(super) fn open_model_picker(
+    session: &mut Session,
+    config: &Config,
+    scope: crate::model_prompt::Scope,
+) {
     let listing = listed_in_the_background(config, session.model());
-    open_model_picker_awaiting(session, config, listing);
+    open_model_picker_awaiting(session, config, listing, scope);
 }
 
 /// [`open_model_picker`] with the answer to the listing stated, so the picker's first frames can be
@@ -859,6 +863,7 @@ pub(super) fn open_model_picker_awaiting(
     session: &mut Session,
     config: &Config,
     listing: mpsc::Receiver<crate::model_prompt::Listed>,
+    scope: crate::model_prompt::Scope,
 ) {
     // The model a prompt file named is where the cursor opens (CMD-17). Opening on it chooses
     // nothing: the person still presses Enter on the row.
@@ -868,7 +873,8 @@ pub(super) fn open_model_picker_awaiting(
             Some(model_in_force(session.model(), config)),
             listing,
         )
-        .wanting(wanted),
+        .wanting(wanted)
+        .starting_in(scope),
     ));
 }
 
@@ -901,6 +907,7 @@ pub(super) fn model_picked(
     session: &mut Session,
     config: &mut Config,
     chosen: bravebot_aichat::models::Model,
+    scope: crate::model_prompt::Scope,
 ) {
     // The listing is the only place a window is ever reported, so the budget is taken
     // here, while the entry that named it is in hand. Said once when it changes, since
@@ -933,7 +940,12 @@ pub(super) fn model_picked(
     // A model the session moves to is sent the level the session began with where it is the
     // account's, which the person is told where it is not the one they chose.
     say_if_kept_for_account(session);
-    session.choose_model(chosen.key, config);
+    match scope {
+        crate::model_prompt::Scope::EverySession => session.choose_model(chosen.key, config),
+        crate::model_prompt::Scope::ThisSession => {
+            session.choose_model_for_this_session(chosen.key)
+        }
+    }
 }
 
 /// What a unit test scripts for the xAI account's listing, and how often it was asked for.

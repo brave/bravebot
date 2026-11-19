@@ -2280,8 +2280,11 @@ granted-rules-too-small = y grants nothing: a rule is taller than this box
 
 theme-picker-title = themes
 theme-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
-model-picker-heading = Select model
-model-picker-keys = ↑↓ PgUp PgDn choose  ·  ←→ fold  ·  Enter select  ·  Esc keep current
+model-picker-heading-every-session = Select model · every session
+model-picker-heading-this-session = Select model · this session only
+model-picker-scope-every-session = Enter: every session  ·  Tab: this session only
+model-picker-scope-this-session = Enter: this session only  ·  Tab: every session
+model-picker-keys = ↑↓ PgUp PgDn choose  ·  ←→ fold  ·  Esc keep current
 model-picker-search-placeholder = Search
 model-picker-nothing-matches = nothing matches that
 model-picker-loading = loading models…
@@ -3495,6 +3498,9 @@ panel-more-references = +{ $count } more
 # Left in the transcript when a click on the session's name in the info panel finds the line in
 # use, so /rename was not put in it.
 panel-rename-line-in-use = The line is in use, so the session's name was not put in it. Clear the line and click the name again, or type /rename.
+# Under the model in the info panel where it was picked with /model session, so the next session
+# does not open on it.
+panel-model-this-session = this session only
 # The reasoning effort and the session's token total in the info panel, one to a row.
 panel-effort = effort { $level }
 panel-spent = { $tokens } this session
@@ -3697,6 +3703,7 @@ command-open = List the links in the latest reply, and open one by its number
 command-limit = Show the session's spend limit, set it in tokens or credits, or remove it
 command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
+command-model-session = Choose a model for this session only, and record nothing
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-variant = Pick a named set of options the model offers, list them, or drop the pick

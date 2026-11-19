@@ -1953,6 +1953,41 @@ mod tests {
         );
     }
 
+    /// BACKEND-11 (R29). `/status` names the model in force for a session-only pick as it does for
+    /// a recorded one: the model, noted as the one chosen, with no word about the scope. Rejects: a
+    /// report that reads the recorded pick and not the model in force, and one that falls back to
+    /// the default for a session-only pick.
+    #[test]
+    fn the_status_line_names_a_session_only_pick_as_it_names_a_recorded_one() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut recorded = crate::state::Session::new("none");
+        recorded.choose_model("the-recorded-pick".to_string(), &config);
+        let mut session_only = crate::state::Session::new("none");
+        session_only.choose_model_for_this_session("the-session-pick");
+        let model_line = |session: &crate::state::Session| {
+            let mut facts = facts(&config, &trust);
+            as_of(&mut facts, session);
+            let report = report(&facts);
+            let at = report
+                .lines
+                .iter()
+                .position(|line| line.label.trim() == t!(status_model))
+                .expect("a model line");
+            (
+                report.lines[at].value.clone(),
+                report.lines[at].note.clone(),
+            )
+        };
+        let (value, note) = model_line(&session_only);
+        assert_eq!(value, "the-session-pick");
+        assert_eq!(note, t!(status_model_chosen));
+        assert_eq!(
+            model_line(&recorded),
+            ("the-recorded-pick".to_string(), note)
+        );
+    }
+
     /// A model a `provider` block named is shown by the name the block gave it, as written: that
     /// name is the person's own words and already says which service answers. One it gave no name
     /// is drawn by its id, with no second line quoting the same id.

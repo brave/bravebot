@@ -1215,6 +1215,9 @@ pub struct Session {
     /// Read from `~/.bravebot` at startup and rewritten when `/model` picks one, so the choice outlives
     /// the session that made it and applies in every directory.
     model: Option<String>,
+    /// Whether `model` was picked for this session only (`/model session`), so it is not the one
+    /// the next session opens on. Set by that pick and cleared by a pick that is recorded.
+    model_is_for_this_session: bool,
     /// The model the turn in flight was begun with.
     ///
     /// `/model` is carried out while a turn runs and changes `model` for the turn after, so what the
@@ -1604,6 +1607,7 @@ impl Session {
             said: Vec::new(),
             started: None,
             model: None,
+            model_is_for_this_session: false,
             turn_model: None,
             model_labels: Vec::new(),
             effort: None,

@@ -385,6 +385,17 @@ settles on. The same model in force is the one the roster is read for the window
 level is read, and the one the sign-in a session makes and the refusal of a level a turn learned are asked
 about, so none of them is read for the pick alone.
 
+A choice recorded with `/model` is read back by every later session. A pick made with `/model session`
+is not recorded. It ranks as a pick made in the running session does, above every file and above the
+build, for the session that made it and for no other, so the next session opens on the model it
+would have had without it. It is outranked, as a recorded pick is, by the model a skill names for
+plan mode and by the model a definition names. Under a definition that names a model, `/model
+session` opens no picker, as `/model` does not. `--model` does not change this: it applies to the
+session it starts and a pick made in that session replaces it. The model a session record names is
+the one the service answered with, so a resumed session opens on the recorded pick and not on a
+session-only one, and `/clear`, `/handoff` and `/branch` keep a session-only pick for the session
+that made it.
+
 **Why.** A build made with a default model bakes it in, so this value ranked like the rest of the file would
 lose on every binary made that way: the key would parse, `doctor` would report it, and nothing
 would change outside a source build.
@@ -417,6 +428,9 @@ and the pick is the later of the two.
 `verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_recorded_model_ignoring_a_checkouts`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
+`verified-by: bravebot_tui::app::a_session_only_pick_is_asked_for_over_every_other_source_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_session_only_pick_is_outranked_by_the_plan_model_and_a_definitions_as_a_recorded_one_is`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
 `verified-by: bravebot_cli::running::a_run_asks_for_an_exported_default_where_no_file_names_a_model`
 `verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
 `verified-by: bravebot_tui::app::the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked`

@@ -1989,8 +1989,8 @@ Refused without a terminal rather than run as a one-shot, because the line asked
 watch the task and be able to stop it. A one-shot in its place, with `--dangerously-skip-permissions`,
 would make every change with nobody watching.
 
-**Known cost.** A bare `bravebot` has no way to name a model or a level: those are what `/model` and
-`/effort` recorded or a settings file names. Only `-i` takes them from the line.
+**Known cost.** A bare `bravebot` has no way to name a model or a level: those are what `/model`,
+`/model session` and `/effort` set, or what a settings file names. Only `-i` takes them from the line.
 
 `verified-by: bravebot_cli::main::the_prompt_a_session_opens_on_is_the_argument_as_written`
 `verified-by: bravebot_cli::main::a_session_given_no_prompt_is_refused`

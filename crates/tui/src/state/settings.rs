@@ -251,6 +251,23 @@ impl Session {
             bravebot_session::store::record_model(config, &model);
         }
         self.model = Some(model);
+        self.model_is_for_this_session = false;
+    }
+
+    /// Put `model` in force for this session only, over every saved pick and file, and record
+    /// nothing: `/model session` and Tab in the picker (CMD-17).
+    ///
+    /// Like [`Session::name_model`] it leaves the pick the next session opens on alone. It also
+    /// notes that the model in force is not the recorded one, for the info panel to say so.
+    pub fn choose_model_for_this_session(&mut self, model: impl Into<String>) {
+        self.model = Some(model.into());
+        self.model_is_for_this_session = true;
+    }
+
+    /// Whether the model in force was picked for this session only, and so is not the one the
+    /// next session opens on.
+    pub fn model_is_for_this_session(&self) -> bool {
+        self.model_is_for_this_session
     }
 
     /// Put `model` in force for this session, over every saved pick and file, and record nothing.

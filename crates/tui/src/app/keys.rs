@@ -53,8 +53,10 @@ pub enum Action {
     /// the terminal, which the loop gives back before the stop and takes again after it.
     #[cfg(unix)]
     Suspend,
-    /// Ask which model to use. Needs the network and the terminal, so the loop runs it.
-    ChooseModel,
+    /// Ask which model to use, and for how long the pick lasts: the picker opens in the scope the
+    /// person typed (`/model` or `/model session`). Needs the network and the terminal, so the loop
+    /// runs it.
+    ChooseModel(crate::model_prompt::Scope),
     /// Ask which theme to paint in. Needs the terminal, so the loop runs it.
     ChooseTheme,
     /// Apply a theme by name without opening the picker.
@@ -1438,7 +1440,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 /// (CLI-17). The picker chooses nothing until Enter is pressed on a row (CMD-17).
 fn offering_a_model(session: &mut Session) -> Action {
     if session.has_model_to_offer() {
-        super::ask_which_model(session)
+        super::ask_which_model(session, crate::model_prompt::Scope::EverySession)
     } else {
         Action::Redraw
     }
