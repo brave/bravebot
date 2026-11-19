@@ -85,16 +85,34 @@ pub fn trust_store(root: &Path) -> bravebot_core::TrustStore {
 ///
 /// `false` whenever that cannot be told, which is right for what a rule grants: a rule about `Docs`
 /// covers `docs` where they are one file and would cover a different file where they are two. A rule
-/// that withholds trust, a reservation of a path for a writer and a record of an untrusted file
-/// are not served by that answer, since a volume that folds and is read as one that does not costs
-/// a refused file read as trusted under another case. They ask [`volume_case_folding`], which says
-/// when the volume could not be asked.
+/// that withholds trust, a reservation of a path for a writer, a record of an untrusted file and a
+/// permission rule in `deny` or `ask` are not served by that answer, since a volume that folds and
+/// is read as one that does not costs a refused file read as open under another case. The first
+/// three ask [`volume_case_folding`] and the permission rules ask [`case_answer`], which say when
+/// the volume could not be asked.
 ///
 /// The question is put with the working directory's own name, a path the person chose, and only
 /// the answer of the filesystem is used. No file is created and no name in the tree is read.
 #[must_use]
 pub fn volume_folds_case(root: &Path) -> bool {
     volume_case_folding(root).folds()
+}
+
+/// [`volume_folds_case`] where `None` says the filesystem could not be asked, which is not the
+/// answer that the names are kept apart.
+///
+/// A caller that grants or vouches reads `None` as no, since a fold widens what it reaches. A rule
+/// that restricts reads it as yes ([`bravebot_core::permissions::Anchors::case_unknown`]): a
+/// `Read(.env)` that compared bytes where the volume opens `.ENV` as the same file would leave the
+/// file open to the planner, and a fold that is not needed covers a second file with a refusal and
+/// grants nothing. `None` is not remembered, so a directory that could not be read is asked again.
+#[must_use]
+pub fn case_answer(root: &Path) -> Option<bool> {
+    match volume_case_folding(root) {
+        CaseFolding::Folds => Some(true),
+        CaseFolding::Keeps => Some(false),
+        CaseFolding::Unknown => None,
+    }
 }
 
 /// What the volume under `root` says about case folding: that it holds two spellings differing only

@@ -291,10 +291,13 @@ A `deny` or `ask` rule written under one Unicode form of a directory is likewise
 checkout of it spelled in the other form, and an `allow` rule is not.
 Where a `deny` or `ask` rule and an `allow` rule are copied to one path under the checkout, the
 lists decide as they do under the working directory: the `deny` or `ask` rule wins.
-Where the volume keeps the spellings apart,
-or the caller could not tell, the match is byte-exact and a rule about `Docs` decides nothing about
-`docs`, in either polarity: the answer only widens what a rule reaches, so an unknown answer is read
-as the narrower one.
+Where the volume keeps the spellings apart, the match is byte-exact and a rule about `Docs` decides
+nothing about `docs`, in either polarity. Where the caller could not tell, the lists differ, since
+the answer widens what a rule reaches and a wrong answer costs different things in each. A rule in
+`deny` or `ask` is read as on a volume that folds: byte for byte it would leave open a file that a
+folding volume opens under the other spelling, which the person wrote the rule to keep from the
+planner, and folded it covers one more file on a volume that does not fold and grants nothing. A
+rule in `allow` is matched byte for byte, so a failed probe never grants a file nobody named.
 
 **Why.** A checkout's two settings files are about the checkout, and Claude Code starts a single
 slash in its project and local files at the project as well, so a rule copied from one covers the
@@ -338,6 +341,9 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_core::permissions::a_rule_is_not_copied_from_another_name_or_a_grant_from_another_unicode_form`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_the_simple_fold`
 `verified-by: bravebot_core::permissions::rules_read_without_an_answer_about_the_volume_compare_bytes`
+`verified-by: bravebot_core::permissions::a_deny_or_ask_rule_folds_case_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::an_allow_rule_compares_bytes_where_the_volume_could_not_be_asked`
+`verified-by: bravebot_core::permissions::a_copy_for_a_checkout_folds_a_refusal_and_not_a_grant_where_the_volume_could_not_be_asked`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
 `verified-by: bravebot_agent::workspace::a_workspace_that_folds_inside_a_parent_that_does_not_folds_case`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`

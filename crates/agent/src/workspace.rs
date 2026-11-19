@@ -144,7 +144,7 @@ pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
 pub use volume::{
-    BACKSLASH_SEPARATES, key_of, trust_store, volume_case_folding, volume_folds_case,
+    BACKSLASH_SEPARATES, case_answer, key_of, trust_store, volume_case_folding, volume_folds_case,
 };
 pub(crate) use volume::{on_disk, one_file};
 

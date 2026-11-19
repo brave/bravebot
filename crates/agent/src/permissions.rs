@@ -218,7 +218,7 @@ pub fn for_an_unattended_run(
     let anchors = anchors(
         profile,
         Some(workspace),
-        crate::workspace::volume_folds_case(workspace),
+        crate::workspace::case_answer(workspace),
     );
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &[], &anchors);
@@ -261,7 +261,7 @@ fn explain(permissions: &mut Permissions, settings: &Settings) {
 fn anchors(
     profile: Option<&std::path::Path>,
     workspace: Option<&std::path::Path>,
-    folds_case: bool,
+    folds_case: Option<bool>,
 ) -> Anchors {
     let home = profile.map(|profile| profile.display().to_string());
     Anchors {
@@ -276,9 +276,11 @@ fn anchors(
         // The host's answer, which this crate is the lowest one that may ask for: the kernel has
         // no filesystem and takes it as data (PERM-3).
         backslash_separates: crate::workspace::BACKSLASH_SEPARATES,
-        // Asked of the workspace's volume by the caller and false where that could not be told, so
-        // a failed probe compares bytes and never widens a rule.
-        folds_case,
+        // Asked of the workspace's volume by the caller. Where that could not be told a rule that
+        // grants compares bytes, so a failed probe never widens a grant, and a rule that restricts
+        // folds, so it never leaves open a file a folding volume opens under another spelling.
+        folds_case: folds_case == Some(true),
+        case_unknown: folds_case.is_none(),
     }
 }
 
@@ -291,7 +293,8 @@ fn anchors(
 /// the file tools ask about a project file by that name.
 fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     let root = workspace.canonicalize().ok();
-    let folds_case = crate::workspace::volume_folds_case(workspace);
+    // Only rules that restrict are followed, so the answer that could not be had is read as yes.
+    let folds_case = crate::workspace::case_answer(workspace).unwrap_or(true);
     permissions.follow_links(|prefix| {
         let named = match bravebot_core::trust::is_absolute_key(prefix) {
             true => std::path::PathBuf::from(
@@ -428,7 +431,7 @@ pub fn with_granted(
     let anchors = anchors(
         profile,
         Some(workspace),
-        crate::workspace::volume_folds_case(workspace),
+        crate::workspace::case_answer(workspace),
     );
     let (mut permissions, mut rejected) =
         Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
@@ -482,7 +485,7 @@ fn dropped_allow_entries(settings: &Settings, anchors: &Anchors) -> (Vec<Propose
 /// [PERM-14]: ../../../docs/specs/permissions.md
 /// [PERM-15]: ../../../docs/specs/permissions.md
 pub fn proposed(settings: &Settings, profile: Option<&std::path::Path>) -> Vec<Proposed> {
-    dropped_allow_entries(settings, &anchors(profile, None, false)).0
+    dropped_allow_entries(settings, &anchors(profile, None, Some(false))).0
 }
 
 /// The rules `proposed` holds as an `allow` list of their own, read as [`with_granted`] reads one.
@@ -500,7 +503,7 @@ pub fn as_allow_list(
     let anchors = anchors(
         profile,
         Some(workspace),
-        crate::workspace::volume_folds_case(workspace),
+        crate::workspace::case_answer(workspace),
     );
     Permissions::parse(&[], &[], &allow, &anchors).0
 }
@@ -637,8 +640,10 @@ mod tests {
         );
     }
 
-    /// The rules take the answer of the volume the workspace is on, and a workspace that cannot be
-    /// read gets byte comparison: a rule about `Docs` covers `docs` only where the two are one file.
+    /// The rules take the answer of the volume the workspace is on. A workspace that could not be
+    /// read gets the narrower reading in each list (PERM-3): a rule that restricts folds, so a rule
+    /// about `Docs` refuses `docs`, and a rule that grants compares bytes, so a grant for `Docs`
+    /// does not reach `docs`.
     #[test]
     fn rules_take_the_case_answer_of_the_volume_the_workspace_is_on() {
         let root = crate::testutil::scratch_dir("Permissions-Volume-Case");
@@ -648,7 +653,9 @@ mod tests {
         std::fs::write(root.join("probe-file"), b"").unwrap();
         let folds = root.join("PROBE-FILE").exists();
 
-        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(Docs/**)"]}}"#);
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(Docs/**)"], "allow": ["Edit(Docs/**)"]}}"#,
+        );
         let (on_it, _) = from_settings(&settings, None, &root);
         let (nowhere, _) = from_settings(&settings, None, &root.join("does-not-exist"));
 
@@ -659,8 +666,13 @@ mod tests {
         assert_eq!(on_it.for_path(Subject::Read, "docs/a.md"), expected);
         assert_eq!(
             nowhere.for_path(Subject::Read, "docs/a.md"),
+            Decision::Ruled(Ruling::Deny),
+            "a workspace that could not be read left a refusal comparing bytes"
+        );
+        assert_eq!(
+            nowhere.for_path(Subject::Edit, "docs/a.md"),
             Decision::Unmatched,
-            "a workspace that could not be read folded case"
+            "a workspace that could not be read folded a grant"
         );
         assert_eq!(
             on_it.for_path(Subject::Read, "Docs/a.md"),
