@@ -1075,11 +1075,31 @@ fn vet_text(data: &Value) -> String {
 }
 
 fn tools_text(data: &Value) -> String {
-    let arguments: Vec<Vec<String>> = data["tools"]
+    let choices: Vec<Vec<(String, Vec<String>)>> = data["tools"]
         .as_array()
         .into_iter()
         .flatten()
-        .map(|tool| strings(&tool["arguments"]))
+        .map(|tool| {
+            tool["arguments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|argument| {
+                    (
+                        text_of(argument, "text").to_string(),
+                        strings(&argument["choices"]),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let arguments: Vec<Vec<bravebot_approval::Argument<'_>>> = choices
+        .iter()
+        .map(|tool| {
+            tool.iter()
+                .map(|(text, choices)| bravebot_approval::Argument { text, choices })
+                .collect()
+        })
         .collect();
     let tools: Vec<bravebot_approval::Tool<'_>> = data["tools"]
         .as_array()
@@ -1988,7 +2008,8 @@ mod tests {
             ),
             (
                 "mcp-tools",
-                json!({"alias": "a", "tools": [{"name": "a:t", "arguments": ["q: string"],
+                json!({"alias": "a", "tools": [{"name": "a:t",
+                    "arguments": [{"text": "q (string)", "choices": ["x", "y"]}],
                     "description": "does it"}], "refused": 1,
                     "vetting": vetting}),
             ),
@@ -2337,6 +2358,27 @@ mod tests {
         call["description"] = json!(hostile);
         let (_, _, text) = shown("mcp-call", call);
         assert!(text.contains(&format!("{bar} ignore this")), "{text}");
+    }
+
+    /// SERVERS-8 over ACP: each value an argument takes is a row of its own behind the margin,
+    /// directly under the argument's text, which has none.
+    ///
+    /// A wrong implementation reads the values from the wrong key of the wire form, so the rows
+    /// are not drawn, or draws them without the margin.
+    #[test]
+    fn the_values_an_argument_takes_are_drawn_behind_the_margin_for_an_editor() {
+        let bar = bravebot_approval::QUARANTINE_BAR;
+        let (_, _, text) = shown("mcp-tools", every_question()[9].1.clone());
+        let rows: Vec<&str> = text.lines().collect();
+        let at = rows
+            .iter()
+            .position(|row| *row == "    q (string)")
+            .unwrap_or_else(|| panic!("the argument has no row of its own: {text}"));
+        assert_eq!(
+            rows[at + 1..at + 3],
+            [format!("{bar} x"), format!("{bar} y")],
+            "{text}"
+        );
     }
 
     /// OUTPUT-1: an editor's yes releases every byte of the output to the planner, so the

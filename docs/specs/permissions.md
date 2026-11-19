@@ -564,6 +564,12 @@ including a path it names: the reference-not-path rule is about the name the cal
 the person's own text. A `reason` any other layer wrote is in no refusal the planner is given,
 because the planner is given nothing a checkout wrote.
 
+A reference to a file nobody vouched for stores the name it was issued under and opens the file when
+a processor, a write, a check or a program's input needs the bytes. The rules are asked then, about
+the stored name and about the file it lands on at that moment, as they are for a `path_ref`, so a file
+replaced by a link to a denied file after the reference was issued is refused when it is opened, the
+slot stays unread, and the refusal names the reference.
+
 The file a name lands on is judged as well as the name. A call is checked against the rules under
 the name it gave and again under the name it reaches once every symbolic link on the way is followed
 and the volume has given the stored spelling, so a link to a denied file is refused, a case variant
@@ -712,6 +718,12 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_given_to_a_processor`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_written_to_another_file`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_fed_to_a_program`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_sent_to_be_vetted`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_of_a_file_that_became_a_link_to_a_denied_file_is_refused_and_left_unread`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_of_a_file_that_became_a_hard_link_to_a_denied_file_is_refused`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_link_to_it`
@@ -1545,6 +1557,15 @@ against them whole. A wrapper added to the table is a decision about both questi
   that runs. A `deny` or `ask` rule then matches more than the program does, which is the safe
   direction, and an `allow` rule does not look through a wrapper at all, so no rule is weaker for
   it.
+- **A mapped IPv6 spelling of a `WebFetch` host is read as text, and what a connection to it reaches
+  is verified on macOS only.** A rule's domain and the fetched host are put in one form by
+  [PERM-1](#PERM-1), so `[::ffff:93.184.216.34]` is the IPv4 address on both sides whatever the
+  operating system does with the spelling. On macOS an IPv6 socket with `IPV6_V6ONLY` off reaches an
+  IPv4 listener through `::ffff:127.0.0.1`. Where an IPv6 socket is IPv6-only by default, as on
+  Windows, the spelling may reach nothing, so a rule can refuse or ask about an address the
+  connection would not have reached. That is the safe direction. Linux and Windows are not verified,
+  so this does not say that no platform connects a mapped spelling to an address other than the IPv4
+  one it names ([#4041](https://github.com/brave/bravebot/issues/4041), row 32).
 - **How many questions a session opens with is the file's to choose.** Every name in
   `additionalDirectories` is one box, so a file naming thirty directories is thirty of them before
   the first prompt can be typed, and the way out of a list somebody does not want to answer is

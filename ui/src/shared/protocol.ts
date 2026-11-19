@@ -917,10 +917,19 @@ export interface McpServerRequest {
   lines?: string[]
 }
 
+/**
+ * One argument of a listed tool. `text` is the client's own words (name, type, whether it is
+ * required). `choices` are the values the server says it takes, each the server's own string.
+ */
+export interface McpToolArgument {
+  text: string
+  choices: string[]
+}
+
 /** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
 export interface McpTool {
   name: string
-  arguments: string[]
+  arguments: McpToolArgument[]
   description: string | null
   /** The server marks the tool read-only, as its own `readOnlyHint` says (SERVERS-8). */
   read_only?: boolean

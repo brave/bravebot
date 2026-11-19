@@ -2244,6 +2244,15 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     if let Some(set) = output.link.clone() {
         state.links.push(set);
     }
+    // The link an item the planner's own command created gives the session, worked out from the
+    // commands and never from what they printed (PANEL-18). A call is read against what an earlier
+    // call created before its own creation is noted, so what a body names is not taken for it.
+    if let Some(set) = state.inferring.named(&output.references) {
+        state.links.push(set);
+    }
+    if let Some(kind) = output.created {
+        state.inferring.created(kind);
+    }
     // What the call's arguments named, reported as they are found so the list is current while the
     // turn runs and a turn that then fails has handed it over (PANEL-16).
     keep_references(state, reporter, &output.references);

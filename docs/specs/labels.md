@@ -89,7 +89,7 @@ guards:
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
       - crates/agent/src/tools/tests/activity.rs: 3
-      - crates/agent/src/tools/tests/editing.rs: 6
+      - crates/agent/src/tools/tests/editing.rs: 8
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
       - crates/agent/src/turn.rs: 10
@@ -143,7 +143,7 @@ guards:
       - crates/core/src/policy.rs: 1
   - symbol: Policy::promote_reference_for_read
     sites:
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/core/src/policy.rs: 7
   - symbol: Policy::destination_from_reference
     sites:
@@ -1215,6 +1215,15 @@ arrives at all.
   after one run, except that an `apply` step skips its calls that depend on a call the server
   reported failed ([MANIFEST-16](manifest.md#MANIFEST-16)). A call that got no reply, because its connection closed or its bound passed, ends
   the run. [MCP-5](mcp.md#MCP-5) says which failures are replies.
+
+  The sentence is one of two the driver wrote, chosen by which kind of failure it was: a JSON-RPC
+  error, or a reply that cannot be used. It holds the name of the tool the planner called and
+  nothing the server chose. The error code a server picked, the HTTP status it answered with and the
+  byte count of a reply are numbers the server chooses, so they are not in the sentence and are
+  not a cost ([MCP-8](mcp.md#MCP-8)).
+
+  `verified-by: bravebot_agent::mcp::a_code_or_a_status_a_server_chose_never_reaches_the_planner_over_http`
+  `verified-by: bravebot_agent::mcp::a_code_a_server_chose_never_reaches_the_planner_over_stdio`
 
   Suppose a server, or a page that steers a tool the server relays, is hostile. Everything that buys
   it is on this list:
