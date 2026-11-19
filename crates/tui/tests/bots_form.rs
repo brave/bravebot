@@ -372,6 +372,14 @@ fn an_empty_model_field_clears_the_model_and_any_other_text_is_stored() {
         !cleared.contains("model:"),
         "the empty field left the model:\n{cleared}"
     );
+
+    handle_key(&mut session, key(KeyCode::Char('e')));
+    handle_key(&mut session, key(KeyCode::Tab));
+    handle_key(&mut session, key(KeyCode::Tab));
+    type_text(&mut session, " \u{a0}");
+    handle_key(&mut session, key(KeyCode::Enter));
+    assert!(!session.bots().form_open());
+    assert_eq!(scratch.rows()[0].model, None);
 }
 
 /// BOT-7.

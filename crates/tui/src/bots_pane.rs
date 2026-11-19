@@ -918,24 +918,7 @@ fn model_change(model: &str) -> Option<Option<String>> {
 }
 
 fn model_field_is_empty(model: &str) -> bool {
-    model.trim_matches(is_blank).is_empty()
-}
-
-fn is_blank(character: char) -> bool {
-    matches!(
-        character,
-        '\u{9}'..='\u{d}'
-            | '\u{20}'
-            | '\u{a0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
-            | '\u{feff}'
-    )
+    bravebot_agent::bots::is_blank_text(model)
 }
 
 fn moves_between_fields(key: KeyEvent) -> bool {
@@ -1163,7 +1146,7 @@ fn pictures_keeping_newlines(text: &str, caret: usize) -> (String, usize) {
             at = out.len();
             placed = true;
         }
-        out.push(pictured(character));
+        out.push_str(&pictured(character));
     }
     if !placed {
         at = out.len();
@@ -1171,12 +1154,11 @@ fn pictures_keeping_newlines(text: &str, caret: usize) -> (String, usize) {
     (out, at)
 }
 
-fn pictured(character: char) -> char {
-    if character.is_control() && character != '\n' {
-        char::from_u32(0x2400 + character as u32).unwrap_or('\u{fffd}')
-    } else {
-        character
+fn pictured(character: char) -> String {
+    if character == '\n' {
+        return "\n".to_string();
     }
+    bravebot_agent::confirm::printable_with_tab_pictured(&character.to_string())
 }
 
 #[expect(

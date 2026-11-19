@@ -1224,9 +1224,6 @@ list later if the list looks too packed.
   bot's working folder inside the state directory.** The bot keeps no memory there
   ([MEMORY-2](definition-memory.md#MEMORY-2)), and a folder holding the state directory leaves its
   definition unread ([SKILL-3](skills.md#SKILL-3)). Both fail safe.
-- **An empty model field in the terminal's edit form clears the stored model.** A field that is empty
-  after its blank characters are trimmed is removed, and a later turn uses the configured default. Any
-  other text is stored as typed, and a model the module refuses is left unchanged.
 - **What `/memory` does in the bots layout before a session exists is not specified.** The command
   works in a bot's session ([BOT-13](#BOT-13)).
 - **Each bot in the list is five rows tall because of its face, so a long list is tall.** The face can be

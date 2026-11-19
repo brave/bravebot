@@ -3193,7 +3193,16 @@ mod form {
             screen.chars().all(|c| !c.is_control() || c == '\n'),
             "{screen:?}"
         );
-        assert_eq!(session.bots().form_purpose(), Some(pasted));
+
+        let mut session = listed(Vec::new());
+        handle_key(&mut session, key(KeyCode::Char('n')));
+        handle_key(&mut session, key(KeyCode::Tab));
+        handle_paste(&mut session, "\u{7f}\u{85}");
+        let screen = screen_text(&drawn(&mut session, 120, 30));
+        assert!(screen.contains('\u{2421}'), "{screen}");
+        assert!(screen.contains("‹U+0085›"), "{screen}");
+        assert!(!screen.contains('\u{247f}'), "{screen}");
+        assert_eq!(session.bots().form_purpose(), Some("\u{7f}\u{85}"));
     }
 
     /// BOT-17.

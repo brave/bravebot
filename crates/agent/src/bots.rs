@@ -415,7 +415,11 @@ pub fn is_identifier(value: &str) -> bool {
 }
 
 fn is_text(value: &str) -> bool {
-    !value.trim_matches(is_blank).is_empty() && !value.contains('\0')
+    !is_blank_text(value) && !value.contains('\0')
+}
+
+pub fn is_blank_text(value: &str) -> bool {
+    value.trim_matches(is_blank).is_empty()
 }
 
 fn is_blank(character: char) -> bool {
