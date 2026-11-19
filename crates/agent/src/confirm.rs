@@ -1778,7 +1778,6 @@ pub struct ApplyDecision {
 }
 
 impl ApplyDecision {
-    /// Make these calls.
     pub fn keep(kept: Vec<usize>) -> Self {
         Self {
             kept,
@@ -1786,7 +1785,7 @@ impl ApplyDecision {
         }
     }
 
-    /// Make none of them.
+    /// Nothing kept, with somebody having been asked, so it is a decline and not [`Self::unasked`].
     pub fn reject() -> Self {
         Self::keep(Vec::new())
     }

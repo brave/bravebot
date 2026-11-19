@@ -2647,6 +2647,7 @@ whether a tool's calls may run without a list nobody reads, are the person's to 
 A server asking every call has said each of its calls is put on its own, which neither may undo.
 
 `verified-by: bravebot_config::mcp::apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call`
+`verified-by: bravebot_config::mcp::apply_arguments_that_are_not_tools_with_argument_words_are_a_problem_of_that_entry`
 `verified-by: bravebot_config::mcp::apply_arguments_are_in_the_digest_only_where_there_are_any`
 `verified-by: bravebot_config::mcp::plan_covers_marks_only_a_tool_with_an_apply_declaration_on_a_local_server`
 `verified-by: bravebot_agent::servers::an_openshell_declaration_keeps_what_a_row_may_fill_and_what_the_plan_covers`

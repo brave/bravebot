@@ -148,7 +148,6 @@ pub enum Source {
 pub struct Call {
     /// The index of the tool in the shape.
     pub tool: usize,
-    /// The tool's name.
     pub name: String,
     /// Each argument with its value and where the value came from, in the shape's order. A value
     /// taken from several entries is the JSON array of their values.

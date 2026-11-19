@@ -4246,6 +4246,45 @@ mod tests {
         );
     }
 
+    /// SERVERS-26. `apply_arguments` that are not tools with argument words, each with a kind, are a
+    /// problem of that entry: a value that is not an object, a tool or argument that is not a tool
+    /// word, a tool with no argument, an argument too long to offer beside a reference, and a kind
+    /// that is not text. The regression it rejects is a malformed declaration read as one that lets
+    /// a row fill nothing, or fill an argument its tool does not have.
+    #[test]
+    fn apply_arguments_that_are_not_tools_with_argument_words_are_a_problem_of_that_entry() {
+        let long = "a".repeat(MAX_TOOL + 1);
+        let too_long_to_offer_beside = "a".repeat(MAX_CHOICE_ARGUMENT + 1);
+        for value in [
+            r#""group_tabs:urls=entries""#.to_string(),
+            "null".to_string(),
+            "[]".to_string(),
+            r#"{"group_tabs": "urls"}"#.to_string(),
+            r#"{"group_tabs": ["urls"]}"#.to_string(),
+            r#"{"group_tabs": {}}"#.to_string(),
+            r#"{"group_tabs": {"urls": 1}}"#.to_string(),
+            r#"{"group_tabs": {"urls": null}}"#.to_string(),
+            r#"{"group_tabs": {"": "entries"}}"#.to_string(),
+            r#"{"group_tabs": {"tab urls": "entries"}}"#.to_string(),
+            r#"{"": {"urls": "entries"}}"#.to_string(),
+            r#"{"group tabs": {"urls": "entries"}}"#.to_string(),
+            r#"{"alias:group_tabs": {"urls": "entries"}}"#.to_string(),
+            format!(r#"{{"group_tabs": {{"{too_long_to_offer_beside}": "entries"}}}}"#),
+            format!(r#"{{"{long}": {{"urls": "entries"}}}}"#),
+        ] {
+            let text = format!(
+                r#"{{"servers": {{"srv": {{"transport": "stdio", "argv": ["tool"],
+                    "apply_arguments": {value}}}}}}}"#
+            );
+            let declarations = Declarations::parse(&text).unwrap();
+            assert_eq!(
+                declarations.get("srv").unwrap().declaration,
+                Err(Problem::Apply),
+                "{value}"
+            );
+        }
+    }
+
     /// SERVERS-26. What a row may fill is part of what an approval binds to only where the
     /// declaration names any, so a declaration with none digests as it did before; a change of it is
     /// named as the field that changed; and it survives the file. The regressions it rejects are an
