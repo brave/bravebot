@@ -155,9 +155,11 @@ impl ProcessorSpec {
 
     /// What it was asked to do.
     ///
-    /// The planner's own words, checked public before the spec was built. Readable because it
-    /// is not workspace content: it is the instruction the driver is about to send, and a
-    /// driver that could not hold it could not send it.
+    /// The planner's own words, released by [`crate::policy::Policy::before_processor`] whatever
+    /// label they carry. Nothing checks the label before the spec is built: it is folded into
+    /// [`ProcessorSpec::out_label`], so a private instruction gives a private answer. Readable
+    /// because it is not workspace content: it is the instruction the driver is about to send,
+    /// and a driver that could not hold it could not send it.
     pub fn instruction(&self) -> &str {
         &self.instruction
     }

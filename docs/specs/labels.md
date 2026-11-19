@@ -13,6 +13,7 @@ guards:
       - crates/agent/src/backend.rs: 2
       - crates/agent/src/classifier.rs: 1
       - crates/agent/src/commit_message.rs: 1
+      - crates/agent/src/conversation.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 4
@@ -32,8 +33,8 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 147
-      - crates/core/src/slot.rs: 12
+      - crates/core/src/policy.rs: 154
+      - crates/core/src/slot.rs: 14
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
       - crates/mcp/src/http.rs: 2
@@ -241,6 +242,16 @@ guards:
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
+  - symbol: Policy::promote_confined_read
+    sites:
+      - crates/agent/src/lsp.rs: 1
+      - crates/agent/src/tools.rs: 20
+      - crates/agent/src/workspace.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Policy::accept_reference
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 4
   - symbol: Policy::decode_transport
     sites:
       - crates/agent/src/images.rs: 1
@@ -262,6 +273,39 @@ guards:
     sites:
       - crates/choice/src/lib.rs: 1
       - crates/core/src/policy.rs: 8
+  - symbol: Policy::before_advice
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Policy::before_processor
+    sites:
+      - crates/agent/src/commit_message.rs: 1
+      - crates/agent/src/manifest.rs: 1
+      - crates/agent/src/processor.rs: 1
+      - crates/agent/src/tools.rs: 1
+      - crates/choice/src/lib.rs: 1
+      - crates/core/src/policy.rs: 28
+  - symbol: Policy::before_chooser
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/choice/src/lib.rs: 1
+      - crates/core/src/policy.rs: 14
+  - symbol: Policy::before_vetting
+    sites:
+      - crates/agent/src/tools.rs: 4
+      - crates/core/src/policy.rs: 10
+  - symbol: ProcessorSpec::instruction
+    sites:
+      - crates/agent/src/permission_mode.rs: 4
+      - crates/agent/src/processor.rs: 2
+      - crates/agent/src/turn/setup.rs: 1
+      - crates/core/src/policy.rs: 1
+      - crates/core/src/processor.rs: 1
+  - symbol: VettingSpec::expects
+    sites:
+      - crates/agent/src/tools.rs: 2
+      - crates/core/src/policy.rs: 4
+      - crates/core/src/vetting.rs: 1
   - symbol: Policy::store_a_choice
     sites:
       - crates/agent/src/turn.rs: 1
@@ -390,9 +434,23 @@ they were counted from never leave.
 
 Everything else the driver needs out of a labelled value it asks a gate for, and every gate records
 the read: the planner's own arguments, a transport envelope a decoder has to see, a model's reply on
-its way out of that envelope, and a processor's answer to the one reader that takes a number out of
-it ([PROC-16](processors.md#PROC-16)). A driver holding the bytes without one is the shape this
-clause exists to stop.
+its way out of that envelope, a processor's answer to the one reader that takes a number out of
+it ([PROC-16](processors.md#PROC-16)), and the question the planner puts to its advisor. A driver
+holding the bytes without one is the shape this clause exists to stop.
+
+Four gates release a string the planner wrote, whatever its label, and decide nothing from the
+label: `Policy::before_advice` (the question put to the advisor, recorded with the label the
+question carried and none of its words), `Policy::before_processor` and `Policy::before_chooser`
+(a processor's instruction, whose label is folded into the answer's), and `Policy::before_vetting`
+(what the planner says a slot holds). The instruction and the expectation are two more strings
+that may be untrusted and that the kernel holds outside a labelled value, once a gate has released
+them into a spec, so the reads of each are pinned too: `ProcessorSpec::instruction` and
+`VettingSpec::expects`. Each gate's call sites are pinned file by file in `guards`. The checker
+matches a method by its bare name, so the count for
+`ProcessorSpec::instruction` also holds the uses of `PermissionMode::instruction` in
+`crates/agent/src/permission_mode.rs` and `crates/agent/src/turn/setup.rs`, and the test helper
+named `instruction` in `crates/core/src/policy.rs`. The reads of a processor's instruction are the
+two in `crates/agent/src/processor.rs`, and `crates/core/src/processor.rs` counts its definition.
 
 **A slot's address is untrusted content too, and is not carried in a labelled value.** The file a
 slot names, the file its bytes are a copy of, the file an answer produced from it belongs to, the
@@ -406,6 +464,16 @@ of `bravebot-core` outside the gates does not compile at all, bar the single rel
 The counts pin releases, not the decisions taken from bytes a counted release already produced, so
 a branch added inside a function that holds a counted use moves nothing and is found by reading the
 diff ([reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md)).
+
+Formatting is a release as well, and no witness stands in front of it. A derived `Debug` prints
+every field, so `SlotStore`, `Entry`, `Deferred`, `Home`, `VettingSpec` and `Origin` write theirs
+by hand. Each prints slot ids, labels and kinds and never a path, a verbatim path, the path of a
+`Home::Only` or an origin, and `VettingSpec` leaves out what it names and what the planner expected
+of it. `SlotWriter` and `Conversation` derive `Debug` and inherit that, since each holds a
+`SlotStore`. `check_slot_address_debug` in the security-audit skill fails a derived `Debug` on any
+of the six, found by the file that declares each. It does not read what a hand-written one prints,
+so a field added to one of those bodies is found by reading the diff, and so is a new type that
+holds an address.
 
 Three gates let a slot's address leave the kernel, each recorded and each pinned file by file in
 `guards`, so a further reader of a slot's address anywhere downstream is a line in a diff rather
@@ -439,7 +507,19 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref, AsRef and a conversion into the content, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest, every function of the type's own impl blocks against the seven the type has (new, trusted, label, declassify, into_trusted, relabel and shape) by name, visibility and signature, every impl whose subject is Labelled, a Box of it, a type alias of it or a wrapper declared beside it, an impl in that file whose subject is a generic parameter or a projection, and every impl for another type that takes a Labelled as an argument of its trait, such as From<Labelled<String>> for String, with comments, strings, raw strings and character literals blanked before any brace is counted; it does not see a wrapper declared in another file, which has no access to the private fields)`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
-`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above; formatting a type that holds one is the other way out, which SlotStore, Entry, Deferred, Home, VettingSpec and Origin close by writing Debug by hand to print ids, labels and kinds, and check_slot_address_debug in the security-audit skill fails a derive of Debug on any of them, so a hand-written Debug that printed an address would be found by reading the diff and a type that began to hold one is found the same way)`
+`verified-by: bravebot_core::slot::formatting_a_store_does_not_print_the_name_of_a_file_waiting_to_be_read`
+`verified-by: bravebot_core::slot::formatting_a_store_does_not_print_the_name_a_read_slot_keeps`
+`verified-by: bravebot_core::slot::formatting_a_home_does_not_print_the_one_file_it_is_restricted_to`
+`verified-by: bravebot_core::slot::formatting_a_store_lists_a_choice_by_name_and_label_only`
+`verified-by: bravebot_core::slot::formatting_a_store_lists_its_slots_in_the_order_they_were_minted`
+`verified-by: bravebot_core::slot::formatting_a_writer_does_not_print_the_names_in_the_store_it_writes_into`
+`verified-by: bravebot_core::vetting::formatting_an_origin_does_not_print_the_recorded_name`
+`verified-by: bravebot_core::policy::formatting_a_store_with_a_reserved_listing_does_not_print_the_filename`
+`verified-by: bravebot_core::policy::formatting_a_store_after_the_listed_file_is_read_does_not_print_the_filename`
+`verified-by: bravebot_core::policy::formatting_a_vetting_spec_does_not_print_the_filename_it_was_built_from`
+`verified-by: bravebot_core::policy::formatting_a_vetting_spec_does_not_print_what_it_names_or_what_was_expected_of_it`
+`verified-by: bravebot_agent::conversation::formatting_a_conversation_does_not_print_the_names_its_quarantine_holds`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
 `verified-by: bravebot_core::slot::a_slot_is_unread_only_while_it_is_waiting_on_its_file`
 
@@ -523,6 +603,16 @@ the driver and a new caller of the wrapper adds one without moving the gate's ow
 `Policy::read_trusted_content` is named and not counted, in [skills.md](skills.md), because it
 refuses anything untrusted before it releases a byte: there is no content its callers' closures
 could read that the driver may not read for itself.
+
+`Policy::promote_confined_read` and `Policy::accept_reference` take no closure and are counted for
+another reason. Each is handed an argument the planner wrote, wrapped `(U,pub)`, and returns it as
+a `(T,pub)` path or as a slot id. What they refuse is a private value and a context that has met
+something untrusted. They do not refuse a public value because of where its bytes came from, so a
+caller that passed them a fetched page or a redirect target would get it back as trusted text or as
+a slot name, and the label would not show it. A caller's argument is the only thing that makes
+the result the planner's own, so each is counted per file in `guards` like
+`Policy::read_planner_argument`, which makes the same two refusals, and a spec that only names
+either one does not account for a new caller of it.
 
 `verified-by: bravebot_agent::tools::tests::activity::a_call_line_names_its_reference_inside_the_kernel`
 `verified-by: bravebot_agent::tools::tests::todos::a_task_list_is_named_inside_the_reshape_that_builds_it`

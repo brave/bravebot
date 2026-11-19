@@ -4739,7 +4739,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and what it can reach was fixed by the session's configuration rather than by the value.
     /// The answer is labelled from the context the advisor was shown ([`Policy::adopt_model_output`]),
     /// which is private where the question is.
+    ///
+    /// The release is recorded with the label the question carried and none of its words. It
+    /// is not refused for any label, and not in a context that has met something untrusted,
+    /// because the advisor is shown that context either way.
     pub fn before_advice(&mut self, question: &Labelled<String>) -> Gated<String> {
+        self.allow(
+            "advice",
+            format!(
+                "the question the planner put to its advisor, {}, released to be sent",
+                question.label()
+            ),
+        );
         let proof = Declassification::authorise("the question the planner put to its advisor");
         Ok(question.clone().declassify(&proof))
     }
@@ -9906,6 +9917,81 @@ mod tests {
                 .before_advice(&public)
                 .expect("a public question passes"),
             "which file first?"
+        );
+    }
+
+    /// The question is released to the advisor, so the trail says so with the label the question
+    /// carried, and says nothing of its words.
+    #[test]
+    fn an_advice_question_is_released_with_a_record_naming_its_label() {
+        let advice_lines = |sink: &RecordingSink| -> Vec<String> {
+            sink.events()
+                .iter()
+                .filter_map(|e| match e {
+                    Event::GatePassed {
+                        gate: "advice",
+                        detail,
+                    } => Some(detail.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let private = Labelled::new(
+            "quoted secret words".to_string(),
+            Label::untrusted_private(),
+        );
+        policy
+            .before_advice(&private)
+            .expect("a private question is put to the advisor");
+        drop(policy);
+        let lines = advice_lines(&sink);
+        assert_eq!(lines.len(), 1, "{:?}", sink.events());
+        assert!(lines[0].contains("(U,priv)"), "{}", lines[0]);
+        assert!(!lines[0].contains("(U,pub)"), "{}", lines[0]);
+        assert!(
+            !lines[0].contains("secret") && !lines[0].contains("quoted"),
+            "the line carries the question's words: {}",
+            lines[0]
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let public = Labelled::new("which file first?".to_string(), Label::untrusted_public());
+        policy
+            .before_advice(&public)
+            .expect("a public question passes");
+        drop(policy);
+        let lines = advice_lines(&sink);
+        assert_eq!(lines.len(), 1, "{:?}", sink.events());
+        assert!(lines[0].contains("(U,pub)"), "{}", lines[0]);
+        assert!(!lines[0].contains("(U,priv)"), "{}", lines[0]);
+        assert!(!lines[0].contains("which file"), "{}", lines[0]);
+    }
+
+    /// The advisor is shown the planner's context whatever it holds, so a context that has met
+    /// something untrusted still puts its question, and the release is recorded.
+    #[test]
+    fn a_question_is_put_to_the_advisor_after_the_context_has_met_something_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).resuming(Integrity::Untrusted);
+        let question = Labelled::new("is this right?".to_string(), Label::untrusted_private());
+        assert_eq!(
+            policy
+                .before_advice(&question)
+                .expect("a fallen context still asks its advisor"),
+            "is this right?"
+        );
+        drop(policy);
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "advice", detail } if detail.contains("(U,priv)")
+            )),
+            "{:?}",
+            sink.events()
         );
     }
 
@@ -17524,6 +17610,32 @@ five
         );
     }
 
+    /// The expectation is released into the spec whatever its label, and the trail names the
+    /// check by its slot and origin, so none of the planner's words about the slot reach it.
+    #[test]
+    fn the_trail_line_for_a_check_carries_no_word_of_the_expectation() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        let private = Labelled::new(
+            "quoted ledger passphrase".to_string(),
+            Label::untrusted_private(),
+        );
+
+        let spec = policy
+            .before_vetting(&slot, Some(&private), &slots)
+            .expect("a private expectation is put to the check");
+        assert_eq!(spec.expects(), Some("quoted ledger passphrase"));
+        drop(policy);
+
+        let trail = format!("{:?}", sink.events());
+        assert!(trail.contains("a check over"), "{trail}");
+        assert!(
+            !trail.contains("ledger") && !trail.contains("passphrase"),
+            "the trail carries the planner's expectation: {trail}"
+        );
+    }
+
     /// A reference to nothing has nothing to check, and answering about it would be answering
     /// about an empty string nobody produced.
     #[test]
@@ -18654,6 +18766,129 @@ five
             recorded.contains("a check over ref:1 from ref:1"),
             "a filename chose what the trail says about where the bytes came from: {recorded}"
         );
+    }
+
+    /// One entry out of a quarantined listing, reserved as `ref:1`. The name is the one thing no
+    /// formatted value may carry.
+    fn reserve_a_listed_file(
+        policy: &mut Policy<'_, RecordingSink>,
+        slots: &mut SlotStore,
+    ) -> SlotId {
+        let slot = SlotId::new("ref:1");
+        let entries = Labelled::new(
+            vec!["secret-plans.md".to_string()],
+            Label::untrusted_private(),
+        );
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                slots,
+            )
+            .expect("one entry may be reserved");
+        slot
+    }
+
+    /// Formatting a store that holds a slot waiting on a listed file shows the slot and not the
+    /// file. A derived `Debug` on the store, its entries or the deferral prints the filename
+    /// whoever can create a file in the listed directory chose.
+    #[test]
+    fn formatting_a_store_with_a_reserved_listing_does_not_print_the_filename() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        reserve_a_listed_file(&mut policy, &mut slots);
+
+        let rendered = format!("{slots:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("Unread"), "{rendered}");
+    }
+
+    /// Reading the file copies the name into the slot's path, its verbatim path and its origin.
+    /// None of the three is printed, and the slot is still told apart by id and kind.
+    #[test]
+    fn formatting_a_store_after_the_listed_file_is_read_does_not_print_the_filename() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("read_file", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when something needs the bytes");
+
+        let rendered = format!("{slots:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("ref:1"), "{rendered}");
+        assert!(rendered.contains("Read"), "{rendered}");
+        assert!(!rendered.contains("Unread"), "{rendered}");
+    }
+
+    /// The spec a check is built from carries where the bytes came from. Formatting it shows that
+    /// there is an origin and not what it is, which a derived `Debug` on the spec or on its origin
+    /// prints as `Recorded("secret-plans.md")`. Only this module can build one, so the pin sits
+    /// here.
+    #[test]
+    fn formatting_a_vetting_spec_does_not_print_the_filename_it_was_built_from() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+        let spec = policy
+            .before_vetting(&slot, None, &slots)
+            .expect("a slot with bytes in it");
+
+        let rendered = format!("{spec:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("VettingSpec"), "{rendered}");
+        assert!(rendered.contains("Recorded"), "{rendered}");
+    }
+
+    /// The check over a file read directly names the path the planner gave, which is a filename
+    /// out of a listing wherever a listed file was what it named, and a check from a slot carries
+    /// the planner's own expectation of it. A derived `Debug` on the spec prints both whatever its
+    /// origin prints.
+    #[test]
+    fn formatting_a_vetting_spec_does_not_print_what_it_names_or_what_was_expected_of_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        let by_path = policy.before_vetting_a_path(
+            "secret-plans.md",
+            Labelled::new("body".to_string(), Label::untrusted_private()),
+        );
+        let rendered = format!("{by_path:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(!rendered.contains("body"), "{rendered}");
+        assert!(rendered.contains("VettingSpec"), "{rendered}");
+        assert!(rendered.contains("TheFileItself"), "{rendered}");
+
+        let mut slots = SlotStore::new();
+        let slot = reserve_a_listed_file(&mut policy, &mut slots);
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok::<String, String>("body".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+        let expects = Labelled::new("secret-expectation".to_string(), Label::untrusted_private());
+        let by_slot = policy
+            .before_vetting(&slot, Some(&expects), &slots)
+            .expect("a slot with bytes in it");
+        let rendered = format!("{by_slot:?}");
+        assert!(!rendered.contains("secret-expectation"), "{rendered}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
     }
 
     /// The other route, which is where saying it twice would be noise: a read of a file says the

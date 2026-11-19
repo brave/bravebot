@@ -7,8 +7,6 @@ governs:
   - crates/core/src/policy.rs
 guards:
   - symbol: Policy::before_endorsed_destination
-  - symbol: Policy::promote_confined_read
-  - symbol: Policy::accept_reference
   - symbol: Policy::path_of_reference
   - symbol: Policy::carry_a_choice
 documented-by:
