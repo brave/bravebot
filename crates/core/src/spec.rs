@@ -629,4 +629,18 @@ pub proof fn a_stage_more_is_one_more_stage(each: Seq<Decision>, at: int)
     }
 }
 
+/// Whether the driver may act on what the planner wrote: the value is public, so it is not the
+/// person's data laundered into an argument, and the context the planner wrote it from has met
+/// nothing untrusted, so the words are the planner's own (LABEL-5).
+pub open spec fn the_planner_may_decide(label: Label, context: Integrity) -> bool {
+    label.confidentiality == Confidentiality::Public && context == Integrity::Trusted
+}
+
+/// What a release into a place a person approved does to a label: confidentiality goes to public,
+/// and integrity is kept. A release is about where bytes may go, never about whether they may
+/// decide anything, so a release of untrusted bytes is still untrusted (ROUTE-3).
+pub open spec fn released(from: Label) -> Label {
+    Label { integrity: from.integrity, confidentiality: Confidentiality::Public }
+}
+
 } // verus!
