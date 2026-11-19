@@ -1356,3 +1356,27 @@ arrives at all.
   that a gateway routes to a search backend are requested and labelled from the context this program
   built, which is the label the pages did not earn. The list is compared with the name a request
   carries and with nothing a reply says, so no byte from outside decides it.
+
+- **The line count and the byte count a reference states for a line's output depend on whether, and
+  on how many names, a pattern in a position the program does not read as a file matched.**
+  `basename incoming/a*` is asked about and its output is untrusted whether or not a name begins
+  with `a` ([CMDLINE-4](tools/command-line.md#CMDLINE-4)), so neither the question nor the label
+  depends on the names in `incoming/`. The reference states the number of lines and the number of
+  bytes of what the program printed. Where no name matched, the program prints the pattern, so
+  the reference states one line and the pattern's length. Where names matched, the program prints
+  its result for each of them, so the reference states a line for each name printed and the total
+  of their lengths. A planner that knows the pattern's length can tell from a different line count
+  or byte count that some name matched, and from the line count how many were printed. The two
+  numbers are the ones the planner is shown for any untrusted output ([LABEL-3](#LABEL-3)). The
+  driver carries them and does not branch on them, and no name is spelled to the planner, only the
+  lengths. Quoting the pattern passes it to the program unmatched.
+
+- **The refusal of a word that stands for more than 100 arguments states how many names a pattern
+  matched.** Where an unquoted pattern matches more names than a person can be shown at one
+  prompt, the compile is refused and the sentence the planner is told carries the count of names
+  the walk found ([CMDLINE-4](tools/command-line.md#CMDLINE-4)). The sentence names the word as
+  the planner wrote it and no name. In a directory nobody vouched for, the names are chosen by
+  whoever wrote it, so the planner can learn from the refusal, and from the count in it, how many
+  names match a pattern it chose. The count is a number and the bound is fixed, so the comparison
+  with 100 is the only decision the driver takes from it. Quoting the pattern passes it to the
+  program unmatched and is not refused.

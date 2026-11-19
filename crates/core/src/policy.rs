@@ -7951,7 +7951,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// resolved to lies outside the workspace and the rest of the set
     /// [`Policy::resolves_inside_the_project`] compares against, and is started by a path outside
     /// them under its own file name, the audited table answers for that file's name and for the exact argv, every
-    /// argument a filename pattern produced is one the audited entry reads as a path ([CMDLINE-4]),
+    /// argument a filename pattern produced, matched or passed through as written, is one the
+    /// audited entry reads as a path ([CMDLINE-4]),
     /// the step carries no environment assignment, and it opens no file for a stream. `2>&1`
     /// renames a descriptor and opens nothing, so it is not one.
     ///
@@ -8009,8 +8010,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // path, the trust map's answer for that path is the label, as for any other operand.
             // Anywhere else it is handed to the program as text the program may print, such as
             // `basename`'s operand, an option's value or grep's pattern, and no path in the read
-            // set answers for it. So the step proves nothing. Decided from where the compiler put
-            // the word, never from its bytes, and here for every audited program at once.
+            // set answers for it. So the step proves nothing. A pattern that matched nothing is
+            // marked the same way, because whether a name exists in a directory is itself decided
+            // by the names in it. Decided from where the compiler put the word, never from its
+            // bytes, and here for every audited program at once.
             //
             // [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
             if (0..step.args.len())

@@ -3186,8 +3186,8 @@ const SHELL_REDIRECTION_SENTENCE: &str = " A redirection inside a shell's comman
 
 /// Whether a step runs a shell with a command string that redirects, the steps
 /// [`SHELL_REDIRECTION_SENTENCE`] is said for: the file it resolved to is a shell and an argument
-/// the planner wrote holds a `>`. An argument a filename pattern produced is a name read from disk
-/// and is not looked at (CMDLINE-4). Decided from the compiled step alone, as
+/// the planner wrote holds a `>`. An argument a filename pattern produced, matched or passed through
+/// as written, is not looked at (CMDLINE-4). Decided from the compiled step alone, as
 /// [`launches_applications`] is; nothing the shell printed is read.
 fn redirects_inside_a_shell(step: &Step) -> bool {
     let Step {
@@ -8480,6 +8480,37 @@ mod tests {
             !failed(Prelude::MacOs, &[&matched]).contains(SHELL_REDIRECTION_SENTENCE),
             "read a name a pattern matched on disk"
         );
+        // A pattern that matched nothing is passed to the shell as written and is marked the same
+        // way, so whether a name exists does not decide whether the sentence is said. The same
+        // argument unmarked is a command string holding a redirection.
+        let mut unmatched = step("/bin/sh", &["-c", "echo hi", "o>*.zzz"]);
+        assert!(
+            failed(Prelude::MacOs, &[&unmatched]).contains(SHELL_REDIRECTION_SENTENCE),
+            "an argument the planner wrote holding a `>` was not looked at"
+        );
+        unmatched.matched = vec![false, false, true];
+        assert!(
+            !failed(Prelude::MacOs, &[&unmatched]).contains(SHELL_REDIRECTION_SENTENCE),
+            "read a pattern that matched nothing and was passed through as written"
+        );
+        unmatched.matched = vec![false, false, false];
+        assert!(failed(Prelude::MacOs, &[&unmatched]).contains(SHELL_REDIRECTION_SENTENCE));
+
+        // Compiled from a line, an escaped `>` inside an unquoted pattern that matches nothing is
+        // marked by the compiler, and the sentence is not said for it.
+        let root = crate::testutil::scratch_dir("bravebot-confine-unmatched-pattern-shell");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a scratch directory");
+        let plan = plan_of(r"/bin/sh -c 'echo hi' o\>*.zzz", &root);
+        let [compiled] = plan.steps.steps()[..] else {
+            panic!("one step");
+        };
+        assert_eq!(
+            compiled.args,
+            ["-c", "echo hi", "o>*.zzz"].map(String::from)
+        );
+        assert!(compiled.from_a_pattern(2), "{:?}", compiled.matched);
+        assert!(!failed(Prelude::MacOs, &[compiled]).contains(SHELL_REDIRECTION_SENTENCE));
     }
 
     /// SANDBOX-8, SANDBOX-19: after a failed step on macOS whose program lists processes, the

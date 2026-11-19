@@ -2123,7 +2123,7 @@ directories it names, and to write the redirection on the `run` line itself, whe
 the file and a refusal names it ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). It names no path:
 the driver compiled no destination from the command string, and nothing the shell printed is read.
 An argument a filename pattern produced ([CMDLINE-4](tools/command-line.md#CMDLINE-4)) is not
-looked at.
+looked at, whether the pattern matched a name or matched nothing and was passed as written.
 
 `verified-by: bravebot_agent::confine::a_failed_shell_step_says_a_redirection_inside_it_is_opened_by_the_sandboxed_shell`
 
