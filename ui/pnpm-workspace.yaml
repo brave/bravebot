@@ -16,7 +16,7 @@ overrides:
 # minimatch is pinned to 11.0.8 because Socket blocks 11.0.9 as recently published. Use ^11.0.1 again
 # once the newest release is old enough.
   "glob@>=9.0.0 <14.0.2": "^14.0.2"
-  "minimatch@>=7.0.0 <11.0.1": "11.0.8"
+  "minimatch@>=7.0.0": "11.0.8"
 
 # Known high advisories the dependency tree still carries; braces and picomatch (GHSA-fc5q-39xc-vjpf,
 # a ReDoS in extglob matching, reached through build-time tooling) have no patched release.
