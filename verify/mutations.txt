@@ -192,3 +192,103 @@ replace: weakest = weaker(weakest, matching[at]); => weakest = weakest;
 mutation: weakest_decision finds a decision where no spelling holds one
 file: crates/core/src/trust.rs
 replace: if matching.is_empty() { => if false {
+
+mutation: Command::is_entry_for covers a step under any arguments
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_texts(held_args, args) => && true
+
+mutation: Command::is_entry_for covers a step in any tree
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_path_buf(held_directory, directory) => && true
+
+mutation: Command::is_entry_for covers a binary started by another path
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_path_buf(held_started_as, started_as) => && true
+
+mutation: Command::is_entry_for covers another binary
+file: crates/core/src/programs.rs
+replace: crate::compare::same_path_buf(held_program, program) => true
+
+mutation: steps_vouched reads only the left side of a join
+file: crates/core/src/programs.rs
+replace: left && steps_vouched(listed, right, directory) => left
+
+mutation: step_vouched lets a step through without an entry for it
+file: crates/core/src/programs.rs
+replace: some_entry_is(listed, step, directory) => true
+
+mutation: same_texts reads two different arguments as the same
+file: crates/core/src/compare.rs
+replace: let same = same_text(&a[at], &b[at]); => let same = true;
+
+mutation: RememberedStep::matches covers a step carrying an expansion
+file: crates/core/src/remembered.rs
+replace: expansions.is_empty() => true
+
+mutation: RememberedStep::matches covers a step under another name
+file: crates/core/src/remembered.rs
+replace: && crate::compare::same_text(held_program, program) => && true
+
+mutation: RememberedStep::matches covers a step with an assignment in front of it
+file: crates/core/src/remembered.rs
+replace: && crate::compare::same_environment(held_environment, environment) => && true
+
+mutation: RememberedStep::matches covers a step with its streams sent elsewhere
+file: crates/core/src/remembered.rs
+replace: && crate::compare::same_routes(held_routes, routes) => && true
+
+mutation: RememberedStep::matches covers a step under any arguments
+file: crates/core/src/remembered.rs
+replace: && every_arg_admits(held_args, args) => && true
+
+mutation: Shape::matches covers a line joined another way
+file: crates/core/src/remembered.rs
+replace: let joined = *held_joiner == *joiner; => let joined = true;
+
+mutation: same_environment compares names only
+file: crates/core/src/compare.rs
+replace: if !same_text(name, other_name) || !same_text(value, other_value) { => if !same_text(name, other_name) {
+
+mutation: Remembered::covers reads a scope's lines as covering every line
+file: crates/core/src/remembered.rs
+replace: some_entry_covers(entries, plan) || some_scope_covers(scopes, plan) => some_entry_covers(entries, plan) || !scopes.is_empty()
+
+mutation: step_vouched lets a step through without asking about the steps inside its `$(...)`
+file: crates/core/src/programs.rs
+replace: if !expansion_vouched(listed, &step.expansions[at], directory) { => if false {
+
+mutation: expansion_vouched lets an expansion through without asking about its parts
+file: crates/core/src/programs.rs
+replace: if !part_vouched(listed, &expansion.parts[at], directory) { => if false {
+
+mutation: steps_vouched lets a group through without asking about the steps inside it
+file: crates/core/src/programs.rs
+replace: // A group starts nothing of its own, so it is vouched for where what it holds is. => Steps::Group(_) => true,
+
+mutation: pipeline_vouched lets a pipeline through without asking about its steps
+file: crates/core/src/programs.rs
+replace: if !step_vouched(listed, &list[at], directory) { => if false {
+
+mutation: same_route reads `>` and `>>` to one file as the same route
+file: crates/core/src/compare.rs
+replace: same_way && same_path_buf(path, other) => same_path_buf(path, other)
+
+mutation: same_routes reads two different routes as the same
+file: crates/core/src/compare.rs
+replace: if !same_route(&a[at], &b[at]) { => if false {
+
+mutation: RememberedArg::admits lets a number slot admit any text
+file: crates/core/src/remembered.rs
+replace: // Digits only, so a slot cannot admit a flag or a name. => Self::Number => true,
+
+mutation: every_arg_admits reads two different arguments as admitted
+file: crates/core/src/remembered.rs
+replace: if !held[at].admits(&seen[at]) { => if false {
+
+mutation: every_step_matches reads two different steps as matching
+file: crates/core/src/remembered.rs
+replace: if !held[at].matches(&seen[at]) { => if false {
+
+mutation: Shape::matches reads only the left side of a join
+file: crates/core/src/remembered.rs
+replace: joined && held_left.matches(left) && held_right.matches(right) => joined && held_left.matches(left)
