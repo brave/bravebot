@@ -501,6 +501,9 @@ class ReviewReady(unittest.TestCase):
         self.assertEqual(result.out.splitlines(), [line(3), line(1)])
 
     def test_enqueue_with_nothing_eligible_adds_nothing_and_succeeds(self):
+        """The menu shows a non-zero exit as an error, so choosing the item when nothing qualifies any
+        more, because a thread was opened or an approval withdrawn since the list was read, must exit 0
+        and call gh pr merge for nothing."""
         self.serve([pr(1), pr(2, also_approved_by=["a"])])
         self.threads({2: {"unresolved": 1}})
         result = self.run_script("--enqueue")

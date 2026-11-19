@@ -58,7 +58,8 @@ eligible as described under `review-ready.py`. Each refresh passes `ELIGIBLE_FIL
 to count them. With none, the item reads "Add 0 eligible to merge queue" and is disabled. Choosing it
 runs `make review-ready ENQUEUE=1`, which reads the pull requests again and queues the eligible ones
 at that moment, then refreshes the menu and shows "Added N to the merge queue". A pull request GitHub
-refuses is named in the menu as an error and the others are still queued.
+refuses is named in the menu as an error, which stays until the next add or Refresh Now, and the others
+are still queued.
 
 ```sh
 contrib/review-ready-menubar/install.sh [--interval SECONDS] [--make-args "REVIEWER=login"] [--login] [--dir DIRECTORY]

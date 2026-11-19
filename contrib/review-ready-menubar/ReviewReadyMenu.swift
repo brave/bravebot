@@ -138,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var lastError: String?
     private var note: String?
     private var queuedNote: String?
+    /// Why the last "Add eligible to merge queue" did not add everything. The refresh that follows an add
+    /// does not clear it, so the menu still names the refused pull request. It is cleared by the next add
+    /// and by "Refresh Now".
+    private var enqueueError: String?
     private var refreshing = false
     private var enqueuing = false
     private var timer: Timer?
@@ -185,7 +189,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: refresh
 
+    /// The timer's and the wake-up's refresh. It leaves an add's refusal in the menu.
     @objc func refresh() {
+        startRefresh(keepingQueuedNote: false)
+    }
+
+    /// "Refresh Now": a person asked for a new list, so an earlier add's refusal is dropped.
+    @objc func refreshNow() {
+        guard !refreshing, !enqueuing else { return }
+        enqueueError = nil
         startRefresh(keepingQueuedNote: false)
     }
 
@@ -223,6 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !refreshing, !enqueuing, !(cache?.eligible ?? []).isEmpty else { return }
         enqueuing = true
         queuedNote = nil
+        enqueueError = nil
         DispatchQueue.global(qos: .utility).async { [weak self] in
             // Reading the threads of each candidate and queuing each one takes longer than a refresh.
             let result = runReviewReady(extra: ["ENQUEUE=1"], timeoutSeconds: 300)
@@ -236,10 +249,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if added > 0 {
             queuedNote = "Added \(added) to the merge queue"
         }
-        if result.status == 0 {
-            lastError = nil
-        } else {
-            lastError = result.err.split(separator: "\n").last.map(String.init) ?? "exit \(result.status)"
+        if result.status != 0 {
+            enqueueError = result.err.split(separator: "\n").last.map(String.init) ?? "exit \(result.status)"
         }
         updateTitle()
         startRefresh(keepingQueuedNote: true)
@@ -249,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let count = cache?.items.count ?? 0
         var title = count > 0 ? " \(count)" : ""
         if statusItem.button?.image == nil { title = "PR" + title }
-        if lastError != nil { title += "!" }
+        if lastError != nil || enqueueError != nil { title += "!" }
         statusItem.button?.title = title
     }
 
@@ -287,6 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             queued.isEnabled = false
             menu.addItem(queued)
         }
+        if let enqueueError {
+            let refused = NSMenuItem(title: "Not added to the merge queue: \(enqueueError.prefix(100))", action: nil, keyEquivalent: "")
+            refused.isEnabled = false
+            menu.addItem(refused)
+        }
         if let lastError {
             let failure = NSMenuItem(title: "Last refresh failed: \(lastError.prefix(100))", action: nil, keyEquivalent: "")
             failure.isEnabled = false
@@ -312,7 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let updated = NSMenuItem(title: status, action: nil, keyEquivalent: "")
         updated.isEnabled = false
         menu.addItem(updated)
-        let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
+        let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
         refreshItem.target = self
         refreshItem.isEnabled = !refreshing && !enqueuing
         menu.addItem(refreshItem)
