@@ -2550,7 +2550,7 @@ forms of `CC`, `CXX`, `AR`, `RANLIB`, `NVCC`, `CFLAGS`, `CXXFLAGS`, `ARFLAGS`, `
 and the others, as the next paragraphs state) and every name that begins `npm_config_` in any case
 (this includes `npm_config_prefix`). A
 `RUSTUP_HOME` that is removed, or that the environment checked does not hold, is set to the account's `.rustup`, since the `cargo` proxy finds
-its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX` and
+its toolchains there. `PYTHONPATH`, `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPYCACHEPREFIX`, `PYTHONEXECUTABLE` and
 `NODE_OPTIONS` are in the generic table ([SANDBOX-30](#SANDBOX-30)), which a stage is given too.
 
 A session records the directories a stage may write when its first confined stage starts, which is
@@ -4584,7 +4584,7 @@ file. A new spawn that looks a name up through
   `GCC_EXEC_PREFIX` of the compiler driver it starts), `cargo` (with `rustc`, `rustdoc`, `rustup`,
   the `BROWSER` and `CARGO_DOC_BROWSER` of `cargo doc --open`, the credential providers, and the
   `CROSS_COMPILE`, `RANLIB`, `NVCC`, `ARFLAGS` and `RANLIBFLAGS` the `cc` crate reads),
-  `npm` (`NODE_PATH`), `python3` (`PYTHONEXECUTABLE`, `_PYTHON_SYSCONFIGDATA_NAME`, and `OPENSSL_CONF`,
+  `npm` (`NODE_PATH`), `python3` (`_PYTHON_SYSCONFIGDATA_NAME`, and `OPENSSL_CONF`,
   `OPENSSL_MODULES` and
   `OPENSSL_ENGINES` through the constants in `programs::selectors`) and `go` (with the C
   compiler, `pkg-config`, `GOAUTH` and the linker and compiler flags a cgo build reads) read to
@@ -4593,7 +4593,7 @@ file. A new spawn that looks a name up through
   `PREPROCESS.<suffix>`, `LEX.<suffix>`, `YACC.<suffix>` and `LINT.<suffix>`, `.SHELLFLAGS`, the
   per-target names below, and every `npm_config_` name in any case. `python3` is also given the
   generic table, which holds
-  `PYTHONPLATLIBDIR` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
+  `PYTHONPLATLIBDIR` and `PYTHONEXECUTABLE` beside `PYTHONHOME`. `CL`, `_CL_`, `LINK` and `_LINK_`, which the Visual C++
   compiler and linker read, are not listed: the suite starts `make`, `cargo`, `go` and `python3`
   only on Unix (`crates/agent/src/usability.rs` is compiled under `cfg(unix)`), the generic table
   applies to every checked start (`gcloud`, `aws`, `ssh` and `git` among them), none of which reads
@@ -4869,12 +4869,25 @@ file. A new spawn that looks a name up through
     `MANPAGER` (for `aws s3 help` with output piped), `PYTHONPATH` (a `sitecustomize`, also with
     `PYTHONSAFEPATH=1`) and `PYTHONWARNINGS` (`ignore::<module>.<Class>` imported the module that
     `PYTHONPATH` placed). It ran nothing under `PYTHONWARNINGS` alone, `PYTHONHOME`,
-    `PYTHONEXECUTABLE`, `PYTHONUSERBASE`, `PYTHONBREAKPOINT`, `PYTHONSTARTUP` with piped streams,
+    `PYTHONUSERBASE`, `PYTHONBREAKPOINT`, `PYTHONSTARTUP` with piped streams,
     `BOTOCORE_EXPERIMENTAL__PLUGINS`, `AWS_PAGER` with piped streams, or `EDITOR`, `VISUAL` and
     `BROWSER` for `aws configure list`. Under a pseudo-terminal, with a local HTTP endpoint,
     `AWS_PAGER` and `PAGER` ran for the output of `aws sts get-caller-identity`, and
     `--no-cli-pager` stopped them. `PYTHONSTARTUP` ran only with `PYTHONINSPECT=1` and a
     pseudo-terminal. Every `aws` this program starts has its streams piped, so neither is listed.
+    `PYTHONEXECUTABLE` naming only an interpreter path ran nothing, which is the value this probe
+    tried; it did not name a venv.
+  - **`PYTHONEXECUTABLE`, a venv**: CPython takes `sys.executable` from this variable, reads the
+    `pyvenv.cfg` beside or above it, and makes that venv's prefix `sys.prefix`, so `site` runs the
+    `.pth` files of its `site-packages`. With a venv made by `python3 -m venv` and an `evil.pth`
+    written into its `site-packages`, `PYTHONEXECUTABLE=<venv>/bin/python` ran the `.pth` file
+    ahead of the Homebrew `aws` script's own import of `awscli`, both as an absolute path and as
+    one relative to the working directory; a bare name such as `python` did not, raising the same
+    `ModuleNotFoundError` the venv's missing `awscli` site-packages gives either way.
+    `__PYVENV_LAUNCHER__` naming the same venv ran nothing. `PYTHONEXECUTABLE` is in the generic
+    `CODE_SELECTORS` as [`Names::Program`](../../crates/sandbox/src/programs.rs), so a bare name
+    is kept, resolved on the reduced `PATH`, and an absolute or relative path is removed unless it
+    names a file outside every directory a stage may write.
   - **Run, pip**: `awscli` 1.46.3 from pip in a virtualenv of Python 3.15.0 (Homebrew), with the
     same method. The results match the Homebrew run, with these differences: version 1 ignores
     `cli_legacy_plugin_path`, and loads a `[plugins]` entry `name = module` only when `PYTHONPATH`
