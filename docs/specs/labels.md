@@ -88,7 +88,7 @@ guards:
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
-      - crates/agent/src/tools/tests/activity.rs: 2
+      - crates/agent/src/tools/tests/activity.rs: 3
       - crates/agent/src/tools/tests/editing.rs: 6
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
