@@ -141,8 +141,15 @@ impl List {
 /// draw a strikethrough or a colour without parsing anything back out of the text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
-    /// The task, as the model wrote it.
+    /// The task as the person reads it: the model's words, with the names the interface was
+    /// allowed to put in the place of references.
     pub content: String,
+    /// The task as the model wrote it, with every reference as the model knew it.
+    ///
+    /// What leaves the screen, such as a file an export writes, carries this and not
+    /// [`Row::content`], because the names in `content` were released for a screen and for nothing
+    /// else. Set where the row is made, so no one has to find the names again afterwards.
+    pub as_the_planner_had_it: String,
     /// What the interface should draw in the margin.
     pub marker: &'static str,
     pub status: Status,
@@ -177,6 +184,7 @@ pub fn rows(list: &List) -> Vec<Row> {
         .iter()
         .map(|item| Row {
             content: item.content.clone(),
+            as_the_planner_had_it: item.content.clone(),
             marker: match item.status {
                 Status::Done => DONE_MARKER,
                 Status::Cancelled => CANCELLED_MARKER,

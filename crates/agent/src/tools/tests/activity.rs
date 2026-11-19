@@ -117,7 +117,7 @@ fn a_call_line_names_its_reference_inside_the_kernel() {
     routing.insert_trusted("task", "read the notes");
 
     let mut sink = RecordingSink::new();
-    let line = {
+    let (line, as_the_planner_had_it) = {
         let mut policy = Policy::begin(
             routing,
             ReleasePlan::new(),
@@ -148,6 +148,8 @@ fn a_call_line_names_its_reference_inside_the_kernel() {
 
     // The reference, its label and the file: the planner has only the first of the three.
     assert_eq!(line, "ref:1(U,priv):notes.md");
+    // What an export writes is the reference alone, never the file name the screen was shown.
+    assert_eq!(as_the_planner_had_it, "ref:1");
 
     let reshaped = super::gate_at(&sink, "render", "read_file");
     let released = super::gate_at(&sink, "display", "what a tool is working on");
@@ -283,7 +285,7 @@ fn a_servers_call_is_drawn_with_the_arguments_it_is_sent() {
     routing.insert_trusted("task", "send the notes");
 
     let mut sink = RecordingSink::new();
-    let line = {
+    let (line, as_the_planner_had_it) = {
         let mut policy = Policy::begin(
             routing,
             ReleasePlan::new(),
@@ -313,6 +315,10 @@ fn a_servers_call_is_drawn_with_the_arguments_it_is_sent() {
     };
 
     assert_eq!(line, r#"notes:send {"body":"ref:1","to":"ops"}"#);
+    assert_eq!(
+        as_the_planner_had_it,
+        r#"notes:send {"body":"ref:1","to":"ops"}"#
+    );
     assert!(
         !sink.events().iter().any(|event| matches!(
             event,
@@ -329,4 +335,65 @@ fn a_servers_call_is_drawn_with_the_arguments_it_is_sent() {
         "the arguments were released before they were shaped: {:?}",
         sink.events()
     );
+}
+
+/// A call drawn with the file a reference stands for carries the reference itself beside it, on
+/// both of its lines, and that is the form an export writes (SESSION-17). A call that carried the
+/// shown line instead would write the file name the person was shown into a file a later turn
+/// may read.
+#[test]
+fn a_reported_call_carries_the_form_the_planner_had_beside_the_one_shown() {
+    use bravebot_core::capability::{Capability, CapabilitySet};
+    use bravebot_core::event::RecordingSink;
+    use bravebot_core::policy::{ReleasePlan, Routing};
+
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "read the notes");
+    let mut sink = RecordingSink::new();
+    let mut reporter = crate::report::RecordingReporter::default();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead]),
+        &mut sink,
+    )
+    .expect("policy");
+    let mut slots = SlotStore::new();
+    policy
+        .defer(
+            "read_file",
+            SlotId::new("ref:1"),
+            "notes.md",
+            &Labelled::trusted("notes.md".to_string()),
+            7,
+            &mut slots,
+        )
+        .expect("the file is reserved");
+    let call: ToolCall = serde_json::from_value(json!({
+        "id": "c1",
+        "type": "function",
+        "function": { "name": "read_file", "arguments": r#"{"path_ref":"ref:1"}"# },
+    }))
+    .unwrap();
+
+    refused_without_running(
+        &mut policy,
+        &mut reporter,
+        None,
+        &slots,
+        &call,
+        "held".to_string(),
+    );
+
+    assert_eq!(reporter.started.len(), 1);
+    assert_eq!(reporter.finished.len(), 1);
+    for line in reporter.started.iter().chain(&reporter.finished) {
+        assert_eq!(line.target, "ref:1(U,priv):notes.md");
+        assert_eq!(line.as_the_planner_had_it.as_deref(), Some("ref:1"));
+        assert!(
+            !line.line_as_the_planner_had_it().contains("notes.md"),
+            "an export would write the file name: {}",
+            line.line_as_the_planner_had_it()
+        );
+    }
 }

@@ -352,6 +352,15 @@ pub struct Entry {
     /// reply: which definition answered is a fact the driver holds, and the reply is model output
     /// that could claim to be any of them (ADDRESS-12).
     pub answered_as: Option<String>,
+    /// Whether this entry was released for the screen alone: for a [`Speaker::Assistant`] entry,
+    /// a manifest run's answer, which no model of this session said and no later turn holds; for a
+    /// [`Speaker::Output`] entry, what a `!!` command or a stopped command printed, which was never
+    /// put in the conversation.
+    ///
+    /// Set by the code that pushes the entry, from which path produced it, and never from the
+    /// words. An export says an answer or output was shown and how long it was, and not what it
+    /// said (SESSION-17).
+    pub displayed_only: bool,
     /// Why the planner made the call, for a [`Speaker::Tool`] entry read back off disk.
     ///
     /// A live call carries its reason on its [`Activity`]; a recalled one has no activity, and
@@ -379,6 +388,7 @@ impl Entry {
             activity: None,
             delegate: None,
             answered_as: None,
+            displayed_only: false,
             why: String::new(),
         }
     }
@@ -468,6 +478,18 @@ impl Entry {
     /// What such a command printed.
     pub fn output(text: impl Into<String>) -> Self {
         Self::blank(Speaker::Output, text.into())
+    }
+
+    /// What such a command printed, where nothing of it reached the conversation: a command typed
+    /// with `!!` and the rows of one that was stopped (SHELL-6, SHELL-7).
+    ///
+    /// Marked by the code that makes the entry, so an export says output was shown and how long it
+    /// was, and not what it said (SESSION-17).
+    pub fn output_for_the_screen_alone(text: impl Into<String>) -> Self {
+        Self {
+            displayed_only: true,
+            ..Self::output(text)
+        }
     }
 
     /// One tool call, as it stands.

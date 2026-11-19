@@ -59158,6 +59158,201 @@ fn a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_
     }
 }
 
+/// CHECKOUT-13, CHECKOUT-23, LABEL-3. A file a run redirected into a directory a link in a tree
+/// nobody vouched for stands for is recorded by the directory as the planner typed it, and not by
+/// the name the link chose. The carry refuses it as one with a link in its way and names the typed
+/// spelling, and no request to the model holds the link's target.
+#[cfg(unix)]
+#[test]
+fn a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling() {
+    let scratch = Scratch::new("checkout-with-changes-linked-redirect");
+    let home = Scratch::new("checkout-with-changes-linked-redirect-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let target = scratch.path.join("vendor").join(LINKED_TARGET);
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("note.txt"), "one\n").unwrap();
+    std::os::unix::fs::symlink(LINKED_TARGET, scratch.path.join("vendor/docs")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "REDIRECT-THROUGH-A-LINK-THEN-CHECK",
+            vec![
+                tool_request(
+                    "run",
+                    r#"{"command":"sed -n p note.txt > out.txt","directory":"vendor/docs"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHECK-THE-LINKED-WORK","isolation":"checkout_with_changes"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate checked"),
+            ],
+        ),
+        ("CHECK-THE-LINKED-WORK", vec![reply_with("checked")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("REDIRECT-THROUGH-A-LINK-THEN-CHECK").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(target.join("out.txt")).ok(),
+        Some("one\n".to_string()),
+        "the run did not write through the link"
+    );
+    // INSTR-14, INSTR-16: the touched record is placed by the typed spelling too.
+    assert!(
+        workspace
+            .touched_files()
+            .iter()
+            .any(|file| file == "vendor/docs/out.txt"),
+        "the typed name was not recorded as touched: {:?}",
+        workspace.touched_files()
+    );
+    assert!(
+        workspace
+            .touched_files()
+            .iter()
+            .chain(workspace.touched_directories().iter())
+            .all(|name| !name.contains(LINKED_TARGET)),
+        "the name a link chose was recorded as touched"
+    );
+    let asked = every_request(&received);
+    assert!(
+        !asked.iter().any(|body| body.contains(LINKED_TARGET)),
+        "the name a link in an unvouched tree chose reached the model: {asked:?}"
+    );
+    for (who, from) in [("the delegate", false), ("the planner", true)] {
+        assert!(
+            asked.iter().any(
+                |body| body.contains("REDIRECT-THROUGH-A-LINK-THEN-CHECK") == from
+                    && body.contains(
+                        "Not carried: `vendor/docs/out.txt` (a link stands in its place or on the \
+                     way to it)."
+                    )
+            ),
+            "{who} was not told the typed name was left for a link: {asked:?}"
+        );
+    }
+}
+
+/// CHECKOUT-13, CHECKOUT-23, LABEL-3. A redirection operand the planner spells with an absolute
+/// path or with a `..` still names the place a link chose nowhere in the record: the carry names
+/// the file by the spelling the planner typed, and no request to the model holds the link's target.
+#[cfg(unix)]
+#[test]
+fn a_redirection_spelled_absolute_or_with_a_parent_is_recorded_by_the_typed_spelling() {
+    for (marker, command, directory) in [
+        ("ABSOLUTE-OPERAND", "ABSOLUTE", None),
+        (
+            "PARENT-OPERAND",
+            "sed -n p note.txt > ../docs/out.txt",
+            Some("vendor/docs"),
+        ),
+    ] {
+        let scratch = Scratch::new("checkout-with-changes-linked-operand");
+        let home = Scratch::new("checkout-with-changes-linked-operand-home");
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let target = scratch.path.join("vendor").join(LINKED_TARGET);
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("note.txt"), "one\n").unwrap();
+        std::os::unix::fs::symlink(LINKED_TARGET, scratch.path.join("vendor/docs")).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let line = if command == "ABSOLUTE" {
+            format!(
+                "sed -n p vendor/docs/note.txt > {}/vendor/docs/out.txt",
+                workspace.root().display()
+            )
+        } else {
+            command.to_string()
+        };
+        let arguments = match directory {
+            Some(directory) => serde_json::json!({"command": line, "directory": directory}),
+            None => serde_json::json!({"command": line}),
+        }
+        .to_string();
+        let task: &'static str =
+            Box::leak(format!("REDIRECT-{marker}-THEN-CHECK").into_boxed_str());
+        let check: &'static str = Box::leak(format!("CHECK-{marker}").into_boxed_str());
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                task,
+                vec![
+                    tool_request("run", &arguments),
+                    tool_request(
+                        "spawn_agent",
+                        &format!(
+                            r#"{{"kind":"worker","task":"{check}","isolation":"checkout_with_changes"}}"#
+                        ),
+                    ),
+                    reply_with("waiting"),
+                    reply_with("the delegate checked"),
+                ],
+            ),
+            (check, vec![reply_with("checked")]),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.distrust("vendor");
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new(task).with_home(Some(home.path.clone())),
+            &mut confirmer,
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("out.txt")).ok(),
+            Some("one\n".to_string()),
+            "{marker}: the run did not write through the link"
+        );
+        let asked = every_request(&received);
+        assert!(
+            !asked.iter().any(|body| body.contains(LINKED_TARGET)),
+            "{marker}: the name a link in an unvouched tree chose reached the model: {asked:?}"
+        );
+        assert!(
+            workspace
+                .touched_files()
+                .iter()
+                .all(|name| !name.contains(LINKED_TARGET)),
+            "{marker}: the name a link chose was recorded as touched"
+        );
+        assert!(
+            asked.iter().any(|body| body.contains(task)
+                && body.contains(
+                    "Not carried: `vendor/docs/out.txt` (a link stands in its place or on the \
+                     way to it)."
+                )),
+            "{marker}: the planner was not told the typed name was left for a link: {asked:?}"
+        );
+    }
+}
+
 /// CHECKOUT-23. A file a deny rule covers reading is not carried, even where the driver recorded
 /// the planner writing it before the rule existed, and the delegate and the planner are told it
 /// was left and why.
@@ -60918,6 +61113,112 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
              holds. It does not name a file a program wrote there"
         )),
         "the planner was not told the paths written in the checkout"
+    );
+}
+
+/// CHECKOUT-13, CHECKOUT-14, CHECKOUT-23, LABEL-3. A file a delegate redirected into a directory a
+/// committed link stands for, in a kept checkout, is named to the planner by the directory as the
+/// delegate typed it. The notice for the kept checkout and the result of `apply_checkout` do not
+/// hold the name the link chose, and the apply leaves the file where it is because a link stands
+/// on the way to it.
+#[cfg(unix)]
+#[test]
+fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() {
+    let scratch = Scratch::new("checkout-linked-redirect");
+    let home = Scratch::new("checkout-linked-redirect-home");
+    repository::commit_files_and_links(
+        &scratch.path,
+        &[
+            ("README", "committed\n"),
+            (&format!("vendor/{LINKED_TARGET}/note.txt"), "one\n"),
+        ],
+        &[("vendor/docs", LINKED_TARGET)],
+        "first",
+    );
+    let target = scratch.path.join("vendor").join(LINKED_TARGET);
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("note.txt"), "one\n").unwrap();
+    std::os::unix::fs::symlink(LINKED_TARGET, scratch.path.join("vendor/docs")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-OF-A-LINKED-REDIRECTION",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"REDIRECT-IN-THE-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                tool_request(
+                    "apply_checkout",
+                    r#"{"checkout":"c1","paths":["vendor/docs/out.txt"]}"#,
+                ),
+                reply_with("applied"),
+            ],
+        ),
+        (
+            "REDIRECT-IN-THE-CHECKOUT",
+            vec![
+                tool_request(
+                    "run",
+                    r#"{"command":"sed -n p note.txt > out.txt","directory":"vendor/docs"}"#,
+                ),
+                reply_with("redirected"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("PARENT-OF-A-LINKED-REDIRECTION").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    let asked = every_request(&received);
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1, "the checkout was not kept");
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("vendor").join(LINKED_TARGET).join("out.txt")).ok(),
+        Some("one\n".to_string()),
+        "the redirection did not write through the link in the checkout"
+    );
+    assert!(
+        !asked.iter().any(|body| body.contains(LINKED_TARGET)),
+        "the name a committed link chose reached the model: {asked:?}"
+    );
+    let told: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("PARENT-OF-A-LINKED-REDIRECTION"))
+        .collect();
+    assert!(
+        told.iter().any(|body| body
+            .contains("The driver recorded writes there to `vendor/docs/out.txt`.")),
+        "the planner was not told the typed name of the file written in the checkout: {told:?}"
+    );
+    assert!(
+        told.iter().any(|body| body.contains(
+            "vendor/docs/out.txt: not brought back, since a link stands in its place, and a \
+             link is not followed"
+        )),
+        "the apply did not refuse the typed name for the link on its way: {told:?}"
+    );
+    assert!(
+        !target.join("out.txt").exists(),
+        "the apply wrote through the link into the working directory"
     );
 }
 

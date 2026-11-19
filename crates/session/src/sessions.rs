@@ -1945,6 +1945,11 @@ impl StoredPath {
 pub struct StoredTask {
     pub content: String,
     pub status: String,
+    /// The task as the model wrote it, beside `content`, which is the form the person read.
+    /// A record written before this field existed has none, and its tasks resume with `content`
+    /// as their only form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_the_planner_had_it: Option<String>,
 }
 
 impl StoredTask {
@@ -1952,6 +1957,7 @@ impl StoredTask {
         Self {
             content: row.content.clone(),
             status: row.status.to_string(),
+            as_the_planner_had_it: Some(row.as_the_planner_had_it.clone()),
         }
     }
 }
@@ -2119,7 +2125,13 @@ impl Record {
                     .iter()
                     .map(|task| Item::new(task.content.clone(), Status::parse(&task.status)))
                     .collect();
-                (*turn, todo::rows(&List::new(items)))
+                let mut rows = todo::rows(&List::new(items));
+                for (row, task) in rows.iter_mut().zip(tasks) {
+                    if let Some(planner) = &task.as_the_planner_had_it {
+                        row.as_the_planner_had_it = planner.clone();
+                    }
+                }
+                (*turn, rows)
             })
             .collect()
     }

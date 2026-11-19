@@ -88,7 +88,7 @@ guards:
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
-      - crates/agent/src/tools/tests/activity.rs: 2
+      - crates/agent/src/tools/tests/activity.rs: 3
       - crates/agent/src/tools/tests/editing.rs: 6
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
@@ -415,6 +415,8 @@ symbolic link in the tree led to, because whoever wrote a tree nobody vouched fo
 `verified-by: bravebot_agent::tools::tests::editing::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 `verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
 `verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context
@@ -485,7 +487,9 @@ than a branch nobody is shown:
 - **The file a reference names, for a line a person reads**, through `names_for_display`. It
   returns every slot's filename as a plain string to be worded into a preview, a note or a task
   line, and records one `Declassified` event and one `display` allow for the call. It is a display
-  release and nothing it returns may become a path an effect uses.
+  release and nothing it returns may become a path an effect uses. A file `/export` writes is read
+  by later turns, so it holds the call as the planner had it and not these names
+  ([SESSION-17](sessions.md#SESSION-17)).
 - **The file a reference names, as a read's path or a destination**, through
   `promote_reference_for_read` and `destination_from_reference`, which [routing.md](routing.md)
   settles and which share `path_of_reference`.
