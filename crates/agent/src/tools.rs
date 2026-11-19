@@ -1505,7 +1505,10 @@ impl Jobs {
         .unwrap();
         self.keep(
             running,
-            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            JobLines::new(
+                &plan.display(),
+                &crate::cmdline::display_as_written(&plan, None),
+            ),
             label,
             FileAuthority::new(TrustStore::new(&root)),
             0,
@@ -12225,7 +12228,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // What the planner is told the line was: the plan with its operands as the line wrote them. A
     // glob in the line has been replaced by the names it matched, which came out of a directory
     // nobody may have vouched for, and the planner is not shown those (CMDLINE-4).
-    let said = in_directory(crate::cmdline::display_as_written(&plan), &told_directory);
+    let said = in_directory(
+        crate::cmdline::display_as_written(
+            &plan,
+            (!at_the_root).then_some(told_directory.as_str()),
+        ),
+        &told_directory,
+    );
 
     // What this line reaches that nothing here holds, which the person approving it was shown at
     // the prompt. Worked out from the same plan the prompt drew, so the record and the grant
@@ -16625,7 +16634,10 @@ mod tests {
             let mut jobs = Jobs::new();
             jobs.keep(
                 running,
-                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+                JobLines::new(
+                    &plan.display(),
+                    &crate::cmdline::display_as_written(&plan, None),
+                ),
                 Label::trusted_public(),
                 authority.clone(),
                 0,
@@ -16677,7 +16689,10 @@ mod tests {
         .unwrap();
         jobs.keep(
             running,
-            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            JobLines::new(
+                &plan.display(),
+                &crate::cmdline::display_as_written(&plan, None),
+            ),
             Label::trusted_public(),
             FileAuthority::new(TrustStore::new(&root)),
             0,
@@ -16772,7 +16787,10 @@ mod tests {
         .unwrap();
         jobs.keep(
             running,
-            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            JobLines::new(
+                &plan.display(),
+                &crate::cmdline::display_as_written(&plan, None),
+            ),
             Label::trusted_public(),
             FileAuthority::new(TrustStore::new(root)),
             0,
@@ -17173,7 +17191,10 @@ mod tests {
             .unwrap();
             let (_, stop) = jobs.keep(
                 running,
-                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+                JobLines::new(
+                    &plan.display(),
+                    &crate::cmdline::display_as_written(&plan, None),
+                ),
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,
@@ -17255,7 +17276,10 @@ mod tests {
             .unwrap();
             let (name, stop) = jobs.keep(
                 running,
-                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+                JobLines::new(
+                    &plan.display(),
+                    &crate::cmdline::display_as_written(&plan, None),
+                ),
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,

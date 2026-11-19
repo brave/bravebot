@@ -184,6 +184,33 @@ pub(crate) fn started_through(started_as: &Path, file: &Path) -> String {
     }
 }
 
+/// The program word a sentence addressed to the planner names `started_as` by.
+///
+/// `started_as` was built by joining a name the line used onto `landing`, the directory the line
+/// actually ran in, which is where a link in a tree nobody vouched for led. Under that directory,
+/// the word is respelled as `told_directory`, the planner's own spelling of it, followed by the
+/// rest of `started_as`, exactly as a redirection's target is respelled for the same sentence: the
+/// landing is never shown to the planner, because the name whoever wrote the tree chose for it is
+/// not the planner's own word (LABEL-3, TOOL-4). `told_directory` is `None` for a line run at the
+/// root, and then, like a path elsewhere, `started_as` is shown as it is. Both halves are strings
+/// the planner wrote or paths the driver resolved: nothing is read from a file to build the word.
+fn told_started_as(started_as: &Path, landing: &Path, told_directory: Option<&str>) -> String {
+    match (told_directory, started_as.strip_prefix(landing)) {
+        (Some(told_directory), Ok(rest)) => {
+            let rest: Vec<std::borrow::Cow<'_, str>> = rest
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect();
+            format!(
+                "{}/{}",
+                told_directory.trim_end_matches('/'),
+                rest.join("/")
+            )
+        }
+        _ => started_as.to_string_lossy().into_owned(),
+    }
+}
+
 /// One argument, quoted so that no two arguments can render alike.
 ///
 /// A bare token is one with nothing in it that quoting is for. Anything else is wrapped, with a
@@ -562,9 +589,19 @@ impl Step {
     ///
     /// `targets` holds the file each redirection of the step names, as the line wrote it and
     /// already quoted, in the order of the routes that name a file. A route's own path was joined
-    /// onto the directory the line landed in, which is where a link led.
-    pub(crate) fn told_args(&self, args: Vec<String>, targets: &[String]) -> String {
-        self.render_args(&self.started_as.to_string_lossy(), args, Some(targets))
+    /// onto the directory the line landed in, which is where a link led. `landing` is that same
+    /// directory and `told_directory` is the planner's own spelling of it, `None` at the root: a
+    /// program found by a relative path is, like a redirection's target, respelled under the
+    /// directory as typed rather than shown by the landing (LABEL-3, TOOL-4).
+    pub(crate) fn told_args(
+        &self,
+        args: Vec<String>,
+        targets: &[String],
+        landing: &Path,
+        told_directory: Option<&str>,
+    ) -> String {
+        let program = told_started_as(&self.started_as, landing, told_directory);
+        self.render_args(&program, args, Some(targets))
     }
 
     fn render_args(&self, program: &str, args: Vec<String>, targets: Option<&[String]>) -> String {
@@ -769,18 +806,23 @@ impl Steps {
     /// step are what a pattern matched, which is a listing of a directory, and a sentence the
     /// planner is shown cannot hold one. The caller owns the quoting of the words, as for
     /// [`Step::told_args`], and passes the file each redirection names, as the line wrote it, in
-    /// `targets`: one list per step, in the order of the routes that name a file.
+    /// `targets`: one list per step, in the order of the routes that name a file. `landing` and
+    /// `told_directory` are [`Step::told_args`]'s own: the directory every step ran in and the
+    /// planner's spelling of it, so a program found by a relative path is respelled the same way
+    /// a redirection's target is.
     /// `None` where `written` or `targets` does not hold exactly one list per step.
     pub fn display_with_operands(
         &self,
         written: &[Vec<String>],
         targets: &[Vec<String>],
+        landing: &Path,
+        told_directory: Option<&str>,
     ) -> Option<String> {
         if written.len() != targets.len() {
             return None;
         }
         let mut rest = written.iter().zip(targets.iter());
-        let shown = self.draw_with_operands(&mut rest)?;
+        let shown = self.draw_with_operands(&mut rest, landing, told_directory)?;
         rest.next().is_none().then_some(shown)
     }
 
@@ -836,13 +878,15 @@ impl Steps {
             std::slice::Iter<'_, Vec<String>>,
             std::slice::Iter<'_, Vec<String>>,
         >,
+        landing: &Path,
+        told_directory: Option<&str>,
     ) -> Option<String> {
         Some(match self {
             Self::Pipeline(steps) => {
                 let mut drawn = Vec::with_capacity(steps.len());
                 for step in steps {
                     let (args, targets) = written.next()?;
-                    drawn.push(step.told_args(args.clone(), targets));
+                    drawn.push(step.told_args(args.clone(), targets, landing, told_directory));
                 }
                 drawn.join(" | ")
             }
@@ -856,11 +900,16 @@ impl Steps {
                     Joiner::Or => "||",
                     Joiner::Then => ";",
                 };
-                let left = left.draw_with_operands(written)?;
-                let right = right.draw_with_operands(written)?;
+                let left = left.draw_with_operands(written, landing, told_directory)?;
+                let right = right.draw_with_operands(written, landing, told_directory)?;
                 format!("{left} {joiner} {right}")
             }
-            Self::Group(inner) => format!("( {} )", inner.draw_with_operands(written)?),
+            Self::Group(inner) => {
+                format!(
+                    "( {} )",
+                    inner.draw_with_operands(written, landing, told_directory)?
+                )
+            }
         })
     }
 }
@@ -1646,7 +1695,7 @@ mod tests {
         let steps = Steps::Pipeline(vec![expanding]);
         assert_eq!(steps.display(), "TOKEN=$SECRET /usr/bin/prog");
         let told = steps
-            .display_with_operands(&[vec!["arg".into()]], &[vec![]])
+            .display_with_operands(&[vec!["arg".into()]], &[vec![]], Path::new("/work"), None)
             .expect("one list per step");
         assert_eq!(told, "TOKEN=$SECRET /usr/bin/prog arg");
         assert_eq!(plan(steps.clone()).display(), "TOKEN=$SECRET /usr/bin/prog");
@@ -1971,9 +2020,34 @@ mod tests {
             .display_with_operands(
                 &[vec!["test".into()], vec!["-n".into(), "5".into()]],
                 &[vec![], vec![]],
+                Path::new("/work"),
+                None,
             )
             .expect("one list per step");
         assert_eq!(told, "/home/me/.cargo/bin/cargo test | /usr/bin/tail -n 5");
+        assert!(steps.display().contains("HOSTILE-landed"));
+    }
+
+    /// A program found by a relative path under a directory a link led to is told to the planner
+    /// by the directory as it typed it, followed by the rest of the path, exactly as a
+    /// redirection's target is. The regression this rejects is the program word drawn from
+    /// `started_as` whole, which is `landing` joined onto the name the line used and so carries
+    /// the name whoever made the link chose (LABEL-3, TOOL-4).
+    #[test]
+    fn what_the_planner_is_told_names_a_relative_program_under_the_directory_as_typed() {
+        let mut build = step("./build.sh", &[]);
+        build.started_as = PathBuf::from("/work/HOSTILE-landed/build.sh");
+        build.resolved = PathBuf::from("/work/HOSTILE-landed/build.sh");
+        let steps = Steps::Pipeline(vec![build]);
+        let told = steps
+            .display_with_operands(
+                &[vec![]],
+                &[vec![]],
+                Path::new("/work/HOSTILE-landed"),
+                Some("docs"),
+            )
+            .expect("one list per step");
+        assert_eq!(told, "docs/build.sh");
         assert!(steps.display().contains("HOSTILE-landed"));
     }
 
