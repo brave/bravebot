@@ -2458,6 +2458,7 @@ fn adopt_settings(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
+    say_undeliverable_chords(session);
     session.adopt_sessions_keys(settings.sessions_keys());
     // And how far the wheel moves the view, for the reason the chords are read here: a figure read
     // once at startup describes the session, and a terminal's own idea of a notch does not change
@@ -2479,6 +2480,29 @@ fn adopt_settings(
     }
     session.adopt_prompt_files(crate::prompt_files::directory());
     session.adopt_suggestions(settings.suggestions() == Some(true));
+}
+
+/// Say which of the chords a settings file asked for this terminal cannot send (INPUT-32).
+///
+/// The action stayed on its default, so the key the person wrote does nothing and `?` names the
+/// default rather than it. Nothing else on the screen would show that, and the press they expect to
+/// work is Escape on a terminal that reports it with no modifier at all, which clears the line. One
+/// sentence with a count behind it where more than one was refused, as the Sessions screen says its
+/// own refused keys ([SCREEN-14](../../docs/specs/sessions-screen.md)).
+fn say_undeliverable_chords(session: &mut Session) {
+    let chords = session.undeliverable_chords();
+    let Some(first) = chords.first() else {
+        return;
+    };
+    let mut said = first.sentence();
+    if chords.len() > 1 {
+        let more = chords.len() - 1;
+        said = format!(
+            "{said}; {}",
+            t!(keybindings_undeliverable_more, count = more)
+        );
+    }
+    session.note(said);
 }
 
 /// Name the session's id where it is handed on, on every pass of the loop: to the panel, and to
@@ -2824,6 +2848,9 @@ fn begin_session(
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
     let mut session = new_session(config, &settings, &workspace, &asked, mcp_servers, basis);
+    // The same answer decides whether a chord on Escape can arrive at all, and the session is given
+    // it here because the chords are read further down, out of the settings (INPUT-32).
+    session.adopt_keys_disambiguated(session.ctrl_enter_arrives);
 
     // What the session begins holding, which is what decides whether the startup question is put
     // to its user at all. Read off `start` before the match below consumes it.
@@ -14689,6 +14716,158 @@ mod tests {
         assert!(
             !session.is_quitting(),
             "clearing the input ended the session"
+        );
+    }
+
+    /// A chord moved onto Alt-Escape or Ctrl-Escape used to be read as plain Escape at rest,
+    /// because the arms that clear the box and that put it away over an enhancement matched on
+    /// `KeyCode::Esc` alone and never looked at the modifiers carried with it. So the box was
+    /// cleared instead of stashed, and the round trip back never ran (#2924).
+    #[test]
+    fn stash_moved_onto_alt_escape_stashes_instead_of_clearing_the_box() {
+        let alt_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::ALT);
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("stash".to_string(), "alt-esc".to_string());
+        session.adopt_keybindings(&moved);
+        assert!(session.bindings().is_stash(&alt_esc));
+
+        type_line(&mut session, "a thought");
+        assert_eq!(handle_key(&mut session, alt_esc), Action::Redraw);
+        assert_eq!(
+            session.input(),
+            "",
+            "the stash chord moved onto alt-esc did not stash"
+        );
+        handle_key(&mut session, alt_esc);
+        assert_eq!(
+            session.input(),
+            "a thought",
+            "the stash chord moved onto alt-esc did not bring the line back, \
+             as plain escape clearing the box would have lost it"
+        );
+    }
+
+    /// The same chord with Ctrl in place of Alt, over the same bug: `undo` moved onto `ctrl-esc`
+    /// must reach `undo`'s own handler rather than the plain-Escape arm that clears the box.
+    #[test]
+    fn undo_moved_onto_ctrl_escape_fires_instead_of_clearing_the_box() {
+        let ctrl_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::CONTROL);
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("undo".to_string(), "ctrl-esc".to_string());
+        session.adopt_keybindings(&moved);
+        assert!(session.bindings().is_undo(&ctrl_esc));
+
+        type_line(&mut session, "one two three");
+        handle_key(&mut session, ctrl('w'));
+        assert_eq!(session.input(), "one two ");
+
+        handle_key(&mut session, ctrl_esc);
+        assert_eq!(
+            session.input(),
+            "one two three",
+            "ctrl-esc moved onto undo did not put back what the delete took, \
+             as if plain escape had cleared the box instead"
+        );
+    }
+
+    /// The same guard on the arm above it: with an enhancement pending, a chord moved onto
+    /// `alt-esc` must still reach its own handler rather than the arm that restores the
+    /// un-enhanced draft, which is what plain Escape does there (#2924).
+    #[test]
+    fn stash_moved_onto_alt_escape_stashes_the_enhancement_instead_of_restoring_the_draft() {
+        let alt_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::ALT);
+        let mut session = enhanced_from("a thought", "a thought, rewritten");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("stash".to_string(), "alt-esc".to_string());
+        session.adopt_keybindings(&moved);
+        assert!(session.bindings().is_stash(&alt_esc));
+        assert!(
+            session.enhanced_pending(),
+            "the fixture holds no enhancement to guard"
+        );
+
+        assert_eq!(handle_key(&mut session, alt_esc), Action::Redraw);
+        assert_eq!(
+            session.input(),
+            "",
+            "alt-esc moved onto stash restored the un-enhanced draft instead of stashing, \
+             as plain escape over an enhancement would have"
+        );
+    }
+
+    /// The other half of the same bug. A terminal that was not asked to disambiguate has no bytes
+    /// for Ctrl-Escape and sends `ESC ESC` for Alt-Escape, which arrives as the Escape key alone, so
+    /// a chord moved there cannot be read however the arms above are written. The request is dropped
+    /// and said: the action keeps the key it had, the list `?` puts up names that key, and the
+    /// person finds out rather than pressing a key that clears the box (#2924).
+    #[test]
+    fn a_chord_on_escape_is_dropped_and_said_where_the_terminal_cannot_send_it() {
+        let settings = bravebot_config::Settings::parse(r#"{"keybindings": {"stash": "alt-esc"}}"#);
+        let mut session = Session::new("none");
+        session.adopt_keys_disambiguated(false);
+        adopt_settings(&mut session, &settings, None);
+
+        assert_eq!(
+            session.bindings().stash_name(),
+            "ctrl-s",
+            "the list names a chord this terminal cannot send"
+        );
+        assert!(
+            !session
+                .bindings()
+                .claims(&KeyEvent::new(KeyCode::Esc, KeyModifiers::ALT)),
+            "an action was left on a chord that never arrives"
+        );
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter().any(|line| {
+                line.contains("\"alt-esc\" cannot be delivered by this terminal")
+                    && line.contains("stash stays on ctrl-s")
+            }),
+            "nothing on the screen said the chord cannot arrive: {said:?}"
+        );
+    }
+
+    /// Two of them are one line with a count behind it, as the Sessions screen says its own refused
+    /// keys. Both actions keep the keys they had.
+    #[test]
+    fn two_chords_the_terminal_cannot_send_are_said_in_one_line_with_a_count() {
+        let settings = bravebot_config::Settings::parse(
+            r#"{"keybindings": {"stash": "alt-esc", "undo": "ctrl-esc"}}"#,
+        );
+        let mut session = Session::new("none");
+        session.adopt_keys_disambiguated(false);
+        adopt_settings(&mut session, &settings, None);
+
+        assert_eq!(session.bindings().stash_name(), "ctrl-s");
+        assert_eq!(session.bindings().undo_name(), "ctrl-_");
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter().any(|line| {
+                *line
+                    == "keybindings.stash: \"alt-esc\" cannot be delivered by this terminal, \
+                        so stash stays on ctrl-s; and 1 more chord this terminal cannot send"
+            }),
+            "the second chord was not counted in one line: {said:?}"
+        );
+    }
+
+    /// And a terminal that does report the chord keeps it, with nothing said. The sentence is about
+    /// what this terminal cannot send rather than about how the chord was spelled.
+    #[test]
+    fn a_chord_on_escape_stands_unsaid_where_the_terminal_sends_it() {
+        let settings = bravebot_config::Settings::parse(r#"{"keybindings": {"stash": "alt-esc"}}"#);
+        let mut session = Session::new("none");
+        session.adopt_keys_disambiguated(true);
+        adopt_settings(&mut session, &settings, None);
+
+        assert_eq!(session.bindings().stash_name(), "alt-esc");
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            !said.iter().any(|line| line.contains("cannot be delivered")),
+            "a chord this terminal can send was said to be undeliverable: {said:?}"
         );
     }
 

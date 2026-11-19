@@ -77,6 +77,8 @@ fr:doctor-skills-shared-not-read
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
 fr:hover-panel-close-peek
+fr:keybindings-undeliverable
+fr:keybindings-undeliverable-more
 fr:lsp-none-started
 fr:lsp-server-running
 fr:lsp-started
