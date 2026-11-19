@@ -237,6 +237,97 @@ fn what_a_vouched_file_names_is_not_listed() {
     );
 }
 
+/// PANEL-18. A `gh pr create` that ran and exited cleanly makes the next pull request the planner's
+/// own call names the session's link, with nothing read from what the program printed.
+///
+/// The regression it rejects: no inference (the session that opened a pull request through the
+/// command line had no link), an inference from a creation that failed, one with no creation at
+/// all (a pull request the planner only looked at), and one that takes the item the creating call
+/// itself names.
+#[test]
+fn the_pull_request_a_clean_creation_is_followed_by_becomes_the_sessions_link() {
+    let link_after = |name: &str, script: &str, calls: &[&str]| {
+        let scratch = Scratch::new(name);
+        let stub = scratch.path.join("gh");
+        std::fs::write(&stub, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut replies: Vec<String> = calls
+            .iter()
+            .map(|command| {
+                tool_request(
+                    "run",
+                    &json!({"command": command, "directory": "."}).to_string(),
+                )
+            })
+            .collect();
+        replies.push(reply_with("done"));
+        let (endpoint, _received) = serve_sequence(replies);
+        let completed = bravebot_agent::turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("open the pull request")
+                .keeping_links(true)
+                .with_default_repository("brave", "bravebot"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut mock_model::answers::Answers::new(bravebot_agent::RunDecision::approve_always()),
+            &mut bravebot_agent::IgnoreReports,
+            &mut RecordingSink::new(),
+            mock_model::trust_of(&workspace, false),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        completed.outcome.expect("the turn runs");
+        completed
+            .decisions
+            .links
+            .iter()
+            .map(|set| (set.kind, set.url.clone(), set.inferred))
+            .collect::<Vec<_>>()
+    };
+
+    let linked = link_after(
+        "references-created",
+        "#!/bin/sh\nexit 0\n",
+        &["./gh pr create --title x", "./gh pr checks 4376"],
+    );
+    assert_eq!(
+        linked,
+        [(
+            LinkKind::PullRequest,
+            "https://github.com/brave/bravebot/pull/4376".to_string(),
+            true
+        )]
+    );
+
+    let failed = link_after(
+        "references-creation-failed",
+        "#!/bin/sh\nexit 1\n",
+        &["./gh pr create --title x", "./gh pr checks 4376"],
+    );
+    assert!(failed.is_empty(), "{failed:?}");
+
+    let looked = link_after(
+        "references-not-created",
+        "#!/bin/sh\nexit 0\n",
+        &["./gh pr checks 4376"],
+    );
+    assert!(looked.is_empty(), "{looked:?}");
+
+    let own = link_after(
+        "references-own-argument",
+        "#!/bin/sh\nexit 0\n",
+        &["./gh pr create --body https://github.com/brave/bravebot/pull/7"],
+    );
+    assert!(own.is_empty(), "{own:?}");
+}
+
 /// R6, LABEL-5. What a program printed is an untrusted result. It adds no reference, and it leaves no
 /// refusal in the trail, which a reader that did not ask the label first would write for each
 /// untrusted result.
