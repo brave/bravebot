@@ -8,6 +8,16 @@
 
 crates/core/src/colour_codes.rs::code_end: r => requires start + 2 <= bytes.len(), ensures r is Some ==> start + 2 <= r->Some_0 < bytes.len() && bytes@[r->Some_0 as int] == b'm', r is Some ==> r->Some_0 <= start + 2 + most,
 crates/core/src/colour_codes.rs::code_end/loop: invariant parameters == start + 2, room == bytes.len() - parameters, taken <= room, decreases room - taken,
+crates/core/src/command.rs::?: r => ensures r == crate::spec::null_device(*path),
+crates/core/src/command.rs::opens_no_file: r => ensures r == crate::spec::opens_no_file(*self),
+crates/core/src/command.rs::is_its_entry: r => ensures r == crate::spec::step_is_its_entry(*self),
+crates/core/src/command.rs::are_their_entries: r => ensures r == crate::spec::steps_are_their_entries(*self), decreases self,
+crates/core/src/command.rs::every_route_opens_no_file: r => ensures r == (forall|i: int| 0 <= i < routes@.len() ==> crate::spec::opens_no_file(#[trigger] routes@[i])),
+crates/core/src/command.rs::every_route_opens_no_file/loop: invariant at <= routes.len(), forall|i: int| 0 <= i < at ==> crate::spec::opens_no_file(#[trigger] routes@[i]), decreases routes.len() - at,
+crates/core/src/command.rs::every_step_is_its_entry: r => ensures r == (forall|i: int| 0 <= i < steps@.len() ==> crate::spec::step_is_its_entry(#[trigger] steps@[i])),
+crates/core/src/command.rs::every_step_is_its_entry/loop: invariant at <= steps.len(), forall|i: int| 0 <= i < at ==> crate::spec::step_is_its_entry(#[trigger] steps@[i]), decreases steps.len() - at,
+crates/core/src/command.rs::can_be_remembered: r => ensures r == crate::spec::plan_is_its_entries(*self),
+crates/core/src/command.rs::can_be_remembered_as: r => ensures r == crate::spec::request_is_its_entries(*self, asked),
 crates/core/src/label.rs::meet: r => ensures r == crate::spec::meet(self, other),
 crates/core/src/label.rs::join: r => ensures r == crate::spec::join(self, other),
 crates/core/src/label.rs::degrades_to: r => ensures r == crate::spec::degrades(self, other),
@@ -21,6 +31,8 @@ crates/core/src/value.rs::into_trusted: r => ensures r is Ok <==> spec_label_of(
 crates/core/src/value.rs::relabel: r => ensures r is Some <==> crate::spec::degrades(spec_label_of(&self), to), r is Some ==> spec_value_of(&r->Some_0) == spec_value_of(&self), r is Some ==> spec_label_of(&r->Some_0) == to,
 
 # What Verus accepts without proof.
+crates/core/src/command.rs::discards: assumes external_body
+crates/core/src/command.rs::clone: assumes external
 crates/core/src/policy.rs::Declassification: assumes external_body
 crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification
@@ -29,3 +41,5 @@ crates/core/src/policy.rs::ExDenial: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
+crates/core/src/spec.rs::ExPathBuf: assumes external_type_specification
+crates/core/src/spec.rs::ExPathBuf: assumes external_body

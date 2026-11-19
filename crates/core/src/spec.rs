@@ -4,7 +4,9 @@
 //! specifies, so a contract holds the code to the meaning. docs/development/verification.md says
 //! how a contract is written and run.
 
+use crate::command::{Asked, Plan, Route, Step, Steps};
 use crate::label::{Confidentiality, Integrity, Label};
+use std::path::PathBuf;
 use vstd::prelude::*;
 
 verus! {
@@ -109,6 +111,84 @@ pub proof fn every_two_labels_have_a_greatest_lower_bound(a: Label, b: Label)
     };
     assert(degrades(l, a) && degrades(l, b));
     assert forall|c: Label| degrades(c, a) && degrades(c, b) implies degrades(c, l) by {}
+}
+
+// A path is bytes Verus has no model of. Whether one is the null device is left uninterpreted, and
+// `command::discards` is assumed to answer it.
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExPathBuf(PathBuf);
+
+pub uninterp spec fn null_device(path: PathBuf) -> bool;
+
+/// A route an entry need not hold, because it opens no file: standard error joined to standard
+/// output, or a stream sent to the null device.
+pub open spec fn opens_no_file(route: Route) -> bool {
+    match route {
+        Route::Stdout { path, append: _ } => null_device(path),
+        Route::Stderr { path, append: _ } => null_device(path),
+        Route::Both { path } => null_device(path),
+        Route::Stdin { path: _ } => false,
+        Route::StderrToStdout => true,
+    }
+}
+
+/// An entry holds a step's resolved file, the path that starts it and its arguments
+/// (`programs::Command`), so a step may be remembered only where every other field that decides
+/// what it does is empty. Every field is named, so a field added to `Step` does not compile here
+/// until it is put on one side or the other.
+pub open spec fn step_is_its_entry(step: Step) -> bool {
+    let Step {
+        // The name the line used, for a reader. What starts is `resolved` by `started_as`.
+        program: _,
+        resolved: _,
+        started_as: _,
+        args: _,
+        // Which arguments a pattern produced. The arguments themselves are held.
+        matched: _,
+        environment,
+        expansions,
+        routes,
+    } = step;
+    environment@.len() == 0 && expansions@.len() == 0 && forall|i: int|
+        0 <= i < routes@.len() ==> opens_no_file(#[trigger] routes@[i])
+}
+
+/// Every step a plan runs is its entry. A substitution is inside an expansion, which a step that is
+/// its entry has none of, so there is no step below these.
+pub open spec fn steps_are_their_entries(steps: Steps) -> bool
+    decreases steps,
+{
+    match steps {
+        Steps::Pipeline(steps) => forall|i: int|
+            0 <= i < steps@.len() ==> step_is_its_entry(#[trigger] steps@[i]),
+        Steps::Join { left, joiner: _, right } => steps_are_their_entries(*left)
+            && steps_are_their_entries(*right),
+        Steps::Group(inner) => steps_are_their_entries(*inner),
+    }
+}
+
+/// An entry adds the tree a plan runs in, so a plan may be remembered only where every other field
+/// that decides what it does is empty. Every field is named, for the reason a step's are.
+pub open spec fn plan_is_its_entries(plan: Plan) -> bool {
+    let Plan {
+        // The line as the planner spelled it, for a reader. Two spellings that compile alike
+        // are one plan.
+        line: _,
+        directory: _,
+        steps,
+        writes,
+        reads,
+        stdin,
+    } = plan;
+    steps_are_their_entries(steps) && writes@.len() == 0 && reads@.len() == 0 && stdin is None
+}
+
+/// A request adds to its plan only what an entry does not need to hold. Every field is named, for
+/// the reason a step's are.
+pub open spec fn request_is_its_entries(plan: Plan, asked: Asked) -> bool {
+    let Asked { scopes, unconfined, protected } = asked;
+    plan_is_its_entries(plan) && !scopes && !unconfined && !protected
 }
 
 } // verus!

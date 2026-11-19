@@ -2405,7 +2405,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The tree is in the trail as well as in the entry, because an entry that covers one tree and
     /// a trail that says which command was vouched for would leave a reader unable to tell which
     /// of two entries for one command a later run spent.
-    pub fn remember_command(&mut self, command: crate::programs::Command) {
+    pub fn remember_vouch(&mut self, vouch: crate::command::Vouch) {
+        for command in vouch.into_entries() {
+            self.remember_command(command);
+        }
+    }
+
+    /// One entry of [`Policy::remember_vouch`]. Private, so an entry reaches the list only
+    /// through a [`crate::command::Vouch`].
+    fn remember_command(&mut self, command: crate::programs::Command) {
         let shown = command.display();
         let tree = command.directory.display().to_string();
         self.programs.trust(command);
