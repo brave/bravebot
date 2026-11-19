@@ -142,7 +142,9 @@ not for what grants it. A distrust, an undecided boundary, the writer reservatio
 and the record of an untrusted memory compare under the full fold and reach both spellings, since
 a miss reads a refused file as trusted under another case and a hit costs a question. A trust
 compares bytes, so a map that could not ask has never made trust cover a path it was not written
-about. A map made without the answer compares bytes throughout, and a map moved to another
+about. The settings file `--settings` names is held as a protected path, which only refuses, so it is
+compared under the full fold where the volume could not be asked and a write under another case of its
+name is protected. A map made without the answer compares bytes throughout, and a map moved to another
 directory takes that directory's answer, including that it could not be asked. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
 as `src` and `ſ` is its own lower case. A letter whose upper or lower case is more than one
 character, such as `ß` (`SS`), is the one place volumes differ: APFS opens `class.md` as `claß.md`
@@ -392,6 +394,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::the_trust_map_the_writer_reservation_and_the_memory_record_follow_the_workspace_s_own_casefold_flag`
 `verified-by: bravebot_agent::workspace::a_workspace_whose_volume_cannot_be_asked_distrusts_folds_and_grants_none`
 `verified-by: bravebot_agent::workspace::a_trust_store_for_a_directory_that_cannot_be_asked_says_so`
+`verified-by: bravebot_agent::workspace::named_settings::a_spelling_in_another_case_reaches_a_file_not_made_yet_unless_the_volume_keeps_them_apart`
 `verified-by: bravebot_agent::workspace::a_real_directory_with_the_casefold_flag_folds_case_for_the_map`
 `verified-by: bravebot_core::trust::a_volume_that_could_not_be_asked_reads_a_refusal_in_every_case_and_a_trust_in_one`
 `verified-by: bravebot_core::trust::an_undecided_boundary_reaches_the_other_case_where_the_volume_might_fold`
