@@ -2586,7 +2586,10 @@ fn open_in_the_mode_asked_for(
         // The flag opens the session in bypass. The rung is on the ladder the key walks either
         // way, unless a settings layer took it off (MODE-5).
         (true, _) => session.starting_in_bypass(),
-        (false, true) => session.starting_in_auto(),
+        (false, true) => session.starting_in_auto(match asked_for_auto {
+            true => bravebot_agent::ModeCause::Flag,
+            false => bravebot_agent::ModeCause::Setting,
+        }),
         (false, false) => session,
     };
     if bypass_is_unreachable(settings) {
@@ -37404,7 +37407,7 @@ mod tests {
         if !cfg!(unix) {
             return;
         }
-        let session = Session::new("none").starting_in_auto();
+        let session = Session::new("none").starting_in_auto(bravebot_agent::ModeCause::Flag);
         assert_eq!(
             handed_to_the_background(
                 &session,
@@ -43837,6 +43840,10 @@ mod chatgpt_failure_tests;
 #[cfg(test)]
 #[path = "credential_mode_tests.rs"]
 mod credential_mode_tests;
+
+#[cfg(test)]
+#[path = "mode_trail_tests.rs"]
+mod mode_trail_tests;
 
 #[cfg(all(test, unix))]
 #[path = "kept_jobs_tests.rs"]

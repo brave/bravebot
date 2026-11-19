@@ -2703,6 +2703,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // the turn's own and the kernel gives it to no run that is a delegate (DELEGATE-7).
     policy = policy.with_delegate_bound(inputs.config.max_running_delegates);
 
+    // The mode the session opened in and each change since the last turn, before the line that
+    // names the mode this turn began in. A delegate shares its parent's handle and leaves the
+    // parent's changes to the parent's trail (TRACE-12).
+    if task.delegate.is_none() {
+        task.permission_mode.record_into(&mut policy);
+    }
     let started_in = task.began_in.unwrap_or_else(|| task.permission_mode.get());
     policy.record_permission_mode(started_in.name());
     // The opening a style takes the place of is the one a person's own turn gets, and
@@ -3695,6 +3701,10 @@ where
     });
     let conversation = &mut *channels.conversation;
     let reporter = &mut channels.reporter;
+    // A change made during the last round, which no later request is there to read (TRACE-12).
+    if task.delegate.is_none() {
+        task.permission_mode.record_into(policy);
+    }
     round_steps::close_the_rounds(
         policy,
         reporter,

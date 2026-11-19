@@ -59,8 +59,10 @@ impl Session {
     /// the key leaves bypass (MODE-5).
     pub fn starting_in_bypass(mut self) -> Self {
         self.began_in_bypass = true;
-        self.permission_mode
-            .set(bravebot_agent::PermissionMode::Bypass);
+        self.permission_mode.starting_in(
+            bravebot_agent::PermissionMode::Bypass,
+            bravebot_agent::ModeCause::Flag,
+        );
         self
     }
 
@@ -70,9 +72,9 @@ impl Session {
     /// Unlike [`Session::starting_in_bypass`] it records nothing about where the session began: the
     /// line under the box names auto for as long as the session is in it, and names nothing once the
     /// key has left it, which is what it does for a session that reached auto by the key.
-    pub fn starting_in_auto(self) -> Self {
+    pub fn starting_in_auto(self, cause: bravebot_agent::ModeCause) -> Self {
         self.permission_mode
-            .set(bravebot_agent::PermissionMode::Auto);
+            .starting_in(bravebot_agent::PermissionMode::Auto, cause);
         self
     }
 
@@ -84,8 +86,10 @@ impl Session {
     pub fn make_bypass_unreachable(&mut self) {
         self.bypass_reachable = false;
         if self.permission_mode.get() == bravebot_agent::PermissionMode::Bypass {
-            self.permission_mode
-                .set(bravebot_agent::PermissionMode::Ask);
+            self.permission_mode.set_by(
+                bravebot_agent::PermissionMode::Ask,
+                bravebot_agent::ModeCause::BypassUnreachable,
+            );
             self.note(t!(session_bypass_made_unreachable));
         }
     }
@@ -117,7 +121,8 @@ impl Session {
     pub fn cycle_permission_mode(&mut self) {
         let was = self.permission_mode.get();
         let next = was.cycle(self.bypass_reachable);
-        self.permission_mode.set(next);
+        self.permission_mode
+            .set_by(next, bravebot_agent::ModeCause::Key);
         self.say_bypass_screens(was, next);
     }
 
@@ -160,7 +165,8 @@ impl Session {
             PermissionMode::Auto => next.cycle(false),
             _ => next,
         };
-        self.permission_mode.set(next);
+        self.permission_mode
+            .set_by(next, bravebot_agent::ModeCause::Click);
     }
 
     /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
@@ -169,8 +175,10 @@ impl Session {
     /// Plan mode only narrows what is permitted, so this grants nothing the key would not, and no
     /// word reaches bypassing (MODE-5).
     pub fn enter_plan_mode(&mut self) {
-        self.permission_mode
-            .set(bravebot_agent::PermissionMode::Plan);
+        self.permission_mode.set_by(
+            bravebot_agent::PermissionMode::Plan,
+            bravebot_agent::ModeCause::Command,
+        );
     }
 
     /// Start a turn on a person's task, after [`Session::enter_plan_mode`] (MODE-12).

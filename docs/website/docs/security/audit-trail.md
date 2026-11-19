@@ -129,7 +129,23 @@ ended: queued, full, too long, stopping, unknown, not reached, or not sent. It h
 ## The mode and what answered are recorded
 
 Each turn and each manifest run begins with a `permission_mode` line naming the mode it began in:
-`ask`, `accept-edits`, `plan` or `bypass`. A manifest run writes it before planning. A command or write that was put to you gets an `approval`
+`ask`, `accept-edits`, `plan` or `bypass`. A manifest run writes it before planning.
+
+The first turn or manifest run after a session opens or resumes also writes a
+`permission_mode_opened` line before it, and a change of mode writes a `permission_mode_changed`
+line, once, in the order the changes were made. The cause is a fixed phrase, so neither line holds
+anything you typed:
+
+```
+ok      permission_mode_opened: the session opened in auto mode by the startInAuto setting
+ok      permission_mode_changed: the permission mode changed from auto to plan by the mode key
+```
+
+The causes are `by default`, `by a command-line flag`, `by the startInAuto setting`, `by the mode
+key`, `by a click on the mode`, `by the /plan command`, `by approving a plan`, `because settings
+made bypass unreachable` and `by a request from the client`. The mode is not kept in the session
+record, so these lines are where you read back what mode a session was in. A session in
+[incognito](../using/incognito.md) writes no trail, so it writes none. A command or write that was put to you gets an `approval`
 line after it that says either `no mode answered, left to the confirmer` or
 `answered by <mode> mode, nobody was asked`, so an entry ending in "asking" is never the only thing
 the trail says about who answered. A fetch that a mode answers carries no such line. A language

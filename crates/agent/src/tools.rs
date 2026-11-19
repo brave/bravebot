@@ -15129,7 +15129,9 @@ fn propose_plan<S: Sink, C: Confirmer>(
     let outcome = match approval(answers.first()) {
         Approval::LeaveFor(mode) => {
             // Applies to the rest of this turn, as any change of mode does (MODE-8).
-            tools.permission_mode.set(mode);
+            tools
+                .permission_mode
+                .set_by(mode, crate::ModeCause::PlanApproval);
             "The user approved the plan and plan mode has ended. Carry the plan out now."
         }
         Approval::KeepPlanning => {

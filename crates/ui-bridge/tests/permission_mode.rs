@@ -541,6 +541,100 @@ fn a_checkouts_copy_of_the_setting_opens_nothing_in_auto() {
     );
 }
 
+/// The entries under the three mode gates that the one trail a test's session left holds, in the
+/// order written, read from the file the bridge wrote under the home.
+fn mode_entries(scratch: &Scratch) -> Vec<String> {
+    let mut entries = Vec::new();
+    let mut trails = 0;
+    let store = scratch.home().join(".bravebot/sessions");
+    for project in std::fs::read_dir(&store).expect("the store").flatten() {
+        if !project.path().is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(project.path())
+            .expect("a project store")
+            .flatten()
+        {
+            if !file.file_name().to_string_lossy().ends_with(".audit.jsonl") {
+                continue;
+            }
+            trails += 1;
+            let text = std::fs::read_to_string(file.path()).expect("a trail");
+            for line in text.lines() {
+                let line: Value = serde_json::from_str(line).expect("a JSON line");
+                let event = &line["event"];
+                if event["kind"] == "gate_passed"
+                    && matches!(
+                        event["gate"].as_str(),
+                        Some(
+                            "permission_mode"
+                                | "permission_mode_opened"
+                                | "permission_mode_changed"
+                        )
+                    )
+                {
+                    entries.push(event["detail"].as_str().expect("a detail").to_string());
+                }
+            }
+        }
+    }
+    assert_eq!(trails, 1, "the session did not leave exactly one trail");
+    entries
+}
+
+/// TRACE-12: a window's session names the cause the bridge gives it. A session the person's
+/// `permissions.startInAuto` opened in auto says the setting, one that asks says nothing chose it,
+/// and a `session.mode` request is written as a request from the client, whatever mode it asks for.
+/// The faults it rejects are the two arms of the bridge's choice swapped, an opening that is written
+/// as a change or the reverse, and the request labelled with the key's or the command's words.
+#[test]
+fn the_trail_of_a_window_session_names_what_opened_it_in_its_mode_and_each_request_to_change_it() {
+    let rows = [
+        (
+            "bridge-mode-trail-auto",
+            Some(r#"{"permissions": {"startInAuto": true}}"#),
+            [
+                "the session opened in auto mode by the startInAuto setting",
+                "the turn began in auto mode",
+                "the permission mode changed from auto to plan by a request from the client",
+                "the turn began in plan mode",
+            ],
+        ),
+        (
+            "bridge-mode-trail-ask",
+            None,
+            [
+                "the session opened in ask mode by default",
+                "the turn began in ask mode",
+                "the permission mode changed from ask to plan by a request from the client",
+                "the turn began in plan mode",
+            ],
+        ),
+    ];
+    for (name, settings, expected) in rows {
+        let scratch = Scratch::new(name);
+        if let Some(settings) = settings {
+            std::fs::write(scratch.home().join(".bravebot/settings.json"), settings)
+                .expect("a home layer");
+        }
+        let (endpoint, _rounds) = a_planner(|_, _| None);
+        let mut front = FrontEnd::start(&scratch, &endpoint);
+        let (session, _) = front.session(&scratch, true);
+
+        front.ask(&session);
+        assert_eq!(front.question_or_the_end()["event"], "turn.done", "{name}");
+        assert_eq!(
+            front.mode(&session, "plan")["ok"],
+            json!({"permissionMode": "plan"}),
+            "{name}"
+        );
+        front.ask(&session);
+        assert_eq!(front.question_or_the_end()["event"], "turn.done", "{name}");
+
+        assert_eq!(mode_entries(&scratch), expected, "{name}");
+    }
+}
+
 /// MODE-5: a window has no command line, so bypassing is refused, as is any word that names no
 /// mode. The session is left in the mode it was in.
 #[test]

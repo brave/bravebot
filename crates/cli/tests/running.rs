@@ -1964,6 +1964,41 @@ fn a_one_shot_run_that_failed_prints_its_trail_under_trace() {
     );
 }
 
+/// TRACE-12: `--trace` prints the entry for the mode a one-shot run opened in, with what chose it,
+/// ahead of the line for the mode the turn began in.
+#[test]
+fn a_traced_run_names_the_mode_it_opened_in_and_what_chose_it() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-trace-mode").with_settings(&settings_for(&gateway));
+
+    for (flags, opened) in [
+        (
+            &[][..],
+            "ok      permission_mode_opened: the session opened in ask mode by default",
+        ),
+        (
+            &["--accept-edits"][..],
+            "ok      permission_mode_opened: the session opened in accept-edits mode by a command-line flag",
+        ),
+    ] {
+        let mut arguments = flags.to_vec();
+        arguments.extend(["--trace", "-p", "say something"]);
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, &arguments);
+        let (_, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{flags:?}: {stderr}");
+        let opening = stderr
+            .find(opened)
+            .unwrap_or_else(|| panic!("{flags:?}: no opening entry: {stderr}"));
+        let began = stderr
+            .find("ok      permission_mode: the turn began in")
+            .unwrap_or_else(|| panic!("{flags:?}: no entry for the turn's mode: {stderr}"));
+        assert!(
+            opening < began,
+            "{flags:?}: the opening came second: {stderr}"
+        );
+    }
+}
+
 /// TRACE-5: `--trace` writes each decision to stderr when the gate takes it, so a run that is
 /// stuck shows what it had decided so far.
 ///
