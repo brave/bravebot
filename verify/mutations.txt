@@ -156,3 +156,39 @@ replace: if facts.vouched && !facts.assignment { => if facts.vouched {
 mutation: output_label trusts a vouched line fed untrusted content
 file: crates/core/src/policy.rs
 replace: let printed = opaque; => let printed = Label { integrity: Integrity::Trusted, confidentiality: Confidentiality::Private };
+
+mutation: meet_of_rules reads an undecided boundary as trusted
+file: crates/core/src/trust.rs
+replace: let decision = bearing[at].unwrap_or(Integrity::Untrusted); => let decision = bearing[at].unwrap_or(Integrity::Trusted);
+
+mutation: meet_of_rules lets a rule raise the answer
+file: crates/core/src/trust.rs
+replace: answer = answer.meet(decision); => answer = decision;
+
+mutation: meet_of_rules skips every rule
+file: crates/core/src/trust.rs
+replace: answer = answer.meet(decision); => answer = answer;
+
+mutation: weakest_name trusts a file with no name to ask under
+file: crates/core/src/policy.rs
+replace: if answers.is_empty() { => if false {
+
+mutation: weakest_name trusts a file on a name nothing answers
+file: crates/core/src/policy.rs
+replace: if answers[at] != Some(Integrity::Trusted) { => if answers[at] == Some(Integrity::Untrusted) {
+
+mutation: weaker keeps the decision that grants more
+file: crates/core/src/trust.rs
+replace: let b_grants_less = strength(b) < strength(a); => let b_grants_less = strength(b) > strength(a);
+
+mutation: strength ranks an undecided boundary above a trust
+file: crates/core/src/trust.rs
+replace: let undecided_strength = 1; => let undecided_strength = 3;
+
+mutation: weakest_decision lets the first spelling's decision stand over a weaker one
+file: crates/core/src/trust.rs
+replace: weakest = weaker(weakest, matching[at]); => weakest = weakest;
+
+mutation: weakest_decision finds a decision where no spelling holds one
+file: crates/core/src/trust.rs
+replace: if matching.is_empty() { => if false {

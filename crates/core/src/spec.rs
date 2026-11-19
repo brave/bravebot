@@ -262,4 +262,79 @@ pub(crate) open spec fn output_label_is_sound(
         && (proven is Some && !requesting ==> label == proven->Some_0)
 }
 
+/// What a decision a rule recorded counts as in a meet: an undecided boundary as untrusted, since
+/// nobody has said.
+pub open spec fn decision_integrity(decision: Option<Integrity>) -> Integrity {
+    match decision {
+        Some(integrity) => integrity,
+        None => Integrity::Untrusted,
+    }
+}
+
+/// `start` met with every decision in `bearing`, in order.
+pub open spec fn meet_of_rules(start: Integrity, bearing: Seq<Option<Integrity>>) -> Integrity
+    decreases bearing.len(),
+{
+    if bearing.len() == 0 {
+        start
+    } else {
+        meet(meet_of_rules(start, bearing.drop_last()), decision_integrity(bearing.last()))
+    }
+}
+
+/// A meet of rules is trusted exactly where the start is and every rule that bears on the path is
+/// a trust (TRUST-3, TRUST-4). So a rule can only lower the answer: one distrust or one undecided
+/// boundary anywhere under the path makes the whole of it untrusted.
+pub proof fn a_meet_of_rules_is_trusted_only_where_every_rule_is(
+    start: Integrity,
+    bearing: Seq<Option<Integrity>>,
+)
+    ensures
+        (meet_of_rules(start, bearing) == Integrity::Trusted) <==> (start == Integrity::Trusted
+            && forall|i: int|
+            0 <= i < bearing.len() ==> #[trigger] bearing[i] == Some(Integrity::Trusted)),
+    decreases bearing.len(),
+{
+    if bearing.len() > 0 {
+        let before = bearing.drop_last();
+        a_meet_of_rules_is_trusted_only_where_every_rule_is(start, before);
+        assert forall|i: int| 0 <= i < before.len() implies #[trigger] before[i] == bearing[i] by {}
+        let last = bearing.len() - 1;
+        assert(bearing[last] == bearing.last());
+        if meet_of_rules(start, bearing) == Integrity::Trusted {
+            assert forall|i: int| 0 <= i < bearing.len() implies #[trigger] bearing[i] == Some(
+                Integrity::Trusted,
+            ) by {
+                if i < last {
+                    assert(before[i] == bearing[i]);
+                }
+            }
+        }
+        if start == Integrity::Trusted && forall|i: int|
+            0 <= i < bearing.len() ==> #[trigger] bearing[i] == Some(Integrity::Trusted) {
+            assert forall|i: int| 0 <= i < before.len() implies #[trigger] before[i] == Some(
+                Integrity::Trusted,
+            ) by {
+                assert(before[i] == bearing[i]);
+            }
+            assert(bearing[last] == Some(Integrity::Trusted));
+        }
+    }
+}
+
+/// How much a decision grants: a distrust least, then an undecided boundary, then a trust.
+pub open spec fn strength(decision: Option<Integrity>) -> u8 {
+    match decision {
+        Some(Integrity::Untrusted) => 0,
+        None => 1,
+        Some(Integrity::Trusted) => 2,
+    }
+}
+
+/// `a` grants no more than `b`. Written from the order itself rather than from `strength`, so a
+/// `strength` that ranked an undecided boundary above a trust fails the contract on it.
+pub open spec fn grants_no_more(a: Option<Integrity>, b: Option<Integrity>) -> bool {
+    a == Some(Integrity::Untrusted) || a == b || (a is None && b == Some(Integrity::Trusted))
+}
+
 } // verus!

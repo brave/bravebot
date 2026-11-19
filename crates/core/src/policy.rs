@@ -8175,19 +8175,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                             _ => keys.clear(),
                         },
                     }
-                    keys.iter()
-                        // A key nothing answers is the answer "nobody has said", which is the weakest
-                        // of them and not an absence to skip over. Dropping it would let one name's
-                        // rule decide for a name it was never written about: an operand holding the
-                        // workspace is asked about the project as well, and the project's rule alone
-                        // would hand back a tree nobody vouched for as trusted. No keys at all is
-                        // the same answer.
-                        .map(|key| {
-                            self.integrity_beneath_in_force(key)
-                                .unwrap_or(Integrity::Untrusted)
-                        })
-                        .reduce(Integrity::meet)
-                        .unwrap_or(Integrity::Untrusted)
+                    // A key nothing answers is the answer "nobody has said", which is the weakest
+                    // of them and not an absence to skip over. Dropping it would let one name's
+                    // rule decide for a name it was never written about: an operand holding the
+                    // workspace is asked about the project as well, and the project's rule alone
+                    // would hand back a tree nobody vouched for as trusted. No keys at all is the
+                    // same answer.
+                    let answers: Vec<Option<Integrity>> = keys
+                        .iter()
+                        .map(|key| self.integrity_beneath_in_force(key))
+                        .collect();
+                    weakest_name(&answers)
                 }
             };
             integrity = integrity.meet(answer);
@@ -9757,6 +9755,34 @@ fn keys_for_the_map(root: &std::path::Path, operand: &str) -> Vec<String> {
 /// The trust map is keyed on names and compares them by segment, so a rule about a directory
 /// answers about `../secret` as readily as about a file inside it. A path that climbs is therefore
 /// one no rule was written about, whatever a rule appears to say.
+/// The integrity of a file asked about under each of its names: trusted only where it has a name
+/// and every name answers trusted. A name nothing answers counts as untrusted, and so does a file
+/// with no name to ask under.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == Integrity::Trusted <==> (answers@.len() > 0 && forall|i: int|
+            0 <= i < answers@.len() ==> #[trigger] answers@[i] == Some(Integrity::Trusted)),
+))]
+fn weakest_name(answers: &[Option<Integrity>]) -> Integrity {
+    if answers.is_empty() {
+        return Integrity::Untrusted;
+    }
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= answers.len(),
+            forall|i: int| 0 <= i < at ==> #[trigger] answers@[i] == Some(Integrity::Trusted),
+        decreases answers.len() - at,
+    ))]
+    while at < answers.len() {
+        if answers[at] != Some(Integrity::Trusted) {
+            return Integrity::Untrusted;
+        }
+        at += 1;
+    }
+    Integrity::Trusted
+}
+
 fn climbs_out(path: &str) -> bool {
     std::path::Path::new(path)
         .components()
