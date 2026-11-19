@@ -514,7 +514,9 @@ netzenbot-reviewer has reviewed the current head and asks for nothing, or a limi
 wait. A review fix is a push, so each one starts this step again.
 
 **Checks.** `... review <pr>` asks netzenbot-reviewer for a review, then `... ci <pr> --wait` with
-`deadline_seconds: 600`. On a failure, fix it as steps 3 and 5 of the pr-fix skill say, in the
+`deadline_seconds: 600`. The wait also ends, with exit 3, when a reviewer writes a thread comment or
+a review that asks for a change while it runs. Then do not wait out the checks: run the fix round
+below for that feedback, and wait again after its push. On a failure, fix it as steps 3 and 5 of the pr-fix skill say, in the
 integration worktree, push with `... push <pr>`, ask for the review again (`... review <pr>`, since
 GitHub drops the reviewer from the request once it has reviewed) and wait again. Stop after three
 rounds and report what is left. A failure that passes alone is load and is reported. One that also
@@ -561,7 +563,8 @@ for the changes:
 4. `... push <pr>`, then post each reply with `... reply <pr> --thread <id> --body-file <file>`, naming
    a commit the pull request holds. Never resolve a thread. Update the body (the item list, the
    decisions and the test plan) when the state is open.
-5. `... review <pr>` to ask for the review of the new head, then `... ci <pr> --wait`, then read the
+5. `... review <pr>` to ask for the review of the new head, then `... ci <pr> --wait` (exit 3 means
+   new review feedback, which starts another fix round), then read the
    verdict again.
 
 **Limits.** Stop the loop, leaving the pull request as it is, and report what is left, when:
