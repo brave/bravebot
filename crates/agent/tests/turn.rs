@@ -82736,6 +82736,179 @@ fn a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line() {
     assert!(trail_entries(&sink, "trust", "note.txt trusted:").is_empty());
 }
 
+/// One turn that lists the working directory, nobody having vouched for it, and reads the one
+/// file in it through its reference. The planner is never shown `name`. Returns the trail and
+/// every request the planner was sent, without the checks the driver makes on its own.
+fn a_turn_reading_an_unvouched_file_through_its_reference<
+    C: bravebot_agent::confirm::Confirmer + Send,
+>(
+    scratch_name: &str,
+    (name, bytes): (&str, &[u8]),
+    read_arguments: &str,
+    mode: bravebot_agent::PermissionMode,
+    confirmer: &mut C,
+) -> (RecordingSink, Vec<String>) {
+    let scratch = Scratch::new(scratch_name);
+    std::fs::write(scratch.path.join(name), bytes).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request("read_file", read_arguments),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("look at what is here").with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    let requests = every_request(&received)
+        .into_iter()
+        .filter(|body| !body.contains("prompt-injection classifier"))
+        .collect();
+    (sink, requests)
+}
+
+const A_PICTURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// A read through a reference to a file nobody vouched for puts the offer to vouch, or has the mode
+/// answer it, whatever the name behind the reference is. Whether it is put was decided from the
+/// extension of that name and from `stat` of it, and the name came out of a directory nobody
+/// vouched for. Under bypass the answer is yes, so the planner was handed the text of a `.txt` and
+/// told "already names that file" for a `.png`, a difference only the hidden name made.
+///
+/// Rejects deciding the offer from `media_for` or `names_a_file` of the name behind a reference.
+#[test]
+fn a_reference_is_offered_for_vouching_whatever_the_name_behind_it_is() {
+    let files: [(&str, &[u8]); 2] = [("note.txt", b"hello\n"), ("shot.png", &A_PICTURE)];
+    let mut declined = Vec::new();
+    for (index, (name, bytes)) in files.into_iter().enumerate() {
+        let mut inner = VouchesForFiles::new(false);
+        let offered = inner.offered.clone();
+        let mut confirmer = bravebot_agent::Confining::new(
+            &mut inner,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+        );
+        let (sink, _requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+            &format!("vouch-reference-bypass-{index}"),
+            (name, bytes),
+            r#"{"path_ref":"ref:1"}"#,
+            bravebot_agent::PermissionMode::Bypass,
+            &mut confirmer,
+        );
+        assert_eq!(
+            trail_entries(&sink, "approval", name),
+            [format!("{name}: answered by bypass mode, nobody was asked")],
+            "{name}: bypass mode was not asked the question"
+        );
+        assert!(offered.lock().unwrap().is_empty());
+
+        let mut person = VouchesForFiles::new(false);
+        let offered = person.offered.clone();
+        let (_sink, requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+            &format!("vouch-reference-asked-{index}"),
+            (name, bytes),
+            r#"{"path_ref":"ref:1"}"#,
+            bravebot_agent::PermissionMode::Ask,
+            &mut person,
+        );
+        assert_eq!(
+            offered.lock().unwrap().len(),
+            1,
+            "{name}: the person was not offered the chance to vouch for it"
+        );
+        declined.push(newest_tool_result_text(requests.last().expect("a request")));
+    }
+    assert_eq!(
+        declined[0], declined[1],
+        "what a declined offer told the planner depended on the name behind the reference"
+    );
+
+    // Bypass vouches for the file, so the read goes on and hands back what the file holds. The same
+    // bytes under a `.txt` and a `.png` name must come back as the same whole result: the form of
+    // a read (text, a binary report, a picture reference) was chosen from the extension of the
+    // hidden name by the picture branch.
+    for (kind, bytes) in [("text", &b"hello\n"[..]), ("picture", &A_PICTURE[..])] {
+        let mut results = Vec::new();
+        for (index, name) in ["note.txt", "shot.png"].into_iter().enumerate() {
+            let mut inner = VouchesForFiles::new(false);
+            let mut confirmer = bravebot_agent::Confining::new(
+                &mut inner,
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+            );
+            let (_sink, requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+                &format!("vouch-reference-bypass-form-{kind}-{index}"),
+                (name, bytes),
+                r#"{"path_ref":"ref:1"}"#,
+                bravebot_agent::PermissionMode::Bypass,
+                &mut confirmer,
+            );
+            // The change token is taken from the file's own metadata, so two files written at
+            // different moments differ in it alone. It is masked and nothing else is.
+            let text = newest_tool_result_text(requests.last().expect("a request"));
+            results.push(match text.rfind("change token ") {
+                Some(at) => {
+                    let after = text[at..].find(')').map_or(text.len(), |close| at + close);
+                    format!("{}change token{}", &text[..at], &text[after..])
+                }
+                None => text,
+            });
+        }
+        assert_eq!(
+            results[0], results[1],
+            "the result of a read of {kind} bytes depended on the name behind the reference"
+        );
+        assert!(
+            !results[1].contains("image/png"),
+            "{kind}: the read was handed back as a picture reference: {}",
+            results[1]
+        );
+    }
+}
+
+/// `output_of` names a cell of a notebook, and whether a name is one is read from its extension. For
+/// a reference to a file nobody vouched for the name is the hidden one, so the answer has to be the
+/// one every such reference gets, and the notebook error ("this is not one") must not come first.
+///
+/// Rejects testing `output_of` against the name behind a reference before the read is held back.
+#[test]
+fn output_of_on_a_reference_nobody_vouched_for_is_answered_whatever_the_name_is() {
+    let mut told = Vec::new();
+    for (index, name) in ["note.txt", "cells.ipynb"].into_iter().enumerate() {
+        let mut person = VouchesForFiles::new(false);
+        let (_sink, requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+            &format!("output-of-reference-{index}"),
+            (name, b"{}\n"),
+            r#"{"path_ref":"ref:1","output_of":1}"#,
+            bravebot_agent::PermissionMode::Ask,
+            &mut person,
+        );
+        let last = newest_tool_result_text(requests.last().expect("a request"));
+        assert!(
+            last.contains("already names that file"),
+            "{name}: the read was not held back as a reference: {last}"
+        );
+        told.push(last);
+    }
+    assert_eq!(
+        told[0], told[1],
+        "the answer depended on the name behind the reference"
+    );
+}
+
 /// MODE-9. A delegate is lent the turn's confirmer, so its offer to vouch is answered by the same
 /// mode and recorded the same way. A wrapper between the delegate and the mode that did not forward
 /// the mode's name would fall back to the default and record a person naming the file.

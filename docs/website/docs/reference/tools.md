@@ -146,7 +146,9 @@ The reason is that a screenshot carries whatever words are in it, so a picture r
 context only if you put it there (a picture you dropped on the terminal) or a check looked at it and
 you let it through. A path in model output is neither. What kind of file it is comes from the extension and never from the
 bytes, so a file cannot become a picture by holding something that looks like one, and a picture
-cannot become text by being called `.txt`.
+cannot become text by being called `.txt`. That is decided from a name the agent typed. A file
+named with `path_ref` is not sorted by the extension of its name, which the agent was not shown, so
+once you have vouched for it, it is read by what it holds like any other file.
 
 **A read the planner may not see does not open the file.** Where the content would be quarantined,
 you are offered the chance to vouch for that one file at the moment it matters, unless the path names
@@ -560,7 +562,9 @@ by a passage. `cell` is refused beside `old_text`, `edits` or `replace_all`, on 
 notebook, and for a number the notebook has no cell for. The notebook is written back in the layout
 Jupyter writes, with every other cell, its metadata and the format version kept, and you approve the
 diff. Replacing a code cell drops that cell's saved outputs and execution count, since they describe
-source that is gone, and the diff shows them going.
+source that is gone, and the diff shows them going. A notebook named with `path_ref` is refused in
+the same words as any other file nobody vouched for, whatever the name behind the reference ends in,
+and `cell` works on one you have vouched for.
 
 ## `apply_checkout`
 

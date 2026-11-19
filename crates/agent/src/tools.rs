@@ -4365,7 +4365,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // map, so all of them ask about that name and not about the spelling.
     let keyed = workspace.trust_key(&proposed_path);
 
-    let media = bravebot_filetype::by_name::media_for(&proposed_path);
+    // Taken from a name the planner typed alone. The name behind a reference came out of a
+    // directory nobody vouched for, so a picture's reference for a `.png` and the text of a `.txt`
+    // would tell the planner what the hidden name ends in. A reference to a file that may be read
+    // is read like any such file, and what it holds decides the answer (READ-3, READ-5).
+    let media = (destination == Destination::Named)
+        .then(|| bravebot_filetype::by_name::media_for(&proposed_path))
+        .flatten();
 
     // What a check over this file cost, where one was made. Carried out of the block so it can be
     // put on whatever this call ends up handing back: a check is a model request, and the turn's
@@ -4379,18 +4385,23 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // not land rather than reading as the file simply being quarantined.
     let mut approval_outlived = false;
 
+    // The extension and `stat` of a name decide whether the question is put only where the name is
+    // the planner's own words. The name behind a reference came out of a directory nobody vouched
+    // for, so a decision made from it would put the question for a `.txt` and not for a `.png`, and
+    // under a mode that answers the question for the person the planner would be handed text in one
+    // case and told the file holds none in the other. A reference to a file nobody vouched for is
+    // offered like any other. The listing that issued it gave references to files only.
+    let is_askable = destination == Destination::Reference
+        || (media.is_none() && workspace.names_a_file(&proposed_path));
+
     // The other names the file has are looked up only for a quarantined file the person could be
     // asked about. A read of it is asked under all of them (TRUST-2), and a yes writes a rule about
     // one name, so where another is distrusted, or the lookup of them did not finish, a yes would
     // change nothing and the question is not put.
-    if policy.read_is_quarantined(&keyed)
-        && media.is_none()
-        && workspace.names_a_file(&proposed_path)
-        && {
-            let other_names = workspace.other_trust_keys(&proposed_path);
-            policy.should_offer_vouch(&keyed, &other_names.keys, other_names.complete)
-        }
-    {
+    if policy.read_is_quarantined(&keyed) && is_askable && {
+        let other_names = workspace.other_trust_keys(&proposed_path);
+        policy.should_offer_vouch(&keyed, &other_names.keys, other_names.complete)
+    } {
         // Whether the question is put has already been settled. What the file holds shapes the
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
@@ -4557,7 +4568,8 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         ));
     }
 
-    // A picture, decided from the extension: the driver's own table, so nothing read chooses this.
+    // A picture, decided from the extension of a name the planner typed: the driver's own table, so
+    // nothing read chooses this. Never for a reference, whose name is not the planner's to learn.
     //
     // Handed back as a reference whatever the trust map says, unlike text. A processor may look at
     // it and the planner may not, for the reason PASTE-2 gives: a picture in a planner's context
