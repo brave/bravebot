@@ -1921,6 +1921,15 @@ managed-model-not-allowed =
     names
 managed-model-denied =
     { $path }, which this machine's administrator manages, denies it with a models.deny entry
+# A model that searches the web before it replies. Nothing this machine's administrator wrote
+# refuses it, so no file is named. Its reply holds pages the context sent to it does not, and a reply
+# is labelled from that context.
+model-retrieves =
+    it searches the web before it replies, so its reply cannot be labelled from what was sent to it
+# The same refusal as the window words it, where a picker's pick or a request names the model. The
+# window reads the reference catalog whatever language the machine is set to.
+desktop-model-retrieves =
+    { $model } is not requested on this machine: it searches the web before it replies, so its reply cannot be labelled from what was sent to it.
 # A delegate definition naming a model the layer refuses. Refused where the definition is read, so
 # nothing is started for it.
 delegate-model-refused =
@@ -5080,15 +5089,16 @@ delegate-model-substituted = { $definition } asked for { $model } and was answer
 # The model `planModel` named, which a turn begun in plan mode could not use. Said, and the turn
 # runs on the session's own model, since the setting asks for a model and not for a refusal.
 plan-model-unavailable =
-    { $model } is set as the plan model but cannot be used here (no configured service answers for it, it needs a sign-in, or this machine's managed settings do not allow it), so this turn runs on the session's model
+    { $model } is set as the plan model but cannot be used here (no configured service answers for it, it needs a sign-in, this machine's managed settings do not allow it, or it searches the web before it replies), so this turn runs on the session's model
 # The model `summaryModel` named, from the person's own settings file. A compaction or a goal check
 # is refused rather than sent to the session's model, since the setting is a cost boundary.
 summary-model-needs-sign-in =
     { $model } is set as the summary model and needs a sign-in first, so nothing was sent
-# The same setting naming a model this machine's managed layer excludes (BACKEND-48). Refused rather
-# than sent, and rather than fallen back from, for the same reason.
+# The same setting naming a model this machine does not request: its managed layer excludes it
+# (BACKEND-48), or it searches the web before it replies (LABEL-8). Refused rather than sent, and
+# rather than fallen back from, for the same reason.
 summary-model-refused =
-    { $model } is set as the summary model and this machine's managed settings do not allow it, so nothing was sent
+    { $model } is set as the summary model and this machine's managed settings do not allow it, or it searches the web before it replies, so nothing was sent
 # The same setting naming a model no configured service answers for. Refused rather than sent, since
 # a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
 summary-model-not-served =
@@ -5097,9 +5107,9 @@ summary-model-not-served =
 # refused rather than sent to the turn's model, since the name is a cost boundary.
 processor-model-needs-sign-in =
     { $model } is set as the processor model and needs a sign-in first, so nothing was sent
-# The same name for a model this machine's managed layer excludes (BACKEND-48).
+# The same name for a model this machine does not request, for either reason above.
 processor-model-refused =
-    { $model } is set as the processor model and this machine's managed settings do not allow it, so nothing was sent
+    { $model } is set as the processor model and this machine's managed settings do not allow it, or it searches the web before it replies, so nothing was sent
 # The same name for a model no configured service answers for.
 processor-model-not-served =
     { $model } is set as the processor model and no configured service answers for it, so nothing was sent

@@ -93,11 +93,16 @@ fn a_task_list_is_named_inside_the_reshape_that_builds_it() {
             &list(&[("Fix ref:1 and run it", "pending")]),
         );
         let rows = reporter.updates.last().expect("the display was told");
-        rows[0].content.clone()
+        (
+            rows[0].content.clone(),
+            rows[0].as_the_planner_had_it.clone(),
+        )
     };
 
-    // The person reading their own task list is told which of their files it means.
-    assert_eq!(shown, "Fix ref:1(U,priv):game.js and run it");
+    // The person reading their own task list is told which of their files it means, and the
+    // row keeps the list as the planner wrote it for anything that leaves the screen.
+    assert_eq!(shown.0, "Fix ref:1(U,priv):game.js and run it");
+    assert_eq!(shown.1, "Fix ref:1 and run it");
 
     let named = super::gate_at(&sink, "display", "reference(s) named");
     let reshaped = super::gate_at(&sink, "render", "todo_write: content reshaped");

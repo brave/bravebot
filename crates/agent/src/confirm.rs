@@ -777,19 +777,19 @@ impl RunRequest {
             .collect()
     }
 
-    /// Whether an entry could record this line at all, which is what `a` would make.
-    ///
-    /// One question rather than a list of reasons repeated at each place that asks, so a reason
-    /// added later cannot reach the drawing and miss the layer that acts on the answer.
-    ///
-    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
-    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
-    /// neither ([PERM-9]).
+    /// Whether an entry could record this line at all, which is what `a` would make, as
+    /// [`bravebot_core::command::Plan::can_be_remembered_as`] answers it.
     pub fn can_be_remembered(&self) -> bool {
-        self.plan.can_be_remembered()
-            && !self.asks_for_scopes()
-            && !self.unconfined
-            && !self.protected
+        self.plan.can_be_remembered_as(self.asked())
+    }
+
+    /// What this request adds to its plan that no entry holds.
+    pub fn asked(&self) -> bravebot_core::command::Asked {
+        bravebot_core::command::Asked {
+            scopes: self.asks_for_scopes(),
+            unconfined: self.unconfined,
+            protected: self.protected,
+        }
     }
 
     /// Whether the planner asked this line to carry a credential scope or a toolchain list.
@@ -933,17 +933,10 @@ impl RunRequest {
     /// [`RunRequest::carries_an_assignment`] is asked separately rather than answered from this
     /// list.
     pub fn would_vouch_for(&self) -> Vec<bravebot_core::programs::Command> {
-        let mut named: Vec<bravebot_core::programs::Command> = Vec::new();
         if self.asks_for_scopes() || self.unconfined {
-            return named;
+            return Vec::new();
         }
-        for step in self.plan.steps() {
-            let command = step.command(&self.plan.directory);
-            if !named.contains(&command) {
-                named.push(command);
-            }
-        }
-        named
+        self.plan.entries()
     }
 }
 
@@ -1495,7 +1488,10 @@ pub struct VouchRequest {
     /// a name that collapses to the project root says so there. Shown to the person and branched
     /// on by nothing.
     pub rule: String,
-    /// The first lines of it, so the decision is about something they have seen.
+    /// The first lines of it, so the decision is about something they have seen, with each
+    /// character that draws as nothing written out as a visible token
+    /// ([`bravebot_core::invisible::spelled`]). The planner's copy of the file is the file's own
+    /// bytes.
     ///
     /// Empty where the file's text cannot be shown, whatever the reason: an empty file, and one
     /// that is not valid UTF-8, arrive here the same way. The prompt says so in place of it, so
@@ -1507,6 +1503,10 @@ pub struct VouchRequest {
     pub label: String,
     /// Whether the preview is only part of the file.
     pub truncated: bool,
+    /// How many characters of the preview drew as nothing before they were written out, as
+    /// [`OutputRequest::hidden`] is. Characters below the cut are not counted. Zero where the
+    /// preview is empty.
+    pub hidden: usize,
     /// What a check said about the whole file, or that it did not complete.
     ///
     /// The whole file and not the preview: the person is being asked to trust the path, so a
@@ -4318,6 +4318,7 @@ mod tests {
             rule: "vendor/lib.js".to_string(),
             preview: "// a library\n".to_string(),
             truncated: false,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             label: String::new(),

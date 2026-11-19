@@ -2935,6 +2935,7 @@ mod tests {
             whole: output,
         });
         call.shown = Some(Shown {
+            as_the_planner_had_it: None,
             origin: "a reader delegate".to_string(),
             reach: Reach::NotThePlanner,
             label: "untrusted".to_string(),
@@ -2943,6 +2944,7 @@ mod tests {
         });
         call.todos = vec![Row {
             content: "read the parser".to_string(),
+            as_the_planner_had_it: "read the parser".to_string(),
             marker: "✓",
             status: Status::Done,
         }];
@@ -3519,6 +3521,7 @@ mod tests {
         let mut call = Entry::tool(Activity::running("Run", "make").done("ok"));
         call.todos = vec![Row {
             content: "still to do".to_string(),
+            as_the_planner_had_it: "still to do".to_string(),
             marker: "■",
             status: Status::Active,
         }];

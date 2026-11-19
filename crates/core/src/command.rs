@@ -45,6 +45,9 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// A path as a key made of text can hold it.
 ///
 /// A path is bytes on Unix and UTF-16 on Windows, and neither is guaranteed to have a text
@@ -263,6 +266,7 @@ impl Pipeline {
 
 /// How two parts of a plan are joined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub enum Joiner {
     /// `&&`: the right side runs only if the left side succeeded.
     And,
@@ -277,6 +281,11 @@ pub enum Joiner {
 /// The paths are absolute and are not tidied. What is recorded is what will be opened, and
 /// rewriting a `..` away would make the two differ wherever a symlink is involved.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub enum Route {
     Stdout {
         path: PathBuf,
@@ -308,12 +317,50 @@ pub fn is_the_null_device(path: &Path) -> bool {
     path.as_os_str() == NULL_DEVICE
 }
 
+/// [`is_the_null_device`] for a route's own path, in the form a contract can name.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::null_device(*path),
+))]
+#[expect(
+    clippy::ptr_arg,
+    reason = "Verus models the PathBuf a route holds, and has no type for the Path it derefs to"
+)]
+fn discards(path: &PathBuf) -> bool {
+    is_the_null_device(path)
+}
+
+impl Route {
+    /// Whether this route opens no file: standard error joined to standard output, or a stream
+    /// sent to [`NULL_DEVICE`].
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::opens_no_file(*self),
+    ))]
+    fn opens_no_file(&self) -> bool {
+        match self {
+            Route::Stdout { path, .. } | Route::Stderr { path, .. } | Route::Both { path } => {
+                discards(path)
+            }
+            // A file read in place of what the step was shown to read.
+            Route::Stdin { .. } => false,
+            Route::StderrToStdout => true,
+        }
+    }
+}
+
 /// One piece of the value of an assignment that is worked out when the step's pipeline starts.
 ///
 /// Only ever the *source*: the name of a variable, or the line of a command. What either comes to
 /// is resolved at spawn time, held by the spawn alone, and never stored in a plan, a key, a trail or
 /// a result, because it may be a secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub enum ValuePart {
     /// Text taken as written.
     Text(String),
@@ -325,6 +372,11 @@ pub enum ValuePart {
 
 /// `NAME=value` in front of a program where the value is not all literal text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Expansion {
     pub name: String,
     pub parts: Vec<ValuePart>,
@@ -367,6 +419,11 @@ impl Expansion {
 
 /// One program in a plan, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Step {
     /// The name the line used, which is what a reader recognises.
     pub program: String,
@@ -424,6 +481,26 @@ impl Step {
             n if n == self.args.len() => self.matched.get(index).copied().unwrap_or(true),
             _ => true,
         }
+    }
+
+    /// Whether an entry holds everything about this step that decides what it does.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::step_is_its_entry(*self),
+    ))]
+    fn is_its_entry(&self) -> bool {
+        // Destructured so that a field added to `Step` stops the build here, as in every key.
+        let Step {
+            program: _,
+            resolved: _,
+            started_as: _,
+            args: _,
+            matched: _,
+            environment,
+            expansions,
+            routes,
+        } = self;
+        environment.is_empty() && expansions.is_empty() && every_route_opens_no_file(routes)
     }
 
     /// Whether an assignment is written in front of this step's program, literal or not.
@@ -551,7 +628,8 @@ impl Step {
 }
 
 /// What a plan runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub enum Steps {
     /// Steps feeding one another, and a single step where the line had no pipe.
     Pipeline(Vec<Step>),
@@ -563,6 +641,27 @@ pub enum Steps {
     },
     /// `( … )`, which groups and starts nothing of its own.
     Group(Box<Steps>),
+}
+
+// Written out rather than derived, because a derived `Clone` calls itself through `Box<Steps>`,
+// which Verus refuses as a cycle. No contract reads a clone, so Verus skips this one.
+impl Clone for Steps {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Pipeline(steps) => Self::Pipeline(steps.clone()),
+            Self::Join {
+                left,
+                joiner,
+                right,
+            } => Self::Join {
+                left: left.clone(),
+                joiner: *joiner,
+                right: right.clone(),
+            },
+            Self::Group(inner) => Self::Group(inner.clone()),
+        }
+    }
 }
 
 impl Steps {
@@ -591,6 +690,27 @@ impl Steps {
                 Some(steps)
             }
             _ => None,
+        }
+    }
+
+    /// Whether an entry holds everything that decides what each step does.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::steps_are_their_entries(*self),
+        decreases self,
+    ))]
+    fn are_their_entries(&self) -> bool {
+        match self {
+            Self::Pipeline(steps) => every_step_is_its_entry(steps),
+            Self::Join {
+                left,
+                joiner: _,
+                right,
+            } => {
+                let left = left.are_their_entries();
+                left && right.are_their_entries()
+            }
+            Self::Group(inner) => inner.are_their_entries(),
         }
     }
 
@@ -745,6 +865,80 @@ impl Steps {
     }
 }
 
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (forall|i: int|
+            0 <= i < routes@.len() ==> crate::spec::opens_no_file(#[trigger] routes@[i])),
+))]
+fn every_route_opens_no_file(routes: &[Route]) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= routes.len(),
+            forall|i: int| 0 <= i < at ==> crate::spec::opens_no_file(#[trigger] routes@[i]),
+        decreases routes.len() - at,
+    ))]
+    while at < routes.len() {
+        if !routes[at].opens_no_file() {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (forall|i: int|
+            0 <= i < steps@.len() ==> crate::spec::step_is_its_entry(#[trigger] steps@[i])),
+))]
+fn every_step_is_its_entry(steps: &[Step]) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= steps.len(),
+            forall|i: int| 0 <= i < at ==> crate::spec::step_is_its_entry(#[trigger] steps@[i]),
+        decreases steps.len() - at,
+    ))]
+    while at < steps.len() {
+        if !steps[at].is_its_entry() {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+/// The entries a person's `a` adds for one line, made only by [`Plan::vouch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vouch {
+    entries: Vec<crate::programs::Command>,
+}
+
+impl Vouch {
+    /// The entries, in stage order.
+    pub fn entries(&self) -> &[crate::programs::Command] {
+        &self.entries
+    }
+
+    pub(crate) fn into_entries(self) -> Vec<crate::programs::Command> {
+        self.entries
+    }
+}
+
+/// What a run's request adds to its plan that no entry holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub struct Asked {
+    /// The planner asked the line to carry a credential scope, a toolchain list, loopback or an
+    /// ssh key (SANDBOX-26).
+    pub scopes: bool,
+    /// The planner asked the line to start with no profile (SANDBOX-29).
+    pub unconfined: bool,
+    /// A file the line redirects into is a protected path (PERM-9).
+    pub protected: bool,
+}
+
 /// A command line, compiled.
 ///
 /// This is the routing field a raw string does not have: what will run, with which binary and
@@ -752,6 +946,11 @@ impl Steps {
 /// directory it runs in. A person endorses this rather than the text the planner sent, because
 /// after compilation this is what decides where an effect lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Plan {
     /// The line as the planner spelled it.
     ///
@@ -838,11 +1037,63 @@ impl Plan {
     /// Which reason it is belongs to whoever explains the refusal, not here.
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::plan_is_its_entries(*self),
+    ))]
     pub fn can_be_remembered(&self) -> bool {
-        !self.releases_private()
-            && !self.carries_an_assignment()
+        self.steps.are_their_entries()
             && self.writes.is_empty()
+            && self.reads.is_empty()
             && self.stdin.is_none()
+    }
+
+    /// Whether an entry could record this line as it was asked for: the plan can be remembered,
+    /// and the request adds nothing an entry cannot hold.
+    ///
+    /// One question rather than a list of reasons repeated at each place that asks, so a reason
+    /// added later cannot reach the drawing and miss the layer that acts on the answer.
+    ///
+    /// A line redirecting into a protected path is never one, whatever else is true of its plan:
+    /// the mark is read here as well as the plan's destinations, so an answer to it is kept by
+    /// neither ([PERM-9]).
+    ///
+    /// [PERM-9]: ../../../docs/specs/permissions.md
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::request_is_its_entries(*self, asked),
+    ))]
+    pub fn can_be_remembered_as(&self, asked: Asked) -> bool {
+        let Asked {
+            scopes,
+            unconfined,
+            protected,
+        } = asked;
+        self.can_be_remembered() && !scopes && !unconfined && !protected
+    }
+
+    /// The vouch a person's `a` for this line makes, or `None` where an entry could not record it
+    /// ([`Plan::can_be_remembered_as`]). The one way to make a [`Vouch`], so the policy records
+    /// only an answer that passed that question.
+    pub fn vouch(&self, asked: Asked) -> Option<Vouch> {
+        if !self.can_be_remembered_as(asked) {
+            return None;
+        }
+        Some(Vouch {
+            entries: self.entries(),
+        })
+    }
+
+    /// The entries vouching for this plan would add, without repeats and in stage order.
+    pub fn entries(&self) -> Vec<crate::programs::Command> {
+        let mut named: Vec<crate::programs::Command> = Vec::new();
+        for step in self.steps() {
+            let command = step.command(&self.directory);
+            if !named.contains(&command) {
+                named.push(command);
+            }
+        }
+        named
     }
 
     /// The plan as a person should read it, in a prompt, in a result and in a job's line.
@@ -1283,6 +1534,49 @@ mod tests {
             !later_stage.can_be_remembered(),
             "a line carrying an expansion could be remembered"
         );
+    }
+
+    /// A vouch is made only where `can_be_remembered_as` allows the line, so the policy can record
+    /// no entry for a request that asked for a scope, to run with no profile, or to write a
+    /// protected path. The control is the same plan asked for plainly, whose vouch holds one entry
+    /// per distinct stage. Rejects a `vouch` that asks only `can_be_remembered`, which ignores the
+    /// request, and one that returns the entries without asking at all.
+    #[test]
+    fn a_vouch_is_made_only_for_a_request_an_entry_can_hold() {
+        let line = plan(Steps::Pipeline(vec![
+            step("git", &["log"]),
+            step("wc", &["-l"]),
+            step("git", &["log"]),
+        ]));
+        let plain = line
+            .vouch(Asked::default())
+            .expect("the control was refused");
+        assert_eq!(
+            plain.entries().len(),
+            2,
+            "a vouch did not hold one entry per stage"
+        );
+
+        for asked in [
+            Asked {
+                scopes: true,
+                ..Asked::default()
+            },
+            Asked {
+                unconfined: true,
+                ..Asked::default()
+            },
+            Asked {
+                protected: true,
+                ..Asked::default()
+            },
+        ] {
+            assert!(
+                line.can_be_remembered(),
+                "the plan alone stopped being rememberable"
+            );
+            assert!(line.vouch(asked).is_none(), "{asked:?} made a vouch");
+        }
     }
 
     /// A step that takes `name` from `parts` in front of its program.

@@ -142,7 +142,9 @@ not for what grants it. A distrust, an undecided boundary, the writer reservatio
 and the record of an untrusted memory compare under the full fold and reach both spellings, since
 a miss reads a refused file as trusted under another case and a hit costs a question. A trust
 compares bytes, so a map that could not ask has never made trust cover a path it was not written
-about. A map made without the answer compares bytes throughout, and a map moved to another
+about. The settings file `--settings` names is held as a protected path, which only refuses, so it is
+compared under the full fold where the volume could not be asked and a write under another case of its
+name is protected. A map made without the answer compares bytes throughout, and a map moved to another
 directory takes that directory's answer, including that it could not be asked. Folding takes each letter to upper case and then to lower case, since APFS opens `ſrc`
 as `src` and `ſ` is its own lower case. A letter whose upper or lower case is more than one
 character, such as `ß` (`SS`), is the one place volumes differ: APFS opens `class.md` as `claß.md`
@@ -392,6 +394,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_agent::workspace::the_trust_map_the_writer_reservation_and_the_memory_record_follow_the_workspace_s_own_casefold_flag`
 `verified-by: bravebot_agent::workspace::a_workspace_whose_volume_cannot_be_asked_distrusts_folds_and_grants_none`
 `verified-by: bravebot_agent::workspace::a_trust_store_for_a_directory_that_cannot_be_asked_says_so`
+`verified-by: bravebot_agent::workspace::named_settings::a_spelling_in_another_case_reaches_a_file_not_made_yet_unless_the_volume_keeps_them_apart`
 `verified-by: bravebot_agent::workspace::a_real_directory_with_the_casefold_flag_folds_case_for_the_map`
 `verified-by: bravebot_core::trust::a_volume_that_could_not_be_asked_reads_a_refusal_in_every_case_and_a_trust_in_one`
 `verified-by: bravebot_core::trust::an_undecided_boundary_reaches_the_other_case_where_the_volume_might_fold`
@@ -464,6 +467,10 @@ argument list names a path the map holds untrusted, under any of that path's nam
 person. `cp fetched.md AGENTS.md` is that row. `sh -c`, `python3 -c` and `make` name no path in their
 argument list and are not covered. A line the audited table proves read-only copies nothing and is not
 put to a person for the paths it names; what it prints keeps the label of those paths.
+
+`/export` writes a file this process opens and records no write. It leaves out what a screen alone was
+shown, so the file holds no untrusted data the planner was not given and no row of the table applies
+([SESSION-17](sessions.md#SESSION-17)).
 
 A prompt asks one question and only this one: **may this path stop being trusted?** That is the
 only consequence a later step cannot undo, since a path recorded as untrusted can no longer be
@@ -2174,6 +2181,11 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   ([tools/command-line.md](tools/command-line.md#CMDLINE-5)), under the name the line spelled and
   with the keying cost every other write has (below). A file the program opens on its own, which
   is `cmd -o notes.txt` or anything a build writes, is not.
+
+  `/export` is the other file this process opens itself. It is not recorded, because a rule recorded
+  here is gone in a fresh session while the file stays. It is kept free of what a screen alone was
+  shown instead ([SESSION-17](sessions.md#SESSION-17)), so reading it as trusted gives the planner
+  nothing it was not already given.
 
   A line the sandbox holds in a directory whose yes said confined lines run without asking is asked
   about when a word of its argument list names a path the map holds untrusted ([RUN-5](tools/run.md#RUN-5)),

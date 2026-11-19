@@ -365,6 +365,7 @@ fn an_unanswerable_vouch_refuses() {
             rule: "notes.md".into(),
             preview: "first line".into(),
             truncated: true,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Inconclusive("not checked"),
             reason: None,
             label: String::new(),

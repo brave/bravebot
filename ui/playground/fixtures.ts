@@ -273,7 +273,8 @@ export const OUTPUT_UNSAFE: OutputRequest = {
 
 export const VOUCH: VouchRequest = {
   request: 9, path: 'vendor/notes.md', shownPath: 'vendor/notes.md', rule: '/Users/example/harbour-lights/vendor/notes.md', shownRule: '/Users/example/harbour-lights/vendor/notes.md',
-  preview: '# Vendor notes\nThe cache is warmed on start.\nRows are fetched in batches of 500.', truncated: true,
+  preview: '# Vendor notes\nThe cache is warmed on start.‹U+200B›\nRows are fetched in batches of 500.', truncated: true,
+  hidden: 1, hiddenNote: 'One character in this text draws as nothing, so it is written out as ‹U+200B›.',
   label: '(U,pub)', labelAxes: axes('untrusted', 'public'), vetting: { verdict: 'unsafe', reason: 'Contains an instruction to the model.' },
 }
 

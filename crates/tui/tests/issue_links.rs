@@ -281,6 +281,7 @@ fn a_number_in_quarantined_content_is_not_linked() {
     let mut session = session_in_brave();
     let mut entry = Entry::system("read notes.md");
     entry.shown = Some(Shown {
+        as_the_planner_had_it: None,
         origin: "notes.md #7".to_string(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".to_string(),

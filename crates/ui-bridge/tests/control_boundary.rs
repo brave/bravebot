@@ -763,6 +763,7 @@ impl Hosted {
             environment: &model_service(endpoint),
             stdout: Stdio::null(),
             stderr,
+            clients: support::ONE_CLIENT,
         });
         let client = host.client();
         let relay_pid = the_relay_of(host.child.id());

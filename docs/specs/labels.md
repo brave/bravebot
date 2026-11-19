@@ -13,6 +13,7 @@ guards:
       - crates/agent/src/backend.rs: 2
       - crates/agent/src/classifier.rs: 1
       - crates/agent/src/commit_message.rs: 1
+      - crates/agent/src/conversation.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 4
@@ -32,8 +33,8 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 151
-      - crates/core/src/slot.rs: 12
+      - crates/core/src/policy.rs: 158
+      - crates/core/src/slot.rs: 14
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
       - crates/mcp/src/http.rs: 2
@@ -87,7 +88,7 @@ guards:
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
-      - crates/agent/src/tools/tests/activity.rs: 2
+      - crates/agent/src/tools/tests/activity.rs: 3
       - crates/agent/src/tools/tests/editing.rs: 6
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
@@ -241,6 +242,16 @@ guards:
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
+  - symbol: Policy::promote_confined_read
+    sites:
+      - crates/agent/src/lsp.rs: 1
+      - crates/agent/src/tools.rs: 20
+      - crates/agent/src/workspace.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Policy::accept_reference
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 4
   - symbol: Policy::decode_transport
     sites:
       - crates/agent/src/images.rs: 1
@@ -262,6 +273,39 @@ guards:
     sites:
       - crates/choice/src/lib.rs: 1
       - crates/core/src/policy.rs: 8
+  - symbol: Policy::before_advice
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Policy::before_processor
+    sites:
+      - crates/agent/src/commit_message.rs: 1
+      - crates/agent/src/manifest.rs: 1
+      - crates/agent/src/processor.rs: 1
+      - crates/agent/src/tools.rs: 1
+      - crates/choice/src/lib.rs: 2
+      - crates/core/src/policy.rs: 28
+  - symbol: Policy::before_chooser
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/choice/src/lib.rs: 1
+      - crates/core/src/policy.rs: 14
+  - symbol: Policy::before_vetting
+    sites:
+      - crates/agent/src/tools.rs: 4
+      - crates/core/src/policy.rs: 10
+  - symbol: ProcessorSpec::instruction
+    sites:
+      - crates/agent/src/permission_mode.rs: 4
+      - crates/agent/src/processor.rs: 3
+      - crates/agent/src/turn/setup.rs: 1
+      - crates/core/src/policy.rs: 1
+      - crates/core/src/processor.rs: 1
+  - symbol: VettingSpec::expects
+    sites:
+      - crates/agent/src/tools.rs: 2
+      - crates/core/src/policy.rs: 4
+      - crates/core/src/vetting.rs: 1
   - symbol: Policy::store_a_choice
     sites:
       - crates/agent/src/turn.rs: 1
@@ -395,6 +439,8 @@ symbolic link in the tree led to, because whoever wrote a tree nobody vouched fo
 `verified-by: bravebot_agent::tools::tests::editing::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 `verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
 `verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context
@@ -414,9 +460,23 @@ they were counted from never leave.
 
 Everything else the driver needs out of a labelled value it asks a gate for, and every gate records
 the read: the planner's own arguments, a transport envelope a decoder has to see, a model's reply on
-its way out of that envelope, and a processor's answer to the one reader that takes a number out of
-it ([PROC-16](processors.md#PROC-16)). A driver holding the bytes without one is the shape this
-clause exists to stop.
+its way out of that envelope, a processor's answer to the one reader that takes a number out of
+it ([PROC-16](processors.md#PROC-16)), and the question the planner puts to its advisor. A driver
+holding the bytes without one is the shape this clause exists to stop.
+
+Four gates release a string the planner wrote, whatever its label, and decide nothing from the
+label: `Policy::before_advice` (the question put to the advisor, recorded with the label the
+question carried and none of its words), `Policy::before_processor` and `Policy::before_chooser`
+(a processor's instruction, whose label is folded into the answer's), and `Policy::before_vetting`
+(what the planner says a slot holds). The instruction and the expectation are two more strings
+that may be untrusted and that the kernel holds outside a labelled value, once a gate has released
+them into a spec, so the reads of each are pinned too: `ProcessorSpec::instruction` and
+`VettingSpec::expects`. Each gate's call sites are pinned file by file in `guards`. The checker
+matches a method by its bare name, so the count for
+`ProcessorSpec::instruction` also holds the uses of `PermissionMode::instruction` in
+`crates/agent/src/permission_mode.rs` and `crates/agent/src/turn/setup.rs`, and the test helper
+named `instruction` in `crates/core/src/policy.rs`. The reads of a processor's instruction are the
+two in `crates/agent/src/processor.rs`, and `crates/core/src/processor.rs` counts its definition.
 
 **A slot's address is untrusted content too, and is not carried in a labelled value.** The file a
 slot names, the file its bytes are a copy of, the file an answer produced from it belongs to, the
@@ -431,6 +491,16 @@ The counts pin releases, not the decisions taken from bytes a counted release al
 a branch added inside a function that holds a counted use moves nothing and is found by reading the
 diff ([reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md)).
 
+Formatting is a release as well, and no witness stands in front of it. A derived `Debug` prints
+every field, so `SlotStore`, `Entry`, `Deferred`, `Home`, `VettingSpec` and `Origin` write theirs
+by hand. Each prints slot ids, labels and kinds and never a path, a verbatim path, the path of a
+`Home::Only` or an origin, and `VettingSpec` leaves out what it names and what the planner expected
+of it. `SlotWriter` and `Conversation` derive `Debug` and inherit that, since each holds a
+`SlotStore`. `check_slot_address_debug` in the security-audit skill fails a derived `Debug` on any
+of the six, found by the file that declares each. It does not read what a hand-written one prints,
+so a field added to one of those bodies is found by reading the diff, and so is a new type that
+holds an address.
+
 Three gates let a slot's address leave the kernel, each recorded and each pinned file by file in
 `guards`, so a further reader of a slot's address anywhere downstream is a line in a diff rather
 than a branch nobody is shown:
@@ -441,7 +511,9 @@ than a branch nobody is shown:
 - **The file a reference names, for a line a person reads**, through `names_for_display`. It
   returns every slot's filename as a plain string to be worded into a preview, a note or a task
   line, and records one `Declassified` event and one `display` allow for the call. It is a display
-  release and nothing it returns may become a path an effect uses.
+  release and nothing it returns may become a path an effect uses. A file `/export` writes is read
+  by later turns, so it holds the call as the planner had it and not these names
+  ([SESSION-17](sessions.md#SESSION-17)).
 - **The file a reference names, as a read's path or a destination**, through
   `promote_reference_for_read` and `destination_from_reference`, which [routing.md](routing.md)
   settles and which share `path_of_reference`.
@@ -463,7 +535,19 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub); the compile_fail doctests on Labelled in crates/core/src/value.rs pin equality, Hash, Display, Deref, AsRef and a conversion into the content, and check_labelled_impls in the security-audit skill reads a derive, a nested-generic bound and a wrapped impl header for the rest, every function of the type's own impl blocks against the seven the type has (new, trusted, label, declassify, into_trusted, relabel and shape) by name, visibility and signature, every impl whose subject is Labelled, a Box of it, a type alias of it or a wrapper declared beside it, an impl in that file whose subject is a generic parameter or a projection, and every impl for another type that takes a Labelled as an argument of its trait, such as From<Labelled<String>> for String, with comments, strings, raw strings and character literals blanked before any brace is counted; it does not see a wrapper declared in another file, which has no access to the private fields)`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
-`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from, Policy::names_for_display, Policy::promote_reference_for_read and Policy::destination_from_reference are the four that can, and each records its release. Those eight and these four are the whole of the surface returning a slot's address and every use of each is pinned above; formatting a type that holds one is the other way out, which SlotStore, Entry, Deferred, Home, VettingSpec and Origin close by writing Debug by hand to print ids, labels and kinds, and check_slot_address_debug in the security-audit skill fails a derive of Debug on any of them, so a hand-written Debug that printed an address would be found by reading the diff and a type that began to hold one is found the same way)`
+`verified-by: bravebot_core::slot::formatting_a_store_does_not_print_the_name_of_a_file_waiting_to_be_read`
+`verified-by: bravebot_core::slot::formatting_a_store_does_not_print_the_name_a_read_slot_keeps`
+`verified-by: bravebot_core::slot::formatting_a_home_does_not_print_the_one_file_it_is_restricted_to`
+`verified-by: bravebot_core::slot::formatting_a_store_lists_a_choice_by_name_and_label_only`
+`verified-by: bravebot_core::slot::formatting_a_store_lists_its_slots_in_the_order_they_were_minted`
+`verified-by: bravebot_core::slot::formatting_a_writer_does_not_print_the_names_in_the_store_it_writes_into`
+`verified-by: bravebot_core::vetting::formatting_an_origin_does_not_print_the_recorded_name`
+`verified-by: bravebot_core::policy::formatting_a_store_with_a_reserved_listing_does_not_print_the_filename`
+`verified-by: bravebot_core::policy::formatting_a_store_after_the_listed_file_is_read_does_not_print_the_filename`
+`verified-by: bravebot_core::policy::formatting_a_vetting_spec_does_not_print_the_filename_it_was_built_from`
+`verified-by: bravebot_core::policy::formatting_a_vetting_spec_does_not_print_what_it_names_or_what_was_expected_of_it`
+`verified-by: bravebot_agent::conversation::formatting_a_conversation_does_not_print_the_names_its_quarantine_holds`
 `verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
 `verified-by: bravebot_core::slot::a_slot_is_unread_only_while_it_is_waiting_on_its_file`
 
@@ -554,6 +638,16 @@ the driver and a new caller of the wrapper adds one without moving the gate's ow
 refuses anything untrusted before it releases a byte: there is no content its callers' closures
 could read that the driver may not read for itself.
 
+`Policy::promote_confined_read` and `Policy::accept_reference` take no closure and are counted for
+another reason. Each is handed an argument the planner wrote, wrapped `(U,pub)`, and returns it as
+a `(T,pub)` path or as a slot id. What they refuse is a private value and a context that has met
+something untrusted. They do not refuse a public value because of where its bytes came from, so a
+caller that passed them a fetched page or a redirect target would get it back as trusted text or as
+a slot name, and the label would not show it. A caller's argument is the only thing that makes
+the result the planner's own, so each is counted per file in `guards` like
+`Policy::read_planner_argument`, which makes the same two refusals, and a spec that only names
+either one does not account for a new caller of it.
+
 `verified-by: bravebot_agent::tools::tests::activity::a_call_line_names_its_reference_inside_the_kernel`
 `verified-by: bravebot_agent::tools::tests::todos::a_task_list_is_named_inside_the_reshape_that_builds_it`
 `verified-by: bravebot_agent::turn::what_a_write_changed_is_diffed_inside_the_kernel_before_it_is_released`
@@ -599,6 +693,21 @@ the table below. Each is the **first** label such a value ever receives, assigne
 the policy layer tracked.
 
 If you find yourself relabelling a value that already has a label, stop: that is LABEL-7.
+
+The sentence holds for every model this program requests, and the program keeps it true by not
+requesting one it does not hold for. A model that searches the web before it replies, which OpenAI's
+Chat Completions search models do on every request, adds the pages its provider's search returns to
+its context, so its reply is a function of more than the context built here and the context's label
+would be given to bytes that came from the web. The models on the list `RETRIEVING_MODELS` in
+`crates/config/src/provider.rs` are therefore not offered in a roster and not requested over chat
+completions, as `model`, `summaryModel`, `advisorModel`, `planModel`, `processorModel`, a
+definition's `model` or a recorded pick, and the refusal is the machine-level layer's, asked in
+`Config::model_refused` without a file to name ([BACKEND-19](backends.md#BACKEND-19),
+[BACKEND-48](backends.md#BACKEND-48)). Over the Responses protocol search is a tool a request has to ask
+for, and a request this program builds asks for none, so the same id is offered there. The ids on the
+list come from OpenAI's web search guide, read on 2026-11-13, and the claim that they search on every
+request has not been exercised against the service. A model that retrieves and is not on the list is
+not detected: see [Known costs](#known-costs).
 
 A reply arrives from a backend wrapped in the label the *network* gave it, because a JSON string
 carries no provenance and a transport can know nothing else. Taking it out of that envelope and
@@ -682,6 +791,8 @@ is told that it answered and given a reference to the reply, and the reply is in
 `verified-by: bravebot_agent::conversation::what_the_planner_was_shown_only_ever_rises`
 `verified-by: bravebot_agent::conversation::compaction_does_not_make_a_private_conversation_public`
 `verified-by: bravebot_ui_bridge::fork::a_conversation_whose_planner_was_shown_private_content_forks_private`
+`verified-by: bravebot_config::lib::a_model_that_searches_the_web_is_refused_over_chat_completions_only`
+`verified-by: bravebot_aichat::models::a_listing_is_not_offered_a_model_that_searches_the_web_over_chat_completions`
 
 <a id="LABEL-9"></a>
 ### LABEL-9: context integrity falls when the planner is shown something, never when a turn reads it
@@ -1274,3 +1385,11 @@ arrives at all.
   include pattern, the rules, the resolved directory argument and the name order above, no name is
   in any of these conditions. A name in that sentence, or a choice of which directory to cut or how
   to word the sentence made from a name, is a violation and not covered here.
+
+- **A model that searches the web is kept out by a list of ids, and a model nobody listed is not.**
+  Whether a model adds retrieved pages to its context is not something a request or a reply states,
+  so `RETRIEVING_MODELS` is a list a developer writes from a provider's documentation
+  ([LABEL-8](#LABEL-8)). A search model released since, an id under a proxy's own name, and a model
+  that a gateway routes to a search backend are requested and labelled from the context this program
+  built, which is the label the pages did not earn. The list is compared with the name a request
+  carries and with nothing a reply says, so no byte from outside decides it.

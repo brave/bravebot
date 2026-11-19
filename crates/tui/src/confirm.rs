@@ -802,6 +802,7 @@ mod tests {
             rule: path.into(),
             preview: preview.into(),
             truncated,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             label: String::new(),
@@ -1282,6 +1283,7 @@ mod tests {
                 let request = VouchRequest {
                     verdict: Verdict::Unsafe,
                     reason: Some(reason.join(" ")),
+                    hidden: 3,
                     ..a_vouch(
                         &format!("/home/someone/{}/notes.md", folders.join("/")),
                         numbered('p', 100).join("\n"),
@@ -1291,6 +1293,7 @@ mod tests {
                 let drawn = request.clone();
                 let mut deciding = reason;
                 deciding.extend(folders);
+                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
                 deciding.push("p0000".to_string());
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {

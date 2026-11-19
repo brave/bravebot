@@ -1097,7 +1097,13 @@ export interface VouchRequest {
   rule: string
   /** The rule spelled the way `shownPath` is. Draw this and not `rule`. */
   shownRule: string
+  /** The head of the file with each character that draws as nothing written out as `‹U+XXXX›`,
+   *  as the agent spelled it. */
   preview: string
+  /** How many characters of the preview drew as nothing before the agent wrote them out. Counted by the agent. */
+  hidden?: number
+  /** The sentence saying so, in the agent's words, or null where none did. Draw this and not a copy. */
+  hiddenNote?: string | null
   /** The label the preview was released under, as the trail writes it. */
   label: string
   /** The same label with both axes named. Draw this. */

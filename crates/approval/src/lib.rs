@@ -221,6 +221,11 @@ pub struct Run<'a> {
     /// the bridge sent. A `String` cannot carry such a byte, so the spelling is not done here;
     /// `run_lines` draws each as given.
     pub writes: &'a [String],
+    /// The reference whose contents the first program is fed, where the call named one. Only the
+    /// name the driver minted when the slot was written, never a byte of what it holds, so a yes is
+    /// an answer about a reference the person was shown (PROMPT-1). `None` where the call
+    /// named none.
+    pub stdin: Option<&'a str>,
     /// What the stages are confined to, or `None` where the turn does not confine them.
     pub confinement: Option<&'a Confinement>,
     /// One sentence for each access the line reaches that nothing here holds, as the agent worded it.
@@ -242,7 +247,7 @@ pub fn not_sandboxed() -> String {
 }
 
 /// The lines a run is read before approving: every step as the line wrote it, the binary each name
-/// resolved to, what it would write, and what it is not confined to.
+/// resolved to, what it would write, the reference it is fed, and what it is not confined to.
 ///
 /// The same things the panel shows, in the same order.
 pub fn run_lines(run: &Run<'_>) -> Vec<String> {
@@ -256,6 +261,12 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         for path in run.writes {
             lines.push(format!("  {path}"));
         }
+    }
+    // What goes into the first program, where the call named a reference for it: the half of a
+    // plan the steps above do not show. The reference name only, the way the panel draws it.
+    if let Some(reference) = run.stdin {
+        lines.push(t!(run_is_fed).to_string());
+        lines.push(format!("  {}", printable(reference)));
     }
     // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
     // programs are confined to where the turn confines them, and that they are not where it does not.
@@ -406,7 +417,16 @@ pub fn vet_lines(vet: &Vet<'_>) -> Vec<String> {
 }
 
 /// The lines a quarantined file is read before it is vouched for.
-pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<String> {
+///
+/// `hidden` is how many characters of `preview` drew as nothing before the agent wrote them out,
+/// and the sentence saying so goes above the preview, as it does over a command's output.
+pub fn vouch_lines(
+    path: &str,
+    rule: &str,
+    check: Check,
+    preview: &str,
+    hidden: usize,
+) -> Vec<String> {
     let mut lines = vec![
         bravebot_agent::confirm::shown_name(path),
         t!(
@@ -418,7 +438,10 @@ pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<S
     ];
     match preview.is_empty() {
         true => lines.push(t!(vouch_nothing).to_string()),
-        false => lines.extend(quarantined(preview)),
+        false => {
+            lines.extend(hidden_note(hidden));
+            lines.extend(quarantined(preview));
+        }
     }
     lines
 }
@@ -767,8 +790,14 @@ mod tests {
     /// the rule a yes writes, which the file's own name does not.
     #[test]
     fn the_vouch_lines_mark_a_blank_name_and_say_the_rule() {
-        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text");
-        let plain = vouch_lines("note.md", "/work/note.md", Check::from_word("safe"), "text");
+        let blank = vouch_lines(" ", "/work/ ", Check::from_word("safe"), "text", 0);
+        let plain = vouch_lines(
+            "note.md",
+            "/work/note.md",
+            Check::from_word("safe"),
+            "text",
+            0,
+        );
         assert_ne!(blank[0], " ");
         assert!(blank[0].contains('\u{2423}'), "{:?}", blank[0]);
         assert_eq!(plain[0], "note.md");
@@ -819,6 +848,32 @@ mod tests {
                 "{what}: a text with nothing hidden in it said something was: {lines:?}"
             );
         }
+    }
+
+    /// PROMPT-13: a file preview holding characters that draw as nothing says how many above the
+    /// preview, and one with none says nothing of the kind. An empty preview says it is empty and
+    /// not how many characters were hidden. The fault it rejects: `vouch_lines` that takes the count
+    /// and drops it, so the plain and editor prompts show the spelled tokens with no sentence.
+    #[test]
+    fn the_vouch_lines_say_how_many_characters_draw_as_nothing_above_the_preview() {
+        let text = "plain \u{2039}U+E0064 d\u{203A}\u{2039}U+200B\u{203A}";
+        let said = t!(hidden_characters, count = 2usize).to_string();
+        let lines = vouch_lines("note.md", "/work", Check::from_word("safe"), text, 2);
+        let saying = lines.iter().position(|line| *line == said);
+        let shown = lines
+            .iter()
+            .position(|line| *line == format!("{QUARANTINE_BAR} {text}"));
+        assert!(
+            saying.is_some() && saying < shown,
+            "the sentence is not above the preview: {lines:?}"
+        );
+        let plain = vouch_lines("note.md", "/work", Check::from_word("safe"), "plain", 0);
+        assert!(
+            plain.iter().all(|line| !line.contains("U+XXXX")),
+            "a preview with nothing hidden in it said something was: {plain:?}"
+        );
+        let empty = vouch_lines("note.md", "/work", Check::from_word("safe"), "", 0);
+        assert_eq!(empty.last(), Some(&t!(vouch_nothing).to_string()));
     }
 
     /// PROMPT-1: the credential-read lines name the file so a name that would draw as nothing, or as
@@ -903,6 +958,7 @@ mod tests {
             summary: "list containers",
             steps: &steps,
             writes: &["out.txt".to_string()],
+            stdin: None,
             confinement: Some(&confinement),
             ambient: &["it reaches the container daemon".to_string()],
             releases_private: false,
@@ -923,6 +979,45 @@ mod tests {
         }
     }
 
+    /// RUN-3, PROMPT-1: a run fed a reference names it, after the files the line writes and
+    /// under the catalog's sentence, and a run fed none draws neither. The regression it rejects
+    /// is a lines builder that leaves the reference out, so a yes to `sh -s` is an answer about a
+    /// program fed contents the person was never told of, and one that draws the sentence over
+    /// nothing.
+    #[test]
+    fn a_run_names_the_reference_it_is_fed_after_what_it_writes_and_only_where_there_is_one() {
+        let steps = [RunStep {
+            written: "sh -s".to_string(),
+            binary: "/bin/sh".to_string(),
+        }];
+        let drawn = |stdin| {
+            run_lines(&Run {
+                summary: "install it",
+                steps: &steps,
+                writes: &["out.txt".to_string()],
+                stdin,
+                confinement: None,
+                ambient: &[],
+                releases_private: false,
+                offers_remember: false,
+            })
+        };
+        let fed = drawn(Some("ref:7"));
+        let sentence = fed
+            .iter()
+            .position(|line| line == &t!(run_is_fed).to_string())
+            .unwrap_or_else(|| panic!("no sentence saying what it is fed: {fed:?}"));
+        assert_eq!(fed[sentence + 1], "  ref:7", "{fed:?}");
+        let written = fed
+            .iter()
+            .position(|line| line == "  out.txt")
+            .expect("a write");
+        assert!(written < sentence, "{fed:?}");
+        let none = drawn(None).join("\n");
+        assert!(!none.contains("it is fed the contents of"), "{none}");
+        assert!(!none.contains("ref:7"), "{none}");
+    }
+
     /// Issue #3045: a front end offering a standing "allow and remember" answer beside a run
     /// question states what it grants, and a front end with no such answer offers no sentence
     /// about it.
@@ -937,6 +1032,7 @@ mod tests {
                 summary: "list containers",
                 steps: &steps,
                 writes: &[],
+                stdin: None,
                 confinement: None,
                 ambient: &[],
                 releases_private: false,
@@ -1141,6 +1237,7 @@ mod tests {
                 summary: "write it",
                 steps: &steps,
                 writes: &[bravebot_agent::confirm::shown_name(write)],
+                stdin: None,
                 confinement: Some(&confinement),
                 ambient: &[],
                 releases_private: false,

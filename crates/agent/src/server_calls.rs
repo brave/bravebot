@@ -473,6 +473,7 @@ impl Servers {
             into => {
                 let shown = crate::turn::preview_for(policy, step.tool(), &text);
                 reporter.quarantined(Shown {
+                    as_the_planner_had_it: None,
                     origin,
                     reach: Reach::NoModel,
                     label: text.label().to_string(),
@@ -780,6 +781,7 @@ impl Servers {
                     let name = format!("{alias}:{}", shown.calls[at].name);
                     let preview = crate::turn::preview_for(policy, manifest::APPLY, &output.text);
                     reporter.quarantined(Shown {
+                        as_the_planner_had_it: None,
                         origin: crate::mcp::origin_of_reply(&name, false),
                         reach: Reach::NoModel,
                         label: output.text.label().to_string(),
@@ -792,6 +794,7 @@ impl Servers {
                     let name = format!("{alias}:{}", shown.calls[at].name);
                     let preview = crate::turn::preview_for(policy, manifest::APPLY, &text);
                     reporter.quarantined(Shown {
+                        as_the_planner_had_it: None,
                         origin: crate::mcp::origin_of_reply(&name, true),
                         reach: Reach::NoModel,
                         label: text.label().to_string(),
@@ -854,6 +857,7 @@ fn show_what_came<S: Sink, R: Reporter>(
         })
         .collect();
     reporter.quarantined(Shown {
+        as_the_planner_had_it: None,
         origin: format!("what became of the calls to {alias} you approved"),
         reach: Reach::NoModel,
         label: resolved.label().to_string(),

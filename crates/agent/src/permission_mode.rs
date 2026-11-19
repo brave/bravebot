@@ -1453,6 +1453,7 @@ mod tests {
             rule: "notes.txt".to_string(),
             preview: "a line".to_string(),
             truncated: false,
+            hidden: 0,
             verdict,
             reason: None,
             label: String::new(),

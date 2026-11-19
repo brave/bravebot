@@ -4,7 +4,11 @@
 //! specifies, so a contract holds the code to the meaning. docs/development/verification.md says
 //! how a contract is written and run.
 
+use crate::command::{Asked, Plan, Route, Step, Steps};
 use crate::label::{Confidentiality, Integrity, Label};
+use crate::permissions::{Decision, Ruling};
+use crate::policy::{OutputFacts, RunFacts, RunReason};
+use std::path::PathBuf;
 use vstd::prelude::*;
 
 verus! {
@@ -109,6 +113,153 @@ pub proof fn every_two_labels_have_a_greatest_lower_bound(a: Label, b: Label)
     };
     assert(degrades(l, a) && degrades(l, b));
     assert forall|c: Label| degrades(c, a) && degrades(c, b) implies degrades(c, l) by {}
+}
+
+// A path is bytes Verus has no model of. Whether one is the null device is left uninterpreted, and
+// `command::discards` is assumed to answer it.
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExPathBuf(PathBuf);
+
+pub uninterp spec fn null_device(path: PathBuf) -> bool;
+
+/// A route an entry need not hold, because it opens no file: standard error joined to standard
+/// output, or a stream sent to the null device.
+pub open spec fn opens_no_file(route: Route) -> bool {
+    match route {
+        Route::Stdout { path, append: _ } => null_device(path),
+        Route::Stderr { path, append: _ } => null_device(path),
+        Route::Both { path } => null_device(path),
+        Route::Stdin { path: _ } => false,
+        Route::StderrToStdout => true,
+    }
+}
+
+/// An entry holds a step's resolved file, the path that starts it and its arguments
+/// (`programs::Command`), so a step may be remembered only where every other field that decides
+/// what it does is empty. Every field is named, so a field added to `Step` does not compile here
+/// until it is put on one side or the other.
+pub open spec fn step_is_its_entry(step: Step) -> bool {
+    let Step {
+        // The name the line used, for a reader. What starts is `resolved` by `started_as`.
+        program: _,
+        resolved: _,
+        started_as: _,
+        args: _,
+        // Which arguments a pattern produced. The arguments themselves are held.
+        matched: _,
+        environment,
+        expansions,
+        routes,
+    } = step;
+    environment@.len() == 0 && expansions@.len() == 0 && forall|i: int|
+        0 <= i < routes@.len() ==> opens_no_file(#[trigger] routes@[i])
+}
+
+/// Every step a plan runs is its entry. A substitution is inside an expansion, which a step that is
+/// its entry has none of, so there is no step below these.
+pub open spec fn steps_are_their_entries(steps: Steps) -> bool
+    decreases steps,
+{
+    match steps {
+        Steps::Pipeline(steps) => forall|i: int|
+            0 <= i < steps@.len() ==> step_is_its_entry(#[trigger] steps@[i]),
+        Steps::Join { left, joiner: _, right } => steps_are_their_entries(*left)
+            && steps_are_their_entries(*right),
+        Steps::Group(inner) => steps_are_their_entries(*inner),
+    }
+}
+
+/// An entry adds the tree a plan runs in, so a plan may be remembered only where every other field
+/// that decides what it does is empty. Every field is named, for the reason a step's are.
+pub open spec fn plan_is_its_entries(plan: Plan) -> bool {
+    let Plan {
+        // The line as the planner spelled it, for a reader. Two spellings that compile alike
+        // are one plan.
+        line: _,
+        directory: _,
+        steps,
+        writes,
+        reads,
+        stdin,
+    } = plan;
+    steps_are_their_entries(steps) && writes@.len() == 0 && reads@.len() == 0 && stdin is None
+}
+
+/// A request adds to its plan only what an entry does not need to hold. Every field is named, for
+/// the reason a step's are.
+pub open spec fn request_is_its_entries(plan: Plan, asked: Asked) -> bool {
+    let Asked { scopes, unconfined, protected } = asked;
+    plan_is_its_entries(plan) && !scopes && !unconfined && !protected
+}
+
+/// A line is let through only by one of the four standing answers or by the audited table or a
+/// rule, never by nothing.
+pub(crate) open spec fn reason_asks(reason: RunReason) -> bool {
+    match reason {
+        RunReason::Ruled(ruling) => ruling != Ruling::Allow,
+        RunReason::ReadProven | RunReason::DirectoryTrust | RunReason::Vouched
+            | RunReason::Remembered => false,
+        _ => true,
+    }
+}
+
+/// What deciding whether to ask has to hold, whatever order the questions are asked in.
+///
+/// Private input, a requested scope, a write and an assignment are asked about every time, and so
+/// is a line outside the root that no entry names (RUN-5, RUN-6, RUN-8, SANDBOX-26). A line goes
+/// unasked only on an answer that covers it: an `allow` rule, a proof from the audited table, the
+/// person's trust of the directory, a vouch, or a remembered line. An `ask` or `deny` rule is
+/// never overturned by a standing answer. A fed reference is never let through by a standing answer
+/// or the directory, none of which records what was fed (RUN-3).
+pub(crate) open spec fn run_reason_is_sound(facts: RunFacts, reason: RunReason) -> bool {
+    let RunFacts {
+        releases_private,
+        requested,
+        writes,
+        at_root,
+        vouched,
+        assignment,
+        rule,
+        read_proven_trusted,
+        fed,
+        held,
+        remembered,
+    } = facts;
+    let unasked = !reason_asks(reason);
+    (releases_private || requested || writes || assignment || (!at_root && !vouched)
+        ==> !unasked)
+        && (rule == Decision::Ruled(Ruling::Ask) || rule == Decision::Ruled(Ruling::Deny)
+        ==> !unasked)
+        && (unasked ==> match reason {
+            RunReason::Ruled(ruling) => rule == Decision::Ruled(ruling)
+                && ruling == Ruling::Allow,
+            RunReason::ReadProven => read_proven_trusted,
+            RunReason::DirectoryTrust => held && !fed,
+            RunReason::Vouched => vouched && !fed,
+            RunReason::Remembered => remembered && !fed,
+            _ => false,
+        })
+}
+
+/// What labelling a line's output has to hold.
+///
+/// Output is trusted only where the audited table proved it so or the person vouched for every
+/// step, and never for a line that asked for a scope or to run unconfined (SANDBOX-26,
+/// SANDBOX-29), and never on a vouch for a line carrying an assignment (RUN-8) or fed untrusted
+/// content (RUN-3). Output is always private unless the table proved the label.
+pub(crate) open spec fn output_label_is_sound(
+    facts: OutputFacts,
+    opaque: Label,
+    label: Label,
+) -> bool {
+    let OutputFacts { requesting, proven, vouched, assignment, fed } = facts;
+    (label.integrity == Integrity::Trusted ==> !requesting && (proven is Some || (vouched
+        && !assignment && fed != Some(Integrity::Untrusted))))
+        && (proven is None ==> label.confidentiality == Confidentiality::Private
+        || label == opaque)
+        && (requesting ==> label == opaque)
+        && (proven is Some && !requesting ==> label == proven->Some_0)
 }
 
 } // verus!

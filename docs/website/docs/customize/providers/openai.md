@@ -120,6 +120,13 @@ Two things differ on this route at `api.openai.com`:
   Responses-only model that neither document names, such as one released since, is offered. `gpt-image-1-mini`
   is one, and this route refused it.
 
+The listing also leaves out the models that search the web before they reply: `gpt-5-search-api`,
+`gpt-4o-search-preview` and `gpt-4o-mini-search-preview`. Over chat completions the search runs at
+OpenAI and its results enter the reply without passing through bravebot's labels, so bravebot refuses
+the id wherever it would request it: `--model`, the `model` key, a recorded pick, `summaryModel`,
+`advisorModel`, a goal check and a definition's `model`. Listing the id under `models` does not
+change that. The Responses protocol, which the default `openai` entry uses, keeps them.
+
 A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key.
 
 Signing in with a ChatGPT account instead of a key is a different route, and its models are named

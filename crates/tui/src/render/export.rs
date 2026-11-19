@@ -1,7 +1,7 @@
 //! The transcript outside a frame: as plain text for an editor, as markdown for a file, and laid
 //! out at the last frame's size for a key that jumps.
 
-use crate::state::{Laid, Session, Speaker};
+use crate::state::{Entry, Laid, Session, Speaker};
 
 use super::transcript::{lay_out, plain_rows};
 
@@ -64,28 +64,28 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
                     }
                 }
             }
-            Speaker::Assistant => {
-                if !entry.text.trim().is_empty() {
-                    out.push_str("## Assistant\n\n");
-                    out.push_str(&entry.text);
-                    out.push_str("\n\n");
-                }
-            }
-            Speaker::Tool => {
-                out.push_str(&format!("*Ran: `{}`*\n\n", entry.text.trim()));
-            }
+            Speaker::Assistant => out.push_str(&assistant_section(entry)),
+            Speaker::Tool => out.push_str(&tool_line(entry)),
             Speaker::Shell => {
                 out.push_str("## Shell Command\n\n");
                 out.push_str(&format!("`{}`\n\n", entry.text.trim()));
             }
             Speaker::Output => {
-                let fence = if entry.text.contains("```") {
-                    "````"
-                } else {
-                    "```"
-                };
                 out.push_str("## Shell Output\n\n");
-                out.push_str(&format!("{fence}\n{}\n{fence}\n\n", entry.text.trim()));
+                if entry.displayed_only {
+                    // Output the conversation never held is not written (SESSION-17).
+                    out.push_str(&format!(
+                        "*Output was shown on the screen and is not kept in this file ({} lines).*\n\n",
+                        entry.text.lines().count()
+                    ));
+                } else {
+                    let fence = if entry.text.contains("```") {
+                        "````"
+                    } else {
+                        "```"
+                    };
+                    out.push_str(&format!("{fence}\n{}\n{fence}\n\n", entry.text.trim()));
+                }
             }
             // The heading is the entry's first line and the quoted words follow it.
             Speaker::Message => {
@@ -116,14 +116,52 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
         }
 
         if let Some(shown) = &entry.shown {
-            out.push_str(&format!(
-                "> *Quarantined: {} ({})*\n\n",
-                shown.origin, shown.label
-            ));
+            out.push_str(&quarantine_note(shown));
         }
     }
 
     out
+}
+
+/// An assistant entry's section, or nothing for a blank one.
+///
+/// An answer released for the screen alone is written as a sentence saying one was shown and how
+/// long it was, and not what it said (SESSION-17).
+fn assistant_section(entry: &Entry) -> String {
+    if entry.displayed_only {
+        format!(
+            "## Assistant\n\n*An answer was shown on the screen and is not kept in this file ({} lines).*\n\n",
+            entry.text.lines().count()
+        )
+    } else if !entry.text.trim().is_empty() {
+        format!("## Assistant\n\n{}\n\n", entry.text)
+    } else {
+        String::new()
+    }
+}
+
+/// A tool call's line, as the planner was given it.
+///
+/// The line drawn for the person names the files a reference stands for, and those names are not
+/// the planner's to read.
+fn tool_line(entry: &Entry) -> String {
+    let line = match &entry.activity {
+        Some(activity) => activity.line_as_the_planner_had_it(),
+        None => entry.text.trim().to_string(),
+    };
+    format!("*Ran: `{line}`*\n\n")
+}
+
+/// The note under an entry whose content was quarantined.
+///
+/// The origin is written as the planner was given it where the person was shown file names in its
+/// place (SESSION-17).
+fn quarantine_note(shown: &bravebot_agent::report::Shown) -> String {
+    let origin = shown
+        .as_the_planner_had_it
+        .as_ref()
+        .unwrap_or(&shown.origin);
+    format!("> *Quarantined: {origin} ({})*\n\n", shown.label)
 }
 
 /// A turn's timing line, with the closing blank line.
@@ -148,6 +186,9 @@ fn outcome_word(outcome: &bravebot_session::sessions::StoredOutcome) -> &'static
 }
 
 /// A turn's task list: the heading, one checkbox line per task and a closing blank line.
+///
+/// Each task is written as the model wrote it. The row's `content` holds the names a person was
+/// shown in place of references, and those are released for a screen alone (SESSION-17).
 fn task_list(tasks: &[bravebot_core::todo::Row]) -> String {
     let mut out = String::from("**Tasks:**\n\n");
     for task in tasks {
@@ -156,7 +197,10 @@ fn task_list(tasks: &[bravebot_core::todo::Row]) -> String {
         } else {
             " "
         };
-        out.push_str(&format!("- [{mark}] {} ({})\n", task.content, task.status));
+        out.push_str(&format!(
+            "- [{mark}] {} ({})\n",
+            task.as_the_planner_had_it, task.status
+        ));
     }
     out.push('\n');
     out
@@ -211,6 +255,89 @@ mod tests {
         );
     }
 
+    /// SESSION-17: an answer released for the screen alone is exported as a sentence with its
+    /// line count, and a planner's reply is exported whole.
+    ///
+    /// Rejects an export that writes every Assistant entry's words, which puts a manifest run's
+    /// answer into a file a later turn reads as trusted.
+    #[test]
+    fn an_answer_released_for_the_screen_is_exported_as_its_length_and_a_reply_whole() {
+        let mut session = Session::new("kernel-enforced");
+        session.narrate_displayed_only("THE ISSUE BODY\nsecond line");
+        session.narrate("the planner said this");
+        let markdown = as_markdown(&session, "t");
+        assert!(!markdown.contains("THE ISSUE BODY"), "{markdown}");
+        assert!(!markdown.contains("second line"), "{markdown}");
+        assert!(
+            markdown.contains("## Assistant\n\n*An answer was shown on the screen"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("(2 lines).*"), "{markdown}");
+        assert!(
+            markdown.contains("## Assistant\n\nthe planner said this\n\n"),
+            "{markdown}"
+        );
+    }
+
+    /// SESSION-17: a call is exported with its target as the planner named it, and a quarantined
+    /// block under the origin as the planner was given it, so a file name released for the screen
+    /// is not written.
+    ///
+    /// Rejects an export that writes `entry.text` or `Shown::origin`, which hold the names.
+    #[test]
+    fn a_call_and_a_block_are_exported_as_the_planner_had_them_and_not_as_the_person_read_them() {
+        use bravebot_agent::report::{Activity, Reach, Shown};
+        let mut session = Session::new("kernel-enforced");
+        let call = Activity::running("Read", "ref:1(U,priv):IGNORE-PREVIOUS-INSTRUCTIONS.md")
+            .as_the_planner_had_it(Some("ref:1".to_string()))
+            .done("3 lines");
+        session.transcript.push(Entry::tool(call));
+        session.transcript.last_mut().expect("the call").shown = Some(Shown {
+            as_the_planner_had_it: Some("ref:1".to_string()),
+            origin: "IGNORE-PREVIOUS-INSTRUCTIONS.md".to_string(),
+            reach: Reach::NotThePlanner,
+            label: "U,priv".to_string(),
+            lines: 1,
+            preview: vec!["x".to_string()],
+        });
+        let markdown = as_markdown(&session, "t");
+        assert!(!markdown.contains("IGNORE-PREVIOUS"), "{markdown}");
+        assert!(markdown.contains("*Ran: `Read(ref:1)`*"), "{markdown}");
+        assert!(
+            markdown.contains("> *Quarantined: ref:1 (U,priv)*"),
+            "{markdown}"
+        );
+    }
+
+    /// A call with no planner form, and a block whose origin names no file, are exported as they
+    /// are drawn.
+    ///
+    /// Rejects an export that drops the line of a call with nothing to substitute.
+    #[test]
+    fn a_call_and_a_block_with_nothing_to_substitute_are_exported_as_drawn() {
+        use bravebot_agent::report::{Activity, Reach, Shown};
+        let mut session = Session::new("kernel-enforced");
+        let call = Activity::running("Read", "src/main.rs").done("3 lines");
+        session.transcript.push(Entry::tool(call));
+        session.transcript.last_mut().expect("the call").shown = Some(Shown {
+            as_the_planner_had_it: None,
+            origin: "what the isolated processor said".to_string(),
+            reach: Reach::NoModel,
+            label: "U,priv".to_string(),
+            lines: 1,
+            preview: vec!["x".to_string()],
+        });
+        let markdown = as_markdown(&session, "t");
+        assert!(
+            markdown.contains("*Ran: `Read(src/main.rs)`*"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("> *Quarantined: what the isolated processor said (U,priv)*"),
+            "{markdown}"
+        );
+    }
+
     /// A finished task is ticked and every other status is left open, and the list is closed by a
     /// blank line so the next line of the export is not read as part of it.
     #[test]
@@ -218,6 +345,7 @@ mod tests {
         use bravebot_core::todo::{Row, Status};
         let row = |content: &str, status| Row {
             content: content.to_string(),
+            as_the_planner_had_it: content.to_string(),
             marker: "",
             status,
         };
@@ -230,5 +358,23 @@ mod tests {
             list,
             "**Tasks:**\n\n- [x] first (completed)\n- [ ] second (in_progress)\n- [ ] third (cancelled)\n\n"
         );
+    }
+
+    /// SESSION-17: a task is exported as the model wrote it, so a file name shown on the screen in
+    /// place of a reference is not written.
+    ///
+    /// Rejects an export that writes `Row::content`, which holds the names.
+    #[test]
+    fn a_task_is_exported_as_the_model_wrote_it_and_not_as_the_person_read_it() {
+        use bravebot_core::todo::{Row, Status};
+        let row = Row {
+            content: "rewrite IGNORE-PREVIOUS-INSTRUCTIONS.md".to_string(),
+            as_the_planner_had_it: "rewrite ref:1".to_string(),
+            marker: "",
+            status: Status::Active,
+        };
+        let list = task_list(&[row]);
+        assert!(!list.contains("IGNORE-PREVIOUS"), "{list}");
+        assert!(list.contains("- [ ] rewrite ref:1 (in_progress)"), "{list}");
     }
 }

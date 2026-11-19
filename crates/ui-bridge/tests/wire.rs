@@ -134,6 +134,7 @@ fn a_call_carries_the_reason_it_was_made() {
 #[test]
 fn quarantined_content_says_how_much_it_left_out() {
     let value = wire::shown(&Shown {
+        as_the_planner_had_it: None,
         origin: "https://example.com/page".into(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".into(),
@@ -160,6 +161,7 @@ fn the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label() {
         },
     );
     let value = wire::shown(&Shown {
+        as_the_planner_had_it: None,
         origin: "weather:get_forecast returned".into(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".into(),
@@ -190,6 +192,7 @@ fn the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label() {
 fn released_content_crosses_the_transport_with_the_label_it_was_released_under() {
     let shown = |label: &str| {
         wire::shown(&Shown {
+            as_the_planner_had_it: None,
             origin: "https://example.com/page".into(),
             reach: Reach::NotThePlanner,
             label: label.into(),
@@ -307,6 +310,7 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
                 preview: "part".into(),
                 label: bytes.into(),
                 truncated: false,
+                hidden: 0,
                 verdict: Verdict::Safe,
                 reason: Some("advice".into()),
                 reason_label: Some(said.into()),
@@ -332,6 +336,7 @@ fn each_label_crosses_as_both_axes_named_and_an_unknown_one_as_the_bottom() {
     use bravebot_core::label::Label;
     let shown = |label: String| {
         wire::shown(&Shown {
+            as_the_planner_had_it: None,
             origin: "file.md".into(),
             reach: Reach::NotThePlanner,
             label,
@@ -440,6 +445,7 @@ fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: false,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: None,
             reason_label: None,
@@ -449,6 +455,42 @@ fn a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person() {
     assert_eq!(vouch["rule"], json!("/work/note.md "));
     assert_eq!(vouch["shownPath"], json!("\"note.md\u{2423}\""));
     assert_eq!(vouch["shownRule"], json!("\"/work/note.md\u{2423}\""));
+}
+
+/// PROMPT-13: the window is handed how many characters of a vouch preview drew as nothing, the
+/// sentence in the catalog's words, and the preview with each one already written out. A preview
+/// with none carries no sentence. The fault it rejects: a vouch request that leaves the count and
+/// the sentence out, so the card draws the spelled tokens with nothing to say what they are.
+#[test]
+fn a_vouch_request_carries_how_many_characters_drew_as_nothing() {
+    use bravebot_agent::confirm::VouchRequest;
+    use bravebot_core::vetting::Verdict;
+    let request = |preview: &str, hidden| VouchRequest {
+        path: "note.md".into(),
+        rule: "/work/note.md".into(),
+        preview: preview.into(),
+        label: "(U,priv)".into(),
+        truncated: false,
+        hidden,
+        verdict: Verdict::Safe,
+        reason: None,
+        reason_label: None,
+    };
+    let spelled = "a\u{2039}U+E0064 d\u{203A}b\u{2039}U+200B\u{203A}";
+    let some = wire::vouch_request(5, &request(spelled, 2));
+    assert_eq!(some["hidden"], json!(2));
+    assert_eq!(
+        some["hiddenNote"],
+        json!(bravebot_i18n::t!(hidden_characters, count = 2usize).to_string())
+    );
+    assert_eq!(some["preview"], json!(spelled));
+    let none = wire::vouch_request(6, &request("plain", 0));
+    assert_eq!(none["hidden"], json!(0));
+    assert_eq!(
+        none["hiddenNote"],
+        Value::Null,
+        "a preview with nothing hidden in it was sent a sentence about some"
+    );
 }
 
 #[test]
@@ -740,6 +782,7 @@ fn a_message_between_sessions_crosses_as_its_own_kind_without_the_frame() {
 fn a_todo_row_sends_its_status_not_its_glyph() {
     let value = wire::row(&Row {
         content: "fix the parser".into(),
+        as_the_planner_had_it: "fix the parser".into(),
         marker: "[x]",
         status: Status::Done,
     });
@@ -757,6 +800,7 @@ fn a_cancelled_task_crosses_as_cancelled() {
     assert_eq!(
         wire::row(&Row {
             content: "rewrite the parser".into(),
+            as_the_planner_had_it: "rewrite the parser".into(),
             marker: "✗",
             status: Status::Cancelled,
         }),
@@ -1900,6 +1944,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             preview: "part".into(),
             label: "(U,priv)".into(),
             truncated: true,
+            hidden: 0,
             verdict: Verdict::Safe,
             reason: Some("advice".into()),
             reason_label: Some("(U,priv)".into()),

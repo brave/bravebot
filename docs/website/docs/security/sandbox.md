@@ -182,6 +182,13 @@ any list: a pinned `allowRead` or `allowWrite` replaces yours, and a pinned refu
 you wrote lifts. `--sandbox-allow-read`, `--sandbox-deny-read`, `--sandbox-allow-write` and
 `--sandbox-deny-write` add to the lists for one run.
 
+On macOS a program cannot rename or remove a directory that lies between a path you refused and the
+directory that grants it, so the refused path is not reached under a new name. That includes the
+granted directory itself: a session opened on the home directory cannot rename `~/.config`. Where a
+directory above the refused path does not exist yet, the topmost missing one cannot be made, so a
+tree built elsewhere cannot be moved into place at `~/.config/systemd`. Files made or removed beside
+the refused path are not affected.
+
 An entry that cannot be applied is not in force. A refused `denyRead` or `denyWrite` stops the
 commands it would have held back, with a message naming it, rather than letting them through. On
 Linux a directory holding a path you refused writes to cannot have new entries made directly in it,

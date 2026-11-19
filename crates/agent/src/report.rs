@@ -271,6 +271,13 @@ pub struct Activity {
     /// the target: a line that decided how to draw a name by looking at the name would be a
     /// branch on content nobody vouched for.
     pub names_a_file: bool,
+    /// [`Activity::target`] as the planner wrote it, which names a file by the reference the
+    /// planner was given where the target names it by the name the person is shown.
+    ///
+    /// What an export writes for the call, so a file name released for the screen does not reach a
+    /// file a later turn may read (SESSION-17). Set by dispatch beside the target from the same
+    /// release, and never derived from the target. `None` for a line no dispatch made.
+    pub as_the_planner_had_it: Option<String>,
     /// Why the planner made the call, in its own words. Empty where it gave no reason.
     ///
     /// Carried to a screen and nowhere else: the call runs the same with or without it, and
@@ -331,6 +338,7 @@ impl Activity {
             verb,
             target: target.into(),
             names_a_file: false,
+            as_the_planner_had_it: None,
             why: String::new(),
             tool: String::new(),
             skill: None,
@@ -365,6 +373,12 @@ impl Activity {
     /// ([`crate::tools::names_a_file`]).
     pub fn naming_a_file(mut self, names_a_file: bool) -> Self {
         self.names_a_file = names_a_file;
+        self
+    }
+
+    /// Say what the target was before a reference in it was drawn as the file's name.
+    pub fn as_the_planner_had_it(mut self, target: Option<String>) -> Self {
+        self.as_the_planner_had_it = target;
         self
     }
 
@@ -439,6 +453,20 @@ impl Activity {
         match self.names_a_file && !self.target.is_empty() {
             true => crate::confirm::shown_name(without_reference_slot(&self.target)),
             false => self.target.clone(),
+        }
+    }
+
+    /// [`Activity::line`] with the target as the planner wrote it, for a file a later turn may
+    /// read. A line no dispatch made has no such form and comes back as [`Activity::line`].
+    pub fn line_as_the_planner_had_it(&self) -> String {
+        match &self.as_the_planner_had_it {
+            Some(target) => Self {
+                target: target.clone(),
+                as_the_planner_had_it: None,
+                ..self.clone()
+            }
+            .line(),
+            None => self.line(),
         }
     }
 
@@ -614,6 +642,13 @@ impl Reach {
 pub struct Shown {
     /// Where it came from, in words a person can act on: a path, or what produced it.
     pub origin: String,
+    /// `origin` as the planner was given it, where `origin` names files the planner was not told
+    /// (the reference rather than the file). `None` where `origin` is already what the planner was
+    /// given.
+    ///
+    /// An export carries this and never `origin`, so a file name released for the screen does not
+    /// reach a file a later turn may read (SESSION-17).
+    pub as_the_planner_had_it: Option<String>,
     /// Which contexts this is kept out of.
     pub reach: Reach,
     /// The label it carries, in the same short form the trail uses.

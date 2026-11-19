@@ -91,13 +91,15 @@ pub(super) fn same_file(_first: &Path, _second: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::Workspace;
+    use bravebot_core::CaseFolding;
     use std::path::Path;
 
     /// A write to a named file that is not made yet reaches it by another case where the volume folds
-    /// case, and only there. Rejects a comparison that reads the spelling alone, or one that folds on a
-    /// volume that holds two spellings as two files.
+    /// case or could not be asked, and not where it holds the spellings apart. Rejects a comparison
+    /// that reads the spelling alone, one that folds on a volume that holds two spellings as two
+    /// files, and one that reads a volume that could not be asked as one that does not fold.
     #[test]
-    fn a_spelling_in_another_case_reaches_a_file_not_made_yet_only_where_the_volume_folds() {
+    fn a_spelling_in_another_case_reaches_a_file_not_made_yet_unless_the_volume_keeps_them_apart() {
         let root = std::env::temp_dir().join(format!("bravebot-named-fold-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("scratch");
         let root = root.canonicalize().expect("canonical scratch");
@@ -105,13 +107,18 @@ mod tests {
             .expect("workspace")
             .with_named_settings_file(Some(&root.join("Grant.json")));
         let other_case = root.join("GRANT.json");
-        let folds = |_: &Path| true;
-        let does_not = |_: &Path| false;
+        let folds = |_: &Path| CaseFolding::Folds;
+        let does_not = |_: &Path| CaseFolding::Keeps;
+        let unasked = |_: &Path| CaseFolding::Unknown;
         assert!(
             workspace.reaches_the_named_settings_file_where(&root.join("Grant.json"), &does_not)
         );
         assert!(workspace.reaches_the_named_settings_file_where(&other_case, &folds));
         assert!(!workspace.reaches_the_named_settings_file_where(&other_case, &does_not));
+        assert!(workspace.reaches_the_named_settings_file_where(&other_case, &unasked));
+        assert!(
+            !workspace.reaches_the_named_settings_file_where(&root.join("Other.json"), &unasked)
+        );
         assert!(!workspace.reaches_the_named_settings_file_where(&root.join("Other.json"), &folds));
         let _ = std::fs::remove_dir_all(&root);
     }
