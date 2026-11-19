@@ -229,7 +229,7 @@ test('an app whose connection ended takes its session over through the next rela
   await session.send('plan:first')
   await until(session, 'the first turn to end', (view) => view.status === 'completed')
   const before = await settled(first.client, 'the first turn\'s worker to return')
-  assert.deepEqual(before.sessions, [{ session: session.id, state: 'open', working: false, controlled: true }])
+  assert.deepEqual(before.sessions, [{ session: session.id, state: 'open', working: false, attached: true }])
 
   made.opened[0]!.close(1000, 'the phone lost its network')
   await within(first.ended, 'the client to see its connection end')
@@ -240,13 +240,13 @@ test('an app whose connection ended takes its session over through the next rela
   const after = await second.client.instance()
   assert.equal(after.instance, before.instance, 'the host did not restart')
   assert.deepEqual(after.answers, ['confirm', 'run', 'fetch', 'ask', 'trust'], 'the answers the command line gave the relay')
-  assert.deepEqual(after.sessions, [{ session: session.id, state: 'open', working: false, controlled: false }])
+  assert.deepEqual(after.sessions, [{ session: session.id, state: 'open', working: false, attached: false }])
 
   const taken = await second.client.attach(session.id)
   assert.equal(taken.view.status, 'completed')
   assert.equal(taken.view.ended, null)
   assert.deepEqual(replies(taken), ['first reply'], 'the view starts from what the session holds')
-  assert.equal((await second.client.instance()).sessions[0]?.controlled, true)
+  assert.equal((await second.client.instance()).sessions[0]?.attached, true)
 
   await taken.send('plan:second')
   await until(taken, 'the second reply', () => replies(taken).length === 2)

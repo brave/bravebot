@@ -3,7 +3,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this file,
 // You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Who controls a session: losing the controller, and handing the session to another.
+//! Who can answer a session's questions: a client leaving it, and a client joining it.
 
 use super::*;
 use crate::turn::{Pending, Question};
@@ -62,10 +62,11 @@ fn waiting_on_a_write(request: u64) -> (Running, mpsc::Receiver<Reply>) {
     (running, receiver)
 }
 
-/// Losing the controller refuses the question that waits, tells nobody a turn was cancelled, and
-/// leaves the turn to go on: it is not stopped, because the person who left may come back.
+/// A client leaving that takes the waiting question's kind with it refuses the question, tells
+/// nobody a turn was cancelled, and leaves the turn to go on: it is not stopped, because the person
+/// who left may come back.
 #[test]
-fn losing_the_controller_refuses_the_waiting_question_and_does_not_stop_the_turn() {
+fn narrowing_to_kinds_without_the_waiting_question_refuses_it_and_does_not_stop_the_turn() {
     let directory = tempfile::tempdir().unwrap();
     let (mut bridge, _) = a_bridge();
     let (running, receiver) = waiting_on_a_write(3);
@@ -74,10 +75,10 @@ fn losing_the_controller_refuses_the_waiting_question_and_does_not_stop_the_turn
     let handle = open(&mut bridge, directory.path(), true, Some(running));
     bridge.emitter.start_view(&handle, true).unwrap();
     bridge
-        .set_answerable(&handle, &[Kind::Write])
+        .set_answerable(&handle, &[Kind::Write, Kind::Run])
         .expect("the session is open");
 
-    bridge.lose_control(&handle);
+    bridge.narrow_answerable(&handle, &[Kind::Run]);
 
     let refusal = receiver.try_recv().expect("the question was refused");
     assert!(
@@ -86,10 +87,37 @@ fn losing_the_controller_refuses_the_waiting_question_and_does_not_stop_the_turn
     );
     assert!(pending.lock().unwrap().is_none());
     assert!(!cancel.is_cancelled(), "the turn was stopped");
+    let answerers = bridge.answerers_of(&handle);
     assert!(
-        !bridge.answerers_of(&handle).can_answer(Kind::Write),
-        "a question asked after the loss would be shown to nobody"
+        !answerers.can_answer(Kind::Write),
+        "a question asked after the client left would be shown to nobody"
     );
+    assert!(answerers.can_answer(Kind::Run));
+}
+
+/// A client leaving while another that can answer the waiting question stays leaves the question
+/// waiting for it.
+#[test]
+fn narrowing_to_kinds_that_cover_the_waiting_question_leaves_it_waiting() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut bridge, said) = a_bridge();
+    let (running, receiver) = waiting_on_a_write(3);
+    let pending = Arc::clone(&running.pending);
+    let handle = open(&mut bridge, directory.path(), true, Some(running));
+    bridge.emitter.start_view(&handle, true).unwrap();
+    bridge
+        .set_answerable(&handle, &[Kind::Write, Kind::Run])
+        .expect("the session is open");
+    let before = names(&said).len();
+
+    bridge.narrow_answerable(&handle, &[Kind::Write]);
+
+    assert!(receiver.try_recv().is_err(), "the question was answered");
+    assert_eq!(pending.lock().unwrap().map(|question| question.id), Some(3));
+    assert_eq!(names(&said).len(), before, "the view was changed");
+    let answerers = bridge.answerers_of(&handle);
+    assert!(answerers.can_answer(Kind::Write));
+    assert!(!answerers.can_answer(Kind::Run));
 }
 
 /// The session is not given a state it did not have, and a session that is not open is not
@@ -113,11 +141,11 @@ fn a_set_of_answerers_is_only_made_for_a_session_that_is_open() {
     );
 }
 
-/// The client is handed the session before it is sent anything of it and after the previous
-/// client was sent the last of it, is told where the session stands with the rows so far, and can
-/// answer from then on and not before.
+/// The joining client is attached before it is sent anything of the session and after the update
+/// before it was sent, is told where the session stands with the rows so far, and can answer from
+/// then on and not before.
 #[test]
-fn taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot() {
+fn joining_a_session_attaches_between_the_last_update_and_the_snapshot() {
     let directory = tempfile::tempdir().unwrap();
     let (mut bridge, said) = a_bridge();
     let handle = open(&mut bridge, directory.path(), true, None);
@@ -130,7 +158,7 @@ fn taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot(
     let (watched, seen) = (Arc::clone(&said), Arc::clone(&marks));
 
     let attached = bridge
-        .attach_view(&handle, &[Kind::Write, Kind::Ask], || {
+        .attach_view(&handle, &[Kind::Write, Kind::Ask], &[], || {
             seen.lock().unwrap().push(watched.lock().unwrap().len());
             Ok(())
         })
@@ -160,8 +188,8 @@ fn taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot(
     assert!(!answerers.can_answer(Kind::Run));
 }
 
-/// A session whose startup question is unanswered puts it to the client that takes it over, and
-/// one that is answered does not.
+/// A session whose startup question is unanswered puts it to the client that joins it, and one
+/// that is answered does not.
 #[test]
 fn the_startup_question_is_asked_again_only_while_it_is_unanswered() {
     for answered in [false, true] {
@@ -170,7 +198,7 @@ fn the_startup_question_is_asked_again_only_while_it_is_unanswered() {
         let handle = open(&mut bridge, directory.path(), answered, None);
         bridge.emitter.start_view(&handle, answered).unwrap();
 
-        bridge.attach_view(&handle, &[], || Ok(())).unwrap();
+        bridge.attach_view(&handle, &[], &[], || Ok(())).unwrap();
 
         let asked = names(&said).contains(&"trust.request");
         assert_eq!(asked, !answered, "answered: {answered}");
@@ -301,10 +329,10 @@ fn the_startup_question_spells_a_directory_that_holds_invisible_characters() {
     assert_ne!(event.data["directory"], event.data["shownDirectory"]);
 }
 
-/// A session with no view has nothing to hand over, and a session that is not open cannot be
-/// taken. Neither runs the hand-over or changes who can answer.
+/// A session with no view cannot be joined, and neither can a session that is not open. Neither
+/// runs the hand-over or changes who can answer.
 #[test]
-fn a_session_that_cannot_be_taken_over_is_not_handed_over() {
+fn a_session_that_cannot_be_joined_attaches_nobody() {
     let directory = tempfile::tempdir().unwrap();
     let (mut bridge, said) = a_bridge();
     let handle = open(&mut bridge, directory.path(), true, None);
@@ -313,7 +341,7 @@ fn a_session_that_cannot_be_taken_over_is_not_handed_over() {
     let marker = Arc::clone(&ran);
 
     let without_a_view = bridge
-        .attach_view(&handle, &[Kind::Write], || {
+        .attach_view(&handle, &[Kind::Write], &[], || {
             marker.store(true, Ordering::SeqCst);
             Ok(())
         })
@@ -324,7 +352,7 @@ fn a_session_that_cannot_be_taken_over_is_not_handed_over() {
 
     let marker = Arc::clone(&ran);
     let unknown = bridge
-        .attach_view("never-opened", &[Kind::Write], || {
+        .attach_view("never-opened", &[Kind::Write], &[], || {
             marker.store(true, Ordering::SeqCst);
             Ok(())
         })
@@ -338,11 +366,11 @@ fn a_session_that_cannot_be_taken_over_is_not_handed_over() {
     );
 }
 
-/// Updates keep arriving from a turn while a client takes the session over. The snapshot says
-/// where the session stood at the hand-over, so every update before it is at or under its
+/// Updates keep arriving from a turn while a client joins the session. The snapshot says where the
+/// session stood at the hand-over, so every update before it is at or under its
 /// sequence and every one after it is the next, with none missing and none twice.
 #[test]
-fn updates_during_a_take_over_fall_on_one_side_of_the_snapshot() {
+fn updates_during_a_join_fall_on_one_side_of_the_snapshot() {
     for _ in 0..20 {
         let directory = tempfile::tempdir().unwrap();
         let (mut bridge, said) = a_bridge();
@@ -361,7 +389,7 @@ fn updates_during_a_take_over_fall_on_one_side_of_the_snapshot() {
             }
         });
         go.send(()).unwrap();
-        bridge.attach_view(&handle, &[], || Ok(())).unwrap();
+        bridge.attach_view(&handle, &[], &[], || Ok(())).unwrap();
         worker.join().unwrap();
 
         let events = said.lock().unwrap();
@@ -403,7 +431,7 @@ fn apply(rows: &mut Vec<Value>, update: &Value) {
 }
 
 /// A turn that reports calls starting and finishing, with labelled narration between, while a
-/// client takes the session over and then asks for a snapshot again. Starting from either snapshot
+/// client joins the session and then asks for a snapshot again. Starting from either snapshot
 /// and applying each update after it, the client holds the rows a snapshot taken at the end holds:
 /// none missing, none twice, each finished call on its own row, and every payload whole with its
 /// label. The turn reports more rows than a snapshot keeps, so the end's snapshot says how many it
@@ -443,7 +471,7 @@ fn a_client_that_applies_the_updates_after_a_snapshot_holds_what_a_later_snapsho
         });
         go.send(()).unwrap();
         let first = if take_over {
-            bridge.attach_view(&handle, &[], || Ok(())).unwrap()
+            bridge.attach_view(&handle, &[], &[], || Ok(())).unwrap()
         } else {
             let resync = Request {
                 id: 1,
@@ -453,7 +481,7 @@ fn a_client_that_applies_the_updates_after_a_snapshot_holds_what_a_later_snapsho
             bridge.dispatch(&resync).unwrap()
         };
         worker.join().unwrap();
-        let last = bridge.attach_view(&handle, &[], || Ok(())).unwrap();
+        let last = bridge.attach_view(&handle, &[], &[], || Ok(())).unwrap();
 
         let events = said.lock().unwrap();
         let snapshots: Vec<usize> = events
@@ -529,24 +557,67 @@ fn a_bridge_that_refuses_until_set_starts_every_session_unanswerable() {
     assert!(!host.answerers_of(&held).can_answer(Kind::Run));
 }
 
-/// A hand-over that fails writes nothing and changes nobody's right to answer, so the client is
-/// not told it controls a session that is still sending its events to someone else.
+/// A hand-over that fails writes nothing and leaves the kinds the clients already there can answer,
+/// without those of the client that was not added.
 #[test]
-fn a_hand_over_that_fails_sends_nothing_and_changes_who_can_answer_nothing() {
+fn a_hand_over_that_fails_sends_nothing_and_leaves_who_can_answer_as_it_was() {
     let directory = tempfile::tempdir().unwrap();
     let (mut bridge, said) = a_bridge();
     let handle = open(&mut bridge, directory.path(), true, None);
     bridge.emitter.start_view(&handle, true).unwrap();
-    bridge.set_answerable(&handle, &[]).unwrap();
+    bridge.set_answerable(&handle, &[Kind::Run]).unwrap();
     let before = names(&said).len();
 
     let failed = bridge
-        .attach_view(&handle, &[Kind::Write], || {
+        .attach_view(&handle, &[Kind::Write, Kind::Run], &[Kind::Run], || {
             Err(Failure::bad_request("the owners cannot be written"))
         })
         .expect_err("the hand-over failed");
 
     assert_eq!(failed.code, ErrorCode::BadRequest);
     assert_eq!(names(&said).len(), before, "something was sent");
-    assert!(!bridge.answerers_of(&handle).can_answer(Kind::Write));
+    let answerers = bridge.answerers_of(&handle);
+    assert!(!answerers.can_answer(Kind::Write));
+    assert!(
+        answerers.can_answer(Kind::Run),
+        "the clients already there lost their answers"
+    );
+}
+
+/// A question asked while a join was widening who can answer, of a kind only the joining client
+/// could answer, is refused when the join fails, and is not left waiting for a client that is not
+/// there.
+#[test]
+fn a_hand_over_that_fails_refuses_a_question_only_the_joining_client_could_answer() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut bridge, _) = a_bridge();
+    let (running, receiver) = waiting_on_a_write(3);
+    let pending = Arc::clone(&running.pending);
+    *pending.lock().unwrap() = None;
+    let handle = open(&mut bridge, directory.path(), true, Some(running));
+    bridge.emitter.start_view(&handle, true).unwrap();
+    bridge.set_answerable(&handle, &[Kind::Run]).unwrap();
+
+    let asked = Arc::clone(&pending);
+    bridge
+        .attach_view(
+            &handle,
+            &[Kind::Write, Kind::Run],
+            &[Kind::Run],
+            move || {
+                *asked.lock().unwrap() = Some(Question {
+                    id: 3,
+                    kind: Kind::Write,
+                });
+                Err(Failure::bad_request("the owners cannot be written"))
+            },
+        )
+        .expect_err("the hand-over failed");
+
+    let refusal = receiver.try_recv().expect("the question was refused");
+    assert!(
+        matches!(refusal, Reply::Write(Decision::Reject)),
+        "{refusal:?}"
+    );
+    assert!(pending.lock().unwrap().is_none());
 }

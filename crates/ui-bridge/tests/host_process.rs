@@ -641,9 +641,9 @@ fn writes_on_request(
     }
 }
 
-/// A client that started its view is asked, and its approval lands.
+/// A client attached to a session whose view it started is asked, and its approval lands.
 #[test]
-fn a_controller_that_started_its_view_is_asked_and_its_approval_lands() {
+fn a_client_attached_with_its_view_started_is_asked_and_its_approval_lands() {
     let scratch = Scratch::new();
     let written = scratch.project().join("out.txt");
     let requests = Arc::default();
@@ -744,11 +744,11 @@ fn a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen(
     next.leave();
 }
 
-/// The controller leaves while the model is still working, so the turn asks nobody: its write is
-/// refused when asked, at once, and the turn goes on to finish rather than being stopped or left
+/// The only attached client leaves while the model is still working, so the turn asks nobody: its
+/// write is refused when asked, at once, and the turn goes on to finish rather than being stopped or left
 /// waiting.
 #[test]
-fn a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on() {
+fn a_question_asked_after_the_last_attached_client_left_is_refused_and_the_turn_goes_on() {
     let scratch = Scratch::new();
     let written = scratch.project().join("out.txt");
     let requests = Arc::default();
@@ -768,7 +768,7 @@ fn a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on() 
     first.leave();
 
     let mut second = Client::next_client_of(&mut host);
-    assert_eq!(second.the_session(&session)["controlled"], false);
+    assert_eq!(second.the_session(&session)["attached"], false);
     // Both requests of the turn are let through now that nobody is there.
     release.send(()).unwrap();
     release.send(()).unwrap();
@@ -792,11 +792,12 @@ fn a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on() 
     second.leave();
 }
 
-/// The controller leaves while a write waits for it. The question is refused and shown resolved,
-/// the turn goes on, and the client that takes the session over is told so, is the one that is
-/// asked next, and cannot answer the old question by its number.
+/// The only attached client leaves while a write waits for it. The question is refused and shown
+/// resolved, the turn goes on, and the client that joins the session next is told so, is the one
+/// that is asked next, and cannot answer the old question by its number.
 #[test]
-fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answers_nothing() {
+fn a_question_waiting_when_the_last_attached_client_leaves_is_refused_and_its_number_answers_nothing()
+ {
     let scratch = Scratch::new();
     let written = scratch.project().join("out.txt");
     let requests = Arc::default();
@@ -814,7 +815,7 @@ fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answe
     first.leave();
 
     let mut second = Client::next_client_of(&mut host);
-    assert_eq!(second.the_session(&session)["controlled"], false);
+    assert_eq!(second.the_session(&session)["attached"], false);
     second.until_idle(&session);
     assert!(!written.exists(), "the question was answered by the loss");
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -825,7 +826,7 @@ fn a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answe
     assert_eq!(snapshot["data"]["status"], "completed", "{snapshot}");
     assert_eq!(snapshot["data"]["target"], sent["target"]);
     assert_eq!(snapshot["data"]["pending"], Value::Null);
-    assert_eq!(second.the_session(&session)["controlled"], true);
+    assert_eq!(second.the_session(&session)["attached"], true);
 
     // The next turn asks this client, with a number the old question did not have.
     second.call(
@@ -967,7 +968,7 @@ fn a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them()
 }
 
 /// A session left before its startup question was answered is still unanswered. The client that
-/// takes it over is asked, and no turn runs until it answers.
+/// joins it is asked, and no turn runs until it answers.
 #[test]
 fn a_session_left_with_its_startup_question_unanswered_asks_the_next_client() {
     let scratch = Scratch::new();
@@ -1004,11 +1005,11 @@ fn a_session_left_with_its_startup_question_unanswered_asks_the_next_client() {
     second.leave();
 }
 
-/// A client that has not taken a session over cannot act on it, whichever way it asks, and may
-/// close it. A session cannot be taken by the client that controls it, or by a client that names a
-/// session the host does not hold.
+/// A client not attached to a session cannot act on it, whichever way it asks, and may close it
+/// once every client has left it. A client cannot join a session it is attached to, or one the
+/// host does not hold.
 #[test]
-fn a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it() {
+fn a_client_not_attached_to_a_session_cannot_act_on_it_and_may_close_it_once_it_is_left() {
     let scratch = Scratch::new();
     let endpoint = a_model_service(ends_the_turn, || {});
     let mut host = Host::start(&scratch, &endpoint);
@@ -1051,7 +1052,7 @@ fn a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it(
     let unknown = second.answered("session.attach", json!({"session": "s99"}));
     assert_eq!(unknown["error"]["code"], "no_such_session", "{unknown}");
     assert_eq!(second.the_session(&session)["state"], "open");
-    assert_eq!(second.the_session(&session)["controlled"], false);
+    assert_eq!(second.the_session(&session)["attached"], false);
 
     let closing = second.call("session.close", json!({"session": session}));
     assert_eq!(closing["state"], "closing");
@@ -2066,10 +2067,10 @@ fn a_client_without_trust_is_not_asked_about_trust_and_cannot_answer_it() {
     client.leave();
 }
 
-/// A client without trust that takes over a session still waiting on its trust question is not
-/// sent it, and no turn runs. The next client that may answer trust is asked.
+/// A client without trust that joins a session still waiting on its trust question is not sent it,
+/// and no turn runs. The next client that may answer trust is asked.
 #[test]
-fn a_takeover_without_trust_is_not_asked_and_the_next_client_with_trust_is() {
+fn a_join_without_trust_is_not_asked_and_the_next_client_with_trust_is() {
     let scratch = Scratch::new();
     let endpoint = a_model_service(ends_the_turn, || {});
     let mut host = Host::start_giving(&scratch, &endpoint, &[("a", "trust"), ("b", "confirm")]);
@@ -2193,9 +2194,10 @@ fn events_of(client: &Client, session: &str) -> Vec<String> {
         .collect()
 }
 
-/// Two clients connected at once each control only the sessions they opened. Each sees both in
-/// `instance.info`, controlling only its own, is sent no event of the other's, and is refused every
-/// request that names the other's, a takeover and a close included.
+/// Two clients connected at once are each attached only to the sessions they opened. Each sees both
+/// in `instance.info`, attached only to its own, is sent no event of the other's, and is refused
+/// every request that acts on the other's, a close included. Joining a session with no view started
+/// is refused for that reason.
 #[test]
 fn two_clients_connected_at_once_each_act_on_and_hear_only_their_own_sessions() {
     let scratch = Scratch::new();
@@ -2211,17 +2213,16 @@ fn two_clients_connected_at_once_each_act_on_and_hear_only_their_own_sessions() 
     );
     a.until(|said| said["event"] == "turn.done" && said["session"] == ours.as_str());
 
-    assert_eq!(a.the_session(&ours)["controlled"], true);
-    assert_eq!(a.the_session(&theirs)["controlled"], false);
-    assert_eq!(b.the_session(&ours)["controlled"], false);
-    assert_eq!(b.the_session(&theirs)["controlled"], true);
+    assert_eq!(a.the_session(&ours)["attached"], true);
+    assert_eq!(a.the_session(&theirs)["attached"], false);
+    assert_eq!(b.the_session(&ours)["attached"], false);
+    assert_eq!(b.the_session(&theirs)["attached"], true);
     for (method, params) in [
         (
             "turn.send",
             message_ids::with_fresh(json!({"session": ours, "prompt": "hello"})),
         ),
         ("session.view.start", json!({"session": ours, "version": 1})),
-        ("session.attach", json!({"session": ours})),
         ("session.close", json!({"session": ours})),
     ] {
         let refused = b.answered(method, params);
@@ -2230,6 +2231,9 @@ fn two_clients_connected_at_once_each_act_on_and_hear_only_their_own_sessions() 
             "{method}: {refused}"
         );
     }
+    let refused = b.answered("session.attach", json!({"session": ours}));
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert_eq!(b.the_session(&ours)["attached"], false);
     assert!(
         !events_of(&a, &ours).is_empty(),
         "the test saw no event to keep apart"
@@ -2241,8 +2245,8 @@ fn two_clients_connected_at_once_each_act_on_and_hear_only_their_own_sessions() 
 }
 
 /// A client that leaves takes nothing from one connected at the same time: a turn the other has
-/// running goes on to its end, the other is still answered, and it may take over the session the
-/// first left.
+/// running goes on to its end, the other is still answered, and it may join the session the first
+/// left.
 #[test]
 fn a_client_leaving_while_another_is_mid_turn_leaves_the_other_served() {
     let scratch = Scratch::new();
@@ -2252,7 +2256,7 @@ fn a_client_leaving_while_another_is_mid_turn_leaves_the_other_served() {
     let mut a = host.client_named("a");
     let mut b = host.client_named("b");
     let left = a.session_in(&scratch.project());
-    // A session is taken over only from where its view stands.
+    // A session is joined only from where its view stands.
     a.call("session.view.start", json!({"session": left, "version": 1}));
     let working = b.session_in(&scratch.project());
     b.call(
@@ -2268,8 +2272,312 @@ fn a_client_leaving_while_another_is_mid_turn_leaves_the_other_served() {
     release.send(()).unwrap();
     b.until(|said| said["event"] == "turn.done" && said["session"] == working.as_str());
     b.call("session.attach", json!({"session": left}));
-    assert_eq!(b.the_session(&left)["controlled"], true);
-    assert_eq!(b.the_session(&working)["controlled"], true);
+    assert_eq!(b.the_session(&left)["attached"], true);
+    assert_eq!(b.the_session(&working)["attached"], true);
+    b.leave();
+}
+
+/// Two clients attached to one session, each given `answers`: `a` opened it and started its view,
+/// and `b` joined it. Returns them with the session.
+fn two_attached(host: &Host, scratch: &Scratch) -> (Client, Client, String) {
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    let session = a.viewed_session_in(&scratch.project());
+    b.call("session.attach", json!({"session": session}));
+    b.event("session.view.snapshot");
+    assert_eq!(a.the_session(&session)["attached"], true);
+    assert_eq!(b.the_session(&session)["attached"], true);
+    (a, b, session)
+}
+
+/// Both clients attached to a session are shown its question and both may answer it. The first
+/// answer is the one that lands, and the second is refused because the question is no longer
+/// waiting. Each hears the turn end.
+#[test]
+fn two_attached_clients_are_both_asked_and_the_first_answer_counts() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    let asked_a = a.event("confirm.request");
+    let asked_b = b.event("confirm.request");
+    assert_eq!(asked_a["data"], asked_b["data"]);
+    let request = asked_b["data"]["request"].clone();
+    b.call(
+        "confirm.reply",
+        json!({"session": session, "request": request, "decision": "approve"}),
+    );
+    let late = a.answered(
+        "confirm.reply",
+        json!({"session": session, "request": request, "decision": "reject"}),
+    );
+    assert_eq!(late["error"]["code"], "no_such_request", "{late}");
+    a.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
+    b.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
+    assert_eq!(
+        std::fs::read_to_string(&written).expect("the first answer, an approval, landed"),
+        "written by the model"
+    );
+    a.leave();
+    b.leave();
+}
+
+/// While a turn sent by one attached client runs, a send from the other is refused as busy, and
+/// only the first turn reaches the model.
+#[test]
+fn a_send_from_each_attached_client_starts_one_turn_and_the_other_is_refused_as_busy() {
+    let scratch = Scratch::new();
+    let (before, reached, release) = a_gate();
+    let endpoint = a_model_service(ends_the_turn, before);
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+    // A view started with no trust: the turn is let through because nothing asks.
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model");
+
+    let busy = b.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello too"})),
+    );
+    assert_eq!(busy["error"]["code"], "turn_in_flight", "{busy}");
+    release.send(()).unwrap();
+    b.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
+    assert!(
+        reached.recv_timeout(NOT_STARTED).is_err(),
+        "a second turn reached the model"
+    );
+    a.leave();
+    b.leave();
+}
+
+/// A client leaves while a question waits that the client still attached can answer. The question
+/// stays waiting, and the answer of the one that stayed lands.
+#[test]
+fn a_client_leaving_while_another_attached_can_answer_leaves_the_question_waiting() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    a.event("confirm.request");
+    let asked = b.event("confirm.request");
+    a.leave();
+    host.says("client a ended");
+
+    b.call("session.view.resync", json!({"session": session}));
+    let snapshot = b.event("session.view.snapshot");
+    assert_eq!(
+        snapshot["data"]["pending"]["request"], asked["data"]["request"],
+        "the question stopped waiting when a client that could answer stayed: {snapshot}"
+    );
+    b.call(
+        "confirm.reply",
+        json!({"session": session, "request": asked["data"]["request"], "decision": "approve"}),
+    );
+    b.event("turn.done");
+    assert_eq!(
+        std::fs::read_to_string(&written).expect("the approval of the client that stayed landed"),
+        "written by the model"
+    );
+    b.leave();
+}
+
+/// A client leaves while a question waits that only it could answer. The question is refused and
+/// shown resolved to the client that stayed, and the turn goes on to its end.
+#[test]
+fn a_client_leaving_that_alone_could_answer_the_waiting_question_refuses_it() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, &[("a", "confirm,trust"), ("b", "run")]);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    let asked = a.event("confirm.request");
+    // The view is shared, so the client that may not answer it is shown it too.
+    b.event("confirm.request");
+    let refused = b.answered(
+        "confirm.reply",
+        json!({"session": session, "request": asked["data"]["request"], "decision": "approve"}),
+    );
+    assert_eq!(refused["error"]["code"], "not_allowed", "{refused}");
+    a.leave();
+    host.says("client a ended");
+
+    b.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
+    assert!(!written.exists(), "a write nobody left could answer landed");
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let resynced = b.call("session.view.resync", json!({"session": session}));
+    let snapshot = b.event("session.view.snapshot");
+    assert_eq!(snapshot["data"]["sequence"], resynced["sequence"]);
+    assert_eq!(snapshot["data"]["pending"], Value::Null, "{snapshot}");
+    b.leave();
+}
+
+/// A client joins a session between two of its updates: after the turn's prompt and before its
+/// reply. The client already attached is sent every update once, in sequence, across the join. The
+/// joining client is sent the snapshot and then each update after it, and applying them leaves it
+/// holding the rows the other client holds.
+#[test]
+fn a_join_between_two_updates_misses_none_and_repeats_none_for_either_client() {
+    let scratch = Scratch::new();
+    let (before, reached, release) = a_gate();
+    let endpoint = a_model_service(ends_the_turn, before);
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    let session = a.viewed_session_in(&scratch.project());
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model");
+    a.until(|message| {
+        message["event"] == "session.view.update" && kinds(&message["data"]) == ["prompt"]
+    });
+
+    let joined = b.call("session.attach", json!({"session": session}));
+    let snapshot = b.event("session.view.snapshot")["data"].clone();
+    assert_eq!(joined["sequence"], snapshot["sequence"]);
+    release.send(()).unwrap();
+    a.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
+    b.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
+    let end = b.call("session.view.resync", json!({"session": session}))["sequence"]
+        .as_u64()
+        .unwrap();
+    b.event("session.view.snapshot");
+
+    let updates = |client: &Client| -> Vec<Value> {
+        client
+            .inbox
+            .written()
+            .iter()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|said| said["event"] == "session.view.update")
+            .map(|said| said["data"].clone())
+            .collect()
+    };
+    let sequences = |all: &[Value]| -> Vec<u64> {
+        all.iter()
+            .map(|u| u["sequence"].as_u64().unwrap())
+            .collect()
+    };
+    let (of_a, of_b) = (updates(&a), updates(&b));
+    let first = of_a[0]["sequence"].as_u64().unwrap();
+    assert_eq!(
+        sequences(&of_a),
+        (first..=end).collect::<Vec<_>>(),
+        "the client already attached missed or repeated an update across the join"
+    );
+    let from = snapshot["sequence"].as_u64().unwrap();
+    assert_eq!(
+        sequences(&of_b),
+        (from + 1..=end).collect::<Vec<_>>(),
+        "the joining client missed or repeated an update after its snapshot"
+    );
+    assert!(!of_b.is_empty(), "the join was not between two updates");
+
+    let mut rows_b = snapshot["rows"].as_array().unwrap().clone();
+    for update in &of_b {
+        apply(&mut rows_b, update);
+    }
+    let mut rows_a = Vec::new();
+    for update in &of_a {
+        apply(&mut rows_a, update);
+    }
+    assert_eq!(rows_b, rows_a, "the two clients hold different rows");
+    a.leave();
+    b.leave();
+}
+
+/// A resync is answered with a snapshot sent to the client that asked for it alone. The other
+/// attached client is sent nothing for it.
+#[test]
+fn a_resync_is_sent_only_to_the_client_that_asked() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+    let snapshots = |client: &Client| {
+        client
+            .inbox
+            .written()
+            .iter()
+            .filter(|line| line.contains("\"session.view.snapshot\""))
+            .count()
+    };
+    // What the host wrote to `a` before this answer has arrived once the answer has.
+    a.call("instance.info", json!({}));
+    let a_before = snapshots(&a);
+    let b_before = snapshots(&b);
+
+    b.call("session.view.resync", json!({"session": session}));
+    b.event("session.view.snapshot");
+    // The resync was dispatched before this request, so anything it wrote to `a` came first.
+    a.call("instance.info", json!({}));
+    assert_eq!(snapshots(&b), b_before + 1);
+    assert_eq!(
+        snapshots(&a),
+        a_before,
+        "the other client was sent the snapshot"
+    );
+    a.leave();
+    b.leave();
+}
+
+/// A close by one attached client is answered to it first, and then each client attached when it
+/// was answered is told the session closed. A client attached to a session may close it while
+/// another is attached.
+#[test]
+fn a_close_reaches_each_attached_client_after_the_closer_is_answered() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    let id = b.send("session.close", json!({"session": session}));
+    let closed_b = b.event("session.closed");
+    assert_eq!(closed_b["session"], session.as_str());
+    let closed_a = a.event("session.closed");
+    assert_eq!(closed_a["session"], session.as_str());
+    let written = b.inbox.written();
+    let at = |wanted: &dyn Fn(&Value) -> bool| {
+        written
+            .iter()
+            .position(|line| serde_json::from_str::<Value>(line).is_ok_and(|said| wanted(&said)))
+            .expect("the host wrote it")
+    };
+    assert!(
+        at(&|said| said["id"] == id && said["ok"]["state"] == "closing")
+            < at(&|said| said["event"] == "session.closed"),
+        "the closer was told the session closed before its close was answered: {written:?}"
+    );
+    assert_eq!(a.the_session(&session)["state"], "closed");
+    a.leave();
     b.leave();
 }
 

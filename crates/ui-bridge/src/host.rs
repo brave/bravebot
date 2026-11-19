@@ -12,16 +12,17 @@
 //! a new launch over a new channel, at the person's request, and sees the same host instance.
 //!
 //! What a client may ask is [`crate::allowlist`], and where its sessions may be opened is the
-//! workspaces the host was given. A session has one controller: the connection that opened it, or
-//! that took it over after the one before had gone. Nobody else can act on it, and its events go
-//! to that connection alone. A controller can answer questions only once it has a view of the
-//! session (`session.view.start`, or `session.attach`), and only the kinds the allowlist offers
-//! that the person gave that client on the host's command line ([`crate::allowlist::Answer`]).
+//! workspaces the host was given. A session has a set of attached connections: the one that opened
+//! it, and each that joined it with `session.attach`, which tells it where the session stands. Only
+//! they can act on it, and its events go to each of them. A question is asked only once the session
+//! has a view (`session.view.start`), and only of a kind some attached connection may answer: one
+//! the allowlist offers that the person gave that client on the host's command line
+//! ([`crate::allowlist::Answer`]).
 //!
-//! When a controller's connection ends the session stays open with no controller. The question it
-//! was waiting on is refused, and so is every question the turn asks from then on, so nothing is
-//! left asking a person who is no longer there. The turn itself goes on. A later connection can
-//! take the session over with `session.attach`, which tells it where the session stands.
+//! When a connection ends it leaves every session it was attached to. The kinds the others can
+//! answer are what remains, and the question waiting is refused if none of them can answer it, so
+//! nothing is left asking a person who is no longer there. When the last one leaves the session
+//! stays open with nobody attached, every question is refused, and the turn itself goes on.
 //!
 //! A session is closed once every thread that worked on it has returned ([`crate::workers`]).
 //! Closing answers `closing` at once and says `session.closed` when that is so. Neither says
@@ -30,9 +31,10 @@
 use crate::allowlist::{self, Answer};
 use crate::bridge::Bridge;
 use crate::protocol::{ErrorCode, Event, Failure, Request, Unreadable, response};
+use crate::turn::Kind;
 use crate::workers::Workers;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -108,8 +110,14 @@ type Sink = Arc<Mutex<HashMap<u64, Attached>>>;
 /// or one not yet registered, is that request's: it is the one opening the session.
 type Dispatching = Arc<AtomicU64>;
 
-/// Which connection opened each session, for routing events.
-type Owners = Arc<Mutex<HashMap<String, u64>>>;
+/// The connections attached to each session, for routing its events. A session whose connections
+/// have all left keeps an empty set, so its events go to nobody.
+type Owners = Arc<Mutex<HashMap<String, BTreeSet<u64>>>>;
+
+/// Events of a session that go only to the connection whose request is being answered, where it
+/// is attached: the snapshot a joining or resyncing client asked for, and the startup question
+/// sent again with it. Another attached connection has its own view and its own answer to it.
+const ADDRESSED: &[&str] = &["session.view.snapshot", "trust.request"];
 
 /// What the platform did about same-user inspection of this process, in the word `agent.info`
 /// reports, or the notice to give when it failed.
@@ -158,8 +166,8 @@ type Sessions = HashMap<String, Option<Arc<Workers>>>;
 const WRITE_PATIENCE: Duration = Duration::from_secs(5);
 
 /// How many lines may wait to be written to a client. A client this far behind is treated as gone
-/// for output, as one whose write waited too long is. It takes the session over again to be told
-/// where it stands (HOST-11).
+/// for output, as one whose write waited too long is. It joins the session again to be told where it
+/// stands (HOST-11).
 pub const QUEUED_LINES: usize = 1024;
 
 /// How many bytes of lines may wait to be written to a client, beside [`QUEUED_LINES`].
@@ -190,8 +198,10 @@ struct Served {
     /// Told when the answer to a request has been written, so a `session.closed` that follows a
     /// close is never sent before the answer to it.
     after_response: Vec<mpsc::Sender<()>>,
-    /// Connections that have ended. A session whose connection is among them has no client.
-    ended: HashSet<u64>,
+    /// The answers the person let each connection being served give.
+    answers: HashMap<u64, Vec<Answer>>,
+    /// Sessions whose view has started, from which their attached connections can answer.
+    viewed: HashSet<String>,
 }
 
 impl Host {
@@ -215,8 +225,7 @@ impl Host {
     /// clients are served on other threads. The client may give only `answers`, which the person
     /// chose for it.
     ///
-    /// Sessions the client controlled stay open when this returns, with no controller and their
-    /// work going on.
+    /// Sessions the client was attached to stay open when this returns, with their work going on.
     pub fn serve(&self, channel: UnixStream, answers: &[Answer]) -> io::Result<Ended> {
         let connection = {
             let mut served = self.lock()?;
@@ -224,6 +233,7 @@ impl Host {
             let connection = served.connections;
             let attached =
                 Attached::start(&self.output, connection, answers, &channel, WRITE_PATIENCE)?;
+            served.answers.insert(connection, answers.to_vec());
             if let Ok(mut output) = self.output.lock() {
                 output.insert(connection, attached);
             }
@@ -337,7 +347,8 @@ impl Served {
             sessions: HashMap::new(),
             connections: 0,
             after_response: Vec::new(),
-            ended: HashSet::new(),
+            answers: HashMap::new(),
+            viewed: HashSet::new(),
         }
     }
 
@@ -356,21 +367,22 @@ impl Served {
         }
         let handle = request.optional_string("session");
         if let Some(handle) = &handle {
-            self.controlled_by(connection, handle, operation.method)?;
+            self.may_act(connection, handle, operation.method)?;
         }
         match operation.method {
             "session.new" => self.new_session(connection, request),
             "session.attach" => {
                 let handle = handle.ok_or_else(|| Failure::bad_request("`session` is required"))?;
-                self.attach(connection, answers, &handle)
+                self.attach(connection, &handle)
             }
             "session.view.start" => {
                 let started = self.bridge.dispatch(request)?;
-                // The view is the control state and the subscription, so from here the client can
-                // answer.
+                // The view is the session's state and the subscription, so from here the session's
+                // attached clients can answer.
                 if let Some(handle) = &handle {
-                    self.bridge
-                        .set_answerable(handle, &allowlist::answerable(answers))?;
+                    self.viewed.insert(handle.clone());
+                    let kinds = self.answerable_by(handle, &self.attached_to(handle));
+                    self.bridge.set_answerable(handle, &kinds)?;
                 }
                 Ok(started)
             }
@@ -390,32 +402,57 @@ impl Served {
 
     /// Whether `connection` may make a `method` request naming `handle`.
     ///
-    /// Its controller may. A connection that is not may close the session or take it over where
-    /// its controller has gone; it may do nothing else.
-    fn controlled_by(&self, connection: u64, handle: &str, method: &str) -> Result<(), Failure> {
-        let owner = self
-            .owners
-            .lock()
-            .ok()
-            .and_then(|owners| owners.get(handle).copied());
-        match (self.sessions.get(handle), owner) {
-            (None, _) | (Some(_), None) => Err(Failure::no_such_session()),
-            (Some(Some(_)), _) => Err(Failure::no_such_session()),
-            (Some(_), Some(owner)) if owner == connection && method == "session.attach" => Err(
-                Failure::bad_request("this connection controls that session"),
+    /// A connection attached to the session may make any but `session.attach`. One that is not may
+    /// join it with `session.attach`, and may close it only where nobody is attached; it may do
+    /// nothing else.
+    fn may_act(&self, connection: u64, handle: &str, method: &str) -> Result<(), Failure> {
+        let attached = self.owners.lock().ok().and_then(|owners| {
+            owners
+                .get(handle)
+                .map(|attached| (attached.contains(&connection), attached.is_empty()))
+        });
+        match (self.sessions.get(handle), attached) {
+            (None | Some(Some(_)), _) | (Some(None), None) => Err(Failure::no_such_session()),
+            (Some(None), Some((true, _))) if method == "session.attach" => Err(
+                Failure::bad_request("this connection is attached to that session"),
             ),
-            (Some(_), Some(owner)) if owner == connection => Ok(()),
-            (Some(_), Some(owner))
-                if matches!(method, "session.close" | "session.attach")
-                    && self.ended.contains(&owner) =>
-            {
-                Ok(())
-            }
-            (Some(_), Some(_)) => Err(Failure::new(
+            (Some(None), Some((true, _))) => Ok(()),
+            (Some(None), Some((false, _))) if method == "session.attach" => Ok(()),
+            (Some(None), Some((false, true))) if method == "session.close" => Ok(()),
+            (Some(None), Some((false, _))) => Err(Failure::new(
                 ErrorCode::NotAllowed,
-                "this connection does not control that session",
+                "this connection is not attached to that session",
             )),
         }
+    }
+
+    /// The connections attached to `handle`, none where they cannot be read.
+    fn attached_to(&self, handle: &str) -> BTreeSet<u64> {
+        self.owners
+            .lock()
+            .ok()
+            .and_then(|owners| owners.get(handle).cloned())
+            .unwrap_or_default()
+    }
+
+    /// The kinds of question `connections` can answer together in the session `handle`: every
+    /// kind one of them may answer, once the session's view has started, and none before.
+    fn answerable_by(&self, handle: &str, connections: &BTreeSet<u64>) -> Vec<Kind> {
+        let mut kinds = Vec::new();
+        if !self.viewed.contains(handle) {
+            return kinds;
+        }
+        for answers in connections
+            .iter()
+            .filter_map(|connection| self.answers.get(connection))
+        {
+            for kind in allowlist::answerable(answers) {
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
+            }
+        }
+        kinds
     }
 
     fn new_session(&mut self, connection: u64, request: &Request) -> Result<Value, Failure> {
@@ -454,39 +491,41 @@ impl Served {
             .map(str::to_string)
         {
             if let Ok(mut owners) = self.owners.lock() {
-                owners.insert(handle.clone(), connection);
+                owners.insert(handle.clone(), BTreeSet::from([connection]));
             }
             self.sessions.insert(handle, None);
         }
         Ok(opened)
     }
 
-    /// Make `connection` the controller of a session whose controller has gone.
-    fn attach(
-        &mut self,
-        connection: u64,
-        answers: &[Answer],
-        handle: &str,
-    ) -> Result<Value, Failure> {
+    /// Attach `connection` to a session beside any connections already attached.
+    fn attach(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
+        let attached = self.attached_to(handle);
+        let before = self.answerable_by(handle, &attached);
+        let mut joined = attached;
+        joined.insert(connection);
+        let kinds = self.answerable_by(handle, &joined);
         let owners = Arc::clone(&self.owners);
         let session = handle.to_string();
-        self.bridge
-            .attach_view(handle, &allowlist::answerable(answers), move || {
-                // Not taken over if the owners cannot be written: the client would be told it
-                // controls a session whose events still go to the connection before it.
-                let mut owners = owners
-                    .lock()
-                    .map_err(|_| Failure::bad_request("the host cannot change who controls it"))?;
-                owners.insert(session, connection);
-                Ok(())
-            })
+        self.bridge.attach_view(handle, &kinds, &before, move || {
+            // Not joined if the owners cannot be written: the client would be told it is attached
+            // to a session whose events do not reach it.
+            let mut owners = owners
+                .lock()
+                .map_err(|_| Failure::bad_request("the host cannot change who is attached"))?;
+            owners.entry(session).or_default().insert(connection);
+            Ok(())
+        })
     }
 
     fn close(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
         let workers = self.bridge.close(handle)?;
-        // Whoever closes a session is told when it has closed.
+        // Whoever closes a session is told when it has closed, beside every connection attached.
         if let Ok(mut owners) = self.owners.lock() {
-            owners.insert(handle.to_string(), connection);
+            owners
+                .entry(handle.to_string())
+                .or_default()
+                .insert(connection);
         }
         if let Some(closing) = self.sessions.get_mut(handle) {
             *closing = Some(Arc::clone(&workers));
@@ -521,13 +560,12 @@ impl Served {
                     Some(workers) if workers.is_idle() => ("closed", false),
                     Some(_) => ("closing", true),
                 };
-                let controlled = owners
+                let attached = owners
                     .as_ref()
                     .and_then(|owners| owners.get(handle))
-                    .copied()
-                    == Some(connection);
+                    .is_some_and(|attached| attached.contains(&connection));
                 json!({"session": handle, "state": state, "working": working,
-                    "controlled": controlled})
+                    "attached": attached})
             })
             .collect();
         sessions.sort_by_key(|session| session["session"].as_str().map(str::to_string));
@@ -553,24 +591,30 @@ impl Served {
         }
     }
 
-    /// A connection ended: its sessions have no controller, so nothing they ask is put to anyone.
+    /// A connection ended: it leaves every session it was attached to, and what each of them asks
+    /// is put only to the connections still attached that can answer it.
     fn lose(&mut self, connection: u64) {
         if let Ok(mut output) = self.output.lock() {
             output.remove(&connection);
         }
+        self.answers.remove(&connection);
         self.responded();
-        self.ended.insert(connection);
-        let owned: Vec<String> = match self.owners.lock() {
-            Ok(owners) => owners
-                .iter()
-                .filter(|(_, owner)| **owner == connection)
-                .map(|(handle, _)| handle.clone())
-                .filter(|handle| self.sessions.get(handle).is_some_and(Option::is_none))
+        let left: Vec<(String, BTreeSet<u64>)> = match self.owners.lock() {
+            Ok(mut owners) => owners
+                .iter_mut()
+                .filter_map(|(handle, attached)| {
+                    attached
+                        .remove(&connection)
+                        .then(|| (handle.clone(), attached.clone()))
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
-        for handle in owned {
-            self.bridge.lose_control(&handle);
+        for (handle, rest) in left {
+            if self.sessions.get(&handle).is_some_and(Option::is_none) {
+                let kinds = self.answerable_by(&handle, &rest);
+                self.bridge.narrow_answerable(&handle, &kinds);
+            }
         }
     }
 }
@@ -617,48 +661,56 @@ fn queue(output: &mut HashMap<u64, Attached>, connection: u64, line: String) {
     }
 }
 
-/// An event to the connection that controls its session, or, for one that belongs to no session or
+/// An event to each connection attached to its session, or, for one that belongs to no session or
 /// to one not yet registered (it is being opened by the request being answered), to the connection
 /// whose request is being answered, and to nobody while none is. A client never sees an event of a
-/// session it does not control, and an owner that cannot be read is no owner to send to. The
-/// startup question goes only to a client that may answer it: another sees the session waiting on
-/// it in the view.
+/// session it is not attached to, and owners that cannot be read are nobody to send to. An
+/// [`ADDRESSED`] event goes only to the connection whose request is being answered. The startup
+/// question goes only to a client that may answer it: another sees the session waiting on it in the
+/// view.
 fn write_event(output: &Sink, owners: &Owners, dispatching: &AtomicU64, event: &Event) {
-    let Some(connection) = target(owners, dispatching, event.session.as_deref()) else {
-        return;
-    };
+    let connections = targets(owners, dispatching, event);
     let Ok(mut output) = output.lock() else {
         return;
     };
-    if output.get(&connection).is_some_and(|attached| {
-        event.name != "trust.request" || attached.answers.contains(&Answer::Trust)
-    }) {
-        queue(&mut output, connection, event.to_value().to_string());
+    let line = event.to_value().to_string();
+    for connection in connections {
+        if output.get(&connection).is_some_and(|attached| {
+            event.name != "trust.request" || attached.answers.contains(&Answer::Trust)
+        }) {
+            queue(&mut output, connection, line.clone());
+        }
     }
 }
 
-/// The connection an event of `session` goes to: the session's owner, else the connection whose
+/// The connections `event` goes to: those attached to its session, else the connection whose
 /// request is being answered. None when the owners cannot be read.
 ///
 /// The connection being answered is read while the owners are held. A session being opened has
 /// its owner registered before its request stops being answered, so a session found with no owner
-/// is read with the connection that is opening it, and not with one whose request came after.
-fn target(owners: &Owners, dispatching: &AtomicU64, session: Option<&str>) -> Option<u64> {
-    let Some(session) = session else {
-        return Some(dispatching.load(Ordering::SeqCst));
+/// is read with the connection that is opening it, and not with one whose request came after. A
+/// connection joining is attached under the lock every update takes, so it is read with the
+/// snapshot it asked for.
+fn targets(owners: &Owners, dispatching: &AtomicU64, event: &Event) -> Vec<u64> {
+    let Some(session) = event.session.as_deref() else {
+        return vec![dispatching.load(Ordering::SeqCst)];
     };
-    let owners = owners.lock().ok()?;
-    Some(
-        owners
-            .get(session)
-            .copied()
-            .unwrap_or_else(|| dispatching.load(Ordering::SeqCst)),
-    )
+    let Ok(owners) = owners.lock() else {
+        return Vec::new();
+    };
+    let asking = dispatching.load(Ordering::SeqCst);
+    match owners.get(session) {
+        None => vec![asking],
+        Some(attached) if ADDRESSED.contains(&event.name) => {
+            attached.get(&asking).copied().into_iter().collect()
+        }
+        Some(attached) => attached.iter().copied().collect(),
+    }
 }
 
 /// The client reads nothing or is gone. Shut the channel so that the thread reading it sees the
-/// end and loses the connection's sessions: left open, the controller would be taken to be there
-/// and a question would wait for an answer nobody can read. Every other connection is served on.
+/// end and the connection leaves its sessions: left attached, it would be taken to be there and a
+/// question would wait for an answer nobody can read. Every other connection is served on.
 fn give_up_on(output: &mut HashMap<u64, Attached>, connection: u64) {
     if let Some(attached) = output.remove(&connection) {
         let _ = attached.channel.shutdown(std::net::Shutdown::Both);
@@ -721,92 +773,138 @@ mod tests {
         assert!(failed.contains("non-dumpable"), "{failed}");
     }
 
-    fn a_host_with_a_session_controlled_by_connection_one() -> Served {
+    fn a_host_with_a_session_attached_to_connection_one() -> Served {
         let mut host = Served::new(Setup {
             workspaces: Vec::new(),
             settings: None,
             inspection: "refused",
         });
         host.sessions.insert("s1".into(), None);
-        host.owners.lock().unwrap().insert("s1".into(), 1);
+        host.owners
+            .lock()
+            .unwrap()
+            .insert("s1".into(), BTreeSet::from([1]));
         host
     }
 
     fn code(host: &Served, connection: u64, method: &str) -> Option<ErrorCode> {
-        host.controlled_by(connection, "s1", method)
+        host.may_act(connection, "s1", method)
             .err()
             .map(|failure| failure.code)
     }
 
-    /// While its controller is connected nobody else can act on a session, or take it. Closing
-    /// and taking over are for a session whose controller has gone, and nothing else is.
+    const ACTING: [&str; 6] = [
+        "turn.send",
+        "turn.cancel",
+        "turn.lookup",
+        "trust.reply",
+        "confirm.reply",
+        "session.view.resync",
+    ];
+
+    /// Every connection attached to a session acts on it, and none attaches to it twice. Another
+    /// may join it, and may close it only where nobody is attached.
     #[test]
-    fn only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left() {
-        let mut host = a_host_with_a_session_controlled_by_connection_one();
-        for method in [
-            "turn.send",
-            "turn.lookup",
-            "trust.reply",
-            "session.view.resync",
-            "session.close",
-            "session.attach",
-        ] {
+    fn an_attached_connection_acts_on_a_session_and_another_may_join_it_or_close_one_left() {
+        let host = a_host_with_a_session_attached_to_connection_one();
+        for method in ACTING.into_iter().chain(["session.close"]) {
             assert_eq!(
                 code(&host, 2, method),
                 Some(ErrorCode::NotAllowed),
                 "{method}"
             );
-        }
-        for method in [
-            "turn.send",
-            "turn.lookup",
-            "trust.reply",
-            "session.view.resync",
-            "session.close",
-        ] {
             assert_eq!(code(&host, 1, method), None, "{method}");
         }
+        assert_eq!(code(&host, 2, "session.attach"), None);
         assert_eq!(
             code(&host, 1, "session.attach"),
             Some(ErrorCode::BadRequest),
-            "a controller took over a session it controls"
+            "a connection attached to a session attached again"
         );
 
-        host.ended.insert(1);
-        for method in ["session.close", "session.attach"] {
-            assert_eq!(code(&host, 2, method), None, "{method}");
+        host.owners.lock().unwrap().get_mut("s1").unwrap().insert(2);
+        for method in ACTING.into_iter().chain(["session.close"]) {
+            for connection in [1, 2] {
+                assert_eq!(
+                    code(&host, connection, method),
+                    None,
+                    "{connection} {method}"
+                );
+            }
         }
-        for method in [
-            "turn.send",
-            "turn.cancel",
-            "trust.reply",
-            "confirm.reply",
-            "session.view.resync",
-        ] {
+        assert_eq!(
+            code(&host, 2, "session.attach"),
+            Some(ErrorCode::BadRequest)
+        );
+        assert_eq!(
+            code(&host, 3, "session.close"),
+            Some(ErrorCode::NotAllowed),
+            "a connection not attached closed a session others are attached to"
+        );
+
+        host.owners.lock().unwrap().get_mut("s1").unwrap().clear();
+        for method in ["session.close", "session.attach"] {
+            assert_eq!(code(&host, 3, method), None, "{method}");
+        }
+        for method in ACTING {
             assert_eq!(
-                code(&host, 2, method),
+                code(&host, 3, method),
                 Some(ErrorCode::NotAllowed),
                 "{method}"
             );
         }
     }
 
-    /// A session being closed, or one the host never opened, is nobody's to take.
+    /// A session being closed, or one the host never opened, is nobody's to join.
     #[test]
     fn a_closing_or_unknown_session_is_not_found_by_anyone() {
-        let mut host = a_host_with_a_session_controlled_by_connection_one();
-        host.ended.insert(1);
+        let mut host = a_host_with_a_session_attached_to_connection_one();
         host.sessions
             .insert("s2".into(), Some(Arc::new(Workers::default())));
-        host.owners.lock().unwrap().insert("s2".into(), 1);
-        for (handle, method) in [
-            ("s2", "session.attach"),
-            ("s2", "turn.send"),
-            ("s3", "session.attach"),
+        host.owners
+            .lock()
+            .unwrap()
+            .insert("s2".into(), BTreeSet::new());
+        for (connection, handle, method) in [
+            (2, "s2", "session.attach"),
+            (2, "s2", "turn.send"),
+            (2, "s3", "session.attach"),
+            (1, "s2", "session.close"),
         ] {
-            let failure = host.controlled_by(2, handle, method).expect_err("refused");
+            let failure = host
+                .may_act(connection, handle, method)
+                .expect_err("refused");
             assert_eq!(failure.code, ErrorCode::NoSuchSession, "{handle} {method}");
         }
+    }
+
+    /// An event of a session goes to every connection attached to it and to no other. The snapshot
+    /// a connection asked for, and the startup question sent with it, go to that connection alone,
+    /// and to nobody where it is not attached or no request is being answered. A session everyone
+    /// has left has its events sent to nobody.
+    #[test]
+    fn an_event_goes_to_every_attached_connection_and_an_addressed_one_to_the_asker_alone() {
+        let owners: Owners = Arc::new(Mutex::new(HashMap::from([(
+            "s1".to_string(),
+            BTreeSet::from([1, 2]),
+        )])));
+        let event = |name| Event::new(name, "s1", json!({}));
+        let to = |asking: u64, name| targets(&owners, &AtomicU64::new(asking), &event(name));
+
+        for asking in [0, 1, 3] {
+            assert_eq!(to(asking, "session.view.update"), [1, 2]);
+            assert_eq!(to(asking, "confirm.request"), [1, 2]);
+        }
+        for name in ADDRESSED {
+            assert_eq!(to(2, name), [2], "{name}");
+            assert_eq!(to(1, name), [1], "{name}");
+            assert_eq!(to(3, name), Vec::<u64>::new(), "{name}");
+            assert_eq!(to(0, name), Vec::<u64>::new(), "{name}");
+        }
+
+        owners.lock().unwrap().get_mut("s1").unwrap().clear();
+        assert_eq!(to(1, "session.view.update"), Vec::<u64>::new());
+        assert_eq!(to(1, "session.view.snapshot"), Vec::<u64>::new());
     }
 
     /// A channel whose client reads nothing, filled so the next write to it waits, and a sink
@@ -975,7 +1073,10 @@ mod tests {
                     owners.remove("s1");
                     dispatching_now.store(1, Ordering::SeqCst);
                 }
-                owners_now.lock().unwrap().insert("s1".into(), 1);
+                owners_now
+                    .lock()
+                    .unwrap()
+                    .insert("s1".into(), BTreeSet::from([1]));
                 dispatching_now.store(2, Ordering::SeqCst);
             }
             still.store(false, Ordering::SeqCst);
@@ -989,8 +1090,9 @@ mod tests {
                 );
                 std::thread::spawn(move || {
                     let mut wrong = 0;
+                    let event = Event::new("narration", "s1", json!({}));
                     while opening.load(Ordering::SeqCst) {
-                        if !matches!(target(&owners, &dispatching, Some("s1")), Some(0 | 1)) {
+                        if !matches!(targets(&owners, &dispatching, &event).as_slice(), [0 | 1]) {
                             wrong += 1;
                         }
                     }

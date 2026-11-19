@@ -145,6 +145,9 @@ class Session implements AgentSession {
 
   private set(next: ViewState): void {
     if (next === this.current) return
+    // A view that arrives detached means the session closed, whichever attached client closed it,
+    // so it is no longer held and nothing more is routed to it.
+    if (next.ended?.reason === 'detached' && this.current?.ended === null) this.forget(this.id)
     this.current = next
     for (const listener of [...this.listeners]) {
       // A listener's failure is the listener's own; it must not stop other listeners or shutdown.
@@ -316,10 +319,10 @@ function readInstance(value: unknown): InstanceInfo {
     throw new ProtocolError('instance.info did not name an instance and its sessions')
   }
   const sessions: HeldSession[] = value.sessions.map((held: unknown) => {
-    if (!isRecord(held) || typeof held.session !== 'string' || typeof held.state !== 'string' || !HELD_STATES.includes(held.state) || typeof held.working !== 'boolean' || typeof held.controlled !== 'boolean') {
+    if (!isRecord(held) || typeof held.session !== 'string' || typeof held.state !== 'string' || !HELD_STATES.includes(held.state) || typeof held.working !== 'boolean' || typeof held.attached !== 'boolean') {
       throw new ProtocolError('instance.info listed a session in a shape it does not have')
     }
-    return { session: held.session, state: held.state as HeldSession['state'], working: held.working, controlled: held.controlled }
+    return { session: held.session, state: held.state as HeldSession['state'], working: held.working, attached: held.attached }
   })
   const answers = value.answers
   if (!Array.isArray(answers) || !answers.every((kind: unknown) => typeof kind === 'string' && ANSWER_KINDS.includes(kind))) {

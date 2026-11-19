@@ -63,7 +63,7 @@ pub const OFFERED: &[Operation] = &[
         method: "session.close",
         fields: &["session"],
     },
-    // Takes over a session whose client has gone. The host answers it itself.
+    // Joins a session another connection opened. The host answers it itself.
     Operation {
         method: "session.attach",
         fields: &["session"],
