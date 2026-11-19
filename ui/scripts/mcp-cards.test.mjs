@@ -149,8 +149,7 @@ test('the tools card draws each tool and its description as the server wrote it,
   const markup = draw(tools())
   assert.ok(markup.includes('<code class="mcp-tool-name">weather:get_forecast</code>'), markup)
   assert.ok(markup.includes('city (string, required)'), markup)
-  assert.ok(markup.includes('class="mcp-tool-description"'), markup)
-  assert.ok(markup.includes('the forecast for a city'), markup)
+  assert.ok(markup.includes('class="mcp-tool-description" data-tooltip="Written by the server">the forecast for a city</blockquote>'), markup)
   assert.deepEqual(buttons(markup), ['Continue without them', 'Offer these tools'])
 })
 
