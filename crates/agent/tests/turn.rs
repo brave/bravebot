@@ -15277,6 +15277,77 @@ fn a_cell_argument_is_refused_beside_a_passage_and_on_a_plain_file() {
     );
 }
 
+/// Lists a workspace holding one unvouched file called `name`, then asks `edit_file` for a `cell`
+/// edit of it by `path_ref`. Returns the request that carries the result of the edit, and the
+/// file as it is afterwards.
+fn cell_edit_of_an_unvouched_reference(label: &str, name: &str) -> (String, String) {
+    let scratch = Scratch::new(label);
+    std::fs::write(scratch.path.join(name), NOTEBOOK_WITH_AN_OUTPUT).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":"."}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path_ref":"ref:1","cell":1,"new_text":"y"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("edit the cell"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(confirmer.seen.is_empty(), "somebody was asked about {name}");
+    // Only what the edit answered, which is the last tool message of the request.
+    let parsed: serde_json::Value = serde_json::from_str(&third).expect("a request");
+    let answered = parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rfind(|message| message["role"] == "tool")
+        .expect("the edit's result")["content"]
+        .to_string();
+    (
+        answered,
+        std::fs::read_to_string(scratch.path.join(name)).unwrap(),
+    )
+}
+
+/// EDIT-8, EDIT-2. A `cell` edit by `path_ref` of a file nobody vouched for is refused the same
+/// whether the name the reference stands for ends in `.ipynb` or not, so the planner learns
+/// nothing about a name it was not shown. The regression it rejects is testing the extension of
+/// that name before the trust check, which answers a `.txt` with "is not one" and a `.ipynb`
+/// with the closed-to-editing refusal. Neither file is written.
+#[test]
+fn a_cell_edit_by_reference_of_an_unvouched_file_is_refused_whatever_its_name() {
+    let (notebook, notebook_after) =
+        cell_edit_of_an_unvouched_reference("cell-reference-ipynb", "zqxleak.ipynb");
+    let (plain, plain_after) =
+        cell_edit_of_an_unvouched_reference("cell-reference-txt", "zqxleak.txt");
+
+    for (request, after) in [(&notebook, &notebook_after), (&plain, &plain_after)] {
+        assert!(request.contains("closed to edit_file"), "{request}");
+        assert!(!request.contains("is not one"), "{request}");
+        assert!(!request.contains("zqxleak"), "{request}");
+        assert_eq!(after, NOTEBOOK_WITH_AN_OUTPUT, "a file was written");
+    }
+    assert_eq!(notebook, plain, "the result depends on the hidden name");
+}
+
 /// A notebook as Jupyter writes it: a markdown cell, and a code cell that ran and printed.
 const NOTEBOOK_WITH_AN_OUTPUT: &str = r##"{
  "cells": [

@@ -89,7 +89,7 @@ guards:
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
       - crates/agent/src/tools/tests/activity.rs: 3
-      - crates/agent/src/tools/tests/editing.rs: 8
+      - crates/agent/src/tools/tests/editing.rs: 9
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
       - crates/agent/src/turn.rs: 10
@@ -1440,6 +1440,18 @@ arrives at all.
   than a pattern may, which is the entry above this one. The refusal carries no name, no
   count and no fact about which pattern matched. A change that spells the count, or a name, or
   chooses the sentence from either, is a violation of shape 1 or 3 and is not covered here.
+
+- **Whether a `cell` edit of a file named by `path_ref` is refused as not a notebook is chosen from
+  the extension of the name behind the reference, and only after a person vouched for the file.**
+  [EDIT-8](tools/edit-file.md#EDIT-8) refuses a `cell` edit of a file nobody vouched for with the
+  refusal [EDIT-2](tools/edit-file.md#EDIT-2) gives, whatever the name ends in. For a file a person
+  vouched for, `edit_file` tests whether the name ends in `.ipynb`, and `output_of` on `read_file`
+  does the same, so the planner learns from the answer whether the name behind a reference it holds
+  is a notebook. The name came out of a directory, and the test is not made until the person has
+  vouched for that file, which they did knowing its name, so what the planner learns is a fact the
+  person already accepted. It is one bit about one vouched file per call, from a closed test of the
+  extension against one suffix. A change that makes the test before the vouch, or that tests any
+  other part of the name, is a violation of shape 1 and is not covered here.
 
 - **A model that searches the web is kept out by a list of ids, and a model nobody listed is not.**
   Whether a model adds retrieved pages to its context is not something a request or a reply states,

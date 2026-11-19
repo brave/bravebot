@@ -256,6 +256,13 @@ number the notebook has no cell for. [EDIT-2](#EDIT-2) holds: a notebook nobody 
 edited, and the planner-argument gate applies to `new_text`. The edit is approved as a diff
 ([EDIT-3](#EDIT-3)).
 
+**The refusal of `cell` on a file that is not a `.ipynb` depends only on a name the planner typed.**
+Where the file is named by `path_ref`, the name behind the reference came out of a directory nobody
+vouched for, so no answer may depend on it before the file is known to be trusted. A `cell` edit
+of a file nobody vouched for gets the refusal [EDIT-2](#EDIT-2) gives, whatever the name behind
+the reference ends in. Only for a file a person vouched for is the extension tested, and a `cell`
+edit of a vouched `.ipynb` by `path_ref` is made.
+
 The notebook is written back in the layout Jupyter writes, one space of indent, keys in sorted
 order and a final newline, so a notebook Jupyter wrote changes only where the edit is, and one laid
 out differently is rewritten into that layout and the diff shows it. The other cells, their ids,
@@ -271,6 +278,9 @@ what a read of the notebook shows.
 `verified-by: bravebot_agent::turn::an_approved_cell_edit_changes_only_that_cell`
 `verified-by: bravebot_agent::turn::a_cell_edit_of_an_untrusted_notebook_is_refused`
 `verified-by: bravebot_agent::turn::a_cell_argument_is_refused_beside_a_passage_and_on_a_plain_file`
+`verified-by: bravebot_agent::turn::a_cell_edit_by_reference_of_an_unvouched_file_is_refused_whatever_its_name`
+`verified-by: bravebot_agent::tools::tests::editing::a_cell_edit_by_reference_of_an_untrusted_file_is_refused_the_same_whatever_its_name`
+`verified-by: bravebot_agent::tools::tests::editing::a_cell_edit_by_reference_of_a_vouched_file_is_made_only_on_a_notebook`
 `verified-by: bravebot_agent::turn::an_insert_at_zero_puts_a_markdown_cell_first`
 `verified-by: bravebot_agent::turn::an_insert_after_a_cell_defaults_to_a_code_cell_placed_after_it`
 `verified-by: bravebot_agent::turn::a_delete_removes_only_the_numbered_cell`

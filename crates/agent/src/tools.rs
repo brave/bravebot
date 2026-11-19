@@ -7626,6 +7626,11 @@ fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
         .ok_or("error: every entry of 'edits' needs 'old_text' and 'new_text' strings")
 }
 
+/// What `edit_file` says of `cell` on a file that is not a `.ipynb` (EDIT-8). Fixed text, said
+/// for a typed name at once and for a reference only once the file is known to be trusted.
+const NOT_A_NOTEBOOK: &str = "error: 'cell' addresses a cell of a .ipynb notebook, and this is \
+     not one. Give 'old_text' and 'new_text' for a passage";
+
 /// Replace an exact passage in a file, after a person approves the diff.
 ///
 /// Same endorsement shape as [`write_file`], since the model never decides a write destination,
@@ -7675,11 +7680,17 @@ fn edit_file<S: Sink, C: Confirmer>(
     };
     let pairs = match &cell_request {
         // A cell edit carries its text in `new_text` alone and locates nothing by it.
-        Some(_) if !crate::notebook::is_notebook_path(&proposed_path) => {
-            return Produced::problem(
-                "error: 'cell' addresses a cell of a .ipynb notebook, and this is not one. Give \
-                 'old_text' and 'new_text' for a passage",
-            );
+        //
+        // The extension is tested here only for a name the planner typed, which is its own
+        // words. The name behind a reference came out of a directory nobody vouched for, so
+        // testing it before the trust check below would tell the planner whether that name ends
+        // in `.ipynb`: a `.txt` would be refused as not a notebook and a `.ipynb` as closed to
+        // editing. For a reference the test is made once the file is known to be trusted.
+        Some(_)
+            if destination == Destination::Named
+                && !crate::notebook::is_notebook_path(&proposed_path) =>
+        {
+            return Produced::problem(NOT_A_NOTEBOOK);
         }
         Some(_) => Vec::new(),
         None => match edit_pairs(arguments) {
@@ -7802,6 +7813,15 @@ fn edit_file<S: Sink, C: Confirmer>(
         };
         return Produced::problem(closed_to_editing(policy, source.label(), read));
     };
+
+    // The file is trusted, so a name a person vouched for may be tested. For a reference this is
+    // the first moment the extension may be looked at (see the check above for a typed name).
+    if cell_request.is_some()
+        && destination == Destination::Reference
+        && !crate::notebook::is_notebook_path(&proposed_path)
+    {
+        return Produced::problem(NOT_A_NOTEBOOK);
+    }
 
     // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair
     // has applied, so a refusal part-way leaves the file as it was.
