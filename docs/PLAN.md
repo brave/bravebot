@@ -813,8 +813,31 @@ Questions slice 2b raised for the owner:
   decided.
 - With focus in the list the prompt box shows its cursor although it drops typing. A cue for which
   of the two has focus is not specified.
-- With focus in the list, which is where the phase starts, typed text is dropped until Esc or the
-  panes chord returns focus to the prompt, as [BOT-17](specs/bots.md#BOT-17) says.
+- With focus in the list, typed text is dropped until Esc or the panes chord returns focus to the
+  prompt, as [BOT-17](specs/bots.md#BOT-17) says. `--layout bots` and `/layout bots` already start
+  there when the list is drawn. `bots_screen::opened` calls `start_in_the_list_where_it_is_drawn`.
+  Below 100 columns the list is not drawn, so focus is the prompt. `Focus` defaults to `Prompt` on
+  the struct, and a session that is already open keeps that default.
+
+Requests from Brian Bondy on 2026-11-19, on https://github.com/brave/bravebot/pull/4356. The accepted
+design stays a layout. Nothing in this list replaces it.
+
+- The phase with no session starts in the list, so the prompt takes nothing until Esc or the panes
+  chord. Alt-P is that chord, and iTerm2 makes it hard to press. `n`, `e`, `a`, `r` and `d` work
+  without it. Enter on a row says a session as a bot arrives in a later release. The owner decided
+  on 2026-11-19 that the default panes chord will not stay Alt-P. The chord that replaces it is not
+  chosen. A settings file can still move it ([INPUT-32](specs/terminal-input.md#INPUT-32)). A
+  different Alt letter does not arrive in iTerm2 either, unless Option is set to send Esc.
+- The prompt in the phase with no session takes `/layout`, the key help, and quitting. A session
+  started as a bot is slice 7, which is when that prompt runs a turn.
+- The form does not take Up and Down. Tab moves between fields. Whether Up and Down should move in a
+  field is not decided.
+- Esc cancels a form and keeps no draft. That is a known cost in [specs/bots.md](specs/bots.md).
+- The terminal form does not change the avatar. Whether it should is not decided.
+- The selection mark is drawn at the top of the row, and the list margin was called visually wrong.
+  Neither change is decided.
+- Placing the bots list on the sessions screen, the one Left opens on an empty prompt, and renaming
+  that screen, is not the layout. It is not decided.
 
 Questions slice 3a raised for the owner:
 
