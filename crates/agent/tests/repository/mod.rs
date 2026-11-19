@@ -18,6 +18,7 @@ pub fn commit_files_at(root: &std::path::Path, files: &[(&str, &str)], message: 
 
 /// The same as [`commit_files`], with `links` committed as symbolic links: each is a path and the
 /// target the link holds.
+#[cfg(unix)]
 pub fn commit_files_and_links(
     root: &std::path::Path,
     files: &[(&str, &str)],
