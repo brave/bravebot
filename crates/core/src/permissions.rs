@@ -1209,20 +1209,7 @@ impl Permissions {
             return Decision::Unmatched;
         }
         let each: Vec<Decision> = stages.iter().map(|argv| self.for_command(argv)).collect();
-
-        // Restricting any stage restricts the pipeline: an unwanted program in the middle is
-        // still an unwanted program.
-        for ruling in [Ruling::Deny, Ruling::Ask] {
-            if each.contains(&Decision::Ruled(ruling)) {
-                return Decision::Ruled(ruling);
-            }
-        }
-        // Granting needs every stage granted. One stage nobody wrote a rule for is a program
-        // nobody has answered for, and it is what the next stage reads.
-        if each.iter().all(|d| *d == Decision::Ruled(Ruling::Allow)) {
-            return Decision::Ruled(Ruling::Allow);
-        }
-        Decision::Unmatched
+        pipeline_decision(&each)
     }
 
     /// Deny, then ask, then allow, first match wins.
@@ -1231,19 +1218,100 @@ impl Permissions {
     /// deny beats a narrow allow, so a deny rule cannot carry exceptions. That is what makes a
     /// deny rule readable as a statement about what will not happen.
     fn deciding(&self, matches: impl Fn(&Rule, bool) -> bool) -> Option<(Ruling, &Rule)> {
-        [
-            (&self.deny, Ruling::Deny, true),
-            (&self.ask, Ruling::Ask, true),
-            (&self.allow, Ruling::Allow, false),
-        ]
-        .into_iter()
-        .find_map(|(rules, ruling, restricting)| {
-            rules
-                .iter()
-                .find(|rule| matches(rule, restricting))
-                .map(|rule| (ruling, rule))
-        })
+        let denied = self.deny.iter().find(|rule| matches(rule, true));
+        let asked = self.ask.iter().find(|rule| matches(rule, true));
+        let allowed = self.allow.iter().find(|rule| matches(rule, false));
+        let ruling = ruling_of(denied.is_some(), asked.is_some(), allowed.is_some())?;
+        let rule = match ruling {
+            Ruling::Deny => denied,
+            Ruling::Ask => asked,
+            Ruling::Allow => allowed,
+        }?;
+        Some((ruling, rule))
     }
+}
+
+/// Which list decides, given which lists hold a rule that matches: deny, then ask, then allow.
+///
+/// The order is the whole of the precedence. A matching deny decides whatever else matches, and an
+/// allow decides only where neither restricting list holds a match.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::ruling_of(denied, asked, allowed),
+))]
+fn ruling_of(denied: bool, asked: bool, allowed: bool) -> Option<Ruling> {
+    if denied {
+        return Some(Ruling::Deny);
+    }
+    if asked {
+        return Some(Ruling::Ask);
+    }
+    if allowed {
+        return Some(Ruling::Allow);
+    }
+    None
+}
+
+/// What the rules say about a pipeline, from what they say about each stage.
+///
+/// Restricting any stage restricts the pipeline: an unwanted program in the middle is still an
+/// unwanted program, and a deny anywhere beats an ask anywhere. Granting needs every stage granted:
+/// one stage nobody wrote a rule for is a program nobody has answered for, and it is what the next
+/// stage reads. An empty pipeline is unmatched.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::pipeline_decision(each@),
+))]
+fn pipeline_decision(each: &[Decision]) -> Decision {
+    if each.is_empty() {
+        return Decision::Unmatched;
+    }
+    let mut denied = false;
+    let mut asked = false;
+    let mut all_allowed = true;
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= each.len(),
+            denied == crate::spec::some_stage_is(
+                each@.take(at as int),
+                Decision::Ruled(Ruling::Deny),
+            ),
+            asked == crate::spec::some_stage_is(
+                each@.take(at as int),
+                Decision::Ruled(Ruling::Ask),
+            ),
+            all_allowed == crate::spec::every_stage_is(
+                each@.take(at as int),
+                Decision::Ruled(Ruling::Allow),
+            ),
+        decreases each.len() - at,
+    ))]
+    while at < each.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            crate::spec::a_stage_more_is_one_more_stage(each@, at as int);
+        }
+        let stage = each[at];
+        denied = denied || stage == Decision::Ruled(Ruling::Deny);
+        asked = asked || stage == Decision::Ruled(Ruling::Ask);
+        all_allowed = all_allowed && stage == Decision::Ruled(Ruling::Allow);
+        at += 1;
+    }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(each@.take(each.len() as int) == each@);
+    }
+    if denied {
+        return Decision::Ruled(Ruling::Deny);
+    }
+    if asked {
+        return Decision::Ruled(Ruling::Ask);
+    }
+    if all_allowed {
+        return Decision::Ruled(Ruling::Allow);
+    }
+    Decision::Unmatched
 }
 
 /// What a deciding rule, or the lack of one, comes to.

@@ -292,3 +292,31 @@ replace: if !held[at].matches(&seen[at]) { => if false {
 mutation: Shape::matches reads only the left side of a join
 file: crates/core/src/remembered.rs
 replace: joined && held_left.matches(left) && held_right.matches(right) => joined && held_left.matches(left)
+
+mutation: ruling_of lets a matching allow beat a matching deny
+file: crates/core/src/permissions.rs
+replace: return Some(Ruling::Deny); => return if allowed { Some(Ruling::Allow) } else { Some(Ruling::Deny) };
+
+mutation: ruling_of reads a matching ask as an allow
+file: crates/core/src/permissions.rs
+replace: return Some(Ruling::Ask); => return Some(Ruling::Allow);
+
+mutation: pipeline_decision lets a pipeline with a denied stage through to an ask
+file: crates/core/src/permissions.rs
+replace: denied = denied || stage == Decision::Ruled(Ruling::Deny); => denied = denied;
+
+mutation: pipeline_decision lets a pipeline with a stage that asks through
+file: crates/core/src/permissions.rs
+replace: asked = asked || stage == Decision::Ruled(Ruling::Ask); => asked = asked;
+
+mutation: pipeline_decision allows a pipeline whose later stage no rule allows
+file: crates/core/src/permissions.rs
+replace: all_allowed = all_allowed && stage == Decision::Ruled(Ruling::Allow); => all_allowed = all_allowed && (at > 0 || stage == Decision::Ruled(Ruling::Allow));
+
+mutation: pipeline_decision allows an empty pipeline
+file: crates/core/src/permissions.rs
+replace: if each.is_empty() { => if false {
+
+mutation: pipeline_decision reads a denied stage as an ask
+file: crates/core/src/permissions.rs
+replace: return Decision::Ruled(Ruling::Deny); => return Decision::Ruled(Ruling::Ask);

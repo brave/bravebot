@@ -24,6 +24,8 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `trust::weakest_decision`, `trust::weaker`, `trust::strength` | Where several spellings of one name hold a decision, the one that grants least decides: a distrust before an undecided boundary before a trust |
 | `TrustedPrograms::covers_every_step` | Every step a plan runs, including each step inside a `$(...)`, has an entry equal to it in file, start path, arguments and tree |
 | `Remembered::covers`, `RememberedStep::matches`, `Shape::matches` | A remembered line covers a plan exactly where the lines are joined the same way and each step matches in name, file, start path, assignments, routes and arguments, with a number slot admitting only a number, and the step carries no expansion |
+| `permissions::ruling_of` | A matching `deny` decides over every other rule, an `ask` over an `allow`, and an `allow` only where nothing restricts |
+| `permissions::pipeline_decision` | A `deny` on any stage denies a pipeline, an `ask` on any stage asks, and a pipeline is allowed only where it has stages and every one is allowed |
 
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.
