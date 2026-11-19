@@ -8,10 +8,10 @@
 //! The host starts each client program it was given over an anonymous channel
 //! (`control_link::launch`) and serves it until it ends. There is no socket path or port for
 //! another program to connect to. Each client has a name and the answers it may give, both from
-//! the command line. The clients start once each, in the order given, and are served one at a
-//! time. A later client is another launch of a named one, which the person asks for by typing
-//! `launch NAME` on the host's standard input; `quit` or the end of that input stops the host and
-//! the work its sessions have going.
+//! the command line. The clients start once each, in the order given, and are served at once. A
+//! client that has ended is started again when the person types `launch NAME` on the host's
+//! standard input; `quit` or the end of that input stops the host and the work its sessions have
+//! going.
 //!
 //! **This is the only file here that may touch stdout or end the process,** for the reason
 //! `bravebot-rpc` is.
@@ -91,78 +91,94 @@ fn main() {
     bravebot_ui_bridge::settings::settle_for_process(&process);
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
 
-    let mut host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
+    // Before any client starts, the person is asked here about each workspace no yes was kept
+    // about, as a session in lines asks (TRUST-23). The answers are read before `launch` and `quit`
+    // are, from the same input.
+    let asked = bravebot_ui_bridge::host_trust::ask_about_each(
+        &workspaces,
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+    );
+    if asked == bravebot_ui_bridge::host_trust::Asked::Stop {
+        return;
+    }
+
+    let host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
         workspaces,
         settings,
         inspection,
     });
     eprintln!("bravebot-host: instance {}", host.instance());
 
+    let clients = std::sync::Arc::new(clients);
     let current = std::sync::Arc::new(Served {
-        channel: std::sync::Mutex::new(None),
+        channels: std::sync::Mutex::new(std::collections::HashMap::new()),
         quitting: std::sync::atomic::AtomicBool::new(false),
         // Every client starts once, in the order the command line gives.
-        line: std::sync::Mutex::new(Line {
-            serving: None,
-            waiting: (0..clients.len()).collect(),
-        }),
+        connected: std::sync::Mutex::new((0..clients.len()).collect()),
     });
     let names = clients.iter().map(|client| client.name.clone()).collect();
     let (commands, received) = std::sync::mpsc::channel();
     listen_for_commands(commands, std::sync::Arc::clone(&current), names);
+    let mut running: Vec<_> = (0..clients.len())
+        .map(|client| start_client(&host, &clients, client, &current))
+        .collect();
     loop {
-        // `quit` wins over a client still waiting to start.
-        if current.quitting.load(std::sync::atomic::Ordering::SeqCst) {
-            return stop(&mut host);
+        match received.recv() {
+            // `quit` wins over a client still to start.
+            Ok(Command::Launch(_))
+                if current.quitting.load(std::sync::atomic::Ordering::SeqCst) => {}
+            Ok(Command::Launch(client)) => {
+                running.push(start_client(&host, &clients, client, &current));
+            }
+            Ok(Command::Quit) | Err(_) => break,
         }
-        let next = match current.line.lock() {
-            Ok(mut line) => {
-                let next = line.waiting.pop_front();
-                line.serving = next;
-                next
-            }
-            Err(_) => return stop(&mut host),
-        };
-        let Some(next) = next else {
-            match received.recv() {
-                Ok(Command::Launch) => continue,
-                Ok(Command::Quit) | Err(_) => return stop(&mut host),
-            }
-        };
-        run_client(&mut host, &clients[next], &current);
     }
+    // Every channel has been shut, so each client's connection ends and its thread returns.
+    for client in running {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a client's thread that panicked has already lost its connection, and the host stops either way"
+        )]
+        let _ = client.join();
+    }
+    stop(&host);
 }
 
 /// What the person typed on the host's input.
 #[cfg(unix)]
 enum Command {
-    Launch,
+    /// The client at this place on the command line, which is not connected.
+    Launch(usize),
     Quit,
 }
 
-/// The near end of the client being served, kept so that `quit` can end it, whether `quit` has
-/// been asked for, and which clients are connected or waiting to start.
+/// The near end of each client's channel, kept so that `quit` can end it, whether `quit` has been
+/// asked for, and which clients are connected or starting, by their place on the command line.
 #[cfg(unix)]
 struct Served {
-    channel: std::sync::Mutex<Option<std::os::unix::net::UnixStream>>,
+    channels: std::sync::Mutex<std::collections::HashMap<usize, std::os::unix::net::UnixStream>>,
     quitting: std::sync::atomic::AtomicBool,
-    line: std::sync::Mutex<Line>,
-}
-
-/// Clients by their place on the command line.
-#[cfg(unix)]
-struct Line {
-    serving: Option<usize>,
-    /// In the order they were asked for.
-    waiting: std::collections::VecDeque<usize>,
+    connected: std::sync::Mutex<std::collections::HashSet<usize>>,
 }
 
 #[cfg(unix)]
 impl Served {
-    /// The client being served is no longer connected, so it may be launched again.
-    fn served(&self) {
-        if let Ok(mut line) = self.line.lock() {
-            line.serving = None;
+    /// `client` is no longer connected, so it may be launched again.
+    fn served(&self, client: usize) {
+        if let Ok(mut connected) = self.connected.lock() {
+            connected.remove(&client);
+        }
+    }
+
+    /// End every client's connection.
+    fn end_every_channel(&self) {
+        if let Ok(channels) = self.channels.lock() {
+            for channel in channels.values() {
+                let _ = channel.shutdown(std::net::Shutdown::Both);
+            }
         }
     }
 }
@@ -170,10 +186,10 @@ impl Served {
 #[cfg(unix)]
 type Current = std::sync::Arc<Served>;
 
-/// Put the client `named` at the end of the line, or say why not. A bare `launch` names the only
-/// client there is. A client already connected or waiting is not put in twice.
+/// The client `named`, counted as connected from now, or why it cannot be launched. A bare
+/// `launch` names the only client there is. A client already connected is not launched twice.
 #[cfg(unix)]
-fn put_in_line(current: &Served, names: &[String], named: Option<&str>) -> Result<(), String> {
+fn to_launch(current: &Served, names: &[String], named: Option<&str>) -> Result<usize, String> {
     let client = match named {
         Some(named) => names
             .iter()
@@ -187,23 +203,21 @@ fn put_in_line(current: &Served, names: &[String], named: Option<&str>) -> Resul
             ));
         }
     };
-    let mut line = current
-        .line
+    let mut connected = current
+        .connected
         .lock()
-        .map_err(|_| "the clients waiting to start cannot be read".to_string())?;
-    if line.serving == Some(client) || line.waiting.contains(&client) {
+        .map_err(|_| "the clients connected cannot be read".to_string())?;
+    if !connected.insert(client) {
         return Err(format!(
-            "the client named `{}` is still connected or waiting to start",
+            "the client named `{}` is still connected",
             names[client]
         ));
     }
-    line.waiting.push_back(client);
-    Ok(())
+    Ok(client)
 }
 
 /// Read `launch` and `quit` from the host's input on a thread of its own, so `quit` is heard while
-/// a client is connected. Quitting ends the connection being served, which is what returns control
-/// to the loop that stops the host.
+/// clients are connected. Quitting ends every client's connection, which is what lets the host stop.
 #[cfg(unix)]
 fn listen_for_commands(
     commands: std::sync::mpsc::Sender<Command>,
@@ -216,16 +230,12 @@ fn listen_for_commands(
                 .quitting
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             let _ = commands.send(Command::Quit);
-            if let Ok(channel) = current.channel.lock()
-                && let Some(channel) = channel.as_ref()
-            {
-                let _ = channel.shutdown(std::net::Shutdown::Both);
-            }
+            current.end_every_channel();
         };
         for line in std::io::stdin().lines() {
-            let launch = |named| match put_in_line(&current, &names, named) {
-                Ok(()) => {
-                    let _ = commands.send(Command::Launch);
+            let launch = |named| match to_launch(&current, &names, named) {
+                Ok(client) => {
+                    let _ = commands.send(Command::Launch(client));
                 }
                 Err(refused) => eprintln!("bravebot-host: {refused}"),
             };
@@ -282,15 +292,38 @@ fn can_write_in(root: &std::path::Path) -> Result<(), String> {
 /// Stop the work of every session and give the threads a few seconds to finish writing their
 /// records before the process ends.
 #[cfg(unix)]
-fn stop(host: &mut bravebot_ui_bridge::host::Host) {
+fn stop(host: &bravebot_ui_bridge::host::Host) {
     if !host.shutdown(std::time::Duration::from_secs(10)) {
         eprintln!("bravebot-host: some sessions were still working when the host stopped");
     }
 }
 
+/// Start the client at `client` on the command line over a new channel, and serve it on a thread
+/// of its own until it ends. Said here, so the clients are said to start in the order they do.
+#[cfg(unix)]
+fn start_client(
+    host: &bravebot_ui_bridge::host::Host,
+    clients: &std::sync::Arc<Vec<Client>>,
+    client: usize,
+    current: &Current,
+) -> std::thread::JoinHandle<()> {
+    eprintln!("bravebot-host: starting client {}", clients[client].name);
+    let (host, clients, current) = (
+        host.clone(),
+        std::sync::Arc::clone(clients),
+        std::sync::Arc::clone(current),
+    );
+    std::thread::spawn(move || run_client(&host, &clients[client], client, &current))
+}
+
 /// Start the client over a new channel and serve it until it ends.
 #[cfg(unix)]
-fn run_client(host: &mut bravebot_ui_bridge::host::Host, client: &Client, current: &Current) {
+fn run_client(
+    host: &bravebot_ui_bridge::host::Host,
+    client: &Client,
+    place: usize,
+    current: &Current,
+) {
     let name = &client.name;
     let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::named_by_person(&client.program),
@@ -300,29 +333,30 @@ fn run_client(host: &mut bravebot_ui_bridge::host::Host, client: &Client, curren
         bravebot_sandbox::programs::CodeSelectors::Kept,
     );
     command.args(&client.arguments);
-    eprintln!("bravebot-host: starting client {name}");
     let mut linked = match bravebot_ui_bridge::control_link::launch(command) {
         Ok(linked) => linked,
         Err(error) => {
-            current.served();
+            current.served(place);
             eprintln!("bravebot-host: cannot start client {name}: {error}");
             return;
         }
     };
-    if let Ok(mut slot) = current.channel.lock() {
-        *slot = linked.channel.try_clone().ok();
+    if let Ok(mut channels) = current.channels.lock()
+        && let Ok(kept) = linked.channel.try_clone()
+    {
+        channels.insert(place, kept);
     }
     // A `quit` typed before the channel was kept ends it now.
     if current.quitting.load(std::sync::atomic::Ordering::SeqCst) {
         let _ = linked.channel.shutdown(std::net::Shutdown::Both);
     }
     let ended = host.serve(linked.channel, &client.answers);
-    if let Ok(mut slot) = current.channel.lock() {
-        *slot = None;
+    if let Ok(mut channels) = current.channels.lock() {
+        channels.remove(&place);
     }
     // The host has dealt with the loss of the connection. A launch typed once the line below is
     // written is accepted.
-    current.served();
+    current.served(place);
     match ended {
         Ok(ended) => eprintln!("bravebot-host: client {name} ended ({ended:?})"),
         Err(error) => eprintln!("bravebot-host: serving client {name} failed: {error}"),
