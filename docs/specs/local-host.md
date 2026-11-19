@@ -17,9 +17,9 @@ documented-by: none (internal: the host is started by a person from a command li
 
 ## Scope
 
-`bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves one client at a time over the anonymous channel of [RPCVIEW-8](session-view.md#RPCVIEW-8). The host itself has no socket path, port or token, and no network or remote client. The development relay of [HOST-12](#HOST-12) is a client program that the host starts like any other. It listens on a loopback port so that an app in development can reach the host.
+`bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves every client that is connected, each over an anonymous channel of its own ([RPCVIEW-8](session-view.md#RPCVIEW-8)), and reads each connection on a thread of its own. The host itself has no socket path, port or token, and no network or remote client. The development relay of [HOST-12](#HOST-12) is a client program that the host starts like any other. It listens on a loopback port so that an app in development can reach the host.
 
-Not here: more of a transcript for a client that returns than the most recent rows of [RPCVIEW-9](session-view.md#RPCVIEW-9), taking a session from a controller that is still connected, two clients acting at once, pairing, and anything about a phone beyond the development relay.
+Not here: more of a transcript for a client that returns than the most recent rows of [RPCVIEW-9](session-view.md#RPCVIEW-9), taking a session from a controller that is still connected, two clients acting on one session at once, pairing, and anything about a phone beyond the development relay.
 
 ## Clauses
 
@@ -30,14 +30,15 @@ The host is started with `--sessions-root DIR`, one or more `--workspace DIR`, a
 
 Before it starts any client, the host asks on its standard error about each `--workspace`, in the order given, whether to trust it ([TRUST-23](trust-map.md#TRUST-23)). It puts the same lines and the same question as a session in lines ([CLI-14](cli.md#CLI-14)), and reads the answer from its standard input before it reads any `launch` or `quit`. A yes is kept in the record the terminal and the desktop interface read, in a line that names no session, so a session later opened in that workspace starts trusted and its client is not asked. A no, or any line that is not yes, keeps nothing, and each session there asks its client as before. `quit` at the question stops the host with nothing kept about that workspace and no client started. The end of the input there answers no and stops the host in the same way. A workspace that a kept yes already answers for is not asked about, and the host says so, when the yes was given and how to be asked again. Nor is one where a yes cannot be kept: the home directory or one holding it, a filesystem root, a directory whose creation time the filesystem does not give, or a process that may write nothing. A yes there would answer nothing, so the host says that each session there asks. The person typed the command line and types the answer, so the answer is theirs.
 
-When it starts, the host starts each client once, in the order of the command line, each over a new channel of its own. It serves one at a time: a client starts when the one before it ends. A client ending ends its channel and leaves the host running. The person starts a client again by typing `launch NAME` on the host's standard input. Launches typed while a client is connected wait and start in the order they were typed. A bare `launch` starts the only client where there is one, and is refused where there are several. A `launch` of a name no client has, or of a client that is connected or waiting to start, is refused on standard error and not kept for later. A client counts as connected until the host has finished dealing with the loss of its connection. The host then says on standard error that the client ended, and a `launch` of it typed from then on is accepted. `quit`, or the end of that input, stops the host, whether or not a client is connected: it ends the connection being served, closes every session and waits up to ten seconds for the threads working for them, so a turn writing its record is not cut off, and says on standard error if any were still working. Nothing a client sends starts a client, and nothing but the startup question and these commands reads the host's standard input. A line on it that is not text is reported and skipped; a read error, or the end of the input, is reported on standard error before the host stops.
+When it starts, the host starts every client at once, in the order of the command line, each over a new channel of its own, and serves them all at once. A client ending ends its channel and leaves the host running. The person starts a client again by typing `launch NAME` on the host's standard input. A bare `launch` starts the only client where there is one, and is refused where there are several. A `launch` of a name no client has, or of a client that is connected, is refused on standard error and not kept for later. A client counts as connected from its launch until the host has finished dealing with the loss of its connection. The host then says on standard error that the client ended, and a `launch` of it typed from then on is accepted. `quit`, or the end of that input, stops the host, whether or not a client is connected: it ends every connection, closes every session and waits up to ten seconds for the threads working for them, so a turn writing its record is not cut off, and says on standard error if any were still working. Nothing a client sends starts a client, and nothing but the startup question and these commands reads the host's standard input. A line on it that is not text is reported and skipped; a read error, or the end of the input, is reported on standard error before the host stops.
 
 `verified-by: bravebot_ui_bridge::host_process::a_command_line_that_names_no_client_or_a_relative_one_is_refused_before_anything_is_made`
 `verified-by: bravebot_ui_bridge::bin::bravebot-host::each_client_keeps_what_its_group_named_in_order`
 `verified-by: bravebot_ui_bridge::bin::bravebot-host::a_client_that_is_not_fully_named_is_refused`
 `verified-by: bravebot_ui_bridge::allowlist::a_list_of_answers_names_known_words_once_or_none`
-`verified-by: bravebot_ui_bridge::host_process::clients_start_once_in_the_order_given_and_launches_in_the_order_typed`
-`verified-by: bravebot_ui_bridge::host_process::a_launch_of_an_unknown_connected_or_waiting_client_is_refused_and_not_kept`
+`verified-by: bravebot_ui_bridge::host_process::every_client_starts_once_at_once_and_a_launch_starts_one_that_ended`
+`verified-by: bravebot_ui_bridge::host_process::a_launch_of_an_unknown_or_connected_client_is_refused_and_not_kept`
+`verified-by: bravebot_ui_bridge::host_process::quit_with_two_clients_connected_ends_both_and_closes_every_session`
 `verified-by: bravebot_ui_bridge::host_process::the_host_stops_when_told_to_or_when_its_input_ends`
 `verified-by: bravebot_ui_bridge::host_process::a_workspace_that_does_not_exist_stops_the_host_before_anything_is_made`
 `verified-by: bravebot_ui_bridge::host_process::a_workspace_already_trusted_is_not_asked_about`
@@ -111,6 +112,7 @@ Each run of the host has an instance ID, drawn from the seed the standard librar
 `verified-by: bravebot_ui_bridge::host::the_ready_event_names_the_instance_and_not_the_state_directory`
 `verified-by: bravebot_ui_bridge::host::a_second_client_reaches_the_host_the_first_left`
 `verified-by: bravebot_ui_bridge::host::instance_info_names_the_answers_of_the_client_that_asks`
+`verified-by: bravebot_ui_bridge::host::clients_connected_at_once_are_each_served_and_each_told_once_that_the_host_is_ready`
 
 
 <a id="HOST-6"></a>
@@ -134,7 +136,7 @@ Each run of the host has an instance ID, drawn from the seed the standard librar
 <a id="HOST-7"></a>
 ### HOST-7: a session has one controller
 
-The controller of a session is the connection that opened it, or that took it over ([HOST-11](#HOST-11)). Requests naming a session are accepted only from its controller, and events of a session go only to its controller. Another connection sees the session in `instance.info`, with `controlled` false unless it is the one served, and is refused every request that names it with `not_allowed`. Once the controller's connection has ended, any later connection may close the session with `session.close`, and then owns it for the `session.closed` that follows, or take it over with `session.attach`.
+The controller of a session is the connection that opened it, or that took it over ([HOST-11](#HOST-11)). Requests naming a session are accepted only from its controller, and events of a session go only to its controller. Another connection sees the session in `instance.info`, with `controlled` true only for the connection that controls it, and is refused every request that names it with `not_allowed`. Once the controller's connection has ended, any other connection may close the session with `session.close`, and then owns it for the `session.closed` that follows, or take it over with `session.attach`.
 
 When the controller's connection ends the session stays open with no controller. The question it was waiting on is refused and shown as resolved in the session's view, and every question the turn asks from then on is refused when it is asked ([HOST-10](#HOST-10)). The turn goes on to its end: it is not cancelled, because the person who left may return, and an effect that needed an answer does not happen. Nothing is left asking a person who is no longer there. The session stays open until it is closed or the host stops. Events the turn produces meanwhile are not sent to anyone.
 
@@ -145,6 +147,11 @@ When the controller's connection ends the session stays open with no controller.
 `verified-by: bravebot_ui_bridge::host_process::a_client_without_trust_is_not_asked_about_trust_and_cannot_answer_it`
 `verified-by: bravebot_ui_bridge::host_process::a_takeover_without_trust_is_not_asked_and_the_next_client_with_trust_is`
 `verified-by: bravebot_ui_bridge::host::a_closing_or_unknown_session_is_not_found_by_anyone`
+`verified-by: bravebot_ui_bridge::host_process::two_clients_connected_at_once_each_act_on_and_hear_only_their_own_sessions`
+`verified-by: bravebot_ui_bridge::host_process::a_client_leaving_while_another_is_mid_turn_leaves_the_other_served`
+`verified-by: bravebot_ui_bridge::host::a_client_leaving_leaves_the_others_served`
+`verified-by: bravebot_ui_bridge::host::a_connection_given_up_on_leaves_the_others_served`
+`verified-by: bravebot_ui_bridge::host::an_event_of_a_session_being_opened_goes_to_the_connection_opening_it`
 `verified-by: bravebot_ui_bridge::control_tests::losing_the_controller_refuses_the_waiting_question_and_does_not_stop_the_turn`
 `verified-by: bravebot_ui_bridge::closing_tests::losing_control_of_a_session_with_no_work_changes_nothing`
 
@@ -169,6 +176,7 @@ A request line is at most 8 MiB, newline excluded. A line that reaches the limit
 `verified-by: bravebot_ui_bridge::host_process::a_client_path_that_is_not_utf8_is_not_a_panic`
 `verified-by: bravebot_ui_bridge::host_process::a_sessions_root_the_host_cannot_write_to_is_refused`
 `verified-by: bravebot_ui_bridge::host_process::the_answer_to_a_close_comes_before_the_session_is_said_to_be_closed`
+`verified-by: bravebot_ui_bridge::host_process::a_close_is_answered_before_its_session_is_closed_while_another_client_is_answered`
 
 <a id="HOST-9"></a>
 ### HOST-9: a program the host starts holds no part of the channel
@@ -182,6 +190,7 @@ The host holds the near end of its client's channel while it runs the person's h
 `verified-by: bravebot_ui_bridge::host_process::a_listing_of_either_system_shows_its_sockets`
 `verified-by: bravebot_ui_bridge::control_boundary::programs_a_host_starts_hold_no_end_of_the_channels_it_created`
 `verified-by: bravebot_ui_bridge::control_boundary::an_mcp_server_a_host_starts_holds_no_end_of_the_channels_it_created`
+`verified-by: bravebot_ui_bridge::control_boundary::a_client_holds_no_socket_of_another_clients_channel`
 `verified-by: bravebot_ui_bridge::layering::every_binary_here_withholds_inherited_descriptors_at_startup`
 
 <a id="HOST-10"></a>

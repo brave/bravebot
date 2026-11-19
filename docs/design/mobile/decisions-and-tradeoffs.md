@@ -105,7 +105,7 @@ No dependencies or build tooling are added by this proposal. Stage 1 covers the 
 
 - **Decision:** the host's command line names each client it launches and the question kinds that client may answer: `--client NAME --answers KINDS --program /ABS [--arg VALUE]...`, repeated for each client. The `-- PROGRAM ARGS` form is removed.
   - KINDS is a list drawn from `confirm`, `run`, `fetch`, `ask` and `trust`, or `none`. There is no default.
-  - The host starts each client once at startup, in command-line order. `launch NAME` starts one again after it has ended, and is refused while a client of that name is connected or waiting to start. A bare `launch` is accepted only when one client is defined.
+  - The host starts every client at startup, in command-line order, and serves them at once. `launch NAME` starts one again after it has ended, and is refused while a client of that name is connected. A bare `launch` is accepted only when one client is defined.
   - The name is the client that acted, as the view and the trace show it.
   - Names and kinds come only from the command line and the `launch` line the person types. Nothing a client sends and no file sets them.
 - **Reason:**

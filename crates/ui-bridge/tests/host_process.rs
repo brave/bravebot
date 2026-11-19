@@ -1955,11 +1955,11 @@ fn answers_of(client: &mut Client) -> Value {
 /// A test is only as patient for a client that should not start as this.
 const NOT_STARTED: Duration = Duration::from_millis(700);
 
-/// The host starts each client once, in the order its command line gives, and serves one at a time:
-/// the next starts only when the one before it ends, and nothing starts after the last until the
-/// person types a launch. Launches typed while a client is connected start in the order typed.
+/// The host starts each client once, in the order its command line gives, and serves them at once.
+/// Nothing starts after that until the person types a launch, and a launch starts a client that has
+/// ended.
 #[test]
-fn clients_start_once_in_the_order_given_and_launches_in_the_order_typed() {
+fn every_client_starts_once_at_once_and_a_launch_starts_one_that_ended() {
     let scratch = Scratch::new();
     let endpoint = a_model_service(ends_the_turn, || {});
     let mut host = Host::start_giving(
@@ -1967,55 +1967,48 @@ fn clients_start_once_in_the_order_given_and_launches_in_the_order_typed() {
         &endpoint,
         &[("a", "confirm,trust"), ("b", "none"), ("c", "run")],
     );
-    let first = {
-        let mut first = host.client();
-        assert_eq!(answers_of(&mut first), json!(["confirm", "trust"]));
-        first
-    };
-    assert!(
-        host.client_within(NOT_STARTED).is_none(),
-        "a second client started while the first was connected"
-    );
-    first.leave();
-    let mut second = host.client();
-    assert_eq!(answers_of(&mut second), json!([]));
-    second.leave();
-    let mut third = host.client();
-    assert_eq!(answers_of(&mut third), json!(["run"]));
-
-    host.command("launch b");
-    host.command("launch a");
-    third.leave();
-    let mut again = host.client();
-    assert_eq!(answers_of(&mut again), json!([]), "a started before b");
-    again.leave();
-    let mut last = host.client();
-    assert_eq!(answers_of(&mut last), json!(["confirm", "trust"]));
-    last.leave();
+    for name in ["a", "b", "c"] {
+        host.says(&format!("starting client {name}"));
+    }
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    let mut c = host.client_named("c");
+    assert_eq!(answers_of(&mut a), json!(["confirm", "trust"]));
+    assert_eq!(answers_of(&mut b), json!([]));
+    assert_eq!(answers_of(&mut c), json!(["run"]));
     assert!(
         host.client_within(NOT_STARTED).is_none(),
         "a client started that nobody launched"
     );
+
+    b.leave();
+    host.says("client b ended");
+    let mut again = host.launched("launch b");
+    assert_eq!(again.name, "b");
+    assert_eq!(answers_of(&mut again), json!([]));
+    assert_eq!(
+        answers_of(&mut a),
+        json!(["confirm", "trust"]),
+        "a stopped being served"
+    );
+    for client in [a, c, again] {
+        client.leave();
+    }
 }
 
-/// A launch that names no client, a client that is connected or waiting to start, or no client
-/// where there are several, is refused on the host's error output and not kept for later.
+/// A launch that names no client, a client that is connected, or no client where there are
+/// several, is refused on the host's error output and not kept for later.
 #[test]
-fn a_launch_of_an_unknown_connected_or_waiting_client_is_refused_and_not_kept() {
+fn a_launch_of_an_unknown_or_connected_client_is_refused_and_not_kept() {
     let scratch = Scratch::new();
     let endpoint = a_model_service(ends_the_turn, || {});
     let mut host = Host::start_giving(&scratch, &endpoint, &[("a", "trust"), ("b", "none")]);
-    let first = host.client();
+    let a = host.client_named("a");
+    let b = host.client_named("b");
     for (line, refusal) in [
         ("launch zed", "no client is named `zed`"),
-        (
-            "launch a",
-            "the client named `a` is still connected or waiting to start",
-        ),
-        (
-            "launch b",
-            "the client named `b` is still connected or waiting to start",
-        ),
+        ("launch a", "the client named `a` is still connected"),
+        ("launch b", "the client named `b` is still connected"),
         (
             "launch",
             "name the client to launch: `launch NAME`, where NAME is one of a, b",
@@ -2024,10 +2017,14 @@ fn a_launch_of_an_unknown_connected_or_waiting_client_is_refused_and_not_kept() 
         host.command(line);
         host.says(refusal);
     }
-    first.leave();
-    let mut second = host.client();
-    assert_eq!(answers_of(&mut second), json!([]));
-    second.leave();
+    a.leave();
+    b.leave();
+    // In whichever order the host deals with them.
+    let ended: Vec<String> = (0..2).map(|_| host.says(" ended (")).collect();
+    for name in ["a", "b"] {
+        let said = format!("client {name} ended");
+        assert!(ended.iter().any(|line| line.contains(&said)), "{ended:?}");
+    }
     assert!(
         host.client_within(NOT_STARTED).is_none(),
         "a refused launch was kept and started later"
@@ -2077,7 +2074,7 @@ fn a_takeover_without_trust_is_not_asked_and_the_next_client_with_trust_is() {
     let endpoint = a_model_service(ends_the_turn, || {});
     let mut host = Host::start_giving(&scratch, &endpoint, &[("a", "trust"), ("b", "confirm")]);
 
-    let mut first = host.client();
+    let mut first = host.client_named("a");
     let opened = first.call("session.new", json!({"directory": scratch.project()}));
     let session = opened["session"].as_str().unwrap().to_string();
     first.call(
@@ -2086,8 +2083,9 @@ fn a_takeover_without_trust_is_not_asked_and_the_next_client_with_trust_is() {
     );
     first.event("trust.request");
     first.leave();
+    host.says("client a ended");
 
-    let mut second = host.client();
+    let mut second = host.client_named("b");
     second.call("session.attach", json!({"session": session}));
     let snapshot = second.event("session.view.snapshot");
     assert_eq!(snapshot["data"]["status"], "awaiting_trust", "{snapshot}");
@@ -2172,6 +2170,211 @@ fn a_reply_of_the_wrong_kind_is_refused_and_the_question_stays_answerable() {
         "written by the model"
     );
     client.leave();
+}
+
+// ---------------------------------------------------------------- several clients at once
+
+/// Two clients that may give every answer.
+const TWO: &[(&str, &str)] = &[
+    ("a", "confirm,run,fetch,ask,trust"),
+    ("b", "confirm,run,fetch,ask,trust"),
+];
+
+/// The events `client` was sent about `session`, of every line it has read.
+fn events_of(client: &Client, session: &str) -> Vec<String> {
+    client
+        .inbox
+        .written()
+        .into_iter()
+        .filter(|line| {
+            serde_json::from_str::<Value>(line)
+                .is_ok_and(|said| said.get("event").is_some() && said["session"] == session)
+        })
+        .collect()
+}
+
+/// Two clients connected at once each control only the sessions they opened. Each sees both in
+/// `instance.info`, controlling only its own, is sent no event of the other's, and is refused every
+/// request that names the other's, a takeover and a close included.
+#[test]
+fn two_clients_connected_at_once_each_act_on_and_hear_only_their_own_sessions() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    let ours = a.session_in(&scratch.project());
+    let theirs = b.session_in(&scratch.project());
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": ours, "prompt": "hello"})),
+    );
+    a.until(|said| said["event"] == "turn.done" && said["session"] == ours.as_str());
+
+    assert_eq!(a.the_session(&ours)["controlled"], true);
+    assert_eq!(a.the_session(&theirs)["controlled"], false);
+    assert_eq!(b.the_session(&ours)["controlled"], false);
+    assert_eq!(b.the_session(&theirs)["controlled"], true);
+    for (method, params) in [
+        (
+            "turn.send",
+            message_ids::with_fresh(json!({"session": ours, "prompt": "hello"})),
+        ),
+        ("session.view.start", json!({"session": ours, "version": 1})),
+        ("session.attach", json!({"session": ours})),
+        ("session.close", json!({"session": ours})),
+    ] {
+        let refused = b.answered(method, params);
+        assert_eq!(
+            refused["error"]["code"], "not_allowed",
+            "{method}: {refused}"
+        );
+    }
+    assert!(
+        !events_of(&a, &ours).is_empty(),
+        "the test saw no event to keep apart"
+    );
+    assert_eq!(events_of(&b, &ours), Vec::<String>::new());
+    assert_eq!(events_of(&a, &theirs), Vec::<String>::new());
+    a.leave();
+    b.leave();
+}
+
+/// A client that leaves takes nothing from one connected at the same time: a turn the other has
+/// running goes on to its end, the other is still answered, and it may take over the session the
+/// first left.
+#[test]
+fn a_client_leaving_while_another_is_mid_turn_leaves_the_other_served() {
+    let scratch = Scratch::new();
+    let (before, reached, release) = a_gate();
+    let endpoint = a_model_service(ends_the_turn, before);
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    let left = a.session_in(&scratch.project());
+    // A session is taken over only from where its view stands.
+    a.call("session.view.start", json!({"session": left, "version": 1}));
+    let working = b.session_in(&scratch.project());
+    b.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": working, "prompt": "hello"})),
+    );
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model");
+
+    a.leave();
+    host.says("client a ended");
+    release.send(()).unwrap();
+    b.until(|said| said["event"] == "turn.done" && said["session"] == working.as_str());
+    b.call("session.attach", json!({"session": left}));
+    assert_eq!(b.the_session(&left)["controlled"], true);
+    assert_eq!(b.the_session(&working)["controlled"], true);
+    b.leave();
+}
+
+/// `quit` with two clients connected ends both connections, closes the session each opened, and
+/// stops the host once each has ended.
+#[test]
+fn quit_with_two_clients_connected_ends_both_and_closes_every_session() {
+    let scratch = Scratch::new();
+    let log = declared_session_hooks(&scratch);
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start_giving(&scratch, &endpoint, TWO);
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    for client in [&mut a, &mut b] {
+        let session = client.session_in(&scratch.project());
+        client.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+        );
+        client.event("turn.done");
+    }
+
+    host.command("quit");
+    for client in [&a, &b] {
+        let deadline = Instant::now() + STOPPED_WITHIN;
+        loop {
+            match client.inbox.said.recv_timeout(Duration::from_millis(50)) {
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                _ => assert!(
+                    Instant::now() < deadline,
+                    "client {} stayed connected after quit",
+                    client.name
+                ),
+            }
+        }
+    }
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Some(status) = host.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the host did not stop");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut said = session_log(&log);
+    said.sort();
+    assert_eq!(
+        said,
+        [
+            "session-ended",
+            "session-ended",
+            "session-started",
+            "session-started"
+        ]
+    );
+    a.leave();
+    b.leave();
+}
+
+/// A close is answered before its session is said to be closed while another client's requests
+/// are being answered at the same moment. Were the answers of the two let go apart, the other's
+/// answer could let the `session.closed` out first.
+#[test]
+fn a_close_is_answered_before_its_session_is_closed_while_another_client_is_answered() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let asking = std::thread::spawn({
+        let stop = Arc::clone(&stop);
+        move || {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                b.call("instance.info", json!({}));
+            }
+            b
+        }
+    });
+    for _ in 0..200 {
+        let session = a.session_in(&scratch.project());
+        let id = a.send("session.close", json!({"session": session}));
+        let mut seen = Vec::new();
+        loop {
+            let message = a.inbox.said.recv_timeout(PATIENCE).expect("a message");
+            let done = message["id"] == id;
+            let closed = message["event"] == "session.closed";
+            seen.push(message);
+            if done || closed {
+                assert!(
+                    done,
+                    "session.closed came before the answer to the close: {seen:?}"
+                );
+                break;
+            }
+        }
+        a.event("session.closed");
+    }
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    asking
+        .join()
+        .expect("the other client was answered")
+        .leave();
+    a.leave();
 }
 
 // ---------------------------------------------------------------- trust asked about at startup

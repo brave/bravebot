@@ -5,13 +5,15 @@
 //! The client the host starts is the including test binary run again, which copies the channel the
 //! host made for it to a socket the test listens on, so the test can speak to the host as its client.
 //! That socket belongs to the test and the host never sees it. Each including file has a test named
-//! [`RELAY_TEST`] that calls [`relay`].
+//! [`RELAY_TEST`] that calls [`relay`]. The relay first writes its client's name and process id on
+//! that socket, so a test with several clients connected can tell them apart.
 #![allow(
     dead_code,
     reason = "each test crate that includes this file uses some of it"
 )]
 
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -38,7 +40,12 @@ pub fn relay() {
     let Ok(path) = std::env::var(RELAY) else {
         return;
     };
-    let socket = UnixStream::connect(path).expect("the test is listening");
+    let name = std::env::args()
+        .skip_while(|argument| argument != RELAY_TEST)
+        .nth(1)
+        .unwrap_or_default();
+    let mut socket = UnixStream::connect(path).expect("the test is listening");
+    writeln!(socket, "{name} {}", std::process::id()).expect("the test reads");
     let mut up = socket.try_clone().unwrap();
     std::thread::spawn(move || {
         let _ = std::io::copy(&mut std::io::stdin(), &mut up);
@@ -171,6 +178,8 @@ pub struct Host {
     relay_path: PathBuf,
     /// The thread that copies the host's standard error, and how many bytes it has copied.
     copying: Option<(JoinHandle<()>, Arc<AtomicUsize>)>,
+    /// Clients that connected while the test waited for another.
+    arrived: RefCell<VecDeque<Client>>,
 }
 
 impl Host {
@@ -252,7 +261,8 @@ impl Host {
                 // The program started is this test binary, the one that is already running.
                 // nosemgrep: rust.lang.security.current-exe.current-exe
                 .arg(std::env::current_exe().unwrap());
-            for argument in ["--ignored", "--exact", RELAY_TEST, "--nocapture"] {
+            // The name after the test's is a second filter, which no test matches.
+            for argument in ["--ignored", "--exact", RELAY_TEST, name, "--nocapture"] {
                 command.args(["--arg", argument]);
             }
         }
@@ -274,6 +284,7 @@ impl Host {
             relay,
             relay_path: start.relay.to_path_buf(),
             copying: Some(copying),
+            arrived: RefCell::default(),
         }
     }
 
@@ -285,10 +296,39 @@ impl Host {
 
     /// The client the host starts within `limit`, if it starts one.
     pub fn client_within(&self, limit: Duration) -> Option<Client> {
+        if let Some(client) = self.arrived.borrow_mut().pop_front() {
+            return Some(client);
+        }
+        self.next_within(limit)
+    }
+
+    /// The client named `name`, once it has connected, keeping any other that connects first.
+    pub fn client_named(&self, name: &str) -> Client {
+        let held = self
+            .arrived
+            .borrow()
+            .iter()
+            .position(|client| client.name == name);
+        if let Some(at) = held {
+            return self.arrived.borrow_mut().remove(at).unwrap();
+        }
+        let deadline = Instant::now() + PATIENCE;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match self.next_within(left) {
+                Some(client) if client.name == name => return client,
+                Some(client) => self.arrived.borrow_mut().push_back(client),
+                None => break,
+            }
+        }
+        panic!("the host never started its client {name}")
+    }
+
+    /// The next client to connect within `limit`.
+    fn next_within(&self, limit: Duration) -> Option<Client> {
         let deadline = Instant::now() + limit;
         loop {
             match self.relay.accept() {
-                Ok((stream, _)) => return Some(Client::over(stream)),
+                Ok((stream, _)) => return Some(Client::named(stream)),
                 Err(_) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(20));
                 }
@@ -385,16 +425,40 @@ impl Drop for Host {
 pub struct Client {
     pub stream: UnixStream,
     pub inbox: Inbox,
+    /// The name the host's command line gave the client, and the relay's process id.
+    pub name: String,
+    pub pid: u32,
     next: u64,
 }
 
 impl Client {
+    /// A client over a relay's socket, which says first which client it is.
+    fn named(mut stream: UnixStream) -> Self {
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(PATIENCE)).unwrap();
+        // A byte at a time, so nothing after the first line is read here.
+        let mut first = Vec::new();
+        let mut byte = [0u8; 1];
+        while stream.read_exact(&mut byte).is_ok() && byte[0] != b'\n' {
+            first.push(byte[0]);
+        }
+        stream.set_read_timeout(None).unwrap();
+        let first = String::from_utf8_lossy(&first).into_owned();
+        let (name, pid) = first.rsplit_once(' ').unwrap_or_default();
+        let mut client = Self::over(stream);
+        client.name = name.to_string();
+        client.pid = pid.parse().unwrap_or_default();
+        client
+    }
+
     pub fn over(stream: UnixStream) -> Self {
         stream.set_nonblocking(false).unwrap();
         let inbox = Inbox::read(stream.try_clone().unwrap());
         Self {
             stream,
             inbox,
+            name: String::new(),
+            pid: 0,
             next: 0,
         }
     }

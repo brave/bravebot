@@ -780,6 +780,80 @@ impl Hosted {
     }
 }
 
+/// The sockets `pid` holds, each by the name its system gives it: the inode on Linux and the
+/// kernel address on macOS. Two descriptors of one socket have the same name, in one process or in
+/// two.
+fn sockets_held_by(pid: u32) -> std::collections::HashSet<String> {
+    if cfg!(target_os = "linux") {
+        return std::fs::read_dir(format!("/proc/{pid}/fd"))
+            .expect("the relay's descriptors can be read")
+            .flatten()
+            .filter_map(|descriptor| std::fs::read_link(descriptor.path()).ok())
+            .filter_map(|target| {
+                let target = target.to_str()?;
+                Some(
+                    target
+                        .strip_prefix("socket:[")?
+                        .strip_suffix(']')?
+                        .to_string(),
+                )
+            })
+            .collect();
+    }
+    let listed = bravebot_sandbox::process::starting_a_program(|| {
+        Command::new("/usr/sbin/lsof")
+            .args(["-nP", "-a", "-p", &pid.to_string(), "-U"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+    })
+    .expect("lsof runs");
+    String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().nth(5).map(str::to_string))
+        .collect()
+}
+
+/// Clients the host serves at once are each started with their own channel and no part of
+/// another's: neither holds a socket the other holds. Each holds two, its channel and its link to
+/// the test, so a client that had been handed the other's channel would hold one of the other's.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_client_holds_no_socket_of_another_clients_channel() {
+    let scratch = Scratch::new("two-clients");
+    let relay_directory = tempfile::tempdir().expect("a directory for the relay");
+    let root = scratch.path.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let host = Host::launch(Start {
+        home: &scratch.home(),
+        sessions_root: &root,
+        workspace: &scratch.project(),
+        relay: &relay_directory.path().join("relay.sock"),
+        settings: None,
+        current_dir: None,
+        environment: &[],
+        stdout: Stdio::null(),
+        stderr: support::discarded(),
+        clients: &[("a", "confirm"), ("b", "confirm")],
+    });
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    // Both are served, so each has its channel in hand.
+    a.call("instance.info", json!({}));
+    b.call("instance.info", json!({}));
+    let (of_a, of_b) = (sockets_held_by(a.pid), sockets_held_by(b.pid));
+    assert!(of_a.len() >= 2 && of_b.len() >= 2, "{of_a:?} {of_b:?}");
+    let shared: Vec<_> = of_a.intersection(&of_b).collect();
+    assert!(
+        shared.is_empty(),
+        "the two clients hold the same sockets: {shared:?}"
+    );
+    a.leave();
+    b.leave();
+}
+
 /// The process id of the relay the host `host` started as its client.
 fn the_relay_of(host: u32) -> u32 {
     let found = bravebot_sandbox::process::starting_a_program(|| {
