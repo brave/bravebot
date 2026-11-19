@@ -46,6 +46,9 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// What is known about whether the volume a map's working directory is on holds two spellings that
 /// differ only in case as one file (TRUST-2).
 ///
@@ -432,21 +435,19 @@ impl TrustStore {
         let mut prefix = path;
         while !prefix.is_empty() && prefix != "/" {
             if let Some(decision) = self.rule_at(prefix) {
-                return Some(*decision);
+                return Some(decision);
             }
             prefix = prefix.rsplit_once('/').map_or("", |(parent, _)| parent);
         }
         // As in covers(), "/" covers even relative keys in a store with no root.
         // It wins the equal-specificity tie with the empty key.
-        self.rule_at("/")
-            .or_else(|| {
-                if is_absolute_key(path) {
-                    None
-                } else {
-                    self.rule_at("")
-                }
-            })
-            .copied()
+        self.rule_at("/").or_else(|| {
+            if is_absolute_key(path) {
+                None
+            } else {
+                self.rule_at("")
+            }
+        })
     }
 
     /// The decision recorded under `key`, reached however the key was spelled.
@@ -473,16 +474,18 @@ impl TrustStore {
     /// another apart has been asked nothing about it.
     ///
     /// The scan costs one pass over the rules a person's decisions have written.
-    fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
+    fn rule_at(&self, key: &str) -> Option<Option<Integrity>> {
         let name = Name::new(key, self.case);
-        self.rules
+        let matching: Vec<Option<Integrity>> = self
+            .rules
             .iter()
             .filter(|(rule, decision)| {
                 name.is(rule)
                     || (**decision != Some(Integrity::Trusted) && name.is_equivalent(rule))
             })
-            .map(|(_, decision)| decision)
-            .min_by_key(|decision| strength(**decision))
+            .map(|(_, decision)| *decision)
+            .collect();
+        weakest_decision(&matching)
     }
 
     /// The integrity of everything at or beneath `path`, by the meet of every rule that bears on
@@ -507,13 +510,14 @@ impl TrustStore {
     /// weaken the answer, so a file a write marked untrusted is not laundered by a read of the tree
     /// around it.
     pub fn integrity_beneath_or(&self, path: &str, assumed: Integrity) -> Integrity {
-        let mut answer = self
+        let start = self
             .integrity_of_or(path, Some(assumed))
             .unwrap_or(Integrity::Untrusted);
         let path = self.key(path);
         // The meet only narrows, so a volume that could not be asked is read as one that folds.
         let folds = self.case.restricts();
         let beneath = canonical_form(&path, folds);
+        let mut bearing = Vec::new();
         for (prefix, integrity) in self.keyed() {
             // A trust under an equivalent spelling is counted as well, which changes nothing since
             // it is the top of the meet. The case this exists for is a refusal beneath the
@@ -522,10 +526,10 @@ impl TrustStore {
                 || covers_by(&path, prefix, folds, fold_simple)
                 || covers_spelled(&beneath, &canonical_form(prefix, folds))
             {
-                answer = answer.meet(integrity.unwrap_or(Integrity::Untrusted));
+                bearing.push(integrity);
             }
         }
-        answer
+        meet_of_rules(start, &bearing)
     }
 
     /// Whether `path` is trusted. Anything not covered by a rule is not.
@@ -637,20 +641,96 @@ impl TrustStore {
 }
 
 /// How much a decision grants: a distrust least, then an undecided boundary, then a trust.
-fn strength(decision: Option<Integrity>) -> u8 {
-    match decision {
-        Some(Integrity::Untrusted) => 0,
-        None => 1,
-        Some(Integrity::Trusted) => 2,
+/// The weakest of the decisions several spellings of one name hold, or `None` where none does: a
+/// distrust before an undecided boundary before a trust.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r is None <==> matching@.len() == 0,
+        r is Some ==> exists|i: int| 0 <= i < matching@.len() && #[trigger] matching@[i]
+            == r->Some_0,
+        r is Some ==> forall|i: int|
+            0 <= i < matching@.len() ==> crate::spec::grants_no_more(r->Some_0, #[trigger] matching@[i]),
+))]
+fn weakest_decision(matching: &[Option<Integrity>]) -> Option<Option<Integrity>> {
+    if matching.is_empty() {
+        return None;
     }
+    let mut weakest = matching[0];
+    let mut at = 1;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            1 <= at <= matching.len(),
+            exists|i: int| 0 <= i < at && #[trigger] matching@[i] == weakest,
+            forall|i: int|
+                0 <= i < at ==> crate::spec::grants_no_more(weakest, #[trigger] matching@[i]),
+        decreases matching.len() - at,
+    ))]
+    while at < matching.len() {
+        weakest = weaker(weakest, matching[at]);
+        at += 1;
+    }
+    Some(weakest)
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::strength(decision),
+))]
+fn strength(decision: Option<Integrity>) -> u8 {
+    if decision == Some(Integrity::Untrusted) {
+        return 0;
+    }
+    let undecided_strength = 1;
+    if decision.is_none() {
+        return undecided_strength;
+    }
+    2
+}
+
+/// `start` met with every decision in `bearing`, an undecided boundary counted as untrusted.
+///
+/// Trusted only where `start` is and every decision is a trust, so a rule can only lower the
+/// answer, never raise it.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::meet_of_rules(start, bearing@),
+))]
+fn meet_of_rules(start: Integrity, bearing: &[Option<Integrity>]) -> Integrity {
+    let mut answer = start;
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= bearing.len(),
+            answer == crate::spec::meet_of_rules(start, bearing@.take(at as int)),
+        decreases bearing.len() - at,
+    ))]
+    while at < bearing.len() {
+        // An undecided boundary is nobody having said, which counts as untrusted.
+        let decision = bearing[at].unwrap_or(Integrity::Untrusted);
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            assert(bearing@.take(at as int + 1).drop_last() == bearing@.take(at as int));
+        }
+        answer = answer.meet(decision);
+        at += 1;
+    }
+    #[cfg(verus_keep_ghost)]
+    proof! {
+        assert(bearing@.take(bearing.len() as int) == bearing@);
+    }
+    answer
 }
 
 /// The one of two decisions that grants less.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == a || r == b,
+        crate::spec::grants_no_more(r, a),
+        crate::spec::grants_no_more(r, b),
+))]
 fn weaker(a: Option<Integrity>, b: Option<Integrity>) -> Option<Integrity> {
-    match strength(b) < strength(a) {
-        true => b,
-        false => a,
-    }
+    let b_grants_less = strength(b) < strength(a);
+    if b_grants_less { b } else { a }
 }
 
 /// Whether a name is a full path rather than one read under a working directory.
