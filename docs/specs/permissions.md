@@ -791,6 +791,11 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file`
 `verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file`
 `verified-by: bravebot_agent::turn::a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_hard_link_put_in_place_while_the_question_was_open_leads_to_another_file`
+`verified-by: bravebot_agent::turn::a_picture_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::an_edit_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::a_download_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else

@@ -2929,15 +2929,21 @@ mod tests {
 
         /// Answers a write yes, after starting a `run` line when it holds an authority to start
         /// one on. A plan has no step that starts a program, so the line stands for one a
-        /// delegate started beside the run. Every other question is Unattended's.
+        /// delegate started beside the run. It also runs `changes_the_files`, which stands for
+        /// something else on the machine acting while the person reads the question. Every other
+        /// question is Unattended's.
         struct SaysYes {
             starts_a_program_on: Option<FileAuthority>,
+            changes_the_files: Option<Box<dyn FnOnce()>>,
         }
 
         impl Confirmer for SaysYes {
             fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
                 if let Some(authority) = self.starts_a_program_on.take() {
                     authority.note_program_started();
+                }
+                if let Some(change) = self.changes_the_files.take() {
+                    change();
                 }
                 WriteDecision::approve()
             }
@@ -3006,12 +3012,27 @@ mod tests {
         /// Runs a planned write over `a.txt`, which nobody vouched for, with a person who says
         /// yes. Returns what the file holds afterwards and the step's error, if it had one.
         fn write_step(starts_a_program: bool) -> (String, Option<String>) {
-            let root = crate::testutil::scratch_dir(&format!(
-                "bravebot-manifest-write-{starts_a_program}"
-            ));
+            let (kept, _other, error) = planned_write(
+                &format!("bravebot-manifest-write-{starts_a_program}"),
+                starts_a_program,
+                None,
+            );
+            (kept, error)
+        }
+
+        /// [`write_step`] where `a.txt` and `other.txt` both exist and `when_asked`, given the
+        /// directory, changes the files while the person is asked. Returns what `a.txt` holds, what
+        /// `other.txt` holds and the step's error, if it had one.
+        fn planned_write(
+            name: &str,
+            starts_a_program: bool,
+            when_asked: Option<fn(&std::path::Path)>,
+        ) -> (String, String, Option<String>) {
+            let root = crate::testutil::scratch_dir(name);
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(&root).unwrap();
             std::fs::write(root.join("a.txt"), "original\n").unwrap();
+            std::fs::write(root.join("other.txt"), "marker\n").unwrap();
             let workspace = Workspace::new(&root).expect("workspace");
 
             let draft = Draft::new(vec![
@@ -3051,8 +3072,11 @@ mod tests {
             )
             .expect("policy")
             .with_file_authority(authority.clone());
+            let in_the_directory = root.clone();
             let mut person = SaysYes {
                 starts_a_program_on: starts_a_program.then_some(authority),
+                changes_the_files: when_asked
+                    .map(|change| Box::new(move || change(&in_the_directory)) as Box<dyn FnOnce()>),
             };
             let outcome = write(
                 &mut policy,
@@ -3065,9 +3089,10 @@ mod tests {
                 &plan.steps()[0],
             );
             let kept = std::fs::read_to_string(root.join("a.txt")).unwrap();
+            let other = std::fs::read_to_string(root.join("other.txt")).unwrap();
             drop(policy);
             let _ = std::fs::remove_dir_all(&root);
-            (kept, outcome.err())
+            (kept, other, outcome.err())
         }
 
         /// A `run` line that started while the person was asked about a planned write voids the
@@ -3081,6 +3106,32 @@ mod tests {
             assert!(
                 error.is_some_and(|error| error.contains("may have changed")),
                 "the step did not say the yes was voided"
+            );
+        }
+
+        /// TRUST-10 at a planned write: a link put at the destination while the person was asked
+        /// is refused when the write is made, and the file it leads to keeps its bytes. Rejects a
+        /// step that passes no reach to the write, which compares the typed name alone.
+        #[cfg(unix)]
+        #[test]
+        fn a_planned_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere()
+         {
+            let (_kept, other, error) = planned_write(
+                "bravebot-manifest-write-linked",
+                false,
+                Some(|root| {
+                    std::fs::remove_file(root.join("a.txt")).unwrap();
+                    std::os::unix::fs::symlink("other.txt", root.join("a.txt")).unwrap();
+                }),
+            );
+            assert_eq!(
+                other, "marker\n",
+                "the step wrote through a link the person was not shown"
+            );
+            assert!(
+                error.is_some_and(|error| error
+                    .contains("leads to a different file than it did when the user was asked")),
+                "the step did not say the destination was redirected"
             );
         }
 
