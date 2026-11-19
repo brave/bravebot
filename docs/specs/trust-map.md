@@ -1119,12 +1119,29 @@ approve with the file shown ([SANDBOX-29](sandboxing.md#SANDBOX-29)). It names i
 session would accept that request and the front end can ask about it. A path that climbs out with `..` into a directory that is not open is refused the same
 way, and once that directory is opened the same path, as typed, reaches the file. Every other
 refusal for leaving the workspace offers nothing, since opening a directory would not make that
-path work: a climb off the top of the file system or onto a name that is not UTF-8, and one a link
-carries out. So does a path whose directory is, or lies inside, a
+path work: a climb off the top of the file system or onto a name that is not UTF-8, and an absolute
+path that a link carries out. So does a path whose directory is, or lies inside, a
 credential location, since `/add-dir` refuses to open one ([SANDBOX-18](sandboxing.md#SANDBOX-18))
 and `request_path` refuses to lend one ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A read of a
 file there is offered the drop alone, a write is offered the unconfined line alone where the
 session accepts one, and a name for the directory itself is offered nothing.
+An absolute path that is written inside the working directory or an opened directory, with each `..`
+taken out, and whose destination is in neither, or is in the working directory while it is written in an
+opened directory, is one a link carried out. The file tools refuse it
+with nothing offered, as they refuse a `run` line's redirection below, and the refusal is the same
+whatever the link leads to: a file, a directory, a credential location, a directory holding the
+working directory, or a name nothing is at yet. A link planted in a directory therefore does not
+choose which sentence the planner reads. The directory a sentence would name is not the one the
+path is written in, so opening it would not make the path work. A link in an opened directory that
+leads into the working directory is refused the same way, and is not told it is inside the
+workspace, since it is not written under the working directory. The choice reads the path as the
+planner spelled it, the directories that are open and where the file system says the path leads,
+and never a byte a file holds. A path
+written outside every directory that is reached keeps the remedy its landing gives, as above.
+Where `permissions.readsStayInWorkspace` keeps reads inside the workspace an added directory is not
+reached, so a path written under one is written outside every directory that is reached and the
+refusal names the setting whatever its link leads to, while a link written under the working
+directory is still refused with nothing offered.
 A `run` line's redirection refused for leaving the workspace is given the remedy a write of the
 same path is given, chosen from where the destination lands, and once that directory is opened the
 same line as typed writes the file. Where the path as the line wrote it, with each `..` taken out,
@@ -1152,15 +1169,16 @@ names no directory to open and no file to drop, a call that writes is not pointe
 with no sandbox ([SANDBOX-29](sandboxing.md#SANDBOX-29)), and the sentence carries the name the
 planner was told and not the path the call was made on.
 
-An absolute path that lands inside the root and in no opened directory is refused too, since a
+An absolute path that lands inside the root and in no opened directory, and is not written in an
+opened directory, is refused too, since a
 relative path means the project. It does not leave the workspace, and the refusal does not say it
 does. It says the path is inside the workspace and that a path there is named relative to the
 workspace root, without the workspace's own directory in front or as `.` for the root itself. It
 names no directory to open and no file to drop, because the relative spelling reaches the file, and
 a call that writes is not pointed at a `run` line with no sandbox
-([SANDBOX-29](sandboxing.md#SANDBOX-29)). The landing of the path decides this, so a link to the
-root, a `.` segment and a doubled separator are told they are inside, and a name under the root that
-a link carries out is told it leaves.
+([SANDBOX-29](sandboxing.md#SANDBOX-29)). The landing of a path written outside every opened
+directory decides this, so a link to the root, a `.` segment and a doubled separator are told they
+are inside, and a name under the root that a link carries out is told it leaves.
 
 `request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. A
 person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
@@ -1229,6 +1247,13 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::turn::a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_directory`
 `verified-by: bravebot_agent::workspace::a_parent_component_cannot_climb_out_of_an_added_directory`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_an_added_directory_is_refused`
+`verified-by: bravebot_agent::workspace::a_link_out_of_an_added_directory_is_refused_with_nothing_offered_whatever_it_leads_to`
+`verified-by: bravebot_agent::workspace::a_file_typed_outside_every_directory_is_offered_what_a_link_to_it_is_not`
+`verified-by: bravebot_agent::workspace::a_link_from_an_added_directory_into_the_root_is_refused_as_every_other_link_is`
+`verified-by: bravebot_agent::workspace::a_link_in_the_root_is_refused_with_nothing_and_a_file_typed_outside_keeps_its_remedy`
+`verified-by: bravebot_agent::workspace::a_link_in_an_added_directory_names_the_key_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::turn::a_link_in_a_distrusted_subdirectory_of_an_added_directory_is_refused_with_nothing_offered`
+`verified-by: bravebot_agent::tools::tests::confinement::a_link_out_of_an_added_directory_is_told_the_same_whatever_it_leads_to`
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlinked_directory_out_of_the_workspace_is_refused`
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlinked_directory_in_an_added_directory_is_refused`
 `verified-by: bravebot_agent::workspace::writing_to_a_dangling_symlink_out_of_the_workspace_is_refused`

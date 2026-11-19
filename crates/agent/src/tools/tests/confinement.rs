@@ -684,8 +684,9 @@ fn a_redirection_outside_with_nobody_to_ask_names_no_route_and_asks_for_the_path
     );
 }
 
-/// What the planner was told for one call of `tool` (`read_file` or `list_files`) naming `path`,
-/// and the confinement refusals the trail recorded, with `nobody_to_ask` as the turn would set it.
+/// What the planner was told for one call of `tool` (`read_file`, `list_files`, `search` or
+/// `edit_file`) naming `path`, and the confinement refusals the trail recorded, with
+/// `nobody_to_ask` as the turn would set it.
 #[cfg(unix)]
 fn file_tool_refusal(
     workspace: &Workspace,
@@ -709,6 +710,26 @@ fn file_tool_refusal(
                     &json!({ "path": path.display().to_string() }),
                 )
             }),
+            "search" => search(
+                &mut policy,
+                workspace,
+                &json!({ "pattern": "notes", "directory": path.display().to_string() }),
+            ),
+            "edit_file" => edit_file(
+                &mut policy,
+                workspace,
+                &SlotStore::new(),
+                crate::findings::Recording::default(),
+                crate::PermissionMode::Ask,
+                nobody_to_ask,
+                None,
+                &mut crate::confirm::ApproveWrites,
+                &json!({
+                    "path": path.display().to_string(),
+                    "old_text": "notes",
+                    "new_text": "changed",
+                }),
+            ),
             _ => list_files(
                 &mut policy,
                 workspace,
@@ -801,6 +822,89 @@ fn file_tools_with_nobody_to_ask_name_no_route_and_record_none() {
     );
 }
 
+/// TRUST-10, CLI-1, TRACE-1: a link in an added directory, or in a subdirectory of one, is refused
+/// by `read_file`, `list_files`, `search` and `edit_file` with the one sentence that offers
+/// nothing, whatever it leads to, and the trail records
+/// `remedy offered: none`. The links lead to an ordinary file, a directory, a credential file and
+/// a file in the directory holding the workspace. The planner's text and the trail entry are the
+/// same for every one of them once the name typed is set aside, with somebody to ask and with
+/// nobody, and neither names `/add-dir`, a drop, the checkout warning or the nobody-to-ask text.
+///
+/// The regression it rejects: the remedy chosen from where the link lands, so a link planted in a
+/// directory decides which route the planner is told of.
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_an_added_directory_is_told_the_same_whatever_it_leads_to() {
+    let mut place = outside_fixture("added-link-told");
+    let downloads = place._scratch.path.join("downloads");
+    std::fs::create_dir_all(downloads.join("sub")).expect("added directory");
+    let holding = place
+        .workspace
+        .root()
+        .parent()
+        .expect("the directory holding the workspace")
+        .join("sibling.txt");
+    std::fs::write(&holding, "beside the workspace\n").expect("a file in the holding directory");
+    let targets = [
+        ("ordinary-file", place.beside.join("notes.txt")),
+        ("directory", place.home.clone()),
+        ("credential-file", place.home.join(".ssh/config")),
+        ("holding-directory-file", holding),
+    ];
+    let mut typed = Vec::new();
+    for (name, target) in &targets {
+        for directory in [&downloads, &downloads.join("sub")] {
+            std::os::unix::fs::symlink(target, directory.join(name)).expect("a link");
+            typed.push(directory.join(name));
+        }
+    }
+    place
+        .workspace
+        .add_directory(downloads.to_str().expect("a UTF-8 scratch path"))
+        .expect("the directory is added");
+
+    for nobody_to_ask in [false, true] {
+        for tool in ["read_file", "list_files", "search", "edit_file"] {
+            let mut told_of = Vec::new();
+            for path in &typed {
+                let (said, trail) = file_tool_refusal(&place.workspace, nobody_to_ask, tool, path);
+                let spelled = path.display().to_string();
+                for route in [
+                    "/add-dir",
+                    "--add-dir",
+                    "drop the file",
+                    "ends checkouts",
+                    "Nobody can be asked",
+                ] {
+                    assert!(
+                        !said.contains(route),
+                        "{tool} {path:?}: a link was told of {route}: {said}"
+                    );
+                }
+                assert!(
+                    said.contains("resolves outside the workspace; refusing to touch it"),
+                    "{tool} {path:?}: not the sentence that offers nothing: {said}"
+                );
+                let [recorded] = trail.as_slice() else {
+                    panic!("{tool} {path:?}: expected one refusal in the trail: {trail:?}");
+                };
+                assert!(
+                    recorded.ends_with("remedy offered: none"),
+                    "{tool} {path:?}: the trail records a remedy the planner was not told: {recorded}"
+                );
+                told_of.push((
+                    said.replace(&spelled, "<path>"),
+                    recorded.replace(&spelled, "<path>"),
+                ));
+            }
+            assert!(
+                told_of.windows(2).all(|pair| pair[0] == pair[1]),
+                "{tool}: links of different kinds were told differently: {told_of:?}"
+            );
+        }
+    }
+}
+
 /// A session directory, a home holding `.ssh`, and an ordinary directory beside them,
 /// each canonical, with the workspace told of the home so a credential location is known.
 #[cfg(unix)]
@@ -835,7 +939,7 @@ fn outside_fixture(name: &str) -> Outside {
     }
 }
 
-/// A policy in a trusted workspace that lets both `run` and `read_file` be reached.
+/// A policy in a trusted workspace that lets `run`, `read_file`, `search` and `edit_file` be reached.
 #[cfg(unix)]
 fn run_and_read_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
     let mut trust = bravebot_core::trust::TrustStore::new("/work");
@@ -845,7 +949,11 @@ fn run_and_read_policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
     Policy::begin(
         routing,
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::ShellExec, Capability::FileRead]),
+        CapabilitySet::from_iter([
+            Capability::ShellExec,
+            Capability::FileRead,
+            Capability::FileWrite,
+        ]),
         sink,
     )
     .expect("policy")

@@ -6646,6 +6646,82 @@ fn a_full_path_rule_through_a_link_to_an_added_directory_covers_its_files() {
     );
 }
 
+/// TRUST-10, TRACE-1: a link in a subdirectory of an added directory that the trust map distrusts is
+/// refused with the sentence that offers nothing, whatever it leads to, as one planted directly
+/// in the added directory is. The planner reads no `/add-dir`, no drop and no checkout warning, and
+/// the sentence is the same for a file in an ordinary directory, a directory and a credential file.
+///
+/// The regression it rejects: the remedy chosen from where the link lands, so a link planted in a
+/// directory decides which route the planner is told of.
+#[cfg(unix)]
+#[test]
+fn a_link_in_a_distrusted_subdirectory_of_an_added_directory_is_refused_with_nothing_offered() {
+    let scratch = Scratch::new("added-link-distrusted-subdirectory");
+    let outside = Scratch::new("added-link-distrusted-subdirectory-outside");
+    let home = Scratch::new("added-link-distrusted-subdirectory-home");
+    let other = Scratch::new("added-link-distrusted-subdirectory-other");
+    std::fs::create_dir_all(outside.path.join("sub")).unwrap();
+    std::fs::create_dir_all(home.path.join(".ssh")).unwrap();
+    std::fs::write(home.path.join(".ssh/config"), "Host *\n").unwrap();
+    std::fs::write(other.path.join("notes.txt"), "notes\n").unwrap();
+    let home_path = home.path.canonicalize().unwrap();
+    let targets = [
+        (
+            "ordinary",
+            other.path.canonicalize().unwrap().join("notes.txt"),
+        ),
+        ("directory", home_path.clone()),
+        ("credential", home_path.join(".ssh/config")),
+    ];
+    for (name, target) in &targets {
+        std::os::unix::fs::symlink(target, outside.path.join("sub").join(name)).unwrap();
+    }
+
+    let mut workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_home(Some(home_path));
+    let added = workspace
+        .add_directory(outside.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+    trust.distrust(&added.join("sub").display().to_string());
+
+    let typed: Vec<String> = targets
+        .iter()
+        .map(|(name, _)| added.join("sub").join(name).display().to_string())
+        .collect();
+    let calls: Vec<(&str, String)> = typed
+        .iter()
+        .map(|path| ("read_file", format!(r#"{{"path":"{path}"}}"#)))
+        .collect();
+    let calls: Vec<(&str, &str)> = calls
+        .iter()
+        .map(|(tool, arguments)| (*tool, arguments.as_str()))
+        .collect();
+    let bodies = run_calls_under(&workspace, rules(&[], &[], &[]), trust, &calls);
+
+    let (first, last) = (
+        bodies.first().expect("a request"),
+        bodies.last().expect("a request after the calls"),
+    );
+    for path in &typed {
+        assert!(
+            last.contains(&format!(
+                "'{path}' resolves outside the workspace; refusing to touch it"
+            )),
+            "the planner was not told the sentence that offers nothing for {path}: {last}"
+        );
+    }
+    for route in ["/add-dir", "drop the file", "ends checkouts"] {
+        assert_eq!(
+            last.matches(route).count(),
+            first.matches(route).count(),
+            "a link was told of {route}, which the request before any call did not carry: {last}"
+        );
+    }
+}
+
 /// An `ask` rule spelled through a link still asks for a write to the file the link reaches, named
 /// by its own name, in a workspace the user trusted at startup.
 #[cfg(unix)]
