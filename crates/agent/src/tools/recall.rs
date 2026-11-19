@@ -541,6 +541,11 @@ fn recalled_fact(fact: &crate::recall::fact::Fact, found: &str) -> String {
 /// A query ranks the live facts of the project and of every project; a key reads that one fact
 /// even where it has been replaced. Every fact returned is trusted text at the confidentiality
 /// its file states, and the answer is held at the join of them.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one read: the confinement check on each argument, then the key path or the query \
+              path, as RECALL-10 covers them"
+)]
 pub(super) fn recall<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &Tools,
