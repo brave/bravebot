@@ -346,6 +346,8 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_core::permissions::a_copy_for_a_checkout_folds_a_refusal_and_not_a_grant_where_the_volume_could_not_be_asked`
 `verified-by: bravebot_agent::permissions::rules_take_the_case_answer_of_the_volume_the_workspace_is_on`
 `verified-by: bravebot_agent::workspace::a_workspace_that_folds_inside_a_parent_that_does_not_folds_case`
+`verified-by: bravebot_agent::tools::tests::confinement::a_path_rule_follows_the_casefold_flag_of_the_workspace_and_not_of_its_parent`
+`verified-by: bravebot_cli::running::permissions_check_follows_the_casefold_flag_of_the_directory_and_not_of_its_parent`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::permissions::a_pattern_written_with_the_hosts_own_separator_is_the_same_rule`
 `verified-by: bravebot_core::permissions::a_command_rule_keeps_a_backslash_where_a_path_rule_would_not`

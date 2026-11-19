@@ -79,6 +79,12 @@ pub(crate) mod repository;
 #[path = "../test-support/chatgpt_host.rs"]
 mod chatgpt_host;
 
+/// Real directories with the casefold flag set on a workspace and not on the directory above it, and
+/// the other way round, where the host can set the flag.
+#[cfg(target_os = "linux")]
+#[path = "../test-support/casefold_layouts.rs"]
+pub(crate) mod casefold_layouts;
+
 /// A temporary directory in no repository, shared with the terminal's tests.
 #[path = "../test-support/no_repository.rs"]
 pub(crate) mod no_repository;
