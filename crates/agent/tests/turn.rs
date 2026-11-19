@@ -34703,13 +34703,13 @@ fn a_pattern_matching_nothing_in_an_unvouched_directory_is_treated_as_one_that_m
 
     let (asked_without, second_without) = a_run_beside_an_unvouched_directory(
         "run-pattern-basename-unmatched",
-        "basename incoming/a*",
+        "basename -a incoming/a*",
         planted,
         bravebot_agent::RunDecision::approve(),
     );
     let (asked_with, second_with) = a_run_beside_an_unvouched_directory(
         "run-pattern-basename-matched-prefix",
-        "basename incoming/a*",
+        "basename -a incoming/a*",
         matching,
         bravebot_agent::RunDecision::approve(),
     );
@@ -34767,7 +34767,7 @@ fn a_pattern_matching_nothing_in_an_unvouched_directory_is_treated_as_one_that_m
     let several = ["apple-4c1e9", "avocado-4c1e9", "acorn-4c1e9"];
     let (asked_several, second_several) = a_run_beside_an_unvouched_directory_holding(
         "run-pattern-basename-several",
-        "basename incoming/a*",
+        "basename -a incoming/a*",
         &several,
         bravebot_agent::RunDecision::approve(),
     );
