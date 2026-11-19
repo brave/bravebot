@@ -25,11 +25,30 @@ REVIEWER = "netzenbot-reviewer"
 FAKE_GH = """#!{python}
 import json, os, sys
 log = os.environ["FAKE_LOG"]
+args = sys.argv[1:]
 with open(log, "a") as handle:
-    handle.write(json.dumps(sys.argv[1:]) + "\\n")
+    handle.write(json.dumps(args) + "\\n")
+if args[:2] == ["api", "graphql"]:
+    number = next(a.split("=", 1)[1] for a in args if a.startswith("number="))
+    scripted = json.load(open(os.environ["FAKE_THREADS"])).get(number)
+    if scripted is None:
+        sys.stderr.write("no threads scripted for " + number)
+        sys.exit(3)
+    if "raw" in scripted:
+        sys.stdout.write(scripted["raw"])
+        sys.exit(scripted.get("exit", 0))
+    nodes = [{"isResolved": True}] * scripted.get("resolved", 0) + [{"isResolved": False}] * scripted.get("unresolved", 0)
+    json.dump({"data": {"repository": {"pullRequest": {"reviewThreads": {
+        "pageInfo": {"hasNextPage": scripted.get("more", False)}, "nodes": nodes}}}}}, sys.stdout)
+    sys.exit(0)
+if args[:2] == ["pr", "merge"]:
+    if args[2] in json.load(open(os.environ["FAKE_REFUSE"])):
+        sys.stderr.write("GraphQL: refused " + args[2])
+        sys.exit(1)
+    sys.exit(0)
 reads = json.load(open(os.environ["FAKE_READS"]))
 with open(log) as handle:
-    calls = sum(1 for _ in handle)
+    calls = sum(1 for text in handle if json.loads(text)[:2] == ["pr", "list"])
 read = reads[min(calls, len(reads)) - 1]
 if isinstance(read, dict):
     sys.stderr.write(read.get("stderr", ""))
@@ -51,14 +70,15 @@ review_ready = load_script()
 
 
 def pr(number, mergeable="MERGEABLE", draft=False, reviews=None, checks=None, created="2026-10-01T00:00:00Z",
-       approved=None):
+       approved=None, also_approved_by=()):
     """A pull request the reviewer can pick up unless an argument says otherwise. `created` is when it was
-    opened and `approved` when the reviewer approved it, which is left out of the review when None."""
+    opened and `approved` when the reviewer approved it, which is left out of the review when None.
+    `also_approved_by` names the other people whose latest review is an approval."""
     if reviews is None:
         review = {"author": {"login": REVIEWER}, "state": "APPROVED"}
         if approved:
             review["submittedAt"] = approved
-        reviews = [review]
+        reviews = [review] + [{"author": {"login": login}, "state": "APPROVED"} for login in also_approved_by]
     if checks is None:
         checks = [{"conclusion": "SUCCESS"}]
     return {
@@ -70,6 +90,7 @@ def pr(number, mergeable="MERGEABLE", draft=False, reviews=None, checks=None, cr
         "isDraft": draft,
         "latestReviews": reviews,
         "statusCheckRollup": checks,
+        "headRefOid": f"head{number}",
     }
 
 
@@ -102,15 +123,29 @@ class ReviewReady(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, True)
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
-        (bin_dir / "gh").write_text(FAKE_GH.format(python=sys.executable))
+        (bin_dir / "gh").write_text(FAKE_GH.replace("{python}", sys.executable))
         (bin_dir / "gh").chmod(0o755)
         self.log = self.root / "log"
         self.reads_path = self.root / "reads"
+        self.threads_path = self.root / "threads"
+        self.refuse_path = self.root / "refuse"
         self.env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-                        FAKE_LOG=str(self.log), FAKE_READS=str(self.reads_path))
+                        FAKE_LOG=str(self.log), FAKE_READS=str(self.reads_path),
+                        FAKE_THREADS=str(self.threads_path), FAKE_REFUSE=str(self.refuse_path))
+        self.threads({})
+        self.refuse()
 
     def serve(self, *reads):
         self.reads_path.write_text(json.dumps(list(reads)))
+
+    def threads(self, scripted):
+        """The review threads each pull request has, by number: resolved and unresolved counts, `more` when
+        GitHub has more than one read returns, or `raw` and `exit` for an answer that is not threads."""
+        self.threads_path.write_text(json.dumps({str(number): value for number, value in scripted.items()}))
+
+    def refuse(self, *numbers):
+        """The pull requests `gh pr merge` fails for."""
+        self.refuse_path.write_text(json.dumps([str(number) for number in numbers]))
 
     def run_command(self, command, cwd=None):
         done = subprocess.run(command, cwd=cwd, env=self.env, capture_output=True, text=True, timeout=60)
@@ -378,6 +413,119 @@ class ReviewReady(unittest.TestCase):
         """The constants are what the issue asks for, and the target does not override them."""
         self.assertEqual((review_ready.WAIT, review_ready.INTERVAL), (30.0, 3.0))
 
+    def calls_of(self, result, *kind):
+        """The gh calls that start with `kind`, such as ("pr", "merge")."""
+        return [call for call in result.calls if tuple(call[:len(kind)]) == kind]
+
+    def test_eligible_for_the_merge_queue_needs_two_approvals_and_no_unresolved_thread(self):
+        """A listed pull request is eligible with at least two approvals from anyone and no unresolved review
+        thread. One approval, or one unresolved thread among resolved ones, is not enough. The listing on
+        stdout does not change, and the threads of a pull request with one approval are never read."""
+        self.serve([
+            pr(1, also_approved_by=["a"], approved="2026-10-01T00:00:00Z"),
+            pr(2, approved="2026-10-02T00:00:00Z"),
+            pr(3, also_approved_by=["a"], approved="2026-10-03T00:00:00Z"),
+            pr(4, also_approved_by=["a"], approved="2026-10-04T00:00:00Z"),
+            pr(5, also_approved_by=["a", "b"], approved="2026-10-05T00:00:00Z"),
+        ])
+        self.threads({1: {}, 3: {"resolved": 2, "unresolved": 1}, 4: {"resolved": 3}, 5: {"resolved": 1}})
+        target = self.root / "eligible.txt"
+        result = self.run_script("--eligible-file", str(target))
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(result.out.splitlines(), [line(n) for n in (1, 2, 3, 4, 5)])
+        self.assertEqual(target.read_text().splitlines(), [line(1), line(4), line(5)])
+        asked = sorted(next(a for a in call if a.startswith("number=")) for call in self.calls_of(result, "api", "graphql"))
+        self.assertEqual(asked, ["number=1", "number=3", "number=4", "number=5"])
+
+    def test_a_second_approval_does_not_make_a_pull_request_the_reviewer_would_not_list_eligible(self):
+        """Eligibility is a subset of the list: a failing check, a request for changes or a conflict keeps a
+        pull request out whatever its approvals and threads are."""
+        self.serve([
+            pr(1, also_approved_by=["a"], checks=[{"conclusion": "FAILURE"}]),
+            pr(2, also_approved_by=["a"], checks=[{"conclusion": "", "status": "IN_PROGRESS"}]),
+            pr(3, "CONFLICTING", also_approved_by=["a"]),
+            pr(4, reviews=[{"author": {"login": REVIEWER}, "state": "APPROVED"},
+                           {"author": {"login": "a"}, "state": "APPROVED"},
+                           {"author": {"login": "b"}, "state": "CHANGES_REQUESTED"}]),
+            pr(5, also_approved_by=["a"], draft=True),
+        ])
+        target = self.root / "eligible.txt"
+        result = self.run_script("--eligible-file", str(target))
+        self.assertEqual((result.code, result.out, target.read_text()), (0, "", ""))
+        self.assertEqual(self.calls_of(result, "api"), [])
+
+    def test_the_eligible_file_is_replaced_and_is_empty_when_nothing_is_eligible(self):
+        """A menu that reads the file must not read the last run's list as this one's."""
+        target = self.root / "eligible.txt"
+        target.write_text(line(9) + "\n")
+        self.serve([pr(1)])
+        result = self.run_script("--eligible-file", str(target))
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(target.read_text(), "")
+        self.assertEqual(list(self.root.glob("eligible.txt*")), [target])
+
+    def test_a_pull_request_with_more_review_threads_than_one_read_returns_is_not_eligible(self):
+        """The unresolved count is unknown past the first 100 threads, and an unknown count is not zero."""
+        self.serve([pr(1, also_approved_by=["a"])])
+        self.threads({1: {"resolved": 100, "more": True}})
+        target = self.root / "eligible.txt"
+        self.assertEqual(self.run_script("--eligible-file", str(target)).code, 0)
+        self.assertEqual(target.read_text(), "")
+
+    def test_a_thread_read_that_fails_or_is_not_threads_exits_non_zero_and_adds_nothing(self):
+        """A pull request whose threads could not be read must not be taken for one with none. Every
+        pull request is read before the first is added, so one failure adds none."""
+        cases = {"gh fails": {"raw": "", "exit": 4}, "not JSON": {"raw": "nope"}, "no data": {"raw": "{}"}}
+        for name, second in cases.items():
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                self.serve([pr(1, also_approved_by=["a"]), pr(2, also_approved_by=["a"])])
+                self.threads({1: {}, 2: second})
+                result = self.run_script("--enqueue")
+                self.assertEqual(result.code, 1, result.err)
+                self.assertIn("review-ready:", result.err)
+                self.assertEqual((result.out, self.calls_of(result, "pr", "merge")), ("", []))
+
+    def test_enqueue_adds_each_eligible_pull_request_pinned_to_the_head_that_was_read(self):
+        """Without a merge strategy gh queues a pull request whose branch requires the queue. The head
+        commit pin stops a push after the read from being queued unreviewed, and nothing bypasses the
+        queue or its checks. Only the queued ones are printed, not the rest of the list."""
+        self.serve([pr(1, also_approved_by=["a"], approved="2026-10-02T00:00:00Z"), pr(2),
+                    pr(3, also_approved_by=["a"], approved="2026-10-01T00:00:00Z")])
+        self.threads({1: {}, 3: {}})
+        result = self.run_script("--enqueue", "--repo", "o/r")
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.calls_of(result, "pr", "merge"), [
+            ["pr", "merge", "3", "--repo", "o/r", "--match-head-commit", "head3"],
+            ["pr", "merge", "1", "--repo", "o/r", "--match-head-commit", "head1"]])
+        self.assertEqual(result.out.splitlines(), [line(3), line(1)])
+
+    def test_enqueue_with_nothing_eligible_adds_nothing_and_succeeds(self):
+        self.serve([pr(1), pr(2, also_approved_by=["a"])])
+        self.threads({2: {"unresolved": 1}})
+        result = self.run_script("--enqueue")
+        self.assertEqual((result.code, result.out, self.calls_of(result, "pr", "merge")), (0, "", []))
+
+    def test_enqueue_goes_on_after_a_refusal_names_it_and_exits_non_zero(self):
+        """GitHub refuses a pull request that is no longer mergeable or whose head moved. The others are
+        still added, the refused one is named, and it is not printed as queued."""
+        self.serve([pr(1, also_approved_by=["a"], approved="2026-10-01T00:00:00Z"),
+                    pr(2, also_approved_by=["a"], approved="2026-10-02T00:00:00Z")])
+        self.threads({1: {}, 2: {}})
+        self.refuse(1)
+        result = self.run_script("--enqueue")
+        self.assertEqual(result.code, 1)
+        self.assertEqual(len(self.calls_of(result, "pr", "merge")), 2)
+        self.assertEqual(result.out.splitlines(), [line(2)])
+        self.assertIn("#1 was not added to the merge queue", result.err)
+        self.assertNotIn("#2 was not", result.err)
+
+    def test_the_eligible_file_and_enqueue_cannot_be_asked_for_together(self):
+        """Writing a list and changing the queue are different requests."""
+        self.serve([pr(1)])
+        result = self.run_script("--enqueue", "--eligible-file", str(self.root / "x"))
+        self.assertEqual((result.code, result.calls), (2, []))
+
     def test_the_make_target_passes_the_repository_reviewer_limit_and_wait_through(self):
         """The recipe's variables reach the script, and without them the defaults do."""
         tree = self.root / "tree"
@@ -394,6 +542,12 @@ class ReviewReady(unittest.TestCase):
         shown = self.run_command(["make", "--no-print-directory", "-n", "review-ready"], tree)
         self.assertIn("--repo 'brave/bravebot' --reviewer 'netzenbot-reviewer'", shown.out)
         self.assertIn("--limit '500' --wait '30'", shown.out)
+        self.assertNotIn("--eligible-file", shown.out)
+        self.assertNotIn("--enqueue", shown.out)
+        asked = self.run_command(["make", "--no-print-directory", "-n", "review-ready",
+                                  "ELIGIBLE_FILE=/tmp/list", "ENQUEUE=1"], tree)
+        self.assertIn("--eligible-file '/tmp/list'", asked.out)
+        self.assertIn("--enqueue", asked.out)
 
 
 if __name__ == "__main__":
