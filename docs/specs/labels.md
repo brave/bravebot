@@ -1136,9 +1136,11 @@ arrives at all.
   - **Choose which of two driver-worded results the planner is shown for the file.** A reference
     with a size, or the refusal above. That is one bit, and the planner was already free to read a
     different path.
-  - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or bytes that are not
-    valid UTF-8 anywhere, makes a later fill of the slot fail with a refusal in the driver's own
-    words, as does a byte order mark. A slot is filled from text that is UTF-8 as it stands.
+  - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or invalid UTF-8 past
+    the 30 percent replacement limit, is what makes a fill of the slot fail with a refusal in the
+    driver's own words. A byte order mark, or invalid UTF-8 within that limit, fills the slot as a
+    decoding instead, so a processor still reads it; the slot is refused only where something
+    writes it back or hands it to a program.
   - **Choose how the bytes are split into lines** for a page of the file that is read through a
     manifest step. A mark makes the units two or four bytes, and an invalid byte makes one
     character. The line and byte counts the planner is told for a quarantined page are already the
