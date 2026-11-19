@@ -2172,7 +2172,7 @@ LABEL_NEW = re.compile(r"Label::new\(")
 LABEL_BUILDERS_NOT_GATES = {
     "label_kept_fact": "the first label of a fact the person kept, read from their own memory file",
     "record_note": "the first label of a note the person typed, which no earlier label preceded",
-    "measure_a_run": "the label of what a run printed, decided by the steps the person vouched for",
+    "output_label": "the label of what a run printed, decided by the steps the person vouched for",
     "declassify_into_place": "returns a witness and records the label the release would have; "
     "the release goes only to a destination the plan named",
     "declassify": "returns a witness and records the label the release would have; "

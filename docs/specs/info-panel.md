@@ -21,8 +21,8 @@ cache, its token total, the language servers and MCP servers it has started, and
 checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)). A session
 gets its own links from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
 [`set_link`](tools/set-link.md) for an address the person typed. It lists the other issues and pull
-requests it has met, which [PANEL-16](#PANEL-16) collects from the lines the person typed, from the
-planner's own tool-call arguments and from content whose label is trusted. A session does not get its
+requests it has met, which [PANEL-16](#PANEL-16) collects from the lines the person typed and from the
+planner's own tool-call arguments. A session does not get its
 links from what `gh pr create` prints. That needs a reader that branches on untrusted run output
 ([RUN-4](tools/run.md#RUN-4)), which is an exception no maintainer has accepted, so it is
 not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). The sections of
@@ -172,7 +172,8 @@ written nothing and keeps its own pointer. Every terminal is told of motion with
 ### PANEL-7: the panel ends with the key that hides it
 
 The panel's last row is `{chord} hide panel`, naming the chord in force, and in the files state the
-keys of that state instead ([FILES-4](files-mode.md#FILES-4)). While the panel is closed
+keys of that state instead ([FILES-4](files-mode.md#FILES-4)), and in the peek state that shows a
+folded paste ([PASTE-13](pasting.md#PASTE-13)) the keys of that state. While the panel is closed
 on a terminal wide enough for it, the hint line has a `{chord} info` part, and that part is the
 first the line drops when the row is short ([INPUT-13](terminal-input.md#INPUT-13)). With the panel
 open, or on a terminal too narrow for it, the line has no such part.
@@ -398,8 +399,8 @@ prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, 
 with `/issue` and `/pr`, or `--issue` and `--pr`, or recorded by `set_link` for an address the person
 typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the rows of the
 Pull requests and Issues sections, which are the items [PANEL-16](#PANEL-16) collects from the lines
-the person typed, from the planner's own tool-call arguments once the gate that reads them has said the
-context is trusted, and from content whose label is trusted, the driver's own counters (the context
+the person typed and from the planner's own tool-call arguments once the gate that reads them has said the
+context is trusted; the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
@@ -566,7 +567,7 @@ case), the repository and the number agree, and the list keeps the order they we
 first spelling.
 
 One reader takes items out of a string. It calls no model, no network and no `gh`, and touches no
-file. Items come from three places:
+file. It reads three forms:
 
 - A full `https://github.com/{owner}/{repo}/issues/{n}` or `/pull/{n}` address, whatever the
   repository is called. The item is always the base `/issues/{n}` or `/pull/{n}` link, and anything
@@ -592,7 +593,7 @@ such as `Add x (#12)` name nothing. A string is read up to its first 64 KiB, cut
 word, so a word the cut falls inside is dropped and never shortened to a different number, and it
 gives at most 64 items.
 
-There are three sources, and only these.
+There are two sources, and only these.
 
 1. **Lines the person typed.** Every line the box sends is read, whether a prompt, a queued line, a
    command or a shell line, and so are the addresses `--issue` and `--pr` gave when the session opened.
@@ -607,14 +608,13 @@ There are three sources, and only these.
    what it was about. Only a turn whose front end keeps links (the terminal and the desktop, as
    [SETLINK-2](tools/set-link.md#SETLINK-2) says) collects. A delegate, a one-shot run and a plain run
    collect nothing.
-3. **Content whose label is trusted.** A tool result is read only after its label is asked, and only
-   where that says trusted ([LABEL-5](labels.md#LABEL-5)), as a read of a file the person vouched for
-   is. One such read is one `allow` event in the trail. A result that is untrusted, such as what a
-   program printed, is not read and adds no event, so an address in `gh pr view` output never
-   reaches the panel.
 
-No other text is read: not an assistant reply, an untrusted tool result, a file that was not vouched
-for, an issue body or a language server's reply. What the reader returns is appended to a list and
+No other text is read: not an assistant reply, any tool result, a file the planner read, a skill, an
+issue body or a language server's reply. A tool result that is trusted, such as a vouched file or a
+loaded skill, is not read either, because it holds example addresses, fixtures and links that the
+session is not about. An address in
+`gh pr view` output or in a file reaches the panel only when the person or the planner's own
+argument writes it. What the reader returns is appended to a list and
 nothing else. It decides no permission, route, prompt, refusal or sentence to the planner, and no code
 in the driver branches on an item beyond the kind the validating constructor set, which picks the
 section. The items travel to the terminal as the turn finds them, one message for each call that named
@@ -624,8 +624,8 @@ and the items of the session are written with each turn's save, kept by a resume
 by `/clear` ([SESSION-3](sessions.md#SESSION-3)).
 
 **Why.** The panel and the lists are the interface speaking in its own voice, so a row is made only
-from what a person or the planner's own context wrote, never from what a page, a reply or a program
-supplied ([PANEL-11](#PANEL-11)). The reader returns a value that only the screen uses, so what it
+from what a person or the planner's own context wrote, never from what a page, a file, a reply or a
+program supplied ([PANEL-11](#PANEL-11)). The reader returns a value that only the screen uses, so what it
 reads cannot decide anything.
 
 `verified-by: bravebot_agent::links::a_reference_is_built_only_from_what_github_allows_in_a_name_and_a_number`
@@ -659,7 +659,7 @@ reads cannot decide anything.
 `verified-by: bravebot_agent::references::an_item_is_reported_once_however_many_calls_name_it`
 `verified-by: bravebot_agent::references::a_bare_number_in_a_planners_command_takes_the_repository_the_task_names`
 `verified-by: bravebot_agent::references::a_turn_whose_front_end_keeps_no_links_reports_nothing`
-`verified-by: bravebot_agent::references::what_a_vouched_file_names_is_listed`
+`verified-by: bravebot_agent::references::what_a_vouched_file_names_is_not_listed`
 `verified-by: bravebot_agent::references::what_a_program_printed_is_not_listed_and_adds_nothing_to_the_trail`
 `verified-by: bravebot_tui::state::references::every_line_the_box_sends_is_read_for_what_it_names`
 `verified-by: bravebot_tui::state::references::an_item_met_again_keeps_its_place_and_a_named_kind_settles_an_assumed_one`
@@ -781,8 +781,7 @@ migration.
 
 - **The desktop collects the list and draws none of it ([PANEL-16](#PANEL-16)).** The desktop bridge
   keeps links so that a turn collects, and the window draws no such list, so each turn there reads the
-  planner's `run` and fetch arguments and the trusted results for a list nobody sees. The trail of a
-  desktop turn gains one `allow` event for each trusted result read, as the terminal's does.
+  planner's `run` and fetch arguments for a list nobody sees.
 
 - **An own link that is not on GitHub is drawn as written and is not a reference
   ([PANEL-12](#PANEL-12)).** It is not in `/issues` or `/prs` either.

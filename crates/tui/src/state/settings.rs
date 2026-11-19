@@ -786,7 +786,7 @@ impl Session {
     /// The columns the info panel takes on a frame `columns` wide, border included: the width the
     /// person dragged it to, held between its minimum and what leaves the transcript its own.
     pub fn panel_columns(&self, columns: u16) -> u16 {
-        if self.files.is_some() {
+        if self.files.is_some() || self.peek.is_some() {
             return crate::files_mode::columns(columns);
         }
         crate::panel::clamped(self.panel_width, columns)
@@ -810,7 +810,7 @@ impl Session {
     /// Whether a press here is on the panel's border, the column a drag resizes it by.
     fn on_panel_border(&self, row: u16, column: u16) -> bool {
         // The files state is half the terminal, which dragging does not change (FILES-4).
-        self.files.is_none() && self.on_the_panel_border_column(row, column)
+        self.files.is_none() && self.peek.is_none() && self.on_the_panel_border_column(row, column)
     }
 
     /// Whether a cell is in the column the panel draws its border in, in every state of the panel.
@@ -856,6 +856,7 @@ impl Session {
             | Target::Languages
             | Target::File(_)
             | Target::CloseFiles
+            | Target::ClosePeek
             | Target::PreviousEdit
             | Target::NextEdit
             | Target::Files
@@ -984,7 +985,7 @@ impl Session {
 
     /// Whether the person has the info panel open, whether or not the last frame had room for it.
     pub fn panel_open(&self) -> bool {
-        self.panel || self.files.is_some()
+        self.panel || self.files.is_some() || self.peek.is_some()
     }
 
     /// Open or close the info panel.
@@ -995,7 +996,7 @@ impl Session {
     /// always closes, so a panel left open before the terminal was narrowed can be put away.
     pub fn toggle_panel(&mut self) {
         // The key hides the panel from either state, and the state goes with it (FILES-3).
-        if self.files.take().is_some() {
+        if self.files.take().is_some() | self.peek.take().is_some() {
             self.panel = false;
             if self.persist {
                 bravebot_session::store::save_panel(false);

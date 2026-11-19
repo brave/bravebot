@@ -734,6 +734,13 @@ doctor-skill-keys-unread =
         [one] { $skill } declares { $keys }, which nothing here reads
        *[other] { $skill } declares { $keys }, none of which anything here reads
     }
+# A key a delegate definition declared that nothing here reads. The definition is its file's path and
+# the keys are that file's own words, joined with a comma, both from a source somebody vouched for.
+doctor-definition-keys-unread =
+    { $count ->
+        [one] { $definition } declares { $keys }, which nothing here reads
+       *[other] { $definition } declares { $keys }, none of which anything here reads
+    }
 # A file that configures a gateway names no variables, and reporting that as an absent file would
 # describe a file the person is looking at.
 doctor-settings-no-variables = settings.json, naming no variables
@@ -938,6 +945,11 @@ doctor-settings-unread-key =
 doctor-settings-unread-bypass =
     { $key } in { $path } is not read by this build, so the bypass mode stays reachable: the key that
     makes it unreachable is permissions.bypassUnreachable
+# A key one settings file wrote twice in the same block. Named by key path and file only, never the
+# value. The repeats are combined, not refused, so a file pasted from two snippets still applies.
+doctor-settings-repeated = repeated key
+doctor-settings-repeated-key =
+    { $key } is written more than once in { $path }: lists that only refuse keep every entry, blocks are combined, and anything else is read as the last one written
 # A settings layer that tried to declare an MCP server. Named by key and file only, since the entry
 # may hold an argv and the values of variables.
 doctor-settings-mcp-declared =
@@ -2018,6 +2030,48 @@ mcp-command-nothing-to-reconnect = Every requested MCP server is running or turn
 mcp-command-reconnected = { $alias } is running. Its tools are put to you before the next turn plans.
 mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
 mcp-command-already-off = { $alias } is already turned off
+command-plugin = Install, list, remove, enable or disable a plugin
+plugin-command-usage = /plugin takes add <path>, list, remove <name>, enable <name> or disable <name>
+plugin-command-needs-an-argument = /plugin { $command } needs a path or a name
+plugin-command-no-home = There is no state directory, so no plugin can be read or written
+plugin-added = Installed { $name } from { $path }
+plugin-add-refused = Nothing was installed from { $path }: { $why }
+plugin-refused-no-manifest = the directory holds no plugin.toml
+plugin-refused-manifest = plugin.toml was refused
+plugin-refused-manifest-key = plugin.toml was refused at the key { $key }
+plugin-refused-part-missing = the path given for { $key } does not exist in the plugin
+plugin-refused-unreadable = the directory could not be read or copied
+plugin-refused-already-installed = a plugin named { $name } is already installed
+plugin-refused-update-not-built = { $name } is already installed from this path, and updating is not built
+plugin-refused-name-offered = { $new } offers { $offered }, which { $existing } already offers
+plugin-refused-nobody-to-ask = nobody can be asked here, so nothing is installed
+plugin-refused-declined = the install was declined
+plugin-list-none = No plugin is installed
+plugin-list-row = { $name } { $version } from { $source } digest { $digest } ({ $state })
+plugin-list-enabled = enabled
+plugin-list-disabled = disabled
+plugin-removed = Removed { $name }
+plugin-enabled = Turned { $name } on
+plugin-disabled = Turned { $name } off
+plugin-not-a-name = { $name } is not the name of a plugin
+plugin-not-installed = No plugin named { $name } is installed
+plugin-manage-failed = { $name } could not be changed
+plugin-install-title = Install plugin
+plugin-install-name = Name
+plugin-install-version = Version
+plugin-install-source = Source (a local path)
+plugin-install-skills = Skills ({ $count })
+plugin-install-no-skills = This plugin offers no skill
+plugin-install-definitions = Definitions ({ $count })
+plugin-install-no-definitions = This plugin offers no definition
+plugin-install-kind = kind: { $kind }
+plugin-install-shadowed = Shadowed by { $by }. The one named here is not the one a session gets
+plugin-install-expand = (e to show the rest)
+plugin-install-collapse = (e to cut long text)
+plugin-install-not-done = A yes copies this plugin and records it. It does not make a hook run and it does not make a server reachable: each asks its own question the first time it is used.
+plugin-install-question = Install this plugin?
+plugin-install-yes = Yes, install it
+plugin-install-no = No, install nothing
 mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-command-not-an-alias = { $alias } is not the name of an MCP server
 mcp-command-no-match = No MCP server is named by { $pattern }. Nothing was changed
@@ -3547,6 +3601,19 @@ files-too-narrow = The files view needs a terminal at least { $columns } columns
 # The last row of the panel while the state is open, naming its keys, and the hint line's where
 # the panel is not drawn.
 files-keys = ↑↓ file  ←→ edit  PgUp PgDn scroll  q back
+# The peek state of the info panel, which shows a folded paste whole: its heading, how many lines
+# the paste has, the control at the right end of that heading, the row naming its keys and the note
+# said where the terminal is too narrow to draw the panel.
+peek-heading = Pasted text #{ $number }
+peek-lines = { $count ->
+    [one] { $count } line
+   *[other] { $count } lines
+    }
+peek-close = x
+peek-keys = ↑↓ scroll  PgUp PgDn page  g G top bottom  q close
+peek-too-narrow = The pasted text view needs a terminal at least { $columns } columns wide.
+# What the `?` list says the key that shows a folded paste whole does.
+shortcut-peek = show the pasted text the caret is on
 # The info panel's Files section: its heading, and how many files the session wrote.
 panel-files = Files
 panel-files-total = { $count ->
@@ -3664,6 +3731,7 @@ command-diff = List the files the session wrote and show every edit to the one h
 command-todos = Print the whole plan, every task with its status
 command-unfinished = List what this session left open, and whose move each is
 command-caffeinate = Keep the computer awake while a turn or loop is pending
+command-redraw = Redraw the whole screen, for a terminal that was cleared or reset
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-schedule = List, add, pause, resume, remove or run scheduled entries
@@ -3707,6 +3775,7 @@ command-waits-for-the-command = { $command } waits for the command that is runni
 skill-from-project = (project)
 skill-from-user = (user)
 skill-from-built-in = (built-in)
+skill-from-plugin = (plugin)
 skill-from-mcp-server = (MCP { $alias })
 # Beside where it was found, on a skill row whose file says only the person may have it loaded.
 skill-person-only = (only you)
@@ -3939,6 +4008,12 @@ session-model-pick-refused = ignoring { $model }, picked with /model: { $reason 
 session-permission-allow-ignored =
     not granting the allow rule { $rule } from { $path }: an allow rule answers a prompt, so a
     project's file proposes one and you grant it
+# The file --settings named, inside a directory a stage may write, on a platform whose sandbox cannot
+# refuse writes to one file there: a stage could rewrite it and the next run would read the rewrite
+# as the person's own, so it is read as a checkout's file. Said by doctor and at the start of a
+# session, by every client.
+session-settings-named-withheld =
+    { $path } is named by --settings and lies in a directory a stage may write, which this platform cannot hold it back from, so it is read as a checkout's file is: its allow rules, sandbox mode and run.network, and every other key a checkout's file may not set, are ignored (name a file outside the working and added directories to grant)
 # Said where a rule this project proposed was granted in an earlier session here, so the box does not
 # ask about it again. Names the rule rather than counting, for the reason the line above it does, and
 # names the file the answer is in: deleting a line from that file is the way back from having granted
@@ -5114,6 +5189,16 @@ delegate-writes-not-read =
         [one] { $definition } has a writes pattern that cannot be read here, so it covers no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
        *[other] { $definition } has writes patterns that cannot be read here, so they cover no file: { $patterns }. Its delegate may write only what the other patterns cover, and no file where there are none
     }
+# A definition declared a key another agent reads as a restriction on its subagent, and nothing here
+# reads it, so its delegate holds what its kind and its tools line give it. The definition is its
+# file's path and the keys are that file's own words, joined with a comma, both from a vouched-for
+# file; a key is named here only where it is spelled with letters, hyphens and underscores. "tools"
+# and "kind" are keys and stay as they are.
+delegate-restriction-not-applied =
+    { $count ->
+        [one] { $definition } declares { $keys }, which nothing here applies, so its delegate is not restricted by it. A tools line names the tools the delegate may call, and its kind decides whether it may run programs or write files
+       *[other] { $definition } declares { $keys }, none of which anything here applies, so its delegate is not restricted by them. A tools line names the tools the delegate may call, and its kind decides whether it may run programs or write files
+    }
 # A definition asks for a checkout and is loaded as a reader, either as its own kind line says or
 # because a definition of the same name narrowed it. A reader is never given a checkout. The
 # definition is its file's path.
@@ -5759,6 +5844,7 @@ hover-panel-hide = click to hide the panel
 hover-panel-files = click to see the files this session changed
 hover-panel-file = click to show the edits to this file
 hover-panel-close-files = click to go back to the panel
+hover-panel-close-peek = click to close the pasted text
 hover-panel-edit-previous = click to go to the previous edit
 hover-panel-edit-next = click to go to the next edit
 hover-panel-name = click to rename this session
@@ -5937,6 +6023,70 @@ ui-usage-ping-notice-more = More…
 ui-usage-ping-notice-less = Less
 ui-usage-ping-notice-settings = Open settings
 ui-usage-ping-notice-dismiss = Dismiss usage ping notice
+# The Folders section of the Files tab, and the More menu item that adds one: folders open beside the
+# project in one chat, as /add-dir opens them in the terminal. $name is a folder's own name.
+ui-folders-heading = Folders
+ui-folders-about = Folders open beside the project in this chat. The agent can read and change files in them until you close them.
+ui-folders-empty = Only the project is open.
+ui-folders-add = Add folder…
+ui-folders-close = Close { $name }
+ui-folders-close-explained = Close { $name } · The agent can no longer reach it
+ui-folders-wait = Wait for the turn to finish
+ui-folders-not-added = The folder could not be added.
+ui-folders-not-closed = The folder could not be closed.
+ui-folders-added = Folder added
+ui-folders-closed = Folder closed
+# The questions a chat asks once its trust question is answered, about what the checkout's settings
+# files ask for (PERM-15, TRUST-9): whether to grant the allow rules they propose, and whether to
+# open each directory they name. $count is a number, $file and $path are paths, $problem is the
+# agent's sentence about why a folder could not be opened.
+ui-project-rules-title = Project rules
+ui-project-rules-subtitle = Grant the allow rules this project proposes?
+ui-project-rules-about = This project's settings files propose these allow rules. A granted rule answers its question for you, so the agent does what the rule covers without asking.
+ui-project-rules-list = Proposed rules
+ui-project-rules-from = from { $file }
+ui-project-rules-granted-before = { $count ->
+    [one] { $count } rule from these files was granted before and stays granted:
+   *[other] { $count } rules from these files were granted before and stay granted:
+    }
+ui-project-rules-keeping = A grant is kept in { $path }, so later chats here are not asked about these rules again. A rule edited since is asked about again.
+ui-project-rules-this-chat = A grant lasts for this chat only and is not written down.
+ui-project-rules-decline-about = Keep asking me, and each action these rules cover asks you first, as it would without them.
+ui-project-rules-decline = Keep asking me
+ui-project-rules-grant = { $count ->
+    [one] Grant { $count } rule
+   *[other] Grant { $count } rules
+    }
+ui-project-rules-not-kept = Granted for this chat only: the grant could not be written to { $path }, so the next chat here will ask again.
+ui-project-folder-title = Open a folder
+ui-project-folder-subtitle = Open this folder beside the project?
+ui-project-folder-named = This project's settings name it as
+ui-project-folder-open-about = Open it, and the agent can read and change files in it in this chat, as with Add folder. It is listed under Folders, where you can close it.
+ui-project-folder-decline-about = Don't open it, and the agent cannot reach it from this chat.
+ui-project-folder-remaining = { $count ->
+    [one] { $count } more folder to ask about after this one.
+   *[other] { $count } more folders to ask about after this one.
+    }
+ui-project-folder-open = Open folder
+ui-project-folder-decline = Don't open
+ui-project-folder-not-opened = { $path } was not opened: { $problem }
+ui-project-questions-waiting-trust = Answer the trust question before sending.
+ui-project-questions-waiting-rules = Answer the question about this project's rules before sending.
+ui-project-questions-waiting-folder = Answer the question about a folder this project names before sending.
+ui-project-questions-stale = That question had been answered already, so the answer was not used. What is waiting now is shown.
+# The folded note above a chat about what its settings files wrote, for the parts the questions
+# above changed.
+ui-rules-note-granted-summary = { $count ->
+    [one] { $count } project rule granted.
+   *[other] { $count } project rules granted.
+    }
+ui-rules-note-granted = These allow rules this project's settings propose are granted, so they are in force:
+ui-rules-note-granted-before = granted before
+ui-rules-note-granted-record = The grant is kept in { $path }, so later chats here are not asked about them. A rule the project edits is asked about again.
+ui-rules-note-granted-this-chat = They are granted for this chat only.
+ui-rules-note-proposed = These allow rules this project's settings propose were not granted. An allow rule answers a question for you, so only one you grant, or one in your own settings file, is in force. You will still be asked:
+ui-rules-note-directories = A settings file named these directories, and they are not open:
+ui-rules-note-refused = These directories a settings file named cannot be opened:
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

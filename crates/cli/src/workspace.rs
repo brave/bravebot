@@ -38,6 +38,7 @@ pub(crate) fn current_workspace(
         .map(|workspace| {
             workspace.with_shared_skill_directories(settings.shared_skill_directories())
         })
+        .map(|workspace| workspace.with_named_settings_file(settings.named_settings_file()))
 }
 
 /// The exit for a workspace that could not be opened, with the problem drawn: it can name a
@@ -190,12 +191,50 @@ pub(crate) fn open_directories(
                 directory = added.display().to_string()
             ));
         }
+        bravebot_config::add_writable_directory(added.clone());
         opened.push(added);
     }
     Ok(Opened {
         notices,
         directories: opened,
     })
+}
+
+/// The paths `--add-dir` names in `args`, read as the invocation reads them and left in place.
+pub(crate) fn add_dir_values(args: &[String]) -> Vec<String> {
+    args.windows(2)
+        .filter(|pair| pair[0] == "--add-dir")
+        .map(|pair| pair[1].trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Record the directories the command line names as ones a stage may write, before the settings
+/// are layered: on a platform that cannot hold one file back, whether the file `--settings` named
+/// may grant depends on them (#2599), and [`open_directories`] runs after the settings load.
+///
+/// `expand_home` is set for a `--sandbox-allow-write` path, which the sandbox reads `~/` in, and
+/// not for `--add-dir`, which leaves `~` to the shell. A relative name is beneath the working
+/// directory, and one that does not exist is skipped, since opening it fails the run anyway.
+/// Nothing is opened or refused here.
+pub(crate) fn count_written_roots(names: &[String], expand_home: bool) {
+    let Ok(here) = std::env::current_dir() else {
+        return;
+    };
+    for name in names {
+        let typed = match name.strip_prefix("~/").filter(|_| expand_home) {
+            Some(rest) => match bravebot_agent::home::profile() {
+                Some(home) => home.join(rest),
+                None => continue,
+            },
+            None => std::path::PathBuf::from(name),
+        };
+        let path = here.join(typed);
+        if let Ok(canonical) = path.canonicalize() {
+            bravebot_config::add_writable_directory(canonical);
+        }
+    }
 }
 
 /// `trust` with each directory the command line opened vouched for, where `trust` vouches for the
@@ -313,4 +352,56 @@ pub(crate) fn confinement_name(level: bravebot_sandbox::policy::ConfinementLevel
         ConfinementLevel::None => t!(confinement_none),
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The directories a command line names are recorded as ones a stage may write, under the path
+    /// they resolve to, and a name that does not exist is not. Rejects a count that records
+    /// nothing, records the spelling instead of the resolved path, or records a missing directory.
+    #[test]
+    fn the_directories_a_command_line_names_are_counted_as_written_roots() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/workspace-written-roots");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("real")).expect("create the scratch directory");
+        let base = base.canonicalize().expect("canonical directory");
+        let real = base.join("real");
+        let spelled = base.join("real").join("..").join("real");
+        let missing = base.join("missing");
+
+        count_written_roots(
+            &[spelled.display().to_string(), missing.display().to_string()],
+            false,
+        );
+        let counted = bravebot_config::added_writable_directories();
+        bravebot_config::close_writable_directory(&real);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(counted.contains(&real), "{counted:?}");
+        assert!(!counted.contains(&spelled), "{counted:?}");
+        assert!(!counted.contains(&missing), "{counted:?}");
+    }
+
+    /// `--add-dir` values are read from the line without taking them out of it, so the roots can
+    /// be counted before the first settings load and the invocation still parses them.
+    #[test]
+    fn add_dir_values_are_read_from_the_line_and_left_in_it() {
+        let line: Vec<String> = [
+            "--add-dir",
+            "/one",
+            "do it",
+            "--add-dir",
+            " /two ",
+            "--add-dir",
+            "  ",
+        ]
+        .iter()
+        .map(|word| word.to_string())
+        .collect();
+        assert_eq!(add_dir_values(&line), vec!["/one", "/two"]);
+        assert_eq!(line.len(), 7);
+    }
 }

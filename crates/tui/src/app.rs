@@ -552,6 +552,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(argument) = argument_to(line, MCP_COMMAND) {
         return Action::Mcp(argument.to_string());
     }
+    if let Some(argument) = argument_to(line, PLUGIN_COMMAND) {
+        return Action::Plugin(argument.to_string());
+    }
     if let Some(word) = argument_to(line, SANDBOX_COMMAND) {
         return Action::Sandbox(word.to_string());
     }
@@ -887,6 +890,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == CAFFEINATE_COMMAND {
         session.toggle_caffeinate();
+        return Action::Redraw;
+    }
+    // For a terminal that was reset or cleared from outside, which no event reports.
+    if line.trim() == REDRAW_COMMAND {
+        session.retake_terminal = true;
         return Action::Redraw;
     }
     if let Some(argument) = argument_to(line, CHECKOUTS_COMMAND) {
@@ -1390,6 +1398,7 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
         || session.watching().is_some()
         || session.modal()
         || session.files_open()
+        || session.peeking()
     {
         return Action::None;
     }
@@ -1455,6 +1464,20 @@ fn redraw(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) -> io::Result<()> {
+    // `/redraw`: the terminal may have been reset or cleared from outside, so its modes are given
+    // back and asked for again, and the screen is cleared so the draw below sends every cell
+    // instead of the difference from a screen that is no longer there (CMD-33).
+    if std::mem::take(&mut session.retake_terminal) {
+        // Only writes: nothing is read back, so this is safe while the terminal's reader runs.
+        // Given back first so the keyboard flags are popped before they are pushed again.
+        give_back_modes(terminal.backend_mut(), enhanced_keys())?;
+        ask_for_modes(
+            terminal.backend_mut(),
+            enhanced_keys(),
+            session.mouse_captured(),
+        )?;
+        terminal.clear()?;
+    }
     let mut laid = crate::state::Laid::default();
     terminal
         .draw(|frame| laid = render::draw(frame, session))
@@ -2372,8 +2395,17 @@ fn restore_resumed(
     // The other half of `/add-dir`, which the map cannot carry: a directory has to be
     // open for an absolute path in it to resolve at all. Restored here so the rule and
     // the reach come back together, rather than the rule alone.
+    let already_open = workspace.added_directories();
     for note in record.reopen_added_directories(workspace) {
         session.note(note);
+    }
+    // Counted for the settings layered from here on, as `/add-dir` counts one, so the file
+    // `--settings` named is judged against the directories this resume made writable (#2599).
+    // Only the directories this call opened are counted: the others were counted when opened.
+    for reopened in workspace.added_directories() {
+        if !already_open.contains(&reopened) {
+            bravebot_config::add_writable_directory(reopened);
+        }
     }
     // Beside them, the checkouts the session's delegates were given: their rules came
     // back with the map, and the list and the candidate paths come back here (CHECKOUT-16).
@@ -3236,6 +3268,7 @@ fn event_loop(
             }
             Action::Reach(argument) => held.reach(&argument),
             Action::Mcp(argument) => held.mcp(terminal, &argument, skip_permissions),
+            Action::Plugin(argument) => held.plugin(terminal, &argument),
             Action::ListCheckouts => held.list_checkouts(),
             Action::Unfinished => held.session.report_unfinished(held.workspace),
             Action::ListMemories => held.list_memories(),
@@ -17505,6 +17538,24 @@ mod tests {
         );
     }
 
+    /// CMD-2: `/redraw` is a command only as the whole line, so a question about it, a longer word
+    /// that starts with it, and the word followed by others are each a prompt.
+    #[test]
+    fn redraw_is_a_command_only_as_the_whole_line() {
+        for line in ["what does /redraw do", "/redrawn", "/redraw now"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
+                "{line}"
+            );
+            assert!(!session.retake_terminal, "{line} retook the terminal");
+        }
+    }
+
     /// CMD-2: `/caffeinate` is a command only as the whole line, so a question about it is a prompt.
     #[test]
     fn a_prompt_containing_the_caffeinate_command_is_still_a_prompt() {
@@ -21645,6 +21696,32 @@ mod tests {
                 &sources
             )
             .is_empty()
+        );
+    }
+
+    /// NAME-12: a name inside a folded paste vouches for no file, and a name the person typed in the
+    /// same line still does. The turn reads names from the prompt with each paste folded back to its
+    /// marker. Rejects reading them from the unfolded words, which opens a file the person never
+    /// typed the name of.
+    #[test]
+    fn a_name_inside_a_folded_paste_names_no_file() {
+        let mut session = Session::new("none");
+        for c in "read @src/lib.rs and ".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste(&mut session, "one\ncc @secrets.txt\nthree\nfour\n");
+        let prompt = session.unfolded(session.input());
+        assert!(prompt.contains("@secrets.txt"), "{prompt}");
+
+        assert_eq!(
+            files_named_by_the_person(
+                &session,
+                &prompt,
+                Wrote::ThePerson,
+                std::path::Path::new("."),
+                &[]
+            ),
+            vec!["src/lib.rs".to_string()]
         );
     }
 
@@ -26759,6 +26836,7 @@ mod tests {
                 PANEL_COMMAND,
                 PR_COMMAND,
                 PRS_COMMAND,
+                REDRAW_COMMAND,
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
                 SANDBOX_COMMAND,
@@ -26773,6 +26851,29 @@ mod tests {
                 VARIANT_COMMAND,
                 WATCH_COMMAND,
             ]
+        );
+    }
+
+    /// `/redraw` asks for the terminal's modes again and a full frame, and changes nothing else, so
+    /// it is carried out as typed, mid-turn included (CMD-33).
+    #[test]
+    fn the_redraw_command_retakes_the_terminal_and_runs_mid_turn() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            commands()
+                .into_iter()
+                .find(|command| command.name == REDRAW_COMMAND)
+                .map(|command| command.mid_turn),
+            Some(MidTurn::Runs)
+        );
+        assert!(!session.retake_terminal);
+        assert_eq!(
+            dispatch_command(&mut session, commanded(REDRAW_COMMAND)),
+            Action::Redraw
+        );
+        assert!(
+            session.retake_terminal,
+            "/redraw did not ask for the modes again"
         );
     }
 
@@ -29839,6 +29940,64 @@ mod tests {
         }
     }
 
+    /// `/plugin` carries what follows it whole to the loop, and a longer word or a sentence that
+    /// mentions it is not the command (CMD-2, PLUGIN-1).
+    ///
+    /// Rejects: `/plugin` read as a command inside a sentence or as the prefix of another word.
+    #[test]
+    fn the_plugin_command_carries_its_words_unparsed() {
+        let mut session = Session::new("none");
+        for (line, argument) in [
+            ("/plugin", ""),
+            ("/plugin list", "list"),
+            ("/plugin add ./demo", "add ./demo"),
+            ("/plugin remove demo", "remove demo"),
+        ] {
+            type_line(&mut session, line);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Plugin(argument.to_string()),
+                "{line}"
+            );
+        }
+        for line in ["/plugins", "does /plugin add work"] {
+            type_line(&mut session, line);
+            assert!(
+                !matches!(
+                    handle_key(&mut session, key(KeyCode::Enter)),
+                    Action::Plugin(_)
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    /// PLUGIN-1: a line that arrives by paste is text in the box, not the typed command, even where
+    /// it reads as one and ends in a newline. Only the person's own Enter sends a line.
+    ///
+    /// Rejects: a paste that carries `/plugin add` out, in one line or in a block that is folded.
+    #[test]
+    fn a_pasted_plugin_line_is_text_in_the_box_and_not_the_command() {
+        for pasted in [
+            "/plugin add /tmp/evil\n".to_string(),
+            "/plugin add /tmp/evil".to_string(),
+            format!("{}/plugin add /tmp/evil\n", "a line\n".repeat(40)),
+        ] {
+            let mut session = Session::new("none");
+            assert!(
+                !matches!(handle_paste(&mut session, &pasted), Action::Plugin(_)),
+                "a paste was carried out as /plugin"
+            );
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .all(|entry| !entry.text.contains("Installed")),
+                "a paste installed something"
+            );
+        }
+    }
+
     /// Settings for a directory whose checkout requests `aliases`, as `/mcp` reads them.
     fn settings_requesting_servers(name: &str, aliases: &[&str]) -> bravebot_config::Settings {
         let directory = tempfile::Builder::new()
@@ -31374,10 +31533,11 @@ mod tests {
             let line = match command.mid_turn {
                 MidTurn::Waits => continue,
                 // The bare word opens a picker or the Sessions screen, which are modes of the session and
-                // say nothing.
+                // say nothing. `/redraw` answers by drawing the screen again, so it says nothing either.
                 _ if [
                     CONFIG_COMMAND,
                     MODEL_COMMAND,
+                    REDRAW_COMMAND,
                     SESSIONS_COMMAND,
                     SIDEBAR_COMMAND,
                 ]
@@ -36219,67 +36379,14 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// The person who was asked about the working directory is asked about each directory a file
-    /// named too, because a name in a file is a request for reach and trust rather than a grant of
-    /// either, and the file is the easiest thing in a checkout to write to.
-    #[test]
-    fn a_person_asked_about_the_workspace_is_asked_about_each_named_directory() {
-        let named = vec!["/home/me/notes".to_string(), "/home/me/.ssh".to_string()];
-
-        assert_eq!(
-            named_directories(Whence::Asked, &named),
-            Named::Asking(named)
-        );
-    }
-
-    /// The mode that answers every permission question answers these as well. It approves every
-    /// write, every run and vouching for every file the planner reads, so stopping at a modal box
-    /// about a directory would be the one thing it did not answer.
-    #[test]
-    fn bypassing_opens_the_directories_a_file_named_without_asking() {
-        let named = vec!["/home/me/notes".to_string()];
-
-        assert_eq!(
-            named_directories(Whence::Unasked, &named),
-            Named::Opening(named)
-        );
-    }
-
-    /// A session resumed with the map its own user left puts no question, and the directories it
-    /// has open are the ones its own record reopened. Taking a name from the file as well would
-    /// open a directory on behalf of somebody who was never asked, out of a file that may have
-    /// been edited since they answered.
-    #[test]
-    fn a_resume_that_brought_its_own_map_opens_no_directory_a_file_named() {
-        let named = vec!["/home/me/notes".to_string()];
-
-        assert_eq!(
-            named_directories(Whence::Resumed, &named),
-            Named::Opening(Vec::new())
-        );
-    }
-
-    /// The rules a checkout proposes in the tests below.
-    fn proposed(rules: &[&str]) -> Vec<bravebot_agent::granted::Proposed> {
-        rules
-            .iter()
-            .map(|rule| {
-                bravebot_agent::granted::Proposed::new(
-                    std::path::Path::new("/work/.bravebot/settings.json"),
-                    rule,
-                )
-            })
-            .collect()
-    }
-
     /// PERM-11, PERM-15: the list this interface builds holds the entries that are rules and not
     /// the ones that are not. A line nothing can act on is reported for what is wrong with it, so
     /// offering it in the box would ask somebody to grant a rule that would still decide nothing
     /// once they had, and telling them it was withheld sends them to the wrong fix.
     ///
     /// From files rather than from [`bravebot_config::Settings::parse`], because which layer wrote
-    /// an entry is what puts it in this list at all. The tests below start from a list already
-    /// built, so this is the one that pins where the interface's own comes from.
+    /// an entry is what puts it in this list at all. The tests in `bravebot_agent::opening` start
+    /// from a list already built, so this is the one that pins where the interface's own comes from.
     #[test]
     fn a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule() {
         let root = crate::testutil::scratch_dir("bravebot-app-proposed-rules");
@@ -36303,97 +36410,6 @@ mod tests {
             offered,
             ["Bash(bash scripts/check.sh)"],
             "the entries this session offers are not the ones that are rules"
-        );
-    }
-
-    /// PERM-15: the person who was asked about the working directory is asked about the `allow` rules
-    /// a checkout proposed too, because each answers an approval prompt they would otherwise see and
-    /// the file is the easiest thing in a checkout to write to.
-    #[test]
-    fn a_person_asked_about_the_workspace_is_asked_about_the_rules_a_checkout_proposed() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Asked, &rules, &[]),
-            Granting::Asking {
-                already: Vec::new(),
-                asking: rules,
-            }
-        );
-    }
-
-    /// PERM-15: and not twice about the same rule. A rule this workspace's record already holds was
-    /// answered in an earlier session here, so it is in force without a box: a question already
-    /// answered trains the habit of answering without reading, which is the whole of what asking is
-    /// worth.
-    #[test]
-    fn a_rule_granted_in_an_earlier_session_is_in_force_rather_than_asked_about_again() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
-        let already = proposed(&["Bash(bash scripts/check.sh)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Asked, &rules, &already),
-            Granting::Asking {
-                already,
-                asking: proposed(&["Edit(src/**)"]),
-            }
-        );
-    }
-
-    /// PERM-15: two layers may write one rule, and a grant is for the file that proposed it, so the
-    /// one that was granted is in force and the other is still asked about.
-    ///
-    /// The case that decides how a dropped rule is reported. What is in force and what was proposed
-    /// are compared to work out which entries to name, and comparing the two on the rule text alone
-    /// would find this rule in both lists and report the ungranted copy as neither granted nor
-    /// dropped: an entry that answers no prompt, with nothing said about it.
-    #[test]
-    fn one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in() {
-        let project = bravebot_agent::granted::Proposed::new(
-            std::path::Path::new("/work/.bravebot/settings.json"),
-            "Bash(bash scripts/check.sh)",
-        );
-        let local = bravebot_agent::granted::Proposed::new(
-            std::path::Path::new("/work/.bravebot/settings.local.json"),
-            "Bash(bash scripts/check.sh)",
-        );
-        let proposed = vec![project.clone(), local.clone()];
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Asked, &proposed, std::slice::from_ref(&project)),
-            Granting::Asking {
-                already: vec![project],
-                asking: vec![local],
-            }
-        );
-    }
-
-    /// PERM-15: the mode that answers every permission question answers this one too, on the terms it
-    /// answers the workspace's. It approves every write, every run and vouching for every file the
-    /// planner reads, so stopping at a modal box about a rule that suppresses one of those prompts
-    /// would be the one thing it did not answer.
-    #[test]
-    fn bypassing_grants_the_rules_a_checkout_proposed_without_asking() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Unasked, &rules, &[]),
-            Granting::Granting(rules)
-        );
-    }
-
-    /// PERM-15: a session resumed with the map its own user left puts no question, and what holds is
-    /// what that workspace's record already says. A rule the checkout has added since is one nobody
-    /// granted, so granting it here would answer an approval prompt on behalf of somebody who was
-    /// never asked, out of a file that may have been edited since they answered.
-    #[test]
-    fn a_resume_grants_only_the_rules_the_record_already_held() {
-        let rules = proposed(&["Bash(bash scripts/check.sh)", "Edit(src/**)"]);
-        let already = proposed(&["Bash(bash scripts/check.sh)"]);
-
-        assert_eq!(
-            granting_proposed_rules(Whence::Resumed, &rules, &already),
-            Granting::Granting(already)
         );
     }
 
@@ -39748,8 +39764,9 @@ mod tests {
     }
 
     /// PERM-14: a file `--settings` named is the person's own wherever it sits, so one inside the
-    /// directory the session opened in grants its rule there and after `/cd` leaves it, and nothing
-    /// is put to the person about it.
+    /// directory the session opened in grants its rule there and after `/cd` leaves it where the
+    /// platform holds the file back from a stage, and nothing is put to the person about it.
+    /// Elsewhere it is read as a checkout's file and grants nothing.
     #[test]
     fn a_named_file_inside_the_directory_left_behind_still_grants_after_moving() {
         use bravebot_core::permissions::{Decision, Ruling};
@@ -39771,15 +39788,31 @@ mod tests {
             Some(&tooling),
         );
         let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
-        assert_eq!(
-            answers
-                .rules
-                .permissions
-                .for_command(&["bash", "scripts/check.sh"]),
-            Decision::Ruled(Ruling::Allow),
-            "a named file inside the working directory was withheld"
-        );
-
+        let first = answers
+            .rules
+            .permissions
+            .for_command(&["bash", "scripts/check.sh"]);
+        if bravebot_sandbox::holds_one_file_back() {
+            assert_eq!(
+                first,
+                Decision::Ruled(Ruling::Allow),
+                "a named file inside the working directory was withheld"
+            );
+        } else {
+            // Linux and Windows cannot hold the file back from a stage that may write `a`, so it
+            // is read as a checkout's file there and its allow rule is only proposed (#2599). The
+            // helper answers yes to a proposal, so the decision is `Allow` here too and the
+            // withholding is read from the settings.
+            assert!(
+                answers
+                    .rules
+                    .sources
+                    .settings(workspace.root())
+                    .named_withheld()
+                    .is_some(),
+                "a named file inside the working directory was not withheld where it cannot be held back"
+            );
+        }
         let mut offered = Vec::new();
         assert_eq!(
             change_directory(
@@ -39917,6 +39950,52 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// #2599: a session opened with a `--settings` file that grants nothing, because the platform
+    /// cannot hold it back from a directory a stage may write, says so and names the file. Where
+    /// the platform can hold it back the session says nothing about it. Rejects an opening that
+    /// leaves the withholding unsaid, or says it for a file that grants.
+    #[test]
+    fn the_opening_note_says_why_a_named_file_in_a_writable_directory_grants_nothing() {
+        let root = crate::testutil::scratch_dir("bravebot-named-withheld-note");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let root = std::fs::canonicalize(&root).expect("canonical scratch");
+        let file = root.join("override.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "off"}}"#).expect("named file");
+        let opened = |can_hold_one_file_back: bool| {
+            let settings = bravebot_config::Settings::layered_reaching(
+                None,
+                Some(&root),
+                Some(&file),
+                std::slice::from_ref(&root),
+                can_hold_one_file_back,
+            );
+            let mut session = Session::new("none");
+            rules_from(
+                &mut session,
+                &settings,
+                &root,
+                None,
+                Whence::Asked,
+                "a-session",
+                |_, _| Some(false),
+            )
+            .expect("nobody left");
+            notes_of(&session).join("\n")
+        };
+        let withheld = opened(false);
+        let held_back = opened(true);
+        std::fs::remove_dir_all(&root).ok();
+
+        assert!(withheld.contains("override.json"), "{withheld}");
+        assert!(withheld.contains("--settings"), "{withheld}");
+        assert!(
+            withheld.contains("read as a checkout's file is"),
+            "{withheld}"
+        );
+        assert!(!held_back.contains("override.json"), "{held_back}");
     }
 
     /// Both halves of what `/cd` does, together: the working directory moves, and the directory
@@ -40636,6 +40715,15 @@ mod tests {
             workspace.added_directories(),
             vec![extra.canonicalize().expect("canonical")],
             "the directory `/add-dir` opened was not opened again"
+        );
+        let canonical_extra = extra.canonicalize().expect("canonical");
+        // The reopened directory counts toward withholding the file `--settings` named (PERM-14),
+        // which the registry the layering reads records.
+        let counted = bravebot_config::added_writable_directories();
+        bravebot_config::close_writable_directory(&canonical_extra);
+        assert!(
+            counted.contains(&canonical_extra),
+            "the resumed session did not count its reopened directory as writable: {counted:?}"
         );
         let said = said_in_the_transcript(&session).join("\n");
         assert!(
@@ -43765,6 +43853,7 @@ mod tests {
     mod jump;
     mod menu;
     mod pasting;
+    mod peeking;
     mod pickers;
     mod pinned;
     mod popups;

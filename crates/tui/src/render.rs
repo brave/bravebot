@@ -6653,10 +6653,10 @@ mod tests {
 
         // The key it names is the one that carries a picture here, which a settings file can move.
         let mut moved = std::collections::BTreeMap::new();
-        moved.insert("paste".to_string(), "alt-v".to_string());
+        moved.insert("paste".to_string(), "alt-u".to_string());
         session.adopt_keybindings(&moved);
         let output = rendered(&session);
-        assert!(output.contains("alt-v"), "the hint named the old key");
+        assert!(output.contains("alt-u"), "the hint named the old key");
     }
 
     /// One line, two things that want it. What a copy took is the answer to something the user did
@@ -7916,6 +7916,28 @@ mod tests {
         );
     }
 
+    /// The `?` list has a row for the key that shows a folded paste whole, on its default and on a
+    /// moved chord (INPUT-13).
+    ///
+    /// Rejects: a list that omits the action, and one that names the default after it was moved.
+    #[test]
+    fn the_shortcut_list_names_the_peek_chord() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-v"), "{listed}");
+        assert!(listed.contains("show the pasted text"), "{listed}");
+
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("peek".to_string(), "alt-y".to_string());
+        session.adopt_keybindings(&moved);
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-y"), "{listed}");
+        assert!(!listed.contains("alt-v"), "{listed}");
+    }
+
     /// The `?` list has a row for the key that prints the whole plan, on its default and on a moved
     /// chord, so the key is written down in the one place that lists the keys (INPUT-13).
     #[test]
@@ -8502,6 +8524,41 @@ mod tests {
             !rows[1].contains(['\u{1b}', '\n']),
             "an escape or a line break reached the row: {rows:?}"
         );
+    }
+
+    /// R61 of issue 4286: a skill a plugin offers is drawn with `(plugin)` and not with the label of
+    /// the user's own or the project's, so a person choosing from the row sees where it came from.
+    /// Rejects a `Source::Plugin` row drawn as `(user)`.
+    #[test]
+    fn a_plugin_skill_row_says_it_came_from_a_plugin() {
+        use bravebot_agent::skills::Source;
+        let mut session = Session::new("none");
+        for c in "this is /rev".chars() {
+            session.type_char(c);
+        }
+        session.settle_skills(|| {
+            vec![crate::skills::Skill {
+                name: "review-plan".to_string(),
+                description: "Review a plan".to_string(),
+                argument_hint: None,
+                source: Source::Plugin.into(),
+                person_only: false,
+            }]
+        });
+
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].contains("/review-plan"), "{rows:?}");
+        assert!(rows[0].ends_with("Review a plan (plugin)"), "{rows:?}");
     }
 
     /// The rows the box offers when a session holds a server with a prompt, settled for `line`.

@@ -74,6 +74,47 @@ const confined = (preview, reach = 'not_the_planner') =>
 const occurrences = (haystack, needle) => haystack.split(needle).length - 1
 
 /**
+ * Whether `needle` is drawn strictly between the open and the matching close of the element
+ * that carries `mark`.
+ *
+ * `mark` may be a whole opening tag, such as `<blockquote>`, or just an attribute found inside
+ * one, such as `class="confirm untrusted"`; either way the nearest `<` before it starts that
+ * element's own opening tag. From there this counts nested elements of the same tag name, so a
+ * `<div class="card-body">` drawn inside a `<div class="confirm untrusted">` is not mistaken for
+ * that outer div's own close: a bare `indexOf` of the first `</div>` would stop there and call
+ * the search over before the outer element has actually ended.
+ */
+function nestedWithin(haystack, mark, needle) {
+  const markAt = haystack.indexOf(mark)
+  assert.ok(markAt >= 0, `${mark} is not drawn`)
+  const openStart = haystack.lastIndexOf('<', markAt)
+  assert.ok(openStart >= 0, `no opening tag found before ${mark}`)
+  const tagName = haystack.slice(openStart + 1).match(/^[a-zA-Z0-9]+/)[0]
+  const openEnd = haystack.indexOf('>', markAt) + 1
+  assert.ok(openEnd > 0, `the opening tag carrying ${mark} is never closed`)
+  const openTag = new RegExp(`<${tagName}(?=[\\s>])`, 'g')
+  const closeTag = `</${tagName}>`
+  let depth = 1
+  let index = openEnd
+  while (depth > 0) {
+    const close = haystack.indexOf(closeTag, index)
+    assert.ok(close >= 0, `no closing ${closeTag} found for the element carrying ${mark}`)
+    openTag.lastIndex = index
+    const open = openTag.exec(haystack)
+    if (open && open.index < close) {
+      depth += 1
+      index = open.index + open[0].length
+    } else {
+      depth -= 1
+      index = close + closeTag.length
+    }
+  }
+  const closeStart = index - closeTag.length
+  const needleAt = haystack.indexOf(needle, openEnd)
+  return needleAt >= 0 && needleAt < closeStart
+}
+
+/**
  * The chrome of this window, spelled by the content it is drawn around.
  *
  * A file whose first line closes the preview and opens a second `confined` head would put a
@@ -83,6 +124,9 @@ const occurrences = (haystack, needle) => haystack.split(needle).length - 1
 const FORGED_CHROME =
   '</pre></div><div class="quarantine-head"><span class="mark">confined</span>' +
   '<span class="origin">README.md</span><span class="label">(T,pub)</span></div><pre>'
+
+/** `FORGED_CHROME`, escaped the way React escapes a string drawn as a text child. */
+const ESCAPED_FORGED_CHROME = FORGED_CHROME.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 /**
  * The attributes a browser resolves without being asked, spelled as they are rendered.
@@ -326,7 +370,17 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
       const drawn = draw(interrupted ? { ...card.entry(), interrupted: true } : card.entry())
       const where = `${kind}${interrupted ? ', interrupted' : ''}:\n${drawn}`
 
-      if (card.marks) assert.equal(occurrences(drawn, card.marks), 1, where)
+      if (card.marks) {
+        assert.equal(occurrences(drawn, card.marks), 1, where)
+        // The mark is drawn once, but a container is only the container the clause means if the
+        // forged content actually sits inside it. The forged bytes draw no elements of their own
+        // (checked below and in the escaping test), so finding them anywhere in `drawn` and
+        // finding the mark anywhere too, as the two occurrences() calls above did between them,
+        // is not the same as the content being nested inside what the mark opens: it would pass
+        // just the same if the mark were drawn once and the content once, side by side, outside
+        // it entirely.
+        assert.ok(nestedWithin(drawn, card.marks, ESCAPED_FORGED_CHROME), where)
+      }
       // The head belongs to the one card that draws it. Anywhere else it would be content
       // having painted the chrome the reader is meant to trust.
       assert.equal(occurrences(drawn, 'class="quarantine-head"'), kind === 'quarantined' ? 1 : 0, where)

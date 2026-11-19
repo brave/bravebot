@@ -39,7 +39,9 @@ pub mod limit;
 pub mod lsp;
 mod managed;
 pub mod mcp;
+mod named_reach;
 mod obfuscate;
+pub mod plugin;
 mod run_network;
 pub mod sandbox;
 mod sandbox_filesystem;
@@ -52,6 +54,10 @@ pub mod time;
 pub mod usage_ping;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
+pub use named_reach::{
+    add_writable_directory, added_writable_directories, close_writable_directory, lies_inside,
+    withholds as named_file_withheld,
+};
 pub use run_network::{
     Decided, RunNetwork, resolve as resolve_run_network, run_network, settle_run_network,
     settle_run_network_in, settled_run_network,

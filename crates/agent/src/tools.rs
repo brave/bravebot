@@ -784,6 +784,7 @@ impl<'a> Tools<'a> {
                         ),
                 )
                 .with_withheld_writes(self.workspace.checkout_exclusions())
+                .with_named_settings(self.workspace.named_settings_paths())
                 .with_host_grants(&self.workspace.granted_hosts())
                 .with_identities(bravebot_config::git_identities::settled())
                 .with_state_directory(self.home.map(std::path::Path::to_path_buf));
@@ -4441,7 +4442,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 crate::memory::trusted_again(
                     workspace.memories(),
                     &policy.file_authority().key(&keyed),
-                    crate::workspace::volume_folds_case(workspace.root()),
+                    crate::workspace::volume_case_folding(workspace.root()).restricts(),
                 );
             }
         }
@@ -5419,6 +5420,7 @@ pub(crate) fn write_needs_approval<S: Sink>(
     destination: Destination,
 ) -> bool {
     policy.write_needs_approval(path, contents, destination)
+        || workspace.is_the_named_settings_file(path)
         || workspace.landing(path).is_some_and(|landed| {
             policy.write_needs_approval(&landed, contents, Destination::Named)
         })
@@ -5462,6 +5464,7 @@ pub(crate) fn put_where_nobody_can_be_asked<S: Sink>(
 /// names could not all be found is protected: one of them may be a protected path.
 pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
     bravebot_core::protected::is_protected(path)
+        || workspace.is_the_named_settings_file(path)
         || workspace
             .landing(path)
             .is_some_and(|landed| bravebot_core::protected::is_protected(&landed))
@@ -5482,6 +5485,12 @@ pub(crate) fn write_is_protected(workspace: &Workspace, path: &str) -> bool {
 pub(crate) fn redirection_is_protected(workspace: &Workspace, path: &std::path::Path) -> bool {
     let mut reached = workspace.paths_reached(path);
     reached.push(path.to_path_buf());
+    if reached
+        .iter()
+        .any(|name| workspace.reaches_the_named_settings_file(name))
+    {
+        return true;
+    }
     // A name that is not UTF-8 has no spelling a rule can be written about, and its lossy
     // rendering is the name of a different file, so the file it opens could be a hard link to a
     // protected one. It is protected, as a file whose other names could not all be found is
@@ -11543,9 +11552,11 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // asked about again. The policy carries it out of the turn and the session records it.
     //
     // Not for a line an entry could not record: one that feeds a file to a program, one that
-    // feeds it a reference, and one that writes an assignment in front of a program. The prompt
+    // feeds it a reference, one that writes an assignment in front of a program, one asking for a
+    // scope or to run with no profile, and one redirecting into a protected path. The prompt
     // offers `a` for none of them, and this is the same refusal at the layer that would act on
-    // it, asked of the same predicate so the two cannot drift. What an entry records is a
+    // it: `Plan::vouch` asks the predicate the prompt asks, which Verus proves, and the policy
+    // records an entry only from the `Vouch` it returns. What an entry records is a
     // program, its exact argv and the tree the line runs in, and a `<` redirection, a
     // `stdin_ref` and an assignment are in none of the three, so an entry made here would cover
     // the same program fed any other file or reference, or run under no assignment at all. A
@@ -11554,10 +11565,10 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // The tree is not among the refusals, and that is RUN-8's own answer rather than an
     // omission: an entry names the directory it was given in, so a line outside the workspace
     // root is one an entry can hold as written, and it grants there and nowhere else.
-    if answer.remember && plan.can_be_remembered() && !unconfined {
-        for command in request.would_vouch_for() {
-            policy.remember_command(command);
-        }
+    if answer.remember
+        && let Some(vouch) = plan.vouch(request.asked())
+    {
+        policy.remember_vouch(vouch);
     }
     // The credential scopes the planner asked for, kept for the stages they were added to
     // (SANDBOX-27). The shapes are worked out again from the plan and the closed table here,
@@ -12284,7 +12295,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // and for the credential scan below: there is no later moment to ask, because afterwards
     // every answer is the line's own.
     let mut standing: Vec<Standing> = Vec::new();
-    let folds = crate::workspace::volume_folds_case(tools.workspace.root());
+    let folds = crate::workspace::volume_case_folding(tools.workspace.root()).restricts();
     tools
         .workspace
         .mark_rewind_gap(crate::rewind::CoverageGap::Command);
@@ -18098,6 +18109,63 @@ mod tests {
         }
     }
 
+    /// PLUGIN-1: no tool the planner or a delegate is offered installs, removes, enables, disables
+    /// or lists a plugin. The only way is the typed `/plugin` command.
+    ///
+    /// Rejects: a tool added to any offered list whose name or description is about plugins.
+    #[test]
+    fn no_tool_offered_installs_or_changes_a_plugin() {
+        use bravebot_core::delegate::{Definitions, Kind};
+
+        let mut offered = Vec::new();
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            for arming in [
+                Arming::Allowed { free: 1 },
+                Arming::UnderALoop,
+                Arming::UnderAGoal,
+                Arming::Full,
+                Arming::Unavailable,
+            ] {
+                offered.extend(for_planner(
+                    scheduling,
+                    arming,
+                    &Definitions::default(),
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                ));
+            }
+        }
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            offered.extend(for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&Definitions::default()),
+                Deadlines::BUILT_IN,
+            ));
+        }
+        assert!(!offered.is_empty());
+        for tool in offered {
+            let name = tool.function.name.to_lowercase();
+            assert!(
+                !name.contains("plugin"),
+                "{name} is a tool about plugins, which only the typed /plugin command may touch"
+            );
+            // The description and every argument name are in the serialised spec, so a tool that
+            // installs a plugin by another name still shows here.
+            let spec = serde_json::to_string(&tool).unwrap().to_lowercase();
+            assert!(
+                !spec.contains("plugin"),
+                "{name} mentions plugins in its description or arguments: {spec}"
+            );
+        }
+    }
+
     /// A call held for being a repeat is drawn on both its lines with the reason the planner gave,
     /// as `dispatch` draws every other call (TOOL-5), and with the target `dispatch` would draw for
     /// the same call: a held call hard-coded to an empty target leaves the person watching with
@@ -23199,6 +23267,10 @@ mod tests {
     /// refuses the call before anything is approved or run, and the trail records the refusal
     /// under the name the planner is told.
     mod confinement;
+
+    /// PERM-9 for the settings file named with `--settings`, which a session reads as a layer that
+    /// grants and which a write must therefore ask about as it does for `.bravebot`.
+    mod named_settings;
 
     /// LABEL-5 over a tool's arguments, at the three tools that take a decision from one and had
     /// been releasing it through a display witness instead.

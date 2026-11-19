@@ -37,6 +37,9 @@ use crate::ambient::{CanonicalHost, canonical_host};
 use crate::trust::is_absolute_key;
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// The family of tools a rule names.
 ///
 /// Claude Code's own spellings, which are categories rather than tool names there too: its docs
@@ -95,6 +98,7 @@ impl fmt::Display for Subject {
 
 /// Which list a rule came from, which is what it does when it matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Ruling {
     /// The action is refused outright.
     Deny,
@@ -123,6 +127,7 @@ impl fmt::Display for Ruling {
 
 /// What the rules had to say about one action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Decision {
     /// A rule matched.
     Ruled(Ruling),
@@ -152,16 +157,29 @@ pub struct Anchors {
     /// ([`crate::spelling`]).
     pub backslash_separates: bool,
     /// Whether the volume the paths live on holds two spellings that differ only in case as one
-    /// file. Supplied by the caller because this crate asks the host nothing, and false when the
-    /// caller cannot tell: folding reads a rule about `Docs` as also covering `docs`, which on a
-    /// volume that keeps them apart is a different file.
+    /// file. Supplied by the caller because this crate asks the host nothing. False where the volume
+    /// keeps them apart and where the caller cannot tell, which [`Anchors::case_unknown`] separates:
+    /// folding reads a rule about `Docs` as also covering `docs`, which on a volume that keeps them
+    /// apart is a different file.
     pub folds_case: bool,
+    /// Whether the caller could not tell if the volume folds case. A rule in `deny` or `ask` is then
+    /// read as it is on a volume that folds, since reading it byte for byte leaves a file open that
+    /// the person wrote the rule to keep from the planner, and a rule in `allow` is read byte for
+    /// byte, since folding it would grant a file nobody named (PERM-3). Not read where
+    /// [`Anchors::folds_case`] is true.
+    pub case_unknown: bool,
 }
 
 impl Anchors {
     /// Anchors that resolve nothing, for a caller with no settings file.
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// Whether a rule in the list `ruling` names is read as on a volume that folds case: where the
+    /// volume does, and for a rule that restricts where the caller could not tell.
+    fn folds_for(&self, ruling: Ruling) -> bool {
+        self.folds_case || (self.case_unknown && ruling != Ruling::Allow)
     }
 }
 
@@ -368,6 +386,12 @@ impl Rule {
             return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
         }
 
+        // A rule that restricts is stored in the fold it is matched in, which is the folding one
+        // wherever the caller could not tell (PERM-3).
+        let anchors = &Anchors {
+            folds_case: anchors.folds_for(ruling),
+            ..anchors.clone()
+        };
         let mut typed_unreadable = None;
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
@@ -516,16 +540,26 @@ impl Rule {
     /// is left to cover what it covers. The copy is part of this rule, as a spelling reached
     /// through a link is, and never floats.
     ///
-    /// `full_fold` is whether the segments are compared in the full case fold, which joins
-    /// `class` with `cla\u{df}`. A rule that restricts is matched that way on a volume that folds
-    /// case, so its copy is made for every checkout it applies to. A rule that grants is compared
-    /// as it is stored, in the fold that leaves such a letter alone, since a copy of a grant under
-    /// a checkout of another file would grant a place nobody approved.
-    fn copy_beneath(&mut self, from: &[String], to: &[String], full_fold: bool) {
+    /// `restricting` is whether the rule is in the `deny` or `ask` list. Its segments are compared
+    /// in the form every canonically equivalent spelling shares, so a rule written under one
+    /// Unicode form of a directory is copied for a checkout of the other. Where `folds_case`, the
+    /// comparison is also in the full case fold, which joins `class` with `cla\u{df}`, so its copy
+    /// is made for every checkout it applies to. A rule that grants is compared as it is stored,
+    /// in the fold that leaves such a letter alone and in the Unicode form written, since a copy of
+    /// a grant under a checkout of another file would grant a place nobody approved.
+    fn copy_beneath(
+        &mut self,
+        from: &[String],
+        to: &[String],
+        restricting: bool,
+        folds_case: bool,
+    ) {
         let copies: Vec<Pattern> = std::iter::once(&self.pattern)
             .chain(&self.landed)
             .filter_map(|pattern| match pattern {
-                Pattern::Absolute(pattern) if is_under(&pattern.segments, from, full_fold) => {
+                Pattern::Absolute(pattern)
+                    if is_under(&pattern.segments, from, restricting, folds_case) =>
+                {
                     let mut segments = to.to_vec();
                     segments.extend_from_slice(&pattern.segments[from.len()..]);
                     Some(Pattern::Absolute(PathPattern {
@@ -540,6 +574,30 @@ impl Rule {
             .collect();
         for copy in copies {
             if copy != self.pattern && !self.landed.contains(&copy) {
+                self.landed.push(copy);
+            }
+        }
+    }
+
+    /// Add the relative spelling of what this rule covers of the workspace, for a rule about a
+    /// full path that names a place above the workspace (PERM-7).
+    ///
+    /// `workspace` is the segments of the workspace's full path, keyed as the rules are. The file
+    /// tools ask about a project file by its workspace-relative name, so a rule on an ancestor of
+    /// the workspace refuses nothing there unless it also holds the name the tools ask by. The
+    /// copy is part of this rule and never floats.
+    fn cover_workspace(&mut self, workspace: &[String], folds_case: bool) {
+        let copies: Vec<Pattern> = std::iter::once(&self.pattern)
+            .chain(&self.landed)
+            .filter_map(|pattern| match pattern {
+                Pattern::Absolute(pattern) => Some(pattern),
+                _ => None,
+            })
+            .flat_map(|pattern| pattern.within_workspace(workspace, folds_case))
+            .map(Pattern::Relative)
+            .collect();
+        for copy in copies {
+            if !self.landed.contains(&copy) {
                 self.landed.push(copy);
             }
         }
@@ -782,6 +840,9 @@ pub struct Permissions {
     /// The volume's answer, kept for the same reason: a path arrives folded or not according to
     /// the volume the rules were read for, and the patterns were stored the way it says.
     folds_case: bool,
+    /// Whether the answer could not be had, kept from the anchors. The rules that restrict were
+    /// stored folded and a path is folded for them, and the rules that grant were not.
+    case_unknown: bool,
 }
 
 impl Permissions {
@@ -826,8 +887,15 @@ impl Permissions {
             allow: read(allow, Ruling::Allow),
             backslash_separates: anchors.backslash_separates,
             folds_case: anchors.folds_case,
+            case_unknown: anchors.case_unknown,
         };
         (permissions, rejected)
+    }
+
+    /// Whether the rules in `deny` and `ask` are matched as on a volume that folds case: where it
+    /// does, and where the answer could not be had. The rules in `allow` follow `folds_case` alone.
+    fn restrictions_fold(&self) -> bool {
+        self.folds_case || self.case_unknown
     }
 
     /// Attach to each rule the reason the person gave for writing it (PERM-1).
@@ -959,9 +1027,29 @@ impl Permissions {
     ///
     /// `allow` rules are left as written, since a grant covers only the spelling approved (PERM-7).
     pub fn follow_links(&mut self, land: impl Fn(&str) -> Option<String>) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        let (backslash_separates, folds_case) =
+            (self.backslash_separates, self.restrictions_fold());
         for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
             rule.follow_links(&land, backslash_separates, folds_case);
+        }
+    }
+
+    /// Have every `deny` and `ask` path rule written about a place above the workspace cover what
+    /// it covers of the workspace under the workspace-relative name as well (PERM-7).
+    ///
+    /// `workspace` is the workspace's full path as the host spells it. A rule that restricts covers
+    /// what is under the place it names, so `Read(~/**)` in a session opened in `~/proj` covers
+    /// every file of the workspace, which the file tools ask about by its relative name. A rule
+    /// about the workspace itself or a place inside it is spelled relative by [`Self::follow_links`],
+    /// and an `allow` rule is left as written, since a grant covers only the spelling approved.
+    ///
+    /// A name of the workspace that is not UTF-8 reaches here as its lossy rendering, which can
+    /// only make a rule cover one more name, never fewer.
+    pub fn cover_workspace(&mut self, workspace: &str) {
+        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        let segments = split(&key_of(workspace, backslash_separates, folds_case));
+        for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
+            rule.cover_workspace(&segments, folds_case);
         }
     }
 
@@ -973,17 +1061,26 @@ impl Permissions {
     /// in, an allow rule included, since the checkout is the same tree. The rules are the delegate's
     /// own copy, so the copies go when the delegate does.
     pub fn copy_beneath(&mut self, from: &str, to: &str) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
-        let from = split(&key_of(from, backslash_separates, folds_case));
-        let to = split(&key_of(to, backslash_separates, folds_case));
+        // Each list is keyed as its rules are stored: the rules that restrict in the fold they are
+        // matched in, which is the folding one where the answer could not be had, and the rules
+        // that grant in the one the volume's answer gives.
+        let keyed = |folds_case: bool| {
+            (
+                split(&key_of(from, self.backslash_separates, folds_case)),
+                split(&key_of(to, self.backslash_separates, folds_case)),
+            )
+        };
+        let (restricting_from, restricting_to) = keyed(self.restrictions_fold());
+        let (granting_from, granting_to) = keyed(self.folds_case);
         // A rule that restricts is matched in the full fold where the volume folds case, as
         // `TrustStore::copy_beneath` copies a refusal, and a grant in the fold it is stored in.
+        let restricting_folds = self.restrictions_fold();
         let restricting = self.deny.iter_mut().chain(self.ask.iter_mut());
         for rule in restricting {
-            rule.copy_beneath(&from, &to, folds_case);
+            rule.copy_beneath(&restricting_from, &restricting_to, true, restricting_folds);
         }
         for rule in &mut self.allow {
-            rule.copy_beneath(&from, &to, false);
+            rule.copy_beneath(&granting_from, &granting_to, false, self.folds_case);
         }
     }
 
@@ -1000,11 +1097,25 @@ impl Permissions {
 
     /// The rule that decides [`Permissions::for_path`], and which list it is in.
     pub fn rule_for_path(&self, subject: Subject, path: &str) -> Option<(Ruling, &Rule)> {
-        let path = key_of(path, self.backslash_separates, self.folds_case);
-        let canonical = crate::trust::canonical_form(&path, self.folds_case);
-        self.deciding(|rule, restricting| {
-            rule.subject == subject
-                && rule.covers_path(&path, &canonical, self.folds_case, restricting)
+        // The path is spelled for each list as that list's rules are stored: folded for the rules
+        // that restrict wherever the answer could not be had, and as the volume's answer gives for
+        // the rules that grant.
+        let spelled = |folds_case: bool| {
+            let path = key_of(path, self.backslash_separates, folds_case);
+            let canonical = crate::trust::canonical_form(&path, folds_case).into_owned();
+            (path, canonical)
+        };
+        let granting = spelled(self.folds_case);
+        let restricting = match self.restrictions_fold() == self.folds_case {
+            true => granting.clone(),
+            false => spelled(true),
+        };
+        self.deciding(|rule, restricts| {
+            let ((path, canonical), folds_case) = match restricts {
+                true => (&restricting, self.restrictions_fold()),
+                false => (&granting, self.folds_case),
+            };
+            rule.subject == subject && rule.covers_path(path, canonical, folds_case, restricts)
         })
     }
 
@@ -1420,9 +1531,108 @@ impl PathPattern {
     /// A pattern that restricts covers what is under the place it names as well as the place, as a
     /// trailing `/**` does and as a walk that does not descend into a covered directory assumes
     /// (PERM-3). A pattern that grants covers the place it names and no more.
+    ///
+    /// The search for a covered ancestor starts at the empty prefix, which is the root the path is
+    /// held under. A pattern with no segments names that root, so `Read(./)` and `Read(//)` cover
+    /// every path under it and not the root alone.
     fn matches(&self, path: &[&str], restricting: bool) -> bool {
         self.names(path, restricting)
-            || (restricting && (1..path.len()).any(|end| self.names(&path[..end], restricting)))
+            || (restricting && (0..path.len()).any(|end| self.names(&path[..end], restricting)))
+    }
+
+    /// The patterns, spelled relative to the workspace, that cover the part of the workspace this
+    /// absolute pattern covers, for a pattern whose literal prefix is shorter than the workspace's
+    /// path (PERM-7).
+    ///
+    /// `workspace` is the segments of the workspace's full path, keyed as a path is matched. Each
+    /// is taken against the pattern as a path's segments are, with `**` free to take any number of
+    /// them. `~/**` in `~/proj` gives `**`, and `~/*/secrets/**` gives `secrets/**`. A pattern
+    /// that restricts covers what is under the place it names, so one that has taken every segment
+    /// it has while the workspace has segments left covers the whole workspace and gives `**`. A
+    /// pattern the workspace's segments do not fit gives nothing. A pattern whose literal prefix
+    /// reaches the workspace or goes below it gives nothing here: that is the place
+    /// [`Rule::follow_links`] already spells relative to the workspace.
+    fn within_workspace(&self, workspace: &[String], folds_case: bool) -> Vec<PathPattern> {
+        let wild = |segment: &str| !self.literal && segment == "**";
+        let literal_prefix = self
+            .segments
+            .iter()
+            .take_while(|segment| self.literal || !segment.contains('*'))
+            .count();
+        if literal_prefix >= workspace.len() {
+            return Vec::new();
+        }
+        // Names are compared as written and in the one form every canonically equivalent
+        // spelling shares, since a rule that restricts is matched both ways.
+        let fits = |segment: &str, name: &str| {
+            let equal = |segment: &str, name: &str| match self.literal {
+                true => segment == name,
+                false => wildcard_matches(segment, name),
+            };
+            equal(segment, name)
+                || equal(
+                    &crate::trust::canonical_form(segment, folds_case),
+                    &crate::trust::canonical_form(name, folds_case),
+                )
+        };
+        // Positions in the segments, each the pattern left once the names so far are taken.
+        let settled = |states: &[usize]| {
+            let mut all = states.to_vec();
+            let mut at = 0;
+            while at < all.len() {
+                let next = all[at] + 1;
+                if self.segments.get(all[at]).is_some_and(|s| wild(s)) && !all.contains(&next) {
+                    all.push(next);
+                }
+                at += 1;
+            }
+            all
+        };
+        let covers_everything = |states: &[usize]| settled(states).contains(&self.segments.len());
+        let everything = || {
+            vec![PathPattern {
+                segments: vec!["**".to_string()],
+                floats_when_restricting: false,
+                literal: false,
+                anywhere: false,
+            }]
+        };
+        let mut states = vec![0];
+        for name in workspace {
+            if covers_everything(&states) {
+                return everything();
+            }
+            let mut next = Vec::new();
+            for position in settled(&states) {
+                let Some(segment) = self.segments.get(position) else {
+                    continue;
+                };
+                let after = match wild(segment) {
+                    true => position,
+                    false if fits(segment, name) => position + 1,
+                    false => continue,
+                };
+                if !next.contains(&after) {
+                    next.push(after);
+                }
+            }
+            if next.is_empty() {
+                return Vec::new();
+            }
+            states = next;
+        }
+        if covers_everything(&states) {
+            return everything();
+        }
+        states
+            .into_iter()
+            .map(|position| PathPattern {
+                segments: self.segments[position..].to_vec(),
+                floats_when_restricting: false,
+                literal: self.literal,
+                anywhere: false,
+            })
+            .collect()
     }
 
     /// Whether this pattern names `path` itself.
@@ -1489,18 +1699,23 @@ fn fold(path: &str, folds: bool) -> String {
         .join("/")
 }
 
-/// Whether `segments` start with `from`, comparing each segment in the full case fold where
-/// `full_fold` says so and byte for byte otherwise.
+/// Whether `segments` start with `from`. A rule that restricts compares each segment in the form
+/// every canonically equivalent spelling shares, with case folded in full where `folds_case` says
+/// so, as [`PathPattern::canonical`] does for a path (PERM-7). A rule that grants compares byte for
+/// byte, since a grant is matched as written and a copy for a spelling it does not cover would
+/// grant a place nobody approved.
 ///
-/// Both are keyed, so each segment is already in the fold a grant is matched in, and the full fold
-/// is taken from there as [`PathPattern::canonical`] takes it for a path.
-fn is_under(segments: &[String], from: &[String], full_fold: bool) -> bool {
-    if !full_fold {
+/// Both are keyed, so each segment is already in the fold a grant is matched in, and the form is
+/// taken from there as [`PathPattern::canonical`] takes it for a path.
+fn is_under(segments: &[String], from: &[String], restricting: bool, folds_case: bool) -> bool {
+    if !restricting {
         return segments.starts_with(from);
     }
     segments.len() >= from.len()
         && segments.iter().zip(from).all(|(segment, name)| {
-            segment == name || crate::trust::fold_case(segment) == crate::trust::fold_case(name)
+            segment == name
+                || crate::trust::canonical_form(segment, folds_case)
+                    == crate::trust::canonical_form(name, folds_case)
         })
 }
 
@@ -2151,6 +2366,7 @@ mod tests {
             workspace: Some("/home/someone/proj".to_string()),
             backslash_separates: false,
             folds_case: false,
+            case_unknown: false,
         }
     }
 
@@ -3583,6 +3799,111 @@ mod tests {
         assert!(!Anchors::none().folds_case);
     }
 
+    /// Rules read where the volume could not be asked.
+    fn rules_where_the_volume_could_not_be_asked(
+        deny: &[&str],
+        ask: &[&str],
+        allow: &[&str],
+    ) -> Permissions {
+        let anchors = Anchors {
+            case_unknown: true,
+            ..anchors()
+        };
+        read_with(&anchors, deny, ask, allow)
+    }
+
+    /// PERM-3. Where the caller could not tell whether the volume folds case, a rule that restricts
+    /// is read as on a volume that folds: `Read(.env)` in `deny` or `ask` covers `.ENV`, since a
+    /// file a folding volume opens under either spelling is otherwise left to the planner, and the
+    /// extra file a refusal covers on a volume that does not fold grants nothing.
+    #[test]
+    fn a_deny_or_ask_rule_folds_case_where_the_volume_could_not_be_asked() {
+        for (written, path) in [
+            ("Read(.env)", ".ENV"),
+            ("Read(src/**)", "SRC/x/y"),
+            ("Read(Docs/**)", "docs/a.md"),
+            ("Read(cla\u{df}.md)", "class.md"),
+        ] {
+            for (ruling, permissions) in [
+                (
+                    Ruling::Deny,
+                    rules_where_the_volume_could_not_be_asked(&[written], &[], &[]),
+                ),
+                (
+                    Ruling::Ask,
+                    rules_where_the_volume_could_not_be_asked(&[], &[written], &[]),
+                ),
+            ] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(ruling),
+                    "{written} in the {ruling} list did not cover {path:?}"
+                );
+            }
+        }
+    }
+
+    /// PERM-3. The same unknown answer leaves a rule that grants as written, in the spelling it
+    /// names and no other, so a failed probe never grants a file nobody named. A refusal beside it
+    /// still wins over the grant for the spelling it covers.
+    #[test]
+    fn an_allow_rule_compares_bytes_where_the_volume_could_not_be_asked() {
+        let permissions = rules_where_the_volume_could_not_be_asked(&[], &[], &["Edit(Docs/**)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        for path in ["docs/a.md", "DOCS/a.md"] {
+            assert_eq!(
+                permissions.for_path(Subject::Edit, path),
+                Decision::Unmatched,
+                "{path} may be another file and was granted"
+            );
+        }
+
+        let both = rules_where_the_volume_could_not_be_asked(
+            &["Edit(secret.md)"],
+            &[],
+            &["Edit(Docs/**)"],
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "SECRET.md"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "Docs/a.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            both.for_path(Subject::Edit, "docs/a.md"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3, CHECKOUT-9. The copy of a rule for a checkout follows the list it is in: a refusal
+    /// written with `Class` is copied under a checkout of `class` where the answer is unknown, and
+    /// a grant is not.
+    #[test]
+    fn a_copy_for_a_checkout_folds_a_refusal_and_not_a_grant_where_the_volume_could_not_be_asked() {
+        let mut permissions = rules_where_the_volume_could_not_be_asked(
+            &["Read(//work/Class/secrets/**)"],
+            &["Read(//work/Class/asked/**)"],
+            &["Read(//work/Class/granted/**)"],
+        );
+        permissions.copy_beneath("/work/class", "/state/c1");
+        for (path, decision) in [
+            ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+            ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+            ("/state/c1/granted/file", Decision::Unmatched),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                decision,
+                "{path} was ruled wrongly under a copy for a checkout of /work/class"
+            );
+        }
+    }
+
     /// The documented asymmetry, and the reason for it: a rule that restricts should cover the
     /// nested copy of what it named, and a rule that grants should cover what it named.
     #[test]
@@ -3786,6 +4107,141 @@ mod tests {
         );
     }
 
+    /// PERM-7. A `deny` or `ask` rule about a place above the workspace covers the workspace under
+    /// the relative name the file tools ask by, in the shapes that name an ancestor: `~/**`, `~/`,
+    /// `~/*/` and `//` with the workspace at `/home/someone/proj`. A rule about the workspace's
+    /// own place is not changed by this pass (it is spelled relative by the caller that follows
+    /// links), so only the rule on an ancestor gains a spelling.
+    #[test]
+    fn a_rule_on_an_ancestor_of_the_workspace_covers_the_workspace_by_its_relative_name() {
+        for rule in [
+            "Read(~/**)",
+            "Read(~/)",
+            "Read(~)",
+            "Read(~/*/**)",
+            "Read(~/*)",
+            "Read(//home/**)",
+            "Read(//home/someone/**)",
+            "Read(//**)",
+            "Read(//)",
+            "Read(**/proj/**)",
+        ] {
+            for (list, subject, ruling) in [
+                (0, Subject::Read, Ruling::Deny),
+                (1, Subject::Read, Ruling::Ask),
+            ] {
+                let written = [rule];
+                let mut permissions = match list {
+                    0 => rules(&written, &[], &[]),
+                    _ => rules(&[], &written, &[]),
+                };
+                permissions.cover_workspace("/home/someone/proj");
+                for path in ["secrets/canary.txt", "a", ".env"] {
+                    let covered = permissions.for_path(subject, path) == Decision::Ruled(ruling);
+                    // `Read(~)` is a file named `~` and `Read(**/proj/**)` is about a directory of
+                    // that name inside the workspace, so neither is a rule about an ancestor.
+                    let about_an_ancestor = !matches!(rule, "Read(~)" | "Read(**/proj/**)");
+                    assert_eq!(
+                        covered, about_an_ancestor,
+                        "{rule} as {ruling} on {path} in a workspace below the home directory"
+                    );
+                }
+            }
+        }
+    }
+
+    /// PERM-7. A rule about a place that is not an ancestor of the workspace, a sibling, a
+    /// descendant of it or a place whose name only starts as an ancestor's does, gains no relative
+    /// spelling, and an `allow` rule on an ancestor is matched as written.
+    #[test]
+    fn a_rule_that_is_not_on_an_ancestor_of_the_workspace_gains_no_relative_name() {
+        let mut permissions = rules(
+            &[
+                "Read(~/sibling/**)",
+                "Read(~/pro/**)",
+                "Read(~/proj-two/**)",
+                "Read(~/proj/deeper/**)",
+                "Read(//home/someone-else/**)",
+            ],
+            &["Edit(~/sibling/**)"],
+            &["Read(~/**)"],
+        );
+        permissions.cover_workspace("/home/someone/proj");
+        for path in ["secrets/canary.txt", "deeper/a", "sibling/a", "pro/a"] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                Decision::Unmatched,
+                "{path} was covered by a rule that is not on an ancestor, or by the allow rule `~/**`"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "sibling/a"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-7. A `Read` rule on an ancestor stays one rule, and the relative name it adds is not a
+    /// rule that floats: `Read(~/*/secrets/**)` in `~/proj` covers `secrets` at the top of the
+    /// workspace and not a `secrets` nested in another directory.
+    #[test]
+    fn the_relative_name_of_a_rule_on_an_ancestor_is_covered_at_that_place_only() {
+        let mut permissions = rules(&["Read(~/*/secrets/**)"], &[], &[]);
+        permissions.cover_workspace("/home/someone/proj");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "secrets/canary.txt"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "vendor/secrets/canary.txt"),
+            Decision::Unmatched,
+            "the relative spelling floated to every directory of that name"
+        );
+        assert_eq!(
+            permissions.len(),
+            1,
+            "the added spelling was counted as a rule"
+        );
+    }
+
+    /// PERM-7. Where the volume folds case, a rule on an ancestor written in another case still
+    /// covers the workspace, and where it does not, the spelling is compared as written.
+    #[test]
+    fn a_rule_on_an_ancestor_is_matched_in_the_case_the_volume_folds() {
+        for (folds_case, covered) in [(true, true), (false, false)] {
+            let mut permissions = rules_on_a_volume_that_folds_case(
+                folds_case,
+                &["Read(//HOME/someone/**)"],
+                &[],
+                &[],
+            );
+            permissions.cover_workspace("/home/someone/proj");
+            assert_eq!(
+                permissions.for_path(Subject::Read, "a.txt") == Decision::Ruled(Ruling::Deny),
+                covered,
+                "folds_case {folds_case}"
+            );
+        }
+    }
+
+    /// PERM-7. A rule on an ancestor written in one Unicode form of a directory's name covers a
+    /// workspace stored under another, as a rule about a file is.
+    #[test]
+    fn a_rule_on_an_ancestor_is_matched_by_canonical_equivalence() {
+        let mut permissions = rules(&["Read(//home/caf\u{e9}/**)"], &[], &[]);
+        permissions.cover_workspace("/home/cafe\u{301}/proj");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "a.txt"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let mut other = rules(&["Read(//home/caf\u{e9}/**)"], &[], &[]);
+        other.cover_workspace("/home/cafe/proj");
+        assert_eq!(
+            other.for_path(Subject::Read, "a.txt"),
+            Decision::Unmatched,
+            "a different name was read as the same directory"
+        );
+    }
+
     /// CHECKOUT-9. A rule about a full path under the working directory also covers the same
     /// place under the checkout, in every list. A rule about a place outside it, a pattern whose
     /// written-out stretch stops short of it, and a relative rule gain nothing, so the copy is not
@@ -3950,6 +4406,94 @@ mod tests {
         }
     }
 
+    /// CHECKOUT-9, PERM-7. A deny or ask rule written under one Unicode form of the working
+    /// directory's name is copied to a checkout of it spelled in the other form, since APFS opens
+    /// the directory under either and the rule covers the files in it as the working directory has
+    /// them. The case of the name does not change that where the volume folds case.
+    #[test]
+    fn a_refusal_is_copied_from_the_other_unicode_form_of_the_working_directory() {
+        for folds_case in [false, true] {
+            for (written, checked_out) in
+                [("caf\u{e9}", "cafe\u{301}"), ("cafe\u{301}", "caf\u{e9}")]
+            {
+                let mut permissions = rules_on_a_volume_that_folds_case(
+                    folds_case,
+                    &[&format!("Read(//work/{written}/secrets/**)")],
+                    &[&format!("Read(//work/{written}/asked/**)")],
+                    &[],
+                );
+                assert_eq!(
+                    permissions
+                        .for_path(Subject::Read, &format!("/work/{checked_out}/secrets/key")),
+                    Decision::Ruled(Ruling::Deny),
+                    "the working directory does not refuse /work/{checked_out}/secrets/key"
+                );
+                permissions.copy_beneath(&format!("/work/{checked_out}"), "/state/c1");
+                for (path, decision) in [
+                    ("/state/c1/secrets/key", Decision::Ruled(Ruling::Deny)),
+                    ("/state/c1/asked/notes", Decision::Ruled(Ruling::Ask)),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, path),
+                        decision,
+                        "{path} was ruled wrongly under a copy for a checkout of /work/{checked_out} of a rule written with {written} (folds case: {folds_case})"
+                    );
+                }
+            }
+        }
+        let mut upper = rules_on_a_volume_that_folds_case(
+            true,
+            &["Read(//work/CAFE\u{301}/secrets/**)"],
+            &[],
+            &[],
+        );
+        upper.copy_beneath("/work/caf\u{e9}", "/state/c1");
+        assert_eq!(
+            upper.for_path(Subject::Read, "/state/c1/secrets/key"),
+            Decision::Ruled(Ruling::Deny),
+            "a rule in another case and another Unicode form was not copied on a volume that folds case"
+        );
+    }
+
+    /// CHECKOUT-9, PERM-7. A name that differs from the working directory's by more than its
+    /// Unicode form is another directory, and a grant is copied only from the spelling it is
+    /// matched in: it covers no other form of the name, so the copy covers none either.
+    #[test]
+    fn a_rule_is_not_copied_from_another_name_or_a_grant_from_another_unicode_form() {
+        for folds_case in [false, true] {
+            let mut permissions = rules_on_a_volume_that_folds_case(
+                folds_case,
+                &["Read(//work/caf\u{e9}/secrets/**)"],
+                &[],
+                &["Read(//work/caf\u{e9}/granted/**)"],
+            );
+            permissions.copy_beneath("/work/cafe\u{301}x", "/state/c1");
+            assert_eq!(
+                permissions.for_path(Subject::Read, "/state/c1/secrets/key"),
+                Decision::Unmatched,
+                "a rule about /work/caf\u{e9} was copied for a checkout of /work/cafe\u{301}x (folds case: {folds_case})"
+            );
+
+            let mut permissions = rules_on_a_volume_that_folds_case(
+                folds_case,
+                &[],
+                &[],
+                &["Read(//work/caf\u{e9}/granted/**)"],
+            );
+            assert_eq!(
+                permissions.for_path(Subject::Read, "/work/cafe\u{301}/granted/file"),
+                Decision::Unmatched,
+                "the grant covers the other Unicode form of its directory, so it is not the narrower rule"
+            );
+            permissions.copy_beneath("/work/cafe\u{301}", "/state/c1");
+            assert_eq!(
+                permissions.for_path(Subject::Read, "/state/c1/granted/file"),
+                Decision::Unmatched,
+                "a grant was copied from another Unicode form of its directory (folds case: {folds_case})"
+            );
+        }
+    }
+
     /// The name a prefix lands on is spelled the way the path it is matched against is, so a
     /// canonical name with backslashes and a drive prefix, or in the case a folding volume stores,
     /// reaches the same file as the spelling a gate asks about.
@@ -3969,6 +4513,14 @@ mod tests {
             folding.for_path(Subject::Read, "REAL/secret"),
             Decision::Ruled(Ruling::Deny),
             "a landing on a volume that folds case missed another case of the name it reaches"
+        );
+
+        let mut unasked = rules_where_the_volume_could_not_be_asked(&["Read(linked/**)"], &[], &[]);
+        unasked.follow_links(|_| Some("Real".to_string()));
+        assert_eq!(
+            unasked.for_path(Subject::Read, "REAL/secret"),
+            Decision::Ruled(Ruling::Deny),
+            "a landing where the volume could not be asked missed another case of the name it reaches"
         );
     }
 
@@ -4058,6 +4610,176 @@ mod tests {
             permissions.for_path(Subject::Edit, "secrets/key"),
             Decision::Unmatched
         );
+
+        // A rule naming a root is a directory like any other: it covers the root and every path
+        // under it. `/` is the directory the settings file is in, and `//` the filesystem root.
+        // Each spelling is in the other namespace's way too: a relative rule says nothing about a
+        // full path, and a full-path rule says nothing about a relative one.
+        for (subject, family) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+            for (spelling, root, below, elsewhere) in [
+                (".", "", "a/b/c", "/etc/passwd"),
+                ("./", "", "a/b/c", "/etc/passwd"),
+                (
+                    "/",
+                    "/home/someone/.bravebot",
+                    "/home/someone/.bravebot/a/b",
+                    "/home/someone/proj/a",
+                ),
+                ("//", "/", "/etc/passwd", "a/b"),
+            ] {
+                let rule = format!("{family}({spelling})");
+                for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                    let permissions = match ruling {
+                        "deny" => rules(&[&rule], &[], &[]),
+                        _ => rules(&[], &[&rule], &[]),
+                    };
+                    for path in [root, "marker.txt", below]
+                        .into_iter()
+                        .filter(|path| path.starts_with('/') == root.starts_with('/'))
+                    {
+                        assert_eq!(
+                            permissions.for_path(subject, path),
+                            Decision::Ruled(list),
+                            "{rule} in {ruling} did not cover {path:?}"
+                        );
+                    }
+                    assert_eq!(
+                        permissions.for_path(subject, elsewhere),
+                        Decision::Unmatched,
+                        "{rule} in {ruling} covered {elsewhere:?} in the other namespace"
+                    );
+                }
+                // A grant covers the place it names and nothing under it.
+                let allow = rules(&[], &[], &[&rule]);
+                assert_eq!(
+                    allow.for_path(subject, root),
+                    Decision::Ruled(Ruling::Allow),
+                    "{rule} as an allow rule did not grant {root:?}"
+                );
+                assert_eq!(
+                    allow.for_path(subject, below),
+                    Decision::Unmatched,
+                    "{rule} as an allow rule granted {below}"
+                );
+            }
+        }
+    }
+
+    /// PERM-3, PERM-7: a `deny` or `ask` rule naming the workspace root covers every path in the
+    /// workspace, for `Read` and for `Edit`, in each spelling of the root and quoted. A rule that
+    /// fences the root and refuses no file in it is a protection that is not there.
+    #[test]
+    fn a_deny_or_ask_rule_naming_the_workspace_root_covers_every_path_under_it() {
+        for (subject, family, spellings) in [
+            (
+                Subject::Read,
+                "Read",
+                &["./", ".", "\"./\"", "./**"] as &[&str],
+            ),
+            (Subject::Edit, "Edit", &["./", "."]),
+        ] {
+            for spelling in spellings {
+                let rule = format!("{family}({spelling})");
+                for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                    let permissions = match ruling {
+                        "deny" => rules(&[&rule], &[], &[]),
+                        _ => rules(&[], &[&rule], &[]),
+                    };
+                    for path in ["", "marker.txt", "a/b", "a/b/c", ".env"] {
+                        assert_eq!(
+                            permissions.for_path(subject, path),
+                            Decision::Ruled(list),
+                            "{rule} in {ruling} did not cover {path:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// PERM-3, PERM-7: a `deny` or `ask` rule naming the filesystem root covers every full path,
+    /// spelled `//` or as the quoted name `"//"`.
+    #[test]
+    fn a_deny_or_ask_rule_naming_the_filesystem_root_covers_every_path_under_it() {
+        for spelling in ["//", "\"//\""] {
+            let rule = format!("Read({spelling})");
+            for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+                let permissions = match ruling {
+                    "deny" => rules(&[&rule], &[], &[]),
+                    _ => rules(&[], &[&rule], &[]),
+                };
+                for path in ["/", "/etc/passwd", "/home/someone/proj/a/b"] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, path),
+                        Decision::Ruled(list),
+                        "{rule} in {ruling} did not cover {path}"
+                    );
+                }
+            }
+        }
+        // The quoted workspace root is the relative name, so it covers `a/b` and not a full path.
+        let permissions = rules(&["Read(\"./\")"], &[], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "a/b"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/etc/passwd"),
+            Decision::Unmatched
+        );
+    }
+
+    /// PERM-3: an `allow` rule naming a root grants the root and not what is under it, as one
+    /// naming any other directory does, so widening the descendant search for a rule that restricts
+    /// leaves a grant alone.
+    #[test]
+    fn an_allow_rule_naming_a_root_grants_that_place_and_not_what_is_under_it() {
+        for (rule, root, below) in [
+            ("Read(./)", "", "a/b"),
+            ("Read(.)", "", "marker.txt"),
+            ("Edit(./)", "", "a/b"),
+            ("Read(//)", "/", "/etc/passwd"),
+        ] {
+            let permissions = rules(&[], &[], &[rule]);
+            let subject = match rule.starts_with("Edit") {
+                true => Subject::Edit,
+                false => Subject::Read,
+            };
+            assert_eq!(
+                permissions.for_path(subject, root),
+                Decision::Ruled(Ruling::Allow),
+                "{rule} did not grant the place it names"
+            );
+            assert_eq!(
+                permissions.for_path(subject, below),
+                Decision::Unmatched,
+                "{rule} as an allow rule granted {below}"
+            );
+        }
+    }
+
+    /// PERM-3, PERM-7: a rule that names the workspace by its full path is also given the
+    /// workspace-relative spelling, which has no segments, and that spelling covers every file in
+    /// the workspace as the full path does.
+    #[test]
+    fn a_rule_naming_the_workspace_by_its_full_path_covers_every_file_in_it() {
+        for (list, ruling) in [(Ruling::Deny, "deny"), (Ruling::Ask, "ask")] {
+            let mut permissions = match ruling {
+                "deny" => rules(&["Read(//home/someone/proj/)"], &[], &[]),
+                _ => rules(&[], &["Read(//home/someone/proj/)"], &[]),
+            };
+            permissions.follow_links(|prefix| match prefix == "/home/someone/proj" {
+                true => Some(String::new()),
+                false => None,
+            });
+            for path in ["marker.txt", "a/b/c", "/home/someone/proj/a"] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, path),
+                    Decision::Ruled(list),
+                    "the rule in {ruling} did not cover {path}"
+                );
+            }
+        }
     }
 
     /// PERM-3: an `allow` rule keeps its reading. Widening a grant to what is under the directory
@@ -5332,6 +6054,7 @@ mod tests {
             workspace: None,
             backslash_separates: true,
             folds_case: false,
+            case_unknown: false,
         };
         let permissions = read_with(
             &anchors,

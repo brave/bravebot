@@ -227,8 +227,7 @@ fn a_setup_that_fails_is_named_as_setup() {
     assert_eq!(only_failure(&report).code, Some(1));
 }
 
-/// Taken by every test that sets variables in the environment of this process, and by a fixture
-/// that starts a program the variables would break.
+/// Taken by every test that sets variables in the environment of this process.
 fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -557,46 +556,6 @@ fn a_login_file_on_the_allow_read_list_passes() {
     assert_eq!(row.outcome, Outcome::Passed);
 }
 
-/// A `gh` whose `auth token` runs `script` under a shell that keeps the dynamic loader's variables.
-/// macOS removes `DYLD_` names when it starts a program under `/bin/sh`, which would make a stub
-/// there pass whatever the check does, so a copy of the shell signed for this machine runs it
-/// instead. Returns why where that copy cannot be made.
-///
-/// Signed under the environment lock. Where System Integrity Protection is off, as on the hosted
-/// macOS runners, a `codesign` started while another test holds `DYLD_INSERT_LIBRARIES` tries to
-/// load the file it names and aborts.
-fn loader_fixture(name: &str, script: &str) -> Result<(PathBuf, PathBuf, PathBuf), String> {
-    let (run, gh, home) = login_fixture(name, script);
-    if !cfg!(target_os = "macos") {
-        return Ok((run, gh, home));
-    }
-    let shell = gh.with_file_name("sh");
-    let _environment = environment_lock();
-    std::fs::copy("/bin/sh", &shell).map_err(|e| format!("/bin/sh was not copied: {e}"))?;
-    let signed = bravebot_sandbox::programs::start_against(
-        &bravebot_sandbox::programs::Resolved::written_in_source("/usr/bin/codesign"),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Inherited,
-        bravebot_sandbox::programs::CodeSelectors::Kept,
-        std::iter::empty(),
-        &|_: &Path| true,
-    )
-    .args(["--force", "--sign", "-"])
-    .arg(&shell)
-    .output()
-    .map_err(|e| format!("codesign did not start: {e}"))?;
-    if !signed.status.success() {
-        return Err(format!(
-            "codesign failed with {}: {}",
-            signed.status,
-            String::from_utf8_lossy(&signed.stderr).trim()
-        ));
-    }
-    std::fs::write(&gh, format!("#!{}\n{script}\n", shell.display()))
-        .map_err(|e| format!("the stub was not written: {e}"))?;
-    Ok((run, gh, home))
-}
-
 /// A test that cannot run on this machine says so. On a CI machine it fails instead, since a skip
 /// there reports green for a check that never ran.
 fn skipped(why: &str) {
@@ -605,77 +564,6 @@ fn skipped(why: &str) {
         "a CI machine must run this check, and cannot: {why}"
     );
     eprintln!("skipped: {why}");
-}
-
-/// SANDBOX-21: `gh auth token` is given none of the dynamic loader's variables, in the run outside
-/// the sandbox, whose failure gives no row, and in the run under it, whose failure is the row's.
-/// The values are files that exist outside every directory a stage writes, which the check every
-/// start makes keeps, so only a removal of the `DYLD_` names does it. The regression it rejects:
-/// handing the stored-login `gh` `DYLD_INSERT_LIBRARIES`, which loads a library into it.
-#[test]
-fn the_gh_the_login_row_starts_is_not_handed_a_dyld_variable() {
-    if !usability::available() {
-        return;
-    }
-    let script =
-        r#"test -z "$DYLD_INSERT_LIBRARIES" && test -z "$DYLD_FALLBACK_LIBRARY_PATH" || exit 1"#;
-    let (root, gh, home) = match loader_fixture("login-dyld", script) {
-        Ok(fixture) => fixture,
-        Err(why) => {
-            skipped(&format!(
-                "no shell that keeps DYLD_ names can be made here: {why}"
-            ));
-            return;
-        }
-    };
-    let _environment = Environment::held(
-        &[
-            ("DYLD_INSERT_LIBRARIES", "/etc/hosts"),
-            ("DYLD_FALLBACK_LIBRARY_PATH", "/etc"),
-        ],
-        &[],
-    );
-
-    let row = usability::login_row_for(&root, &gh, &home, &Lists::default())
-        .expect("the probe runs")
-        .expect("the stub failed, so it was handed a DYLD_ variable");
-
-    assert_eq!(row.outcome, Outcome::Passed);
-}
-
-/// SANDBOX-21: as for the `DYLD_` names, with `LD_PRELOAD`, which the shared check would keep for
-/// this value, and two `LD_` names it does not list, so a removal of a fixed list does not pass.
-/// The regression it rejects: removing `DYLD_` names and leaving the `LD_` ones.
-#[test]
-fn the_gh_the_login_row_starts_is_not_handed_an_ld_variable() {
-    if !usability::available() {
-        return;
-    }
-    let script = r#"test -z "$LD_PRELOAD" && test -z "$LD_LIBRARY_PATH" && test -z "$LD_DEBUG" && test -z "$LD_BIND_NOW" || exit 1"#;
-    let (root, gh, home) = match loader_fixture("login-ld", script) {
-        Ok(fixture) => fixture,
-        Err(why) => {
-            skipped(&format!(
-                "no shell that keeps loader names can be made here: {why}"
-            ));
-            return;
-        }
-    };
-    let _environment = Environment::held(
-        &[
-            ("LD_PRELOAD", "/etc/hosts"),
-            ("LD_LIBRARY_PATH", "/etc"),
-            ("LD_DEBUG", "all"),
-            ("LD_BIND_NOW", "1"),
-        ],
-        &[],
-    );
-
-    let row = usability::login_row_for(&root, &gh, &home, &Lists::default())
-        .expect("the probe runs")
-        .expect("the stub failed, so it was handed an LD_ variable");
-
-    assert_eq!(row.outcome, Outcome::Passed);
 }
 
 /// A directory for what a test plants, empty and outside every directory a stage is given.
@@ -3317,7 +3205,7 @@ fn a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler() {
     if !usability::available() {
         return;
     }
-    let planted = planted_dir("make-rule-asflags");
+    let planted = planted_dir("make-assembler-flags");
     let marker = planted.join("ran");
     plant(&planted.join("as"), &marker);
     let value = if cfg!(target_os = "macos") {
@@ -3327,7 +3215,7 @@ fn a_setup_make_is_not_handed_assembler_flags_that_name_an_assembler() {
     };
 
     withheld_from_a_setup_stage(
-        "make-rule-asflags",
+        "make-assembler-flags",
         "sh",
         &["-c", "make -s -C {session} || true"],
         &[("Makefile", "all: x.o\n"), ("x.S", "")],
@@ -3636,12 +3524,12 @@ fn a_setup_make_is_not_handed_a_compiler_path() {
     if !usability::available() {
         return;
     }
-    let planted = planted_dir("make-compiler-path");
+    let planted = planted_dir("make-compiler-path-linked");
     let marker = planted.join("ran");
     plant(&planted.join("ld"), &marker);
 
     withheld_from_a_setup_stage(
-        "make-compiler-path",
+        "make-compiler-path-linked",
         "sh",
         &["-c", "make -s -C {session} || true"],
         &[

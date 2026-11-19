@@ -609,6 +609,11 @@ doctor-skill-keys-unread =
         [one] { $skill } déclare { $keys }, que rien ici ne lit
        *[other] { $skill } déclare { $keys }, dont rien ici ne lit aucune
     }
+doctor-definition-keys-unread =
+    { $count ->
+        [one] { $definition } déclare { $keys }, que rien ici ne lit
+       *[other] { $definition } déclare { $keys }, dont rien ici ne lit aucune
+    }
 doctor-settings-no-variables = settings.json, ne nommant aucune variable
 doctor-settings-layer = couche
 doctor-settings-override = remplacement
@@ -2876,6 +2881,7 @@ command-sidebar = Choisir les sections que le panneau d'informations affiche
 command-diff = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-todos = Afficher le plan en entier, chaque tâche avec son état
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
+command-redraw = Redessiner tout l'écran, pour un terminal qui a été effacé ou réinitialisé
 command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-schedule = Lister, ajouter, suspendre, reprendre, supprimer ou lancer des entrées planifiées
@@ -3151,6 +3157,8 @@ session-model-pick-set-aside = { $model }, choisi avec /model, est ignoré car a
 session-permission-allow-ignored =
     la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une invite,
     le fichier d'un projet la propose donc et c'est vous qui l'accordez
+session-settings-named-withheld =
+    { $path } est nommé par --settings et se trouve dans un répertoire où une étape peut écrire, ce que cette plateforme ne peut pas lui interdire : il est donc lu comme le fichier d'une copie de travail : ses règles allow, son mode sandbox et run.network, ainsi que toute autre clé qu'un tel fichier ne peut pas définir, sont ignorés (nommez un fichier hors des répertoires de travail et ajoutés pour accorder)
 session-permission-allow-granted-before =
     la règle allow { $rule } de { $path } est accordée : vous l'avez accordée à ce projet
     auparavant ; cette réponse est conservée dans { $record }
@@ -4061,6 +4069,11 @@ delegate-writes-not-read =
         [one] { $definition } a un motif writes illisible ici, qui ne couvre donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
        *[other] { $definition } a des motifs writes illisibles ici, qui ne couvrent donc aucun fichier : { $patterns }. Son délégué ne peut écrire que ce que couvrent les autres motifs, et aucun fichier s'il n'y en a pas
     }
+delegate-restriction-not-applied =
+    { $count ->
+        [one] { $definition } déclare { $keys }, que rien ici n'applique : son délégué n'est donc pas restreint par cette clé. Une ligne tools nomme les outils que le délégué peut appeler, et son kind décide s'il peut lancer des programmes ou écrire des fichiers
+       *[other] { $definition } déclare { $keys }, dont rien ici n'applique aucune : son délégué n'est donc pas restreint par ces clés. Une ligne tools nomme les outils que le délégué peut appeler, et son kind décide s'il peut lancer des programmes ou écrire des fichiers
+    }
 delegate-checkout-reader =
     { $definition } est chargé sans copie de travail à part : c'est un reader, et un reader n'en reçoit jamais
 delegate-memory-in-checkout =
@@ -4759,6 +4772,62 @@ ui-usage-ping-notice-more = Plus…
 ui-usage-ping-notice-less = Moins
 ui-usage-ping-notice-settings = Ouvrir les réglages
 ui-usage-ping-notice-dismiss = Fermer l'avis sur le signal d'utilisation
+ui-folders-heading = Dossiers
+ui-folders-about = Dossiers ouverts à côté du projet dans cette conversation. L'agent peut lire et modifier leurs fichiers jusqu'à ce que vous les fermiez.
+ui-folders-empty = Seul le projet est ouvert.
+ui-folders-add = Ajouter un dossier…
+ui-folders-close = Fermer { $name }
+ui-folders-close-explained = Fermer { $name } · L'agent ne peut plus y accéder
+ui-folders-wait = Attendez la fin du tour
+ui-folders-not-added = Le dossier n'a pas pu être ajouté.
+ui-folders-not-closed = Le dossier n'a pas pu être fermé.
+ui-folders-added = Dossier ajouté
+ui-folders-closed = Dossier fermé
+ui-project-rules-title = Règles du projet
+ui-project-rules-subtitle = Accorder les règles d'autorisation que ce projet propose ?
+ui-project-rules-about = Les fichiers de réglages de ce projet proposent ces règles d'autorisation. Une règle accordée répond à sa question à votre place : l'agent fait ce qu'elle couvre sans demander.
+ui-project-rules-list = Règles proposées
+ui-project-rules-from = de { $file }
+ui-project-rules-granted-before = { $count ->
+    [one] { $count } règle de ces fichiers a déjà été accordée et le reste :
+   *[other] { $count } règles de ces fichiers ont déjà été accordées et le restent :
+    }
+ui-project-rules-keeping = L'accord est conservé dans { $path } : les prochaines conversations ici ne redemandent pas ces règles. Une règle modifiée depuis est redemandée.
+ui-project-rules-this-chat = L'accord ne vaut que pour cette conversation et n'est pas écrit.
+ui-project-rules-decline-about = Continuer à demander : chaque action que couvrent ces règles vous est d'abord demandée, comme sans elles.
+ui-project-rules-decline = Continuer à demander
+ui-project-rules-grant = { $count ->
+    [one] Accorder { $count } règle
+   *[other] Accorder { $count } règles
+    }
+ui-project-rules-not-kept = Accordé pour cette conversation seulement : l'accord n'a pas pu être écrit dans { $path }, la prochaine conversation ici redemandera.
+ui-project-folder-title = Ouvrir un dossier
+ui-project-folder-subtitle = Ouvrir ce dossier à côté du projet ?
+ui-project-folder-named = Les réglages de ce projet le nomment
+ui-project-folder-open-about = Ouvrez-le, et l'agent peut lire et modifier ses fichiers dans cette conversation, comme avec Ajouter un dossier. Il figure sous Dossiers, où vous pouvez le fermer.
+ui-project-folder-decline-about = Ne l'ouvrez pas, et l'agent ne peut pas l'atteindre depuis cette conversation.
+ui-project-folder-remaining = { $count ->
+    [one] Encore { $count } dossier à demander après celui-ci.
+   *[other] Encore { $count } dossiers à demander après celui-ci.
+    }
+ui-project-folder-open = Ouvrir le dossier
+ui-project-folder-decline = Ne pas ouvrir
+ui-project-folder-not-opened = { $path } n'a pas été ouvert : { $problem }
+ui-project-questions-waiting-trust = Répondez à la question de confiance avant d'envoyer.
+ui-project-questions-waiting-rules = Répondez à la question sur les règles de ce projet avant d'envoyer.
+ui-project-questions-waiting-folder = Répondez à la question sur un dossier que nomme ce projet avant d'envoyer.
+ui-project-questions-stale = Cette question avait déjà reçu une réponse, la vôtre n'a donc pas été utilisée. Ce qui attend maintenant est affiché.
+ui-rules-note-granted-summary = { $count ->
+    [one] { $count } règle du projet accordée.
+   *[other] { $count } règles du projet accordées.
+    }
+ui-rules-note-granted = Ces règles d'autorisation que proposent les réglages du projet sont accordées, et donc en vigueur :
+ui-rules-note-granted-before = accordée auparavant
+ui-rules-note-granted-record = L'accord est conservé dans { $path } : les prochaines conversations ici ne les redemandent pas. Une règle que le projet modifie est redemandée.
+ui-rules-note-granted-this-chat = Elles ne sont accordées que pour cette conversation.
+ui-rules-note-proposed = Ces règles d'autorisation que proposent les réglages du projet n'ont pas été accordées. Une règle d'autorisation répond à une question à votre place : seule une règle que vous accordez, ou une de votre propre fichier de réglages, est en vigueur. On vous demandera encore :
+ui-rules-note-directories = Un fichier de réglages nomme ces dossiers, et ils ne sont pas ouverts :
+ui-rules-note-refused = Ces dossiers qu'un fichier de réglages nomme ne peuvent pas être ouverts :
 gcloud-not-installed = La CLI Google Cloud (`gcloud`) est introuvable. Installez-la et lancez `gcloud auth application-default login`, ou définissez GOOGLE_API_KEY pour utiliser Google Vertex AI avec une clé.
 gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail }). Lancez `gcloud auth application-default login`.
 gcloud-no-token = la réponse n'était pas un jeton

@@ -4150,6 +4150,13 @@ def test_labels():
             f"severity/{impact} is the only scale a run judges",
             not any(one.startswith(("importance/", "urgency/", "size/")) for one in labels),
         )
+    for area in ("sandbox", "mcp", "browser", "connectors", "background", "plugins", "desktop", "acp", "remote", "release"):
+        labels = drafts.label_set({"kind": "violation", "impact": "low", "area": area})
+        check(f"area/{area} is a label a finding can carry", f"area/{area}" in labels, str(labels))
+        check(
+            f"a finding in {area} is titled by it rather than by its lane",
+            drafts.subsystem({"area": area, "lane": "tools"}) == area,
+        )
     check(
         "an area the tracker does not have is left off rather than invented",
         drafts.label_set({"kind": "violation", "impact": "low", "area": "kernel"})

@@ -375,6 +375,13 @@ pub struct Managed {
     /// That is a value that is not a block, or a block whose `enabled` is not a boolean. A block
     /// with no `enabled` is not this: it says nothing about the switch.
     retrieval_unreadable: bool,
+    /// The keys the file wrote twice in one object, by path, for `doctor` to report (BACKEND-36).
+    ///
+    /// The file is read as [`crate::settings`] reads a repeat, so a second `models` block cannot
+    /// erase what the first refused. Reported for the reason `narrowing_unreadable` is: an
+    /// administrator who pasted two snippets into one file is the person least likely to be told by
+    /// the machine it binds. Paths only, never values.
+    repeated: Vec<String>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -441,6 +448,7 @@ impl Managed {
             hosts_unreadable.extend(misshapen.into_iter().map(|(_, key)| key));
         }
         Self {
+            repeated: root.repeated().to_vec(),
             narrowing,
             narrowing_unreadable,
             start_in_auto_named: layer.start_in_auto(),
@@ -711,6 +719,12 @@ impl Managed {
     /// The file, where there is one there at all, read or not.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// The keys the file wrote twice in one object, by path such as `models` or `permissions.deny`
+    /// (BACKEND-36), for `doctor` to name.
+    pub fn repeated_keys(&self) -> impl Iterator<Item = &str> {
+        self.repeated.iter().map(String::as_str)
     }
 
     /// Whether anything is pinned at all.
@@ -1871,5 +1885,181 @@ mod tests {
         );
         assert!(managed.gateways().is_none());
         assert_eq!(managed.get(env_var::BEDROCK_OPUS_MODEL), None);
+    }
+
+    /// Two snippets pasted into one file give `models` twice. The block written first keeps its deny
+    /// whichever order they come in, the repeat is named for `doctor`, and the list is still pinned.
+    /// The fault it rejects is serde_json's last-key-wins, under which the later `{}` erased the
+    /// refusal and nothing said so (BACKEND-36).
+    #[test]
+    fn a_models_block_written_twice_keeps_the_deny_of_either_and_is_reported() {
+        for (name, text) in [
+            (
+                "managed-models-repeat-deny-first",
+                r#"{"models":{"deny":["x"]},"models":{}}"#,
+            ),
+            (
+                "managed-models-repeat-deny-last",
+                r#"{"models":{},"models":{"deny":["x"]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert_eq!(
+                model_refusal(&managed, "x"),
+                Some(ModelRefusal::Denied),
+                "{text}"
+            );
+            assert_eq!(model_refusal(&managed, "y"), None, "{text}");
+            assert!(managed.pinned().any(|name| name == MODEL_DENY), "{text}");
+            assert_eq!(managed.repeated_keys().collect::<Vec<_>>(), ["models"]);
+            assert!(!managed.is_empty(), "{text}");
+        }
+    }
+
+    /// A repeated `deny` list keeps both lists, earlier entries first, so no refusal written in
+    /// either is lost. Nested at a depth below the repeated block, which is reported by its path.
+    #[test]
+    fn a_deny_list_written_twice_keeps_every_entry_of_both() {
+        let managed = scratch(
+            "managed-models-deny-twice",
+            r#"{"models":{"deny":["x"],"deny":["y"]}}"#,
+        );
+        assert_eq!(model_refusal(&managed, "x"), Some(ModelRefusal::Denied));
+        assert_eq!(model_refusal(&managed, "y"), Some(ModelRefusal::Denied));
+        assert_eq!(model_refusal(&managed, "z"), None);
+        assert_eq!(managed.repeated_keys().collect::<Vec<_>>(), ["models.deny"]);
+    }
+
+    /// The `permissions` repeat from the issue: an empty second `deny` must not deny nothing. The
+    /// rule stays pinned and the repeat is named by its path.
+    #[test]
+    fn a_permissions_deny_list_written_twice_keeps_the_rule_pinned() {
+        let managed = scratch(
+            "managed-permissions-deny-twice",
+            r#"{"permissions":{"deny":["Read(.env)"],"deny":[]}}"#,
+        );
+        assert_eq!(managed.rules().deny, ["Read(.env)"]);
+        assert!(managed.pinned().any(|name| name == RULES_DENY));
+        assert_eq!(
+            managed.repeated_keys().collect::<Vec<_>>(),
+            ["permissions.deny"]
+        );
+        let ask = scratch(
+            "managed-permissions-ask-twice",
+            r#"{"permissions":{"ask":["Edit(x)"]},"permissions":{"ask":["Bash(rm)"]}}"#,
+        );
+        assert_eq!(ask.rules().ask, ["Edit(x)", "Bash(rm)"]);
+        assert_eq!(
+            ask.repeated_keys().collect::<Vec<_>>(),
+            ["permissions", "permissions.ask"]
+        );
+    }
+
+    /// An allow list that restricts, written twice, allows only what both name. The last list alone
+    /// would allow `b` after the first wrote `["a"]`, and the union would allow it after the first
+    /// wrote `["a", "b"]` and the second `["a"]`, so both orders are held.
+    #[test]
+    fn a_model_allow_list_written_twice_allows_only_what_both_name() {
+        for (name, text) in [
+            (
+                "managed-models-allow-twice-a",
+                r#"{"models":{"allow":["a"],"allow":["a","b"]}}"#,
+            ),
+            (
+                "managed-models-allow-twice-b",
+                r#"{"models":{"allow":["a","b"],"allow":["a"]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert_eq!(model_refusal(&managed, "a"), None, "{text}");
+            assert_eq!(
+                model_refusal(&managed, "b"),
+                Some(ModelRefusal::NotAllowed),
+                "{text}"
+            );
+        }
+    }
+
+    /// The same for `mcp.allow`, which is a restriction on what may start. Both orders are held:
+    /// the last list alone passes the one where the narrower list comes last and fails the other.
+    #[test]
+    fn a_server_allow_list_written_twice_allows_only_what_both_name() {
+        for (name, text) in [
+            (
+                "managed-mcp-allow-twice-wide-first",
+                r#"{"mcp":{"allow":[{"host":"a.example"},{"host":"b.example"}],"allow":[{"host":"a.example"}]}}"#,
+            ),
+            (
+                "managed-mcp-allow-twice-narrow-first",
+                r#"{"mcp":{"allow":[{"host":"a.example"}],"allow":[{"host":"a.example"},{"host":"b.example"}]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert!(
+                managed
+                    .refuses(Server::Remote("https://a.example/mcp"))
+                    .is_none(),
+                "{text}"
+            );
+            assert!(
+                matches!(
+                    managed.refuses(Server::Remote("https://b.example/mcp")),
+                    Some((_, Refusal::NotAllowed))
+                ),
+                "{text}"
+            );
+        }
+    }
+
+    /// A repeated `mcp.deny` keeps both lists, so a host named in the first is still refused.
+    #[test]
+    fn a_server_deny_list_written_twice_refuses_what_either_names() {
+        let managed = scratch(
+            "managed-mcp-deny-twice",
+            r#"{"mcp":{"deny":[{"host":"a.example"}],"deny":[{"host":"b.example"}]}}"#,
+        );
+        for host in ["a.example", "b.example"] {
+            assert!(
+                matches!(
+                    managed.refuses(Server::Remote(&format!("https://{host}/mcp"))),
+                    Some((_, Refusal::Denied(_)))
+                ),
+                "{host}"
+            );
+        }
+    }
+
+    /// A repeat spelled wrongly cannot take away what the other wrote: a deny list beside a value
+    /// that is not a list stays, whichever comes last.
+    #[test]
+    fn a_deny_list_repeated_as_something_else_is_not_lost() {
+        for (name, text) in [
+            (
+                "managed-models-deny-null-last",
+                r#"{"models":{"deny":["x"],"deny":null}}"#,
+            ),
+            (
+                "managed-models-deny-null-first",
+                r#"{"models":{"deny":null,"deny":["x"]}}"#,
+            ),
+        ] {
+            let managed = scratch(name, text);
+            assert_eq!(
+                model_refusal(&managed, "x"),
+                Some(ModelRefusal::Denied),
+                "{text}"
+            );
+        }
+    }
+
+    /// A file that writes each key once reports no repeat, so the report names a repeat and not a
+    /// pin.
+    #[test]
+    fn a_file_that_writes_each_key_once_reports_no_repeat() {
+        let managed = scratch(
+            "managed-no-repeat",
+            r#"{"models":{"deny":["x"]},"mcp":{"deny":[{"host":"a.example"}]}}"#,
+        );
+        assert_eq!(managed.repeated_keys().count(), 0);
     }
 }

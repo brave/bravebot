@@ -89,6 +89,7 @@ pub(super) fn add_directory(
     session.adopt_workspace(workspace);
     match outcome {
         Ok(added) => {
+            bravebot_config::add_writable_directory(added.clone());
             trust.trust(&bravebot_agent::workspace::key_of(&added));
             session.note_done(t!(
                 session_directory_added,
@@ -134,6 +135,7 @@ pub(super) fn close_directory(
     session.adopt_workspace(workspace);
     match outcome {
         Ok(closed) => {
+            bravebot_config::close_writable_directory(&closed);
             let directory = closed.display().to_string();
             // Where no trusted rule went, the directory answers as it did before the close, so
             // saying trust was withdrawn would tell the person something that did not happen.
@@ -226,7 +228,7 @@ pub(super) fn change_directory(
     *exposed = bravebot_core::credentials::Exposed::new();
     *trust = trust.rebased(
         std::path::Path::new(&bravebot_agent::workspace::key_of(&moved.root)),
-        bravebot_agent::workspace::volume_folds_case(&moved.root),
+        bravebot_agent::workspace::volume_case_folding(&moved.root),
     );
     trust.trust(".");
     // The servers go, and LSP-5 is why: what a person approved was a server reading *that* tree,
@@ -261,10 +263,7 @@ pub(super) fn change_directory(
     session.end_watches_left_behind(&moved.root);
     // Asked, since the person who typed the path is here to answer, unless the mode in force answers
     // every question. Never resumed: no record holds an answer for a directory the session was not in.
-    let whence = match crate::trust_prompt::answered_by(session.permission_mode(), &moved.root) {
-        Some(_) => Whence::Unasked,
-        None => Whence::Asked,
-    };
+    let whence = Whence::after_a_move(session.permission_mode());
     if rules.read_for(session, &moved.root, whence, id, ask) {
         Changed::Moved
     } else {
@@ -300,44 +299,12 @@ pub(super) fn named_directory(
     typed: &str,
     home: Option<&std::path::Path>,
 ) -> Result<String, bravebot_agent::WorkspaceError> {
-    let expanded = match bravebot_agent::workspace::expand_home(typed, home) {
-        Ok(Some(path)) => path.to_string_lossy().into_owned(),
-        // No home to expand `~` against is not a refusal here, the way it is for a file tool's own
-        // read of `~` (TRUST-9): the name is read as it was typed, as a name under the working
-        // directory, and resolved exactly as any other.
-        Ok(None) | Err(_) => typed.to_string(),
-    };
-    bravebot_agent::workspace::named_directory(root, &expanded)
+    bravebot_agent::opening::named_directory(root, typed, home)
 }
 
-/// What becomes of the directories a settings file named.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum Named {
-    /// Opened with nothing put to anybody.
-    Opening(Vec<String>),
-    /// Put to the person, one question per directory.
-    Asking(Vec<String>),
-}
-
-/// What becomes of the directories a settings file named, for a session that opened this way.
-///
-/// A file names them and a person grants them, so whoever answered for the working directory
-/// answers for these: a person who was asked about it is asked about each of these, and the mode
-/// that answers every question answers these too, on the terms it answers that one.
-///
-/// A resumed session opens none of them. Nothing is put to it, and the directories it has open are
-/// the ones its own record reopened, so a name in a file that has been edited since is not a grant
-/// that session's user made.
-pub(super) fn named_directories(whence: Whence, named: &[String]) -> Named {
-    match whence {
-        Whence::Asked => Named::Asking(named.to_vec()),
-        Whence::Unasked => Named::Opening(named.to_vec()),
-        // Nothing is resolved for this one either: a name is a path on the filesystem, and
-        // reading the disk to decide about directories this session will not open is work done
-        // for a question nobody is being asked.
-        Whence::Resumed => Named::Opening(Vec::new()),
-    }
-}
+/// What becomes of the directories a settings file named, for a session that opened this way
+/// ([`bravebot_agent::opening::named_directories`]).
+pub(super) use bravebot_agent::opening::{Named, named_directories};
 
 /// The directories the names in a settings file would open, in the order they were named.
 ///
@@ -351,29 +318,19 @@ pub(super) fn named_to_open(
     workspace: &Workspace,
     named: &[String],
 ) -> Vec<String> {
-    let mut paths: Vec<String> = Vec::new();
-    for directory in named {
-        match named_directory(
-            workspace.root(),
-            directory,
-            bravebot_agent::home::profile().as_deref(),
-        )
-        .and_then(|candidate| workspace.resolve_directory(&candidate))
-        {
-            Ok(path) => {
-                let shown = path.display().to_string();
-                if !paths.contains(&shown) {
-                    paths.push(shown);
-                }
-            }
-            Err(problem) => session.note_refused(t!(
-                session_directory_not_added,
-                directory = directory,
-                problem = problem
-            )),
-        }
+    let resolved = bravebot_agent::opening::named_to_open(
+        workspace,
+        named,
+        bravebot_agent::home::profile().as_deref(),
+    );
+    for (directory, problem) in resolved.refused {
+        session.note_refused(t!(
+            session_directory_not_added,
+            directory = directory,
+            problem = problem
+        ));
     }
-    paths
+    resolved.paths
 }
 
 /// Open and vouch for each directory that was accepted, and nothing else.

@@ -46,6 +46,68 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// What is known about whether the volume a map's working directory is on holds two spellings that
+/// differ only in case as one file (TRUST-2).
+///
+/// A rule that withholds trust reaches the other case wherever the volume might fold, since a miss
+/// reads a refused file as trusted, and a rule that grants reaches it only where the volume is known
+/// to, since a fold the volume does not have widens a trust to a different file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaseFolding {
+    /// The volume holds the spellings apart. What a map made without an answer assumes.
+    #[default]
+    Keeps,
+    /// The volume holds them as one file.
+    Folds,
+    /// The volume could not be asked: an error, a mount point, a name with no letter anywhere on the
+    /// path, a host with no way of telling files apart.
+    Unknown,
+}
+
+impl CaseFolding {
+    /// The answer a probe gave, where `None` is a probe that could not tell.
+    #[must_use]
+    pub fn from_answer(answer: Option<bool>) -> Self {
+        match answer {
+            Some(true) => Self::Folds,
+            Some(false) => Self::Keeps,
+            None => Self::Unknown,
+        }
+    }
+
+    /// Whether the volume is known to hold the spellings as one file, which is what a trust or an
+    /// allow rule is compared by.
+    #[must_use]
+    pub fn folds(self) -> bool {
+        self == Self::Folds
+    }
+
+    /// Whether the volume may hold the spellings as one file, which is what a rule that withholds
+    /// trust, a reservation of a path for a writer and a record of an untrusted file are compared by.
+    /// Reaching a spelling the volume holds apart costs a question and never a grant.
+    #[must_use]
+    pub fn restricts(self) -> bool {
+        self != Self::Keeps
+    }
+
+    /// The answer a comparison that can only narrow reads the volume by.
+    fn narrowing(self) -> Self {
+        match self.restricts() {
+            true => Self::Folds,
+            false => Self::Keeps,
+        }
+    }
+}
+
+impl From<bool> for CaseFolding {
+    fn from(folds: bool) -> Self {
+        match folds {
+            true => Self::Folds,
+            false => Self::Keeps,
+        }
+    }
+}
+
 /// A user's decisions about which paths are trustworthy.
 ///
 /// Empty of rules when it is made, which means nothing is trusted and every write is shown to a
@@ -66,9 +128,10 @@ pub struct TrustStore {
     rules: BTreeMap<String, Option<Integrity>>,
     /// Whether two spellings differing only in case are one path, because the volume the working
     /// directory is on answers to either. Told by the caller, which has probed the volume, since
-    /// this crate performs no I/O. `false` unless the caller says otherwise, so a map made without
-    /// the answer compares bytes and never extends a rule to a spelling it was not written about.
-    folds_case: bool,
+    /// this crate performs no I/O. A map made without the answer compares bytes and never extends a
+    /// rule to a spelling it was not written about. Where the caller could not ask, a rule that
+    /// withholds trust still reaches every spelling and a trust compares bytes.
+    case: CaseFolding,
     /// The working directory the person's yes said confined `run` lines may start in without being
     /// asked ([RUN-5]), or `None` where no yes did.
     ///
@@ -95,9 +158,21 @@ impl TrustStore {
         Self {
             root: normalise(&root.as_ref().to_string_lossy()),
             rules: BTreeMap::new(),
-            folds_case: false,
+            case: CaseFolding::Keeps,
             confined_lines_in: None,
         }
+    }
+
+    /// This map, reading the volume as `case` says: held apart, folded, or not asked.
+    ///
+    /// For a caller whose probe of the volume can fail, which passes what [`CaseFolding::from_answer`]
+    /// makes of it. Where the volume could not be asked, a refusal and a reservation reach every
+    /// spelling and a trust reaches the spelling it was written about, so a failed probe never lets
+    /// a distrusted file read as trusted under another case and never widens a trust.
+    #[must_use]
+    pub fn with_case_folding(mut self, case: CaseFolding) -> Self {
+        self.case = case;
+        self
     }
 
     /// This map, comparing names with case folded where `folds` is true.
@@ -108,13 +183,19 @@ impl TrustStore {
     /// two files, and folding would let a rule about one cover the other.
     #[must_use]
     pub fn folding_case(mut self, folds: bool) -> Self {
-        self.folds_case = folds;
+        self.case = folds.into();
         self
     }
 
-    /// Whether names are compared with case folded.
+    /// Whether the volume is known to fold case, which is what a trust is compared by.
     pub fn folds_case(&self) -> bool {
-        self.folds_case
+        self.case.folds()
+    }
+
+    /// What the map knows of the volume's case folding. A caller recording or reserving a file
+    /// asks [`CaseFolding::restricts`] of it and not [`TrustStore::folds_case`].
+    pub fn case_folding(&self) -> CaseFolding {
+        self.case
     }
 
     /// The key `path` is held under: the full path it names.
@@ -204,16 +285,16 @@ impl TrustStore {
         // (`\u{df}` and `\u{1e9e}` are one name to the first and two to the second). Copying a trust
         // from a name only the full fold joins would trust a place under `to` that nobody vouched
         // for.
-        let folds = self.folds_case;
+        let (grants, withholds) = (self.case.folds(), self.case.restricts());
         let found: Vec<(String, Option<Integrity>)> = self
             .rules
             .iter()
             .filter_map(|(key, decision)| {
                 let covered = match decision {
-                    Some(Integrity::Trusted) => covers_by(&from, key, folds, fold_simple),
+                    Some(Integrity::Trusted) => covers_by(&from, key, grants, fold_simple),
                     _ => {
-                        covers_by(&from, key, folds, fold_case)
-                            || covers_by(&from, key, folds, fold_simple)
+                        covers_by(&from, key, withholds, fold_case)
+                            || covers_by(&from, key, withholds, fold_simple)
                     }
                 };
                 if !covered {
@@ -251,7 +332,7 @@ impl TrustStore {
     /// Whether any rule was kept.
     pub fn withdraw_beneath(&mut self, under: &str) -> bool {
         let under = self.key(under);
-        let folds = self.folds_case;
+        let folds = self.case.restricts();
         let beneath =
             |key: &str| covers(&under, key, folds) || covers_by(&under, key, folds, fold_simple);
         self.rules
@@ -274,7 +355,7 @@ impl TrustStore {
     /// `path` answers as trusted by no rule afterwards.
     pub fn withdraw_trust(&mut self, path: &str) -> bool {
         let key = self.key(path);
-        let name = Name::new(&key, self.folds_case);
+        let name = Name::new(&key, self.case.narrowing());
         let before = self.rules.len();
         self.rules.retain(|rule, decision| {
             let here = name.is(rule) || name.is_equivalent(rule);
@@ -320,7 +401,7 @@ impl TrustStore {
         Self {
             root: self.root.clone(),
             rules,
-            folds_case: self.folds_case,
+            case: self.case,
             confined_lines_in,
         }
     }
@@ -393,7 +474,7 @@ impl TrustStore {
     ///
     /// The scan costs one pass over the rules a person's decisions have written.
     fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
-        let name = Name::new(key, self.folds_case);
+        let name = Name::new(key, self.case);
         self.rules
             .iter()
             .filter(|(rule, decision)| {
@@ -430,14 +511,16 @@ impl TrustStore {
             .integrity_of_or(path, Some(assumed))
             .unwrap_or(Integrity::Untrusted);
         let path = self.key(path);
-        let beneath = canonical_form(&path, self.folds_case);
+        // The meet only narrows, so a volume that could not be asked is read as one that folds.
+        let folds = self.case.restricts();
+        let beneath = canonical_form(&path, folds);
         for (prefix, integrity) in self.keyed() {
             // A trust under an equivalent spelling is counted as well, which changes nothing since
             // it is the top of the meet. The case this exists for is a refusal beneath the
             // directory that was recorded under another form of its name.
-            if covers(&path, prefix, self.folds_case)
-                || covers_by(&path, prefix, self.folds_case, fold_simple)
-                || covers_spelled(&beneath, &canonical_form(prefix, self.folds_case))
+            if covers(&path, prefix, folds)
+                || covers_by(&path, prefix, folds, fold_simple)
+                || covers_spelled(&beneath, &canonical_form(prefix, folds))
             {
                 answer = answer.meet(integrity.unwrap_or(Integrity::Untrusted));
             }
@@ -494,11 +577,11 @@ impl TrustStore {
     /// second spelling of one directory would read the rules written under the first as though
     /// they were about somewhere else. `folds_case` is the answer for the volume `to` is on, which
     /// may not be the one the map came from.
-    pub fn rebased(&self, to: &Path, folds_case: bool) -> Self {
+    pub fn rebased(&self, to: &Path, case: impl Into<CaseFolding>) -> Self {
         Self {
             root: normalise(&to.to_string_lossy()),
             rules: self.rules.clone(),
-            folds_case,
+            case: case.into(),
             confined_lines_in: self.confined_lines_in.clone(),
         }
     }
@@ -683,22 +766,31 @@ pub(crate) fn canonical_form(key: &str, folds_case: bool) -> Cow<'_, str> {
     }
 }
 
+/// [`canonical_form`] for a caller outside this crate that compares one name of a path with another
+/// the way a refusal does: two names are one when their keys are equal. Costs no allocation for an
+/// ASCII name on a volume that does not fold case.
+#[must_use]
+pub fn canonical_key(key: &str, folds_case: bool) -> Cow<'_, str> {
+    canonical_form(key, folds_case)
+}
+
 /// A name, held in the forms it is compared in, for a lookup that tests it against many rules.
 struct Name<'a> {
     key: &'a str,
-    /// The key with case folded one letter to one letter, where the volume folds it.
+    /// The key with case folded one letter to one letter, where the volume is known to fold it.
     folded: Option<String>,
+    /// The key as a rule that withholds trust reads it, folded where the volume might.
     canonical: Cow<'a, str>,
-    folds_case: bool,
+    case: CaseFolding,
 }
 
 impl<'a> Name<'a> {
-    fn new(key: &'a str, folds_case: bool) -> Self {
+    fn new(key: &'a str, case: CaseFolding) -> Self {
         Self {
             key,
-            folded: folds_case.then(|| fold_simple(key)),
-            canonical: canonical_form(key, folds_case),
-            folds_case,
+            folded: case.folds().then(|| fold_simple(key)),
+            canonical: canonical_form(key, case.restricts()),
+            case,
         }
     }
 
@@ -720,10 +812,12 @@ impl<'a> Name<'a> {
     /// pair is not compared again: on a volume that folds case it would fold the rule a second time
     /// for every rule at every level of a lookup.
     fn is_equivalent(&self, rule: &str) -> bool {
-        if self.key.is_ascii() && rule.is_ascii() {
+        // Where the volume could not be asked, [`Name::is`] compares bytes, so two ASCII names that
+        // differ only in case are still to be joined here.
+        if self.case != CaseFolding::Unknown && self.key.is_ascii() && rule.is_ascii() {
             return false;
         }
-        canonical_form(rule, self.folds_case) == self.canonical
+        canonical_form(rule, self.case.restricts()) == self.canonical
     }
 }
 
@@ -836,7 +930,7 @@ mod tests {
                 let expected = store
                     .rules
                     .iter()
-                    .filter(|(prefix, _)| covers(prefix, path, store.folds_case))
+                    .filter(|(prefix, _)| covers(prefix, path, store.case.folds()))
                     .max_by_key(|(prefix, _)| {
                         if prefix.is_empty() || *prefix == "/" {
                             0
@@ -2334,6 +2428,102 @@ mod tests {
         assert_eq!(
             exact.integrity_of("/Users/x/Notes/a.md"),
             Some(Integrity::Trusted)
+        );
+    }
+
+    /// TRUST-2: where the volume could not be asked, a refusal reaches every case spelling and a
+    /// trust reaches the spelling it was written about, so a failed probe neither reads a distrusted
+    /// file as trusted under another case nor widens a trust to a file the volume may hold apart.
+    /// The two answers the volume can give are written beside it, so the unknown one is shown to be
+    /// neither of them.
+    #[test]
+    fn a_volume_that_could_not_be_asked_reads_a_refusal_in_every_case_and_a_trust_in_one() {
+        // (what the map was told, whether `.ENV` is read as the file distrusted as `.env`,
+        // whether `docs` is read as the directory trusted as `Docs`)
+        let layouts = [
+            (CaseFolding::Keeps, None, None),
+            (
+                CaseFolding::Folds,
+                Some(Integrity::Untrusted),
+                Some(Integrity::Trusted),
+            ),
+            (CaseFolding::Unknown, Some(Integrity::Untrusted), None),
+        ];
+        for (case, refused, trusted) in layouts {
+            let mut map = TrustStore::new("/work").with_case_folding(case);
+            map.distrust(".env");
+            map.trust("Docs");
+            assert_eq!(map.integrity_of(".env"), Some(Integrity::Untrusted));
+            assert_eq!(map.integrity_of(".ENV"), refused, "{case:?}: .ENV");
+            assert_eq!(
+                map.integrity_of("docs/a.md"),
+                trusted,
+                "{case:?}: docs/a.md"
+            );
+            assert_eq!(
+                map.integrity_of("Docs/a.md"),
+                Some(Integrity::Trusted),
+                "{case:?}: Docs/a.md"
+            );
+        }
+    }
+
+    /// An undecided boundary withholds trust as a distrust does, so where the volume might fold it
+    /// reaches the other case, and a trusted project above it does not take over for that spelling.
+    #[test]
+    fn an_undecided_boundary_reaches_the_other_case_where_the_volume_might_fold() {
+        for (case, under_other_case) in [
+            (CaseFolding::Keeps, Some(Integrity::Trusted)),
+            (CaseFolding::Folds, None),
+            (CaseFolding::Unknown, None),
+        ] {
+            let mut map = TrustStore::new("/work").with_case_folding(case);
+            map.trust(".");
+            map.undecide("Notes/inbox");
+            assert_eq!(map.integrity_of("Notes/inbox/a.md"), None, "{case:?}");
+            assert_eq!(
+                map.integrity_of("NOTES/INBOX/a.md"),
+                under_other_case,
+                "{case:?}: the boundary under another case"
+            );
+        }
+    }
+
+    /// The answer a probe gives maps to the reading the map takes: held apart is bytes, folded is
+    /// folded, and a probe that could not tell is the reading that only refuses.
+    #[test]
+    fn a_probe_answer_is_read_as_the_case_folding_it_says() {
+        assert_eq!(CaseFolding::from_answer(Some(false)), CaseFolding::Keeps);
+        assert_eq!(CaseFolding::from_answer(Some(true)), CaseFolding::Folds);
+        assert_eq!(CaseFolding::from_answer(None), CaseFolding::Unknown);
+        assert_eq!(CaseFolding::default(), CaseFolding::Keeps);
+        for (case, folds, restricts) in [
+            (CaseFolding::Keeps, false, false),
+            (CaseFolding::Folds, true, true),
+            (CaseFolding::Unknown, false, true),
+        ] {
+            assert_eq!(case.folds(), folds, "{case:?}");
+            assert_eq!(case.restricts(), restricts, "{case:?}");
+            assert_eq!(
+                TrustStore::new("/work")
+                    .with_case_folding(case)
+                    .folds_case(),
+                folds
+            );
+        }
+    }
+
+    /// A map moved to another directory takes that directory's answer, including that it could not
+    /// be asked.
+    #[test]
+    fn a_map_moved_takes_a_volume_that_could_not_be_asked() {
+        let mut map = TrustStore::new("/work").folding_case(true);
+        map.distrust("secret.md");
+        let moved = map.rebased(Path::new("/other"), CaseFolding::Unknown);
+        assert_eq!(moved.case_folding(), CaseFolding::Unknown);
+        assert_eq!(
+            moved.integrity_of("/work/SECRET.md"),
+            Some(Integrity::Untrusted)
         );
     }
 }

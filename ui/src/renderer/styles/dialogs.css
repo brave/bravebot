@@ -84,7 +84,7 @@
 
 /* ---------------------------------------------------------------- trust */
 
-.trust .path {
+.project-question .path, .trust .path {
   display: block;
   margin-bottom: var(--leo-spacing-xl);
   padding: var(--leo-spacing-m) var(--leo-spacing-l);
@@ -112,8 +112,38 @@
 .trust-options leo-icon { flex: none; margin-top: var(--leo-spacing-xs); color: var(--ink-tertiary); --leo-icon-size: var(--icon-control); }
 .trust-options p { margin: 0; font: var(--type-meta); }
 .trust-options strong { color: var(--ink-primary); font-weight: 600; }
-.trust .aside { font: var(--type-caption); color: var(--ink-tertiary); }
-.trust .aside code { font: var(--type-caption); font-family: var(--font-mono); word-break: break-all; }
+.trust .aside, .project-question .aside { font: var(--type-caption); color: var(--ink-tertiary); }
+.trust .aside code, .project-question .aside code { font: var(--type-caption); font-family: var(--font-mono); word-break: break-all; }
+
+/* ---------------------------------------------------------------- the questions after trust */
+
+.project-question-about { margin: 0 0 var(--leo-spacing-l); font: var(--type-meta); color: var(--ink-secondary); }
+/* Every proposed rule, however many: the list scrolls inside its own box, and the grant waits
+   until each row has been in view in it. */
+.project-rules {
+  margin: 0 0 var(--leo-spacing-xl);
+  padding: 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-field);
+  background: var(--surface-sunken);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.project-rules-file + .project-rules-file { border-top: 1px solid var(--border-hairline); }
+.modal .project-rules h4.project-rule-file { margin: 0; padding: var(--leo-spacing-m) var(--leo-spacing-l) var(--leo-spacing-xs); font: var(--type-caption-strong); color: var(--ink-secondary); }
+.project-rules ul { list-style: none; margin: 0; padding: 0 0 var(--leo-spacing-s); }
+.project-rules li { padding: var(--leo-spacing-xs) var(--leo-spacing-l); min-width: 0; }
+.project-rules code { font: var(--type-code); color: var(--ink-primary); overflow-wrap: anywhere; }
+.project-rule-file { font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+/* The count of rows still to read gives way to the answers, so both stay on one line. */
+.project-question .trust-answers { flex-wrap: nowrap; }
+.project-question .trust-answers .shown-left { flex: 1 1 0; min-width: 0; }
+.project-question .trust-answers leo-button { flex: none; }
+.project-rules-before { margin: 0 0 var(--leo-spacing-l); font: var(--type-meta); color: var(--ink-secondary); }
+.project-rules-before p { margin: 0 0 var(--leo-spacing-s); }
+.project-rules-before ul { margin: 0; padding-left: var(--leo-spacing-xl); }
+.project-rules-before code, .project-folder-named code { font: var(--type-code); overflow-wrap: anywhere; }
+.project-folder-named { margin: 0 0 var(--leo-spacing-xl); font: var(--type-meta); color: var(--ink-secondary); }
 
 /* ---------------------------------------------------------------- rewind */
 

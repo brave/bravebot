@@ -236,6 +236,8 @@ pub struct Keybindings {
     pub panel: KeyChord,
     /// Prints the whole plan, as `/todos` does (CMD-28).
     pub todos: KeyChord,
+    /// Opens the full text of the pasted text the caret is on (PASTE-13).
+    pub peek: KeyChord,
     pub scope: KeyChord,
     pub undo: KeyChord,
     /// Absent where the session cannot be suspended, which is Windows (INPUT-47).
@@ -261,6 +263,8 @@ impl Default for Keybindings {
             panel: KeyChord::ctrl('x'),
             // Alt for the reason `outputs` is: every Ctrl letter is taken.
             todos: KeyChord::alt('a'),
+            // Alt for the reason `outputs` is: every Ctrl letter is taken.
+            peek: KeyChord::alt('v'),
             scope: KeyChord::ctrl('n'),
             undo: Keybindings::UNDO,
             #[cfg(unix)]
@@ -270,10 +274,10 @@ impl Default for Keybindings {
     }
 }
 
-/// How many actions a settings file can move. Fifteen where the session can be suspended, and
-/// fourteen where it cannot, since an action that does nothing has no chord to be moved off of
+/// How many actions a settings file can move. Sixteen where the session can be suspended, and
+/// fifteen where it cannot, since an action that does nothing has no chord to be moved off of
 /// (INPUT-47).
-const MOVABLE: usize = if cfg!(unix) { 15 } else { 14 };
+const MOVABLE: usize = if cfg!(unix) { 16 } else { 15 };
 
 /// The spellings a terminal reports for the byte Ctrl-_ sends, which is 0x1f.
 ///
@@ -343,6 +347,7 @@ impl Keybindings {
             ("history", &mut self.history),
             ("outputs", &mut self.outputs),
             ("panel", &mut self.panel),
+            ("peek", &mut self.peek),
             ("paste", &mut self.paste),
             ("scope", &mut self.scope),
             ("scroller", &mut self.scroller),
@@ -452,6 +457,11 @@ impl Keybindings {
         self.todos.matches(key)
     }
 
+    /// Whether this press asks for the full text of the pasted text under the caret (PASTE-13).
+    pub fn is_peek(&self, key: &KeyEvent) -> bool {
+        self.peek.matches(key)
+    }
+
     /// Whether this press asks for the session to be suspended to the shell (INPUT-47).
     #[cfg(unix)]
     pub fn is_suspend(&self, key: &KeyEvent) -> bool {
@@ -473,6 +483,7 @@ impl Keybindings {
             self.history,
             self.outputs,
             self.panel,
+            self.peek,
             self.paste,
             self.scope,
             self.scroller,
@@ -554,6 +565,10 @@ impl Keybindings {
         self.todos.display()
     }
 
+    pub fn peek_name(&self) -> String {
+        self.peek.display()
+    }
+
     pub fn undo_name(&self) -> String {
         self.undo.display()
     }
@@ -581,6 +596,7 @@ impl Keybindings {
             || self.is_panel(key)
             || self.is_scope(key)
             || self.is_todos(key)
+            || self.is_peek(key)
             || self.is_undo(key)
             || self.is_enhance(key);
         #[cfg(unix)]
@@ -905,6 +921,44 @@ mod tests {
         let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
         assert!(bindings.is_todos(&moved) && bindings.claims(&moved));
         assert!(!bindings.is_todos(&pressed) && !bindings.claims(&pressed));
+    }
+
+    /// Opening the full text of a folded paste is an action of its own on Alt-V, because every Ctrl
+    /// letter is taken. It moves like the others and gives up the chord it left.
+    ///
+    /// Rejects: a default other than Alt-V, a moved action whose old chord still answers for it,
+    /// and a moved action that is not claimed on its new chord.
+    #[test]
+    fn the_peek_chord_is_alt_v_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.peek, KeyChord::alt('v'));
+        assert_eq!(defaults.peek_name(), "alt-v");
+        let pressed = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT);
+        assert!(defaults.is_peek(&pressed) && defaults.claims(&pressed));
+        assert!(!defaults.is_paste(&pressed));
+
+        let mut map = BTreeMap::new();
+        map.insert("peek".to_string(), "alt-y".to_string());
+        let bindings = Keybindings::from_map(&map, true).0;
+        assert_eq!(bindings.peek_name(), "alt-y");
+        let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
+        assert!(bindings.is_peek(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_peek(&pressed) && !bindings.claims(&pressed));
+    }
+
+    /// Another action asking for Alt-V loses to the action that opens a paste, and that action
+    /// asking for another action's chord loses to that one: both fall back to the defaults.
+    ///
+    /// Rejects: another action that takes Alt-V from the peek action, and a peek action that takes
+    /// a chord from the action that has it.
+    #[test]
+    fn another_action_cannot_take_the_peek_chord_and_the_peek_action_cannot_take_another() {
+        let mut map = BTreeMap::new();
+        map.insert("paste".to_string(), "alt-v".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
+        let mut map = BTreeMap::new();
+        map.insert("peek".to_string(), "alt-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map, true).0);
     }
 
     /// Another action asking for Alt-A loses to the action that prints the whole plan, as it loses

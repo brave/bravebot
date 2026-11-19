@@ -1492,6 +1492,7 @@ anything. An editor is always asked.
 | Ctrl-L | Watch what a delegate is doing, and read what an aside answered |
 | Alt-L | Read what a command printed, as `/outputs` does |
 | Alt-A | Print the whole plan, as `/todos` does |
+| Alt-V | With the caret on a `[Pasted text #1 +4 lines]` marker, read the whole paste in the info panel. Clicking the marker does the same |
 | Up / Down | Walk back through sent prompts |
 | Ctrl-R | Search every prompt you have sent |
 | Wheel, PageUp / PageDown | Scroll the transcript |

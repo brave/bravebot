@@ -23,6 +23,12 @@ all-features = true
 # Empty, and worth keeping empty: an entry is a published advisory this binary ships with
 # anyway. Each takes an id and a reason, and the reason is what a reviewer agrees to.
 ignore = []
+# cargo-deny's default scope for an unsound advisory is Scope::Workspace: a diagnostic fires
+# only where a direct dependent of the flagged crate is a workspace member. Most crates in
+# the resolve are transitive, so that default drops an unsound advisory against any of them
+# without a warning, which is quieter than the yanked default this file already overrides
+# below. "all" reports an unsound advisory against every crate in the graph.
+unsound = "all"
 # A yanked version is one the people who published it withdrew, which says something about it
 # whether or not an advisory follows. This defaults to a warning, and a warning in a CI log is
 # read by nobody, which is the state this file exists to replace.

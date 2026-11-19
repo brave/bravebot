@@ -189,13 +189,7 @@ fn accepted(directories: &[String], mut answer: impl FnMut(&str) -> Answer) -> O
 ///
 /// Separated from the loop so it can be tested without a terminal.
 pub fn answered_by(mode: PermissionMode, directory: &Path) -> Option<TrustStore> {
-    match mode {
-        PermissionMode::Bypass => Some(trusting_the_workspace(directory)),
-        PermissionMode::Ask
-        | PermissionMode::AcceptEdits
-        | PermissionMode::Plan
-        | PermissionMode::Auto => None,
-    }
+    bravebot_agent::opening::mode_answers(mode).then(|| trusting_the_workspace(directory))
 }
 
 /// The map an answer starts the session with, or `None` for leaving.

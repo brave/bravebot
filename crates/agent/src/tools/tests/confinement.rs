@@ -82,6 +82,57 @@ fn a_home_rule_refuses_the_relative_name_in_a_session_opened_in_the_home_directo
     assert_eq!(refusal, denied_by_rule("secrets/canary.txt", None));
 }
 
+/// PERM-7: a rule on an ancestor of the workspace refuses the file tools' call by the
+/// workspace-relative name, for a read and for a write. Each row of the table has the same
+/// answer for the relative name and the absolute name of the same file, so the wider rule is
+/// not weaker than `~/proj/**`.
+#[test]
+fn a_rule_on_an_ancestor_of_the_workspace_refuses_the_relative_name_of_a_file_in_it() {
+    let scratch = Scratch::new("deny-ancestor-relative-name");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("proj").join("secrets")).unwrap();
+    std::fs::write(
+        home.join("proj").join("secrets").join("canary.txt"),
+        "CANARY\n",
+    )
+    .unwrap();
+    let home = home.canonicalize().unwrap();
+    let project = home.join("proj");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+    let absolute = project.join("secrets").join("canary.txt");
+    let absolute = absolute.to_str().unwrap();
+
+    for (family, purpose) in [("Read", Purpose::Read), ("Edit", Purpose::Effect)] {
+        for tree in ["~/**", "~/", "~/proj/**", "~/proj/"] {
+            let settings = bravebot_config::Settings::parse(&format!(
+                "{{\"permissions\": {{\"deny\": [\"{family}({tree})\"]}}}}"
+            ));
+            let (permissions, rejected) =
+                crate::permissions::from_settings(&settings, Some(&home), &project);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "touch a file");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_permissions(permissions);
+
+            for name in ["secrets/canary.txt", absolute] {
+                let refusal = refuse_denied_path(&mut policy, &workspace, purpose, name)
+                    .expect_err(&format!("{family}({tree}) did not refuse {name}"));
+                assert_eq!(refusal, denied_by_rule(name, None));
+            }
+        }
+    }
+}
+
 /// PERM-7: a hard link has no name a rule spells, so where the walk for the file's other
 /// names cannot finish, a call is refused while any rule about a path is in force. The
 /// rule here is an `Edit` rule, which the refusal of a write has to honour as well as a

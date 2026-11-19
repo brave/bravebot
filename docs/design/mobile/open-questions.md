@@ -147,8 +147,25 @@ These are not accepted risks or implementation details that can be skipped. The 
 - **Status:** resolved. The app reads `TargetInfo.sessionList` from `describe()` before its first list request, and asks again on the next refresh if that question fails. For a target that reports `false`, the drawer says "This target does not keep a list of sessions." and never requests a list. A failed list request, or a failed `describe()`, shows "Sessions could not be listed." when no list has arrived, and otherwise keeps the last list with a note that it could not be refreshed, until a request newer than the failure succeeds. An empty list still says "No sessions yet." Tests: `mobile/src/__tests__/sessionList.test.tsx`.
 - **Issue:** [#2771](https://github.com/brave/bravebot/issues/2771), "Show the mobile sessions drawer by target capability, and tell a person when listing fails".
 
+### Q9. May the phone answer startup trust?
+
+- **Status:** unresolved.
+- **Question and reason:**
+  - A yes to startup trust vouches for a whole directory tree, and a kept yes answers every later session there ([TRUST-23](../../specs/trust-map.md#TRUST-23)).
+  - From stage 5a the phone does not answer it, and a session the phone opens in a workspace with no kept yes waits until a client on the host that may answer trust, such as the host test client, attaches and the person answers there.
+  - Letting the phone answer would let a person start work from the phone alone in a workspace answered no at startup, or one where a yes cannot be kept.
+- **Current assumption:**
+  - The phone does not answer startup trust.
+  - The host asks about each workspace at startup ([decision 12](decisions-and-tradeoffs.md#12-the-host-asks-about-each-workspaces-trust-at-startup)), so the phone waits only in a workspace with no kept yes.
+  - Kinds are fixed per client on the host's command line ([decision 11](decisions-and-tradeoffs.md#11-clients-are-named-on-the-hosts-command-line-with-the-kinds-each-may-answer)). The host cannot tell the relay from another client, so it does not refuse `--answers trust` for the relay. HOST-3's reason for offering `trust.reply` does not hold for the relay: any local program that has its port and code can answer ([HOST-12](../../specs/local-host.md#HOST-12)), and a yes it sends may be kept for every later session in that workspace. Until step 6 of stage 5a, `dev-relay-demo.ts` and the relay tests give the relay `trust` in a scratch workspace, so a session in a workspace answered no at startup can still be trusted, and the tests answer no at startup to check that path. From step 6, the host test client answers it and they no longer do.
+- **Evidence needed:**
+  - Whether a phone's yes may count as the person's own, and whether a paired phone gets `trust` (stage 6).
+  - Whether the phone's trust question meets TRUST-23's rule that a yes takes no press until the directory, what each answer does and the file it writes have been shown.
+  - Deciding yes changes [decision 5](decisions-and-tradeoffs.md#5-every-attached-device-can-act-with-no-takeover-step), the [shared control rules](architecture.md#shared-control-across-devices), the executive summary, [HOST-3](../../specs/local-host.md#HOST-3) and the relay's `--answers` in `dev-relay-demo.ts`.
+- **Before:** stage 6 pairing.
+
 ## Keeping this record current
 
-Update an entry when its assumption, evidence, or required checkpoint changes. When resolved, mark it resolved and replace the open discussion with a link to the decision and its evidence. Update the affected architecture, contract, and stages in the same change. Keep U1–U4 and Q1–Q8 identifiers stable so existing references continue to work.
+Update an entry when its assumption, evidence, or required checkpoint changes. When resolved, mark it resolved and replace the open discussion with a link to the decision and its evidence. Update the affected architecture, contract, and stages in the same change. Keep U1–U4 and Q1–Q9 identifiers stable so existing references continue to work.
 
 Add a question when it affects a capability, security boundary, or delivery choice. Routine names, numerical limits, and libraries can be chosen during implementation and recorded with their tests. Keep checkpoints and scope cuts in the [implementation plan](implementation-plan.md#checkpoints-and-scope-cuts); review remaining work there as these questions are answered.

@@ -467,7 +467,7 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) -> Ve
     let hint = argument_hint(session);
     // The files state owns every key, so the box has no caret to draw and no selection to show
     // (FILES-9). The line keeps its text.
-    let held = session.files_open();
+    let held = session.files_open() || session.peeking();
 
     // Shell mode is coloured throughout rather than only in the marker, because the whole line
     // means something different: it goes to a shell instead of the model, and that is worth more

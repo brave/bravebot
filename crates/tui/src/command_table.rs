@@ -68,6 +68,25 @@ pub(crate) const REACH_COMMAND: &str = "/reach";
 /// session (SERVERS-19).
 pub(crate) const MCP_COMMAND: &str = "/mcp";
 
+/// The line that installs a plugin from a local path, lists the installed plugins, and removes,
+/// enables or disables one (PLUGIN-1). The words are written here and read from no file.
+pub(crate) const PLUGIN_COMMAND: &str = "/plugin";
+
+/// The word after `/plugin` that installs the plugin at the path named after it.
+pub(crate) const PLUGIN_ADD: &str = "add";
+
+/// The word after `/plugin` that lists the installed plugins.
+pub(crate) const PLUGIN_LIST: &str = "list";
+
+/// The word after `/plugin` that removes the installed plugin named after it.
+pub(crate) const PLUGIN_REMOVE: &str = "remove";
+
+/// The word after `/plugin` that turns the installed plugin named after it back on.
+pub(crate) const PLUGIN_ENABLE: &str = "enable";
+
+/// The word after `/plugin` that turns the installed plugin named after it off and keeps it.
+pub(crate) const PLUGIN_DISABLE: &str = "disable";
+
 /// The line that says which language servers the session has started (CMD-29).
 pub(crate) const LSP_COMMAND: &str = "/lsp";
 
@@ -205,6 +224,12 @@ pub(crate) const TODOS_COMMAND: &str = "/todos";
 
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
+
+/// The line that gives the terminal's modes back, asks for them again and draws the whole screen.
+///
+/// For a terminal that was reset or cleared from outside, such as by a shortcut of the emulator,
+/// which leaves the screen blank wherever nothing changed and reports nothing to repair it from.
+pub(crate) const REDRAW_COMMAND: &str = "/redraw";
 
 /// The line that shows or hides the model's thinking as it arrives.
 ///
@@ -352,6 +377,9 @@ impl Command {
                 format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
             }
             MCP_COMMAND => format!("[{MCP_LIST} | {MCP_RECONNECT} | {MCP_DISABLE} | {MCP_REMOVE}]"),
+            PLUGIN_COMMAND => format!(
+                "[{PLUGIN_ADD} <path> | {PLUGIN_LIST} | {PLUGIN_REMOVE} <name> | {PLUGIN_ENABLE} <name> | {PLUGIN_DISABLE} <name>]"
+            ),
             COMMIT_MESSAGE_COMMAND => {
                 use crate::commit_message_command::{RANGE, STAGED};
                 format!("[{STAGED} | {RANGE} <a>..<b>] [format]")
@@ -680,6 +708,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: REDRAW_COMMAND,
+            argument: "",
+            description: t!(command_redraw),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: THINKING_COMMAND,
             argument: "",
             description: t!(command_thinking),
@@ -816,6 +850,12 @@ pub fn commands() -> Vec<Command> {
             argument: "[action]",
             description: t!(command_mcp),
             mid_turn: MidTurn::RunsUnlessItStarts,
+        },
+        Command {
+            name: PLUGIN_COMMAND,
+            argument: "[action]",
+            description: t!(command_plugin),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: LSP_COMMAND,
@@ -1522,6 +1562,7 @@ mod tests {
             (HUNKS_COMMAND, false, false, true, false, true),
             (EXIT_COMMAND, true, true, true, true, true),
             (MCP_COMMAND, false, false, false, false, true),
+            (PLUGIN_COMMAND, false, true, true, true, true),
             (LOOP_COMMAND, false, true, true, true, true),
             (AFTER_COMMAND, false, false, true, false, false),
             (GOAL_COMMAND, false, true, true, true, true),

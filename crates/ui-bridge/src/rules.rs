@@ -10,12 +10,13 @@
 //! - `deny` and `ask` rules are read from every layer, since both only narrow.
 //! - `allow` rules are read from the person's own file, and from a selected settings file
 //!   outside the workspace (PERM-14).
-//! - An `allow` rule a checkout wrote is proposed and not granted (PERM-14). The terminal puts
-//!   the proposed rules to the person in one question (PERM-15). This front end has no such
-//!   question yet, so it grants none of them and reads no grant the terminal recorded. Each is
-//!   reported, so the person knows the rule is not in force.
-//! - A directory named in `additionalDirectories` is not opened (PERM-10), for the same reason.
-//!   Each is reported.
+//! - An `allow` rule a checkout wrote is proposed and not granted (PERM-14) until the person
+//!   grants it. Every front puts the proposed rules to the person in one question (PERM-15),
+//!   which the bridge puts as `rules.request` once the trust question is answered. A rule
+//!   granted, now or by an earlier yes the grant record holds, is in force and reported as
+//!   granted. One not granted is reported as proposed, so the person knows it is not in force.
+//! - A directory named in `additionalDirectories` is opened only once the person says yes to it
+//!   (PERM-10), one `folder.request` per directory. One not open is reported.
 //! - The four lists of `sandbox.filesystem` (SANDBOX-25) are what the process settled when it
 //!   started, or what the settings and the managed file say where it settled none. Each entry is
 //!   reported with the file that wrote it and, where it is not in force, why. The window shows
@@ -40,12 +41,19 @@ pub struct SettingsRules {
     pub unreadable: Vec<Unreadable>,
     /// `allow` rules a checkout wrote, which are not in force, with the file each was written in.
     pub proposed: Vec<Proposed>,
+    /// `allow` rules a checkout wrote that this session's person granted, which are in force.
+    pub granted: Vec<Granted>,
+    /// The record a yes to the proposed rules is kept in, where there is one.
+    pub granted_record: Option<PathBuf>,
     /// Directories a file asked to have opened, which are not open.
     pub directories: Vec<String>,
     /// Every entry of the four filesystem lists, with what became of it (SANDBOX-25).
     pub filesystem: Vec<FilesystemEntry>,
     /// `allowRead` and `allowWrite` a checkout wrote, which are not in force, as `(key, file)`.
     pub filesystem_ignored: Vec<(String, PathBuf)>,
+    /// The agent's sentence for the file `--settings` named where it is read as a checkout's file
+    /// because this platform cannot hold it back from a directory a stage may write (#2599).
+    pub named_withheld: Option<String>,
     /// Whether the file tools are held to the project (PERM-16), as the files said when the
     /// session opened. A file edited afterwards changes nothing about this session (PERM-12).
     pub reads_stay_in_workspace: bool,
@@ -91,6 +99,26 @@ pub struct Proposed {
     pub file: PathBuf,
 }
 
+/// An `allow` rule a checkout wrote that is in force because the person granted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Granted {
+    pub rule: String,
+    pub file: PathBuf,
+    /// Granted by a yes the record already held, rather than in this session.
+    pub before: bool,
+}
+
+/// What the person has granted of the rules a checkout proposed, for [`SettingsRules::read_granting`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Granting<'a> {
+    /// The proposed rules in force.
+    pub granted: &'a [bravebot_agent::granted::Proposed],
+    /// Of those, the ones the record held before this session asked.
+    pub held: &'a [bravebot_agent::granted::Proposed],
+    /// The record a yes is kept in.
+    pub record: Option<&'a Path>,
+}
+
 impl SettingsRules {
     /// Read the rules out of the settings a session opens under.
     ///
@@ -101,9 +129,27 @@ impl SettingsRules {
     /// `workspace` is the directory the session works in. Its volume answers whether two
     /// spellings of a path that differ only in case name one file, which a path rule has to know.
     pub fn read(settings: &Settings, workspace: &Path) -> Self {
+        Self::read_granting(settings, workspace, Granting::default())
+    }
+
+    /// [`SettingsRules::read`], with the proposed rules in `granting` in force (PERM-15).
+    ///
+    /// A granted rule is listed as in force and as granted, and is no longer reported as proposed.
+    /// Matched on the file as well as the text, since two layers may write one rule and only one of
+    /// them be granted.
+    pub fn read_granting(settings: &Settings, workspace: &Path, granting: Granting<'_>) -> Self {
         let profile = bravebot_agent::home::profile();
-        let (permissions, rejected) =
-            bravebot_agent::permissions::from_settings(settings, profile.as_deref(), workspace);
+        let texts: Vec<String> = granting
+            .granted
+            .iter()
+            .map(|rule| rule.rule.clone())
+            .collect();
+        let (permissions, rejected) = bravebot_agent::permissions::with_granted(
+            settings,
+            &texts,
+            profile.as_deref(),
+            workspace,
+        );
         let lists = settings.permissions();
         // A list in force leaves out what could not be read, so a front end does not show a
         // mistyped rule as one that holds.
@@ -118,11 +164,18 @@ impl SettingsRules {
                 .cloned()
                 .collect()
         };
+        let mut allow = readable(&lists.allow);
+        for text in &texts {
+            if !allow.contains(text) {
+                allow.push(text.clone());
+            }
+        }
+        let proposed = bravebot_agent::permissions::proposed(settings, profile.as_deref());
         Self {
             permissions,
             deny: readable(&lists.deny),
             ask: readable(&lists.ask),
-            allow: readable(&lists.allow),
+            allow,
             unreadable: rejected
                 .iter()
                 .map(|reject| Unreadable {
@@ -141,19 +194,30 @@ impl SettingsRules {
                     ),
                 })
                 .collect(),
-            proposed: bravebot_agent::permissions::proposed(settings, profile.as_deref())
+            proposed: bravebot_agent::opening::not_granted(&proposed, granting.granted)
                 .into_iter()
                 .map(|proposed| Proposed {
-                    rule: proposed.rule,
-                    file: proposed.path,
+                    rule: proposed.rule.clone(),
+                    file: proposed.path.clone(),
                 })
                 .collect(),
+            granted: granting
+                .granted
+                .iter()
+                .map(|rule| Granted {
+                    rule: rule.rule.clone(),
+                    file: rule.path.clone(),
+                    before: granting.held.contains(rule),
+                })
+                .collect(),
+            granted_record: granting.record.map(Path::to_path_buf),
             directories: bravebot_agent::permissions::additional_directories(settings).to_vec(),
             filesystem: filesystem(settings, profile.as_deref(), workspace),
             filesystem_ignored: settings
                 .sandbox_filesystem_ignored()
                 .map(|(file, key)| (key.to_string(), file.to_path_buf()))
                 .collect(),
+            named_withheld: bravebot_agent::permissions::named_withheld_said(settings),
             reads_stay_in_workspace: reads_stay_in_workspace(settings, &Managed::load()),
         }
     }
@@ -194,6 +258,17 @@ impl SettingsRules {
                     "shownFile": bravebot_agent::confirm::shown_path(&entry.file),
                 }))
                 .collect::<Vec<_>>(),
+            "granted": self.granted.iter()
+                .map(|entry| json!({
+                    "rule": entry.rule,
+                    "shownRule": bravebot_agent::confirm::shown_text(&entry.rule),
+                    "file": entry.file.display().to_string(),
+                    "shownFile": bravebot_agent::confirm::shown_path(&entry.file),
+                    "before": entry.before,
+                }))
+                .collect::<Vec<_>>(),
+            "grantedRecord": self.granted_record.as_ref().map(|record| record.display().to_string()),
+            "shownGrantedRecord": self.granted_record.as_ref().map(|record| bravebot_agent::confirm::shown_path(record)),
             "directories": self.directories,
             "shownDirectories": self.directories.iter()
                 .map(|directory| bravebot_agent::confirm::shown_name(directory))
@@ -216,6 +291,7 @@ impl SettingsRules {
                     "shownFile": bravebot_agent::confirm::shown_path(file),
                 }))
                 .collect::<Vec<_>>(),
+            "namedWithheld": self.named_withheld,
         })
     }
 }
@@ -311,8 +387,43 @@ mod tests {
         assert!(rules.permissions.is_empty());
         assert_eq!(
             rules.json(),
-            json!({ "deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [], "unreadable": [], "proposed": [], "directories": [], "shownDirectories": [], "filesystem": [], "filesystemIgnored": [] })
+            json!({ "deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [], "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null, "shownGrantedRecord": null, "directories": [], "shownDirectories": [], "filesystem": [], "filesystemIgnored": [], "namedWithheld": null })
         );
+    }
+
+    /// #2599: a file `--settings` named inside a directory a stage may write is read as a
+    /// checkout's file where the platform cannot hold it back, and the report the front end draws
+    /// says so. Where the platform holds it back the report carries no such sentence.
+    #[test]
+    fn a_withheld_named_file_is_reported_to_the_front_end() {
+        let (dir, _) = layers(None, None);
+        let project = std::fs::canonicalize(dir.path().join("project")).unwrap();
+        let file = project.join("override.json");
+        std::fs::write(
+            &file,
+            r#"{"permissions": {"allow": ["WebFetch(domain:example.com)"]}}"#,
+        )
+        .unwrap();
+        let reported = |can_hold_one_file_back: bool| {
+            let settings = Settings::layered_reaching(
+                None,
+                Some(&project),
+                Some(&file),
+                std::slice::from_ref(&project),
+                can_hold_one_file_back,
+            );
+            SettingsRules::read(&settings, &project)
+        };
+        let withheld = reported(false);
+        let said = withheld.named_withheld.as_deref().expect("a sentence");
+        assert!(said.contains("override.json"), "{said}");
+        assert_eq!(withheld.json()["namedWithheld"], json!(said));
+        assert_eq!(fetching(&withheld, "example.com"), None);
+
+        let held_back = reported(true);
+        assert_eq!(held_back.named_withheld, None);
+        assert_eq!(held_back.json()["namedWithheld"], json!(null));
+        assert_eq!(fetching(&held_back, "example.com"), Some(Ruling::Allow));
     }
 
     /// An `allow` rule in the person's own file holds, since there is a person at this front end.
@@ -608,11 +719,31 @@ mod tests {
         let inside = project.join("override.json");
         std::fs::write(&inside, text).unwrap();
         let rules = SettingsRules::read(
-            &Settings::layered(Some(home), Some(&project), Some(&inside)),
+            &Settings::layered_reaching(
+                Some(home.clone()),
+                Some(&project),
+                Some(&inside),
+                std::slice::from_ref(&project),
+                true,
+            ),
             &project,
         );
         assert_eq!(fetching(&rules, "example.com"), Some(Ruling::Allow));
         assert!(rules.proposed.is_empty(), "{:?}", rules.proposed);
+
+        // Where the sandbox cannot hold one file back, the same file inside a root a stage may
+        // write grants nothing (#2599).
+        let rules = SettingsRules::read(
+            &Settings::layered_reaching(
+                Some(home),
+                Some(&project),
+                Some(&inside),
+                std::slice::from_ref(&project),
+                false,
+            ),
+            &project,
+        );
+        assert_eq!(fetching(&rules, "example.com"), None);
     }
 
     /// PERM-10: a directory a file named is reported and is not something this module opens.

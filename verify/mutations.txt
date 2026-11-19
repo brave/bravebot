@@ -56,3 +56,103 @@ replace: while taken < room && taken <= most { => while taken < room {
 mutation: code_end returns the offset of a byte that is not the m ending the code
 file: crates/core/src/colour_codes.rs
 replace: if byte == b'm' { => if true {
+
+mutation: taint takes the first input's confidentiality, so a private second input comes out public
+file: crates/core/src/spec.rs
+replace: confidentiality: join(a.confidentiality, b.confidentiality), => confidentiality: a.confidentiality,
+
+mutation: Plan::can_be_remembered lets a line that writes a file be remembered
+file: crates/core/src/command.rs
+replace: && self.writes.is_empty() => && true
+
+mutation: Plan::can_be_remembered lets a line that reads a file by name be remembered
+file: crates/core/src/command.rs
+replace: && self.reads.is_empty() => && true
+
+mutation: Plan::can_be_remembered lets a line fed a reference be remembered
+file: crates/core/src/command.rs
+replace: && self.stdin.is_none() => && true
+
+mutation: Step::is_its_entry lets a step carrying a literal assignment be remembered
+file: crates/core/src/command.rs
+replace: environment.is_empty() && expansions.is_empty() && every_route_opens_no_file(routes) => expansions.is_empty() && every_route_opens_no_file(routes)
+
+mutation: Step::is_its_entry lets a step carrying an expansion, and the substitution inside it, be remembered
+file: crates/core/src/command.rs
+replace: environment.is_empty() && expansions.is_empty() && every_route_opens_no_file(routes) => environment.is_empty() && every_route_opens_no_file(routes)
+
+mutation: Step::is_its_entry lets a step with a redirection be remembered
+file: crates/core/src/command.rs
+replace: environment.is_empty() && expansions.is_empty() && every_route_opens_no_file(routes) => environment.is_empty() && expansions.is_empty()
+
+mutation: Route::opens_no_file lets a `<` redirection be remembered
+file: crates/core/src/command.rs
+replace: // A file read in place of what the step was shown to read. => Route::Stdin { .. } => true,
+
+mutation: Route::opens_no_file lets a redirection to any file be remembered
+file: crates/core/src/command.rs
+replace: discards(path) => true
+
+mutation: Steps::are_their_entries reads only the left side of a join
+file: crates/core/src/command.rs
+replace: left && right.are_their_entries() => left
+
+mutation: every_step_is_its_entry passes a pipeline whose later stage is not its entry
+file: crates/core/src/command.rs
+replace: if !steps[at].is_its_entry() { => if at == 0 && !steps[at].is_its_entry() {
+
+mutation: Plan::can_be_remembered_as lets a line that asked for a scope be remembered
+file: crates/core/src/command.rs
+replace: self.can_be_remembered() && !scopes && !unconfined && !protected => self.can_be_remembered() && !unconfined && !protected
+
+mutation: Plan::can_be_remembered_as lets a line that asked to run with no profile be remembered
+file: crates/core/src/command.rs
+replace: self.can_be_remembered() && !scopes && !unconfined && !protected => self.can_be_remembered() && !scopes && !protected
+
+mutation: Plan::can_be_remembered_as lets a line into a protected path be remembered
+file: crates/core/src/command.rs
+replace: self.can_be_remembered() && !scopes && !unconfined && !protected => self.can_be_remembered() && !scopes && !unconfined
+
+mutation: run_reason lets private input through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.releases_private { => if false {
+
+mutation: run_reason lets a requested scope through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.requested { => if false {
+
+mutation: run_reason lets a line that writes through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.writes { => if false {
+
+mutation: run_reason lets a line carrying an assignment through to a standing answer
+file: crates/core/src/policy.rs
+replace: if facts.assignment { => if false {
+
+mutation: run_reason lets a line outside the root through to a rule
+file: crates/core/src/policy.rs
+replace: if !facts.at_root && !facts.vouched { => if false {
+
+mutation: run_reason reads the standing answers before a fed reference
+file: crates/core/src/policy.rs
+replace: if facts.fed { => if facts.fed && !facts.vouched && !facts.remembered && !facts.held {
+
+mutation: run_reason lets a line through on a vouch that does not cover it
+file: crates/core/src/policy.rs
+replace: if facts.vouched { => if true {
+
+mutation: RunReason::asks treats an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let allowed = ruling == crate::permissions::Ruling::Allow; => let allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: output_label gives a trusted proof's label to a line that asked for a scope
+file: crates/core/src/policy.rs
+replace: if facts.requesting { => if false {
+
+mutation: output_label trusts a vouched line carrying an assignment
+file: crates/core/src/policy.rs
+replace: if facts.vouched && !facts.assignment { => if facts.vouched {
+
+mutation: output_label trusts a vouched line fed untrusted content
+file: crates/core/src/policy.rs
+replace: let printed = opaque; => let printed = Label { integrity: Integrity::Trusted, confidentiality: Confidentiality::Private };
