@@ -154,6 +154,99 @@ fn kept_in_place_rules(policy: &SandboxPolicy) -> String {
     out
 }
 
+/// The refusals that keep a refused read or write at its path.
+///
+/// Seatbelt matches the path a process opens and does not carry a refusal up to the directories
+/// holding it, so a write row over a directory that holds a refusal also lets the stage rename a
+/// directory between the row and the refusal, and the refused path is then reached under the new
+/// name. Linux lists the entries around a refusal instead (SANDBOX-12). Here each directory that
+/// is on disk and lies between a write row and a refusal beneath it, the row's own directory
+/// included, is refused removal, which is also what renaming it away is. The row's own directory
+/// is included because a rename into another write row, the temporary directory for one, is
+/// allowed. The refused paths are those of a read and of a write, each written where it stands
+/// and where its links lead, and the rows are the ones the profile grants. A directory that is
+/// not on disk has nothing to rename away, but it can be renamed into place: a tree built
+/// elsewhere in the row and moved to the missing name leads to the refusal. The topmost missing
+/// name between the row and the refusal is therefore refused creation, which covers a directory,
+/// a link or a rename made there. A row with no refusal beneath it gets no rule, and a refusal
+/// outside every write row needs none. A file made or removed beside the refusal, or beside the
+/// missing name, is not refused.
+fn refused_path_ancestor_rules(policy: &SandboxPolicy) -> String {
+    let rows: Vec<PathBuf> = policy
+        .writable
+        .iter()
+        .filter(|row| !policy.unwritable.contains(&row.path))
+        .map(|row| row.path.clone())
+        .collect();
+    let rows = with_their_resolved_spelling(&rows);
+    let mut refused = with_their_resolved_spelling(&policy.unreadable);
+    refused.extend(with_their_resolved_spelling(&policy.unwritable));
+    let mut above: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    let mut absent: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    for path in &refused {
+        for row in rows
+            .iter()
+            .filter(|row| path.starts_with(row) && *row != path)
+        {
+            let mut missing: Option<&Path> = None;
+            for ancestor in path.ancestors().skip(1) {
+                if ancestor.as_os_str().is_empty() || ancestor == Path::new("/") {
+                    break;
+                }
+                if !ancestor.starts_with(row) {
+                    break;
+                }
+                if std::fs::symlink_metadata(ancestor).is_ok() {
+                    above.insert(ancestor.to_path_buf());
+                } else if ancestor != row {
+                    missing = Some(ancestor);
+                }
+                if ancestor == row {
+                    break;
+                }
+            }
+            if let Some(missing) = missing {
+                absent.insert(missing.to_path_buf());
+            }
+        }
+    }
+    let mut out = String::new();
+    for path in above {
+        out.push_str(&format!(
+            "(deny file-write-unlink (literal {}))\n",
+            quote(&path.to_string_lossy())
+        ));
+    }
+    for path in absent {
+        out.push_str(&format!(
+            "(deny file-write-create (literal {}))\n",
+            quote(&path.to_string_lossy())
+        ));
+    }
+    out
+}
+
+/// The row that allows the named machine-information queries, with its closing newline.
+fn sysctl_read_rules() -> String {
+    let mut out = String::from("(allow sysctl-read");
+    for name in [
+        "hw.machine",
+        "hw.memsize",
+        "hw.ncpu",
+        "hw.pagesize",
+        "hw.pagesize_compat",
+        "kern.argmax",
+        "kern.hostname",
+        "kern.osrelease",
+        "kern.ostype",
+        "kern.version",
+    ] {
+        out.push_str(&format!(" (sysctl-name {})", quote(name)));
+    }
+    out.push_str(")\n");
+    out
+}
+
 /// Where `path` leads: its longest prefix that is on disk with every link followed, then the rest
 /// as written.
 fn landed(path: &Path) -> PathBuf {
@@ -329,22 +422,7 @@ impl SeatbeltSandbox {
         // limit that xargs, find -exec {} + and getconf ARG_MAX read. The remaining names are
         // uname's fields, used by Python's package platform detection. No process arguments or
         // environment query is in this list.
-        out.push_str("(allow sysctl-read");
-        for name in [
-            "hw.machine",
-            "hw.memsize",
-            "hw.ncpu",
-            "hw.pagesize",
-            "hw.pagesize_compat",
-            "kern.argmax",
-            "kern.hostname",
-            "kern.osrelease",
-            "kern.ostype",
-            "kern.version",
-        ] {
-            out.push_str(&format!(" (sysctl-name {})", quote(name)));
-        }
-        out.push_str(")\n");
+        out.push_str(&sysctl_read_rules());
         out.push_str("(allow mach-lookup");
         for service in mach_services(policy) {
             out.push_str(&format!(" (global-name {})", quote(service)));
@@ -415,6 +493,11 @@ impl SeatbeltSandbox {
         if !policy.writable.is_empty() && !policy.git_directories_writable {
             out.push_str(&protected_name_rules(policy));
         }
+
+        // A refused path is refused at its own path, and renaming a directory above it is a write
+        // Seatbelt does not count as one beneath that directory, so each directory between a row
+        // and a refusal is refused removal after every row has been written.
+        out.push_str(&refused_path_ancestor_rules(policy));
 
         // A file held in place is refused its write above, and a write is also how a directory
         // above it is renamed away or replaced, which Seatbelt does not count as a write beneath
@@ -2798,6 +2881,283 @@ int main(int argc, char **argv) {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A directory between a write row and a refused path is not renamed away. Seatbelt matches the
+    /// path a process opens, so without a refusal of the rename the refused file is read and
+    /// appended to under the new name of the directory above it (SANDBOX-12, SANDBOX-25).
+    ///
+    /// Each refusal kind is run on its own, since a rule written for one of them only would pass
+    /// the other. Writes beside the refusal succeed in the same run, so the refusal costs the stage
+    /// no other write. The regression it rejects: leaving the directories above a refused path
+    /// out of the profile, which lets `mv dir/a dir/a2` through.
+    #[test]
+    fn a_directory_above_a_refused_path_is_not_renamed_away() {
+        let printed_by_sh = |policy: &SandboxPolicy, dir: &Path, line: &str| {
+            let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+            let mut child = sandbox
+                .spawn(
+                    OsStr::new("/bin/sh"),
+                    &["-c".into(), line.into()],
+                    &policy.clone().starting_in(dir),
+                    capturing_stdout(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn");
+            let mut printed = Vec::new();
+            child
+                .take_stdout()
+                .expect("stdout was piped")
+                .read_to_end(&mut printed)
+                .expect("stdout is readable");
+            let code = child.wait().expect("should wait").code();
+            (code, String::from_utf8_lossy(&printed).into_owned())
+        };
+
+        for (name, reads, writes) in [
+            ("both", true, true),
+            ("read", true, false),
+            ("write", false, true),
+        ] {
+            let dir = crate::testutil::scratch_dir(&format!("bravebot-sandbox-ancestor-{name}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            let secret = dir.join("a").join("b").join("secret");
+            std::fs::create_dir_all(secret.parent().unwrap()).expect("creatable");
+            std::fs::write(&secret, "SECRET-TEXT").expect("writable");
+            let mut policy = SandboxPolicy::strict()
+                .allow_subprocesses()
+                .allow_read("/usr")
+                .allow_read("/bin")
+                .allow_read(&dir)
+                .allow_write(&dir);
+            if reads {
+                policy = policy.deny_read(dir.join("a").join("b"));
+            }
+            if writes {
+                policy = policy.deny_write(dir.join("a").join("b"));
+            }
+            let moved = format!(
+                "mv {a} {a2} && cat {a2}/b/secret",
+                a = dir.join("a").display(),
+                a2 = dir.join("a2").display()
+            );
+            let (code, printed) = printed_by_sh(&policy, &dir, &moved);
+            assert_ne!(code, Some(0), "{name}: the directory was renamed");
+            assert!(
+                !printed.contains("SECRET-TEXT"),
+                "{name}: the refused file was read under a new name"
+            );
+            assert!(secret.exists(), "{name}: the refused file left its name");
+            assert!(!dir.join("a2").exists(), "{name}: the directory moved");
+
+            if writes {
+                let appended = format!(
+                    "mv {a} {a2} && echo x >> {a2}/b/secret",
+                    a = dir.join("a").display(),
+                    a2 = dir.join("a2").display()
+                );
+                let (code, _) = printed_by_sh(&policy, &dir, &appended);
+                assert_ne!(code, Some(0), "{name}: the directory was renamed");
+                assert_eq!(
+                    std::fs::read_to_string(&secret).expect("still readable"),
+                    "SECRET-TEXT",
+                    "{name}: the refused file was appended to"
+                );
+            }
+
+            let beside = format!(
+                "echo ok > {d}/c && echo ok > {d}/a/c && mv {d}/a/c {d}/a/d && mkdir {d}/e && rm {d}/c",
+                d = dir.display()
+            );
+            let (code, _) = printed_by_sh(&policy, &dir, &beside);
+            assert_eq!(code, Some(0), "{name}: a write beside the refusal failed");
+            assert!(dir.join("a").join("d").exists(), "{name}: not written");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The same holds when the refusal is spelled through a link, since the kernel matches where
+    /// the link leads and the profile writes both spellings. The regression it rejects: guarding
+    /// only the directories above the spelling a person wrote, which leaves `real` renamable.
+    #[test]
+    fn a_directory_above_a_refusal_spelled_as_a_link_is_not_renamed_away() {
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-ancestor-link");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real").join("a").join("b")).expect("creatable");
+        std::fs::write(dir.join("real").join("a").join("b").join("secret"), "S").expect("writable");
+        std::os::unix::fs::symlink(dir.join("real").join("a"), dir.join("link")).expect("linkable");
+        let dir = dir.canonicalize().expect("there");
+
+        let policy = SandboxPolicy::strict()
+            .allow_subprocesses()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir)
+            .deny_read(dir.join("link").join("b"))
+            .deny_write(dir.join("link").join("b"));
+        for line in [
+            format!("mv {d}/real {d}/real2", d = dir.display()),
+            format!("mv {d}/real/a {d}/real/a2", d = dir.display()),
+            format!("mv {d}/link {d}/link2", d = dir.display()),
+        ] {
+            assert_ne!(
+                sh_under(&policy, &dir, &line),
+                Some(0),
+                "`{line}` went through"
+            );
+        }
+        assert!(dir.join("real").join("a").join("b").join("secret").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refused path whose directories are not on disk is not reached by building a tree
+    /// elsewhere in the row and moving it to the missing name. The topmost missing name between
+    /// the row and the refusal cannot be made, so the refused path never leads into a tree the
+    /// stage made. The layouts are a refusal with none of its directories on disk and one with the
+    /// first of them on disk. A sibling of the missing name stays writable in each, which is the
+    /// control that the refusal costs no other write. The regression it rejects: refusing only the
+    /// directories that exist, which lets `mv built ~/.config/systemd` put a tree at the refusal.
+    #[test]
+    fn a_tree_built_elsewhere_is_not_moved_to_a_missing_directory_above_a_refusal() {
+        for (name, reads, writes) in [
+            ("both", true, true),
+            ("read", true, false),
+            ("write", false, true),
+        ] {
+            for (layout, existing, missing) in
+                [("none on disk", "", "m"), ("first on disk", "m", "m/n")]
+            {
+                let dir = crate::testutil::scratch_dir(&format!(
+                    "bravebot-sandbox-missing-ancestor-{name}-{}",
+                    existing.len()
+                ));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(dir.join("built").join("n").join("p")).expect("creatable");
+                std::fs::write(dir.join("built").join("n").join("p").join("secret"), "S")
+                    .expect("writable");
+                if !existing.is_empty() {
+                    std::fs::create_dir_all(dir.join(existing)).expect("creatable");
+                }
+                let dir = dir.canonicalize().expect("there");
+                let refused = dir.join("m").join("n").join("p");
+                let mut policy = SandboxPolicy::strict()
+                    .allow_subprocesses()
+                    .allow_read("/usr")
+                    .allow_read("/bin")
+                    .allow_read(&dir)
+                    .allow_write(&dir);
+                if reads {
+                    policy = policy.deny_read(&refused);
+                }
+                if writes {
+                    policy = policy.deny_write(&refused);
+                }
+                let target = dir.join(missing);
+                let source = if missing == "m" { "built" } else { "built/n" };
+                for line in [
+                    format!(
+                        "mv {d}/{source} {t}",
+                        d = dir.display(),
+                        t = target.display()
+                    ),
+                    format!("mkdir {t}", t = target.display()),
+                    format!(
+                        "ln -s {d}/built {t}",
+                        d = dir.display(),
+                        t = target.display()
+                    ),
+                ] {
+                    assert_ne!(
+                        sh_under(&policy, &dir, &line),
+                        Some(0),
+                        "{name}, {layout}: `{line}` went through"
+                    );
+                    assert!(
+                        !target.exists() && std::fs::symlink_metadata(&target).is_err(),
+                        "{name}, {layout}: `{line}` made {}",
+                        target.display()
+                    );
+                }
+                assert!(
+                    dir.join("built")
+                        .join("n")
+                        .join("p")
+                        .join("secret")
+                        .exists(),
+                    "{name}, {layout}: the tree left its place"
+                );
+                let beside = format!(
+                    "mkdir {d}/other && echo ok > {d}/other/f && mv {d}/other/f {d}/other/g && echo ok > {d}/m2 && mv {d}/m2 {d}/m3",
+                    d = dir.display()
+                );
+                assert_eq!(
+                    sh_under(&policy, &dir, &beside),
+                    Some(0),
+                    "{name}, {layout}: a write beside the missing name failed"
+                );
+                assert!(dir.join("other").join("g").exists(), "{name}: not written");
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
+    }
+
+    /// A root that holds the whole home with a refusal two directories down, and a narrower row
+    /// beneath it with a refusal of its own, are both held: every directory between a write row
+    /// and a refusal beneath it is refused removal, the row's own directory included, and a row
+    /// with no refusal beneath it gets nothing. The regression it rejects: reading only the nearest
+    /// row, which leaves a directory a wider row holds open.
+    #[test]
+    fn the_profile_refuses_removal_of_each_directory_between_a_write_row_and_a_refusal() {
+        let home = crate::testutil::scratch_dir("bravebot-sandbox-ancestor-rows");
+        let _ = std::fs::remove_dir_all(&home);
+        let refused = home.join(".config").join("gcloud").join("credentials.db");
+        std::fs::create_dir_all(refused.parent().unwrap()).expect("creatable");
+        std::fs::create_dir_all(home.join("project").join("secrets")).expect("creatable");
+        std::fs::create_dir_all(home.join("unrefused")).expect("creatable");
+        let home = home.canonicalize().expect("there");
+        let refused = home.join(".config").join("gcloud").join("credentials.db");
+        let key = home.join("project").join("secrets").join("prod.key");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/")
+            .allow_write(&home)
+            .allow_write(home.join("project"))
+            .allow_write(home.join("unrefused"))
+            .allow_write_listed(home.join(".config"))
+            .deny_read(&refused)
+            .deny_write(&refused)
+            .deny_read(&key)
+            .deny_write(&key);
+        let profile = SeatbeltSandbox::profile(&policy);
+        let rule = |path: PathBuf| {
+            format!(
+                "(deny file-write-unlink (literal {}))",
+                quote(&path.to_string_lossy())
+            )
+        };
+        for held in [
+            home.clone(),
+            home.join(".config"),
+            home.join(".config").join("gcloud"),
+            home.join("project"),
+            home.join("project").join("secrets"),
+        ] {
+            assert!(
+                profile.contains(&rule(held.clone())),
+                "{held:?}:\n{profile}"
+            );
+        }
+        assert!(
+            !profile.contains(&rule(home.join("unrefused"))),
+            "a row with no refusal beneath it was refused removal:\n{profile}"
+        );
+        let last_grant = profile.rfind("(allow file-write*").expect("a write row");
+        assert!(
+            profile.find(&rule(home.join(".config"))).unwrap() > last_grant,
+            "a removal refusal is written before a write row that would lift it:\n{profile}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// The other names a person's own tools run later (a `.husky` hook, `.pre-commit-config.yaml`,

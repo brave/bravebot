@@ -180,13 +180,21 @@ pub enum Refusal<'a> {
     HostUnread,
 }
 
-/// Why the managed layer refuses a model (BACKEND-48).
+/// Why the managed layer refuses a model (BACKEND-48), or why a model that retrieves for itself is
+/// refused whatever the layer says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRefusal {
     /// `models.allow` is in force and no entry in it names the model.
     NotAllowed,
     /// `models.deny` names it.
     Denied,
+    /// It searches the web before it replies, and its reply is labelled from a context that holds
+    /// none of what the search read ([LABEL-8], [BACKEND-19]). No file refuses it: the list is
+    /// compiled in ([`crate::provider::Provider::retrieving_models`]).
+    ///
+    /// [LABEL-8]: ../../../docs/specs/labels.md#LABEL-8
+    /// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+    Retrieves,
 }
 
 /// Which models the managed layer lets a machine request, and the file that said so (BACKEND-48).

@@ -10,8 +10,9 @@
 const range = (count) => [...Array(count).keys()]
 const pad = (n) => String(n).padStart(2, '0')
 // How the agent writes out a character that draws as nothing, in the content of an output or vetting
-// request: a tag character with the letter it stands for, and a zero-width space. The card draws
-// the request's text as it comes, so these are in the rows the person is deciding about.
+// request and in the preview of a vouch request: a tag character with the letter it stands for, and
+// a zero-width space. The card draws the request's text as it comes, so these are in the rows the
+// person is deciding about.
 const TAG_A = '\u2039U+E0041 A\u203A'
 const ZERO_WIDTH = '\u2039U+200B\u203A'
 // The sentence the agent words from its catalog for a count of two and of one, which the card draws
@@ -105,11 +106,11 @@ export const CASES = {
     event: 'vouch.request',
     request: {
       request: 106, path: `vendor/${'deep/'.repeat(40)}zqu01.md`, truncated: true,
-      shownPath: `vendor/${'deep/'.repeat(40)}zqu01.md`, rule: '/work/vendor', shownRule: '/work/vendor',
-      preview: ['zqu03 is the first line of the file', ...range(119).map((n) => `line ${n + 2} of the file`)].join('\n'),
+      shownPath: `vendor/${'deep/'.repeat(40)}zqu01.md`, rule: '/work/vendor', shownRule: '/work/vendor', hidden: 1, hiddenNote: ONE_HIDDEN,
+      preview: [`zqu03 is the first line of the file ${TAG_A}`, ...range(119).map((n) => `line ${n + 2} of the file`)].join('\n'),
       vetting: { verdict: 'safe', reason: `zqu02 ${filler(80)}` },
     },
-    tokens: ['zqu01', 'zqu02', 'zqu03'],
+    tokens: ['zqu01', 'zqu02', 'zqu03', TAG_A],
     standing: [],
   },
   fetch: {

@@ -4170,6 +4170,47 @@ mod tests {
         assert!(note.contains("ref:0"), "{note}");
     }
 
+    /// The quarantine holds the name of every listed file a reference stands for. A conversation
+    /// formatted for a log or a failed assertion shows the reference and not the name, so the
+    /// derived `Debug` on the conversation does not reopen what the store's own closes.
+    #[test]
+    fn formatting_a_conversation_does_not_print_the_names_its_quarantine_holds() {
+        use bravebot_core::{
+            Capability, CapabilitySet, Policy, RecordingSink, ReleasePlan, Routing,
+        };
+
+        let mut conversation = four_exchanges();
+        let slot = conversation.next_reference();
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "list");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .expect("a policy");
+        let entries = Labelled::new(
+            vec!["secret-plans.md".to_string()],
+            Label::untrusted_private(),
+        );
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                conversation.quarantine(),
+            )
+            .expect("one entry may be reserved");
+
+        let rendered = format!("{conversation:?}");
+        assert!(!rendered.contains("secret-plans"), "{rendered}");
+        assert!(rendered.contains("ref:0"), "{rendered}");
+    }
+
     /// COMPACT-16: the planner's list is the one thing in the head it cannot rebuild from prose.
     #[test]
     fn a_task_list_written_before_the_cut_is_in_the_request_after_it() {

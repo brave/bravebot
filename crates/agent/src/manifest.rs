@@ -1549,6 +1549,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         for (origin, said) in connectors.take_heard() {
             let shown = crate::turn::preview_for(&mut policy, step.tool(), &said);
             reporter.quarantined(crate::report::Shown {
+                as_the_planner_had_it: None,
                 origin,
                 reach: crate::report::Reach::NoModel,
                 label: said.label().to_string(),

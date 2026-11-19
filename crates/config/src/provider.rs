@@ -168,6 +168,27 @@ const RESPONSES_ONLY_MODELS: &[&str] = &[
     "gpt-5.4-pro-2026-03-05",
 ];
 
+/// The models that search the web before every reply when they are asked over chat completions
+/// ([LABEL-8], [BACKEND-19]).
+///
+/// A reply is labelled from the context this process built, which holds only where the model answers
+/// from that context. A model on this list adds the pages its provider's search returns, so its
+/// reply is not a function of the context and is not offered or requested over chat completions.
+///
+/// OpenAI's web search guide, read on 2026-11-13, says that the Chat Completions search models
+/// always search before responding and that search over the Responses API is a tool. Nothing in
+/// this tree has exercised the claim against the service. `gpt-5-search-api` answered a chat
+/// completion with 200 on 2026-10-27 ([BACKEND-19]). The two `-search-preview` ids answered that
+/// they are deprecated on the same day and are listed because the guide names them.
+///
+/// [LABEL-8]: ../../../docs/specs/labels.md#LABEL-8
+/// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+const RETRIEVING_MODELS: &[&str] = &[
+    "gpt-5-search-api",
+    "gpt-4o-search-preview",
+    "gpt-4o-mini-search-preview",
+];
+
 /// The id a model of the ChatGPT account is qualified by
 /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
 ///
@@ -1393,6 +1414,29 @@ impl Provider {
         } else {
             &[]
         }
+    }
+
+    /// The ids of the models that search the web before they reply, which this service is not
+    /// offered and does not request ([LABEL-8], [BACKEND-19]).
+    ///
+    /// Empty for an entry reached in the Responses protocol, where search is a tool a request has
+    /// to ask for and a model's options cannot add. Every entry reached over chat completions has
+    /// the list, whatever its host: a proxy that relays a search model searches as OpenAI's own
+    /// API does, and the entry that names the model is the person's own configuration.
+    ///
+    /// [LABEL-8]: ../../../docs/specs/labels.md#LABEL-8
+    /// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+    pub fn retrieving_models(&self) -> &'static [&'static str] {
+        if self.protocol == Protocol::ChatCompletions {
+            RETRIEVING_MODELS
+        } else {
+            &[]
+        }
+    }
+
+    /// Whether `wire`, the name this service is sent, is one of [`Provider::retrieving_models`].
+    pub fn retrieves(&self, wire: &str) -> bool {
+        self.retrieving_models().contains(&wire)
     }
 
     /// Whether a request to this service carries `cache_control` marks on the prefix it will send

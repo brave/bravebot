@@ -120,6 +120,7 @@ mod tests {
     fn a_task_list() -> Vec<Row> {
         vec![Row {
             content: "write the test".to_string(),
+            as_the_planner_had_it: "write the test".to_string(),
             marker: "-",
             status: Status::Active,
         }]

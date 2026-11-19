@@ -303,7 +303,7 @@ pub(super) fn set_advisor(session: &mut Session, config: &Config, word: &str) {
             session.note(t!(
                 managed_model_refused,
                 model = model,
-                reason = bravebot_agent::backend::refusal_reason(&file, why)
+                reason = bravebot_agent::backend::refusal_reason(file.as_deref(), why)
             ));
         }
         bravebot_agent::backend::Serving::NothingConfigured { .. } => {

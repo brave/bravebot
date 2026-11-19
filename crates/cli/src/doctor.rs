@@ -1174,7 +1174,7 @@ fn report_serving(config: &Config, ending: &mut Ending) {
         bravebot_agent::backend::Serving::Refused { file, why } => {
             *ending = ends_on(*ending, Ending::Configuration);
             println!();
-            println!("{}", managed_refusal(&model, &file, why));
+            println!("{}", managed_refusal(&model, file.as_deref(), why));
         }
         bravebot_agent::backend::Serving::Configured => {}
     }

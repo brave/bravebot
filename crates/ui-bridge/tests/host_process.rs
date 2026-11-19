@@ -229,6 +229,24 @@ impl Host {
             environment: &model_service(endpoint),
             stdout: Stdio::null(),
             stderr: Stdio::null(),
+            clients: support::ONE_CLIENT,
+        })
+    }
+
+    /// As [`Host::start`], given `clients`, each a name and its answers, with its standard error
+    /// kept for the test to read.
+    fn start_giving(scratch: &Scratch, endpoint: &str, clients: &[(&str, &str)]) -> Self {
+        Self::launch(Start {
+            home: &scratch.home(),
+            sessions_root: &scratch.root(),
+            workspace: &scratch.project(),
+            relay: &scratch.directory.path().join("relay.sock"),
+            settings: None,
+            current_dir: None,
+            environment: &model_service(endpoint),
+            stdout: Stdio::null(),
+            stderr: Stdio::piped(),
+            clients,
         })
     }
 }
@@ -587,8 +605,7 @@ impl Client {
     /// The next client the host starts, once the one before it has gone. It is served only after
     /// the host has dealt with the loss of the one before.
     fn next_client_of(host: &mut Host) -> Client {
-        host.command("launch");
-        host.client()
+        host.launched("launch")
     }
 
     fn until_idle(&mut self, session: &str) {
@@ -1047,49 +1064,100 @@ fn a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it(
     second.leave();
 }
 
-/// The person decides what the host starts and where it keeps things, and a command line that
-/// leaves any of that to a default or a search path is refused before anything is made.
+/// The person decides what the host starts, what each client may answer and where it keeps things,
+/// and a command line that leaves any of that to a default or a search path is refused before
+/// anything is made.
 #[test]
 fn a_command_line_that_names_no_client_or_a_relative_one_is_refused_before_anything_is_made() {
     let scratch = Scratch::new();
     let root = scratch.directory.path().join("never-made");
     let host = env!("CARGO_BIN_EXE_bravebot-host");
     let project = scratch.project();
+    let places = [
+        "--sessions-root",
+        root.to_str().unwrap(),
+        "--workspace",
+        project.to_str().unwrap(),
+    ];
+    let client = [
+        "--client",
+        "a",
+        "--answers",
+        "confirm",
+        "--program",
+        "/bin/cat",
+    ];
+    let with_places = |rest: &[&'static str]| {
+        let mut arguments = places.to_vec();
+        arguments.extend_from_slice(rest);
+        arguments
+    };
     for arguments in [
-        vec![
-            "--sessions-root",
-            root.to_str().unwrap(),
-            "--workspace",
-            project.to_str().unwrap(),
-        ],
-        vec![
-            "--sessions-root",
-            root.to_str().unwrap(),
-            "--workspace",
-            project.to_str().unwrap(),
-            "--",
-            "relative-client",
-        ],
-        vec![
-            "--sessions-root",
-            "relative-root",
-            "--workspace",
-            project.to_str().unwrap(),
-            "--",
+        with_places(&[]),
+        with_places(&["--", "/bin/cat"]),
+        with_places(&["--client", "a", "--answers", "confirm", "--program", "cat"]),
+        with_places(&["--client", "a", "--program", "/bin/cat"]),
+        with_places(&["--client", "a", "--answers", "confirm"]),
+        with_places(&[
+            "--client",
+            "a",
+            "--answers",
+            "write",
+            "--program",
             "/bin/cat",
-        ],
-        vec!["--sessions-root", root.to_str().unwrap(), "--", "/bin/cat"],
+        ]),
+        with_places(&[
+            "--client",
+            "A",
+            "--answers",
+            "confirm",
+            "--program",
+            "/bin/cat",
+        ]),
+        with_places(&[
+            "--answers",
+            "confirm",
+            "--client",
+            "a",
+            "--program",
+            "/bin/cat",
+        ]),
+        with_places(&[
+            "--client",
+            "a",
+            "--answers",
+            "none",
+            "--program",
+            "/bin/cat",
+            "--client",
+            "a",
+            "--answers",
+            "none",
+            "--program",
+            "/bin/cat",
+        ]),
+        with_places(&[
+            "--unknown",
+            "--client",
+            "a",
+            "--answers",
+            "none",
+            "--program",
+            "/bin/cat",
+        ]),
+        [
+            &[
+                "--sessions-root",
+                "relative-root",
+                "--workspace",
+                project.to_str().unwrap(),
+            ][..],
+            &client,
+        ]
+        .concat(),
+        [&["--sessions-root", root.to_str().unwrap()][..], &client].concat(),
         vec!["--workspace"],
         vec!["--sessions-root"],
-        vec![
-            "--sessions-root",
-            root.to_str().unwrap(),
-            "--workspace",
-            project.to_str().unwrap(),
-            "--unknown",
-            "--",
-            "/bin/cat",
-        ],
     ] {
         let ran = Command::new(host)
             .args(&arguments)
@@ -1469,7 +1537,14 @@ fn a_workspace_that_does_not_exist_stops_the_host_before_anything_is_made() {
         .arg(&root)
         .arg("--workspace")
         .arg(scratch.directory.path().join("proj-typo"))
-        .args(["--", "/bin/cat"])
+        .args([
+            "--client",
+            "cat",
+            "--answers",
+            "none",
+            "--program",
+            "/bin/cat",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1532,7 +1607,14 @@ fn an_existing_sessions_root_that_others_can_read_or_a_link_is_refused() {
             .arg(&root)
             .arg("--workspace")
             .arg(scratch.project())
-            .args(["--", "/bin/cat"])
+            .args([
+                "--client",
+                "cat",
+                "--answers",
+                "none",
+                "--program",
+                "/bin/cat",
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1602,7 +1684,7 @@ fn a_client_path_that_is_not_utf8_is_not_a_panic() {
         .arg(scratch.root())
         .arg("--workspace")
         .arg(scratch.project())
-        .arg("--")
+        .args(["--client", "a", "--answers", "none", "--program"])
         .arg(client)
         .stdin(Stdio::null())
         .output()
@@ -1632,7 +1714,14 @@ fn a_sessions_root_the_host_cannot_write_to_is_refused() {
         .arg(scratch.root())
         .arg("--workspace")
         .arg(scratch.project())
-        .args(["--", "/bin/cat"])
+        .args([
+            "--client",
+            "cat",
+            "--answers",
+            "none",
+            "--program",
+            "/bin/cat",
+        ])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -1656,6 +1745,7 @@ fn a_relative_directory_is_refused_even_from_inside_a_workspace() {
         environment: &model_service(&endpoint),
         stdout: Stdio::null(),
         stderr: Stdio::null(),
+        clients: support::ONE_CLIENT,
     });
     let mut client = host.client();
     let answered = client.answered("session.new", json!({"directory": "."}));
@@ -1853,5 +1943,266 @@ fn a_host_that_quits_ends_the_sessions_it_holds_before_it_exits() {
     }
 
     assert_eq!(session_log(&log), ["session-started", "session-ended"]);
+    client.leave();
+}
+
+// ---------------------------------------------------------------- named clients and their answers
+
+/// The lines the host writes on its standard error, as they arrive.
+fn what_the_host_says(host: &mut Host) -> mpsc::Receiver<String> {
+    let stderr = host
+        .child
+        .stderr
+        .take()
+        .expect("the host's error output is kept");
+    let (said, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if said.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    lines
+}
+
+/// Waits for a line of the host's that holds `wanted`, failing where none arrives.
+fn says(lines: &mpsc::Receiver<String>, wanted: &str) -> String {
+    let deadline = Instant::now() + PATIENCE;
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        match lines.recv_timeout(left) {
+            Ok(line) if line.contains(wanted) => return line,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    panic!("the host never said `{wanted}`")
+}
+
+/// The answers the host reports for the client that asks.
+fn answers_of(client: &mut Client) -> Value {
+    client.call("instance.info", json!({}))["answers"].clone()
+}
+
+/// A test is only as patient for a client that should not start as this.
+const NOT_STARTED: Duration = Duration::from_millis(700);
+
+/// The host starts each client once, in the order its command line gives, and serves one at a time:
+/// the next starts only when the one before it ends, and nothing starts after the last until the
+/// person types a launch. Launches typed while a client is connected start in the order typed.
+#[test]
+fn clients_start_once_in_the_order_given_and_launches_in_the_order_typed() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start_giving(
+        &scratch,
+        &endpoint,
+        &[("a", "confirm,trust"), ("b", "none"), ("c", "run")],
+    );
+    let first = {
+        let mut first = host.client();
+        assert_eq!(answers_of(&mut first), json!(["confirm", "trust"]));
+        first
+    };
+    assert!(
+        host.client_within(NOT_STARTED).is_none(),
+        "a second client started while the first was connected"
+    );
+    first.leave();
+    let mut second = host.client();
+    assert_eq!(answers_of(&mut second), json!([]));
+    second.leave();
+    let mut third = host.client();
+    assert_eq!(answers_of(&mut third), json!(["run"]));
+
+    host.command("launch b");
+    host.command("launch a");
+    third.leave();
+    let mut again = host.client();
+    assert_eq!(answers_of(&mut again), json!([]), "a started before b");
+    again.leave();
+    let mut last = host.client();
+    assert_eq!(answers_of(&mut last), json!(["confirm", "trust"]));
+    last.leave();
+    assert!(
+        host.client_within(NOT_STARTED).is_none(),
+        "a client started that nobody launched"
+    );
+}
+
+/// A launch that names no client, a client that is connected or waiting to start, or no client
+/// where there are several, is refused on the host's error output and not kept for later.
+#[test]
+fn a_launch_of_an_unknown_connected_or_waiting_client_is_refused_and_not_kept() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start_giving(&scratch, &endpoint, &[("a", "trust"), ("b", "none")]);
+    let said = what_the_host_says(&mut host);
+    let first = host.client();
+    for (line, refusal) in [
+        ("launch zed", "no client is named `zed`"),
+        (
+            "launch a",
+            "the client named `a` is still connected or waiting to start",
+        ),
+        (
+            "launch b",
+            "the client named `b` is still connected or waiting to start",
+        ),
+        (
+            "launch",
+            "name the client to launch: `launch NAME`, where NAME is one of a, b",
+        ),
+    ] {
+        host.command(line);
+        says(&said, refusal);
+    }
+    first.leave();
+    let mut second = host.client();
+    assert_eq!(answers_of(&mut second), json!([]));
+    second.leave();
+    assert!(
+        host.client_within(NOT_STARTED).is_none(),
+        "a refused launch was kept and started later"
+    );
+    let mut relaunched = host.launched("launch a");
+    assert_eq!(answers_of(&mut relaunched), json!(["trust"]));
+    relaunched.leave();
+}
+
+/// A client that may not answer trust is not asked about a new session's directory. Its view says
+/// the session is waiting on that answer, its own answer is refused, and no turn runs.
+#[test]
+fn a_client_without_trust_is_not_asked_about_trust_and_cannot_answer_it() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start_giving(&scratch, &endpoint, &[("a", "confirm,run,fetch,ask")]);
+    let mut client = host.client();
+    let opened = client.call("session.new", json!({"directory": scratch.project()}));
+    let session = opened["session"].as_str().unwrap().to_string();
+    client.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    let snapshot = client.event("session.view.initial");
+    assert_eq!(snapshot["data"]["status"], "awaiting_trust", "{snapshot}");
+    assert!(
+        client
+            .within(NOT_STARTED, |message| message["event"] == "trust.request")
+            .is_none(),
+        "a client without trust was asked about trust"
+    );
+    let refused = client.answered("trust.reply", json!({"session": session, "trusted": true}));
+    assert_eq!(refused["error"]["code"], "not_allowed", "{refused}");
+    let early = client.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    assert_eq!(early["error"]["code"], "bad_request", "{early}");
+    client.leave();
+}
+
+/// A client without trust that takes over a session still waiting on its trust question is not
+/// sent it, and no turn runs. The next client that may answer trust is asked.
+#[test]
+fn a_takeover_without_trust_is_not_asked_and_the_next_client_with_trust_is() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start_giving(&scratch, &endpoint, &[("a", "trust"), ("b", "confirm")]);
+
+    let mut first = host.client();
+    let opened = first.call("session.new", json!({"directory": scratch.project()}));
+    let session = opened["session"].as_str().unwrap().to_string();
+    first.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    first.event("trust.request");
+    first.leave();
+
+    let mut second = host.client();
+    second.call("session.attach", json!({"session": session}));
+    let snapshot = second.event("session.view.snapshot");
+    assert_eq!(snapshot["data"]["status"], "awaiting_trust", "{snapshot}");
+    assert!(
+        second
+            .within(NOT_STARTED, |message| message["event"] == "trust.request")
+            .is_none(),
+        "a client without trust was sent the trust question"
+    );
+    let early = second.answered(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    assert_eq!(early["error"]["code"], "bad_request", "{early}");
+    second.leave();
+
+    let mut third = host.launched("launch a");
+    third.call("session.attach", json!({"session": session}));
+    let asked = third.event("trust.request");
+    assert_eq!(asked["session"], session.as_str());
+    third.leave();
+}
+
+/// A client that may not confirm a write is not shown the question, and the write does not land.
+#[test]
+fn a_write_is_not_put_to_a_client_that_may_not_confirm_it() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, &[("a", "run,fetch,ask,trust")]);
+    let mut client = host.client();
+    let session = client.viewed_session_in(&scratch.project());
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    client.event("turn.done");
+    assert!(
+        client
+            .inbox
+            .held
+            .iter()
+            .all(|message| message["event"] != "confirm.request"),
+        "a client that may not confirm was asked to: {:?}",
+        client.inbox.held
+    );
+    assert!(!written.exists(), "a write nobody could confirm landed");
+    client.leave();
+}
+
+/// A reply of a kind the client may not give is refused before the bridge reads it, even with the
+/// number of a question the client was asked. The question stays open, and the right answer lands.
+#[test]
+fn a_reply_of_the_wrong_kind_is_refused_and_the_question_stays_answerable() {
+    let scratch = Scratch::new();
+    let written = scratch.project().join("out.txt");
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, &[("a", "confirm,trust")]);
+    let mut client = host.client();
+    let session = client.viewed_session_in(&scratch.project());
+    client.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    let asked = client.event("confirm.request");
+    let request = asked["data"]["request"].clone();
+    let refused = client.answered(
+        "run.reply",
+        json!({"session": session, "request": request, "decision": "approve"}),
+    );
+    assert_eq!(refused["error"]["code"], "not_allowed", "{refused}");
+    assert!(!written.exists(), "a refused reply let the write land");
+    client.call(
+        "confirm.reply",
+        json!({"session": session, "request": request, "decision": "approve"}),
+    );
+    client.event("turn.done");
+    assert_eq!(
+        std::fs::read_to_string(&written).expect("the approved write landed"),
+        "written by the model"
+    );
     client.leave();
 }

@@ -162,6 +162,13 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   here routing or inspecting the traffic.
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
+- **A model that searches the web where bravebot cannot see the search.** A chat completions model that
+  searches before it replies, such as `gpt-5-search-api`, returns text from web pages inside its reply.
+  Bravebot labels a reply by what the model was sent, so that text would carry the label of a trusted
+  conversation. Bravebot refuses these models over chat completions, by a list compiled into the release,
+  and keeps them over the Responses protocol, where search is a tool bravebot does not offer. A model
+  that searches and is not on the list is not detected. Which models search on every request is taken
+  from OpenAI's documentation and was not exercised against the service.
 
 ## Ten deliberate exceptions
 

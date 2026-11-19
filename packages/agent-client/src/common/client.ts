@@ -1,7 +1,7 @@
 import { describeThrown, isolate } from './isolate.js'
 import { CapabilityError, ProtocolError, RpcError, UnknownSendError, UnsupportedError } from './errors.js'
 import { RpcConnection, type Deadlines, type LineSink, type Outcome } from './connection.js'
-import type { AgentClient, AgentSession, AskAnswer, CancelResult, CloseOutcome, HeldSession, InstanceInfo, MessageStatus, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
+import type { AgentClient, AgentSession, AnswerKind, AskAnswer, CancelResult, CloseOutcome, HeldSession, InstanceInfo, MessageStatus, SendResult, SessionSummary, TargetInfo, ViewListener } from './interface.js'
 import { applySnapshot, applyUpdate, awaitSnapshot, endView, startView, viewFromSnapshot, type ViewState } from './view.js'
 import {
   SESSION_VIEW_RESYNC,
@@ -293,6 +293,7 @@ function newMessageId(): string {
 }
 
 const HELD_STATES: readonly string[] = ['open', 'closing', 'closed']
+const ANSWER_KINDS: readonly string[] = ['confirm', 'run', 'fetch', 'ask', 'trust']
 
 function readMessageStatus(value: unknown): MessageStatus {
   if (isRecord(value)) {
@@ -320,7 +321,11 @@ function readInstance(value: unknown): InstanceInfo {
     }
     return { session: held.session, state: held.state as HeldSession['state'], working: held.working, controlled: held.controlled }
   })
-  return { instance: value.instance, sessions }
+  const answers = value.answers
+  if (!Array.isArray(answers) || !answers.every((kind: unknown) => typeof kind === 'string' && ANSWER_KINDS.includes(kind))) {
+    throw new ProtocolError('instance.info did not list the answers this connection may give')
+  }
+  return { instance: value.instance, sessions, answers: answers as AnswerKind[] }
 }
 
 type RawAccess = (client: RpcAgentClient, method: string, params: Record<string, unknown>) => Promise<unknown>

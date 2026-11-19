@@ -797,6 +797,11 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
 /// `truncated` is load-bearing: a preview that stops without saying so reads as the whole
 /// file, and a person vouching for a path on the strength of its first few lines should
 /// know that is what they are doing.
+///
+/// `preview` has each character that draws as nothing written out, and `hidden` is how many
+/// there were in it, as `hidden` is on an output request. `hiddenNote` is the sentence saying so,
+/// in the catalog's words, so a front end that draws it carries no copy of its own. The planner's
+/// copy of the file is the file's own bytes.
 pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
     json!({
         "request": id,
@@ -808,6 +813,8 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
         "label": request.label,
         "labelAxes": label_axes(&request.label),
         "truncated": request.truncated,
+        "hidden": request.hidden,
+        "hiddenNote": bravebot_approval::hidden_note(request.hidden),
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
     })
 }

@@ -48,6 +48,7 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
         1,
         vec![Row {
             content: "read the parser".into(),
+            as_the_planner_had_it: "read the parser".into(),
             marker: "[x]",
             status: Status::Done,
         }],

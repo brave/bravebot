@@ -136,7 +136,7 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
         bravebot_agent::backend::Serving::Refused { file, why } => {
             return Some(fail(
                 Ending::Configuration,
-                crate::model::managed_refusal(&model, &file, why),
+                crate::model::managed_refusal(&model, file.as_deref(), why),
             ));
         }
         bravebot_agent::backend::Serving::NothingConfigured {
@@ -272,7 +272,7 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
         // (BACKEND-48).
         bravebot_agent::backend::Serving::Refused { file, why } => Start::Ended(fail(
             Ending::Configuration,
-            crate::model::managed_refusal(&model, &file, why),
+            crate::model::managed_refusal(&model, file.as_deref(), why),
         )),
         bravebot_agent::backend::Serving::Configured => Start::Serving(Box::new(config)),
     }

@@ -167,6 +167,9 @@ only the routing part has to be trustworthy.
 `verified-by: bravebot_agent::turn::a_background_line_cannot_be_fed_a_reference`
 `verified-by: bravebot_agent::turn::a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_names_the_reference_it_would_be_fed`
+`verified-by: bravebot_approval::lib::a_run_names_the_reference_it_is_fed_after_what_it_writes_and_only_where_there_is_one`
+`verified-by: bravebot_cli::plain::a_run_fed_a_reference_is_asked_about_with_the_reference_named`
+`verified-by: bravebot_ui_bridge::acp::the_editor_is_told_the_reference_a_run_is_fed`
 
 <a id="RUN-4"></a>
 ### RUN-4: output is untrusted and private by default, and nothing inferred changes that

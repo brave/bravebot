@@ -8968,28 +8968,37 @@ fn a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it()
     std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "DELEGATE-THE-WORK",
-            vec![
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
-                // Nothing of its own to call, so the turn waits here until the delegate has
-                // finished, which is what the planner is told to do with a round it has no work
-                // for. It also puts every boundary the delegate reaches inside one window of the
-                // parent's: the parent's first asking is over before the delegate can have a reply
-                // to its own opening request, and its next one waits on the delegate being joined.
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        (
-            "DO-THE-WORK",
-            vec![
-                tool_request("read_file", r#"{"path":"a.txt"}"#),
-                reply_with("read it"),
-            ],
-        ),
-    ]);
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-THE-WORK",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                    // Nothing of its own to call, so the turn waits here until the delegate has
+                    // finished, which is what the planner is told to do with a round it has no
+                    // work for.
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "DO-THE-WORK",
+                vec![
+                    tool_request("read_file", r#"{"path":"a.txt"}"#),
+                    reply_with("read it"),
+                ],
+            ),
+        ],
+        // The delegate is answered only once the parent's second request has arrived, so it is
+        // still working when the parent answers "waiting" and the turn waits on it. Unheld, it
+        // could finish first and be taken back before that request, and the turn would end on
+        // "waiting" with the line still to be read, which INPUT-10 leaves for a turn of its own.
+        Order::After {
+            held: "DO-THE-WORK",
+            after: "DELEGATE-THE-WORK",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -9008,6 +9017,11 @@ fn a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it()
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was never held for the parent's second request, so it could have ended \
+         before the turn waited on it"
+    );
     // A turn replays the arguments it called with, so the task it handed out is in its own requests
     // as well as in the delegate's. Its own prompt is what tells the two apart.
     let asked = every_request(&received);
@@ -45874,6 +45888,78 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
     );
 }
 
+/// PROMPT-13: a quarantined file whose text holds characters that draw as nothing is offered with
+/// each one written out and counted, in a file short enough that the cut says nothing, and the
+/// planner is handed the bytes the file holds once the person says yes.
+///
+/// A file of 20 lines or fewer is not cut, so before the head was written out a person reading
+/// `here.` had no sign that a message followed it. The count is taken in the reshape the head is
+/// cut in, so the test holds that the planner's copy is the file's own bytes: spelling it would
+/// hand the model a different text from the one the person agreed to.
+#[test]
+fn a_vouch_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes() {
+    let scratch = Scratch::new("vouch-hidden-characters");
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "# Notes\nNothing to see here.\u{E0064}\u{E006F}\u{202E}\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"notes.md"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = VouchesForFiles::new(true);
+    let offered = confirmer.offered.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the notes"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let asked = offered.lock().unwrap();
+    let request = asked.first().expect("the user was offered the file");
+    assert!(!request.truncated, "a file of two lines was said to be cut");
+    assert_eq!(
+        request.preview,
+        "# Notes\nNothing to see here.\u{2039}U+E0064 d\u{203A}\u{2039}U+E006F o\u{203A}\u{2039}U+202E\u{203A}",
+        "a character the person cannot see was drawn as nothing, or the preview was changed otherwise"
+    );
+    assert_eq!(
+        request.hidden, 3,
+        "the prompt would say the wrong number of characters draw as nothing"
+    );
+    drop(asked);
+
+    let _first = received.recv().expect("first request");
+    let _check = received.recv().expect("the check before the question");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("here.\u{E0064}\u{E006F}\u{202E}"),
+        "the planner was not handed the bytes the file holds: {second}"
+    );
+    assert!(
+        !second.contains("U+E0064"),
+        "the planner was handed the person's spelling of the bytes instead of the bytes: {second}"
+    );
+}
+
 /// The defect this branch was reported for. A session offered to promote a file whose whole point
 /// was a line addressed to whoever read it, and the offer said nothing about that: the check only
 /// ran when the planner reached for the content a second way. Somebody answering yes here is
@@ -53796,11 +53882,14 @@ fn a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_
 /// DELEGATE-17 and AGENT-3: a call that sets `wake_after` to the number of delegates it starts is
 /// not asked again until all of them have ended, and is then asked once with every report.
 ///
-/// The fast delegate answers at once. The slow one is held until a third planner request arrives,
-/// or for the server's bound of ten seconds where none does. A turn that woke at the first
-/// delegate's end sends that request with the fast report alone, which releases the slow one and
-/// sets the flag saying the hold was met. The turn under test sends no third request until the
-/// slow delegate has ended, so the hold runs to its bound and the flag stays false.
+/// The fast delegate is held until the planner's second request has arrived, so it ends while the
+/// turn waits and never before that request is written. Unheld, it could end first, and the turn
+/// takes back what has finished before it asks (AGENT-3), which leaves only the slow delegate to
+/// wait for and no first end for the count to hold back. The slow one is held until a third
+/// planner request arrives, or for the server's bound of ten seconds where none does. A turn that
+/// woke at the fast delegate's end sends a third request with the fast report alone, which
+/// releases the slow one and costs a fourth. The turn under test sends no third request until the
+/// slow delegate has ended, so the hold runs to its bound and the planner is asked three times.
 #[test]
 fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_last_ends() {
     let scratch = Scratch::new("delegates-wake-after-all");
@@ -53823,11 +53912,7 @@ fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_la
             ("FAST-ONE", vec![reply_with("THE-FAST-REPORT")]),
             ("SLOW-ONE", vec![reply_with("THE-SLOW-REPORT")]),
         ],
-        Order::After {
-            held: "SLOW-ONE",
-            after: "ASK-ALL",
-            asked: 3,
-        },
+        Order::Staged(&[("FAST-ONE", "ASK-ALL", 2), ("SLOW-ONE", "ASK-ALL", 3)]),
     );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -53848,9 +53933,9 @@ fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_la
     .expect("turn runs");
 
     assert!(
-        !kept.load(Ordering::SeqCst),
-        "a third planner request arrived while the slow delegate was still held, so the planner \
-         was asked again before the last of the call's delegates ended: {:?}",
+        kept.load(Ordering::SeqCst),
+        "the fast delegate was never held for the planner's second request, so it could have ended \
+         before the wait and this proves nothing: {:?}",
         reporter.lines()
     );
     let requests = every_request(&received);
@@ -53861,7 +53946,8 @@ fn a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_la
     assert_eq!(
         planner.len(),
         3,
-        "the planner was not asked exactly once after both delegates ended"
+        "the planner was not asked exactly once after both delegates ended, so it was asked again \
+         before the last of the call's delegates ended"
     );
     assert!(
         !planner[1].contains("THE-FAST-REPORT"),
@@ -59072,6 +59158,201 @@ fn a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_
     }
 }
 
+/// CHECKOUT-13, CHECKOUT-23, LABEL-3. A file a run redirected into a directory a link in a tree
+/// nobody vouched for stands for is recorded by the directory as the planner typed it, and not by
+/// the name the link chose. The carry refuses it as one with a link in its way and names the typed
+/// spelling, and no request to the model holds the link's target.
+#[cfg(unix)]
+#[test]
+fn a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling() {
+    let scratch = Scratch::new("checkout-with-changes-linked-redirect");
+    let home = Scratch::new("checkout-with-changes-linked-redirect-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let target = scratch.path.join("vendor").join(LINKED_TARGET);
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("note.txt"), "one\n").unwrap();
+    std::os::unix::fs::symlink(LINKED_TARGET, scratch.path.join("vendor/docs")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "REDIRECT-THROUGH-A-LINK-THEN-CHECK",
+            vec![
+                tool_request(
+                    "run",
+                    r#"{"command":"sed -n p note.txt > out.txt","directory":"vendor/docs"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHECK-THE-LINKED-WORK","isolation":"checkout_with_changes"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the delegate checked"),
+            ],
+        ),
+        ("CHECK-THE-LINKED-WORK", vec![reply_with("checked")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("REDIRECT-THROUGH-A-LINK-THEN-CHECK").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(target.join("out.txt")).ok(),
+        Some("one\n".to_string()),
+        "the run did not write through the link"
+    );
+    // INSTR-14, INSTR-16: the touched record is placed by the typed spelling too.
+    assert!(
+        workspace
+            .touched_files()
+            .iter()
+            .any(|file| file == "vendor/docs/out.txt"),
+        "the typed name was not recorded as touched: {:?}",
+        workspace.touched_files()
+    );
+    assert!(
+        workspace
+            .touched_files()
+            .iter()
+            .chain(workspace.touched_directories().iter())
+            .all(|name| !name.contains(LINKED_TARGET)),
+        "the name a link chose was recorded as touched"
+    );
+    let asked = every_request(&received);
+    assert!(
+        !asked.iter().any(|body| body.contains(LINKED_TARGET)),
+        "the name a link in an unvouched tree chose reached the model: {asked:?}"
+    );
+    for (who, from) in [("the delegate", false), ("the planner", true)] {
+        assert!(
+            asked.iter().any(
+                |body| body.contains("REDIRECT-THROUGH-A-LINK-THEN-CHECK") == from
+                    && body.contains(
+                        "Not carried: `vendor/docs/out.txt` (a link stands in its place or on the \
+                     way to it)."
+                    )
+            ),
+            "{who} was not told the typed name was left for a link: {asked:?}"
+        );
+    }
+}
+
+/// CHECKOUT-13, CHECKOUT-23, LABEL-3. A redirection operand the planner spells with an absolute
+/// path or with a `..` still names the place a link chose nowhere in the record: the carry names
+/// the file by the spelling the planner typed, and no request to the model holds the link's target.
+#[cfg(unix)]
+#[test]
+fn a_redirection_spelled_absolute_or_with_a_parent_is_recorded_by_the_typed_spelling() {
+    for (marker, command, directory) in [
+        ("ABSOLUTE-OPERAND", "ABSOLUTE", None),
+        (
+            "PARENT-OPERAND",
+            "sed -n p note.txt > ../docs/out.txt",
+            Some("vendor/docs"),
+        ),
+    ] {
+        let scratch = Scratch::new("checkout-with-changes-linked-operand");
+        let home = Scratch::new("checkout-with-changes-linked-operand-home");
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let target = scratch.path.join("vendor").join(LINKED_TARGET);
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("note.txt"), "one\n").unwrap();
+        std::os::unix::fs::symlink(LINKED_TARGET, scratch.path.join("vendor/docs")).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let line = if command == "ABSOLUTE" {
+            format!(
+                "sed -n p vendor/docs/note.txt > {}/vendor/docs/out.txt",
+                workspace.root().display()
+            )
+        } else {
+            command.to_string()
+        };
+        let arguments = match directory {
+            Some(directory) => serde_json::json!({"command": line, "directory": directory}),
+            None => serde_json::json!({"command": line}),
+        }
+        .to_string();
+        let task: &'static str =
+            Box::leak(format!("REDIRECT-{marker}-THEN-CHECK").into_boxed_str());
+        let check: &'static str = Box::leak(format!("CHECK-{marker}").into_boxed_str());
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                task,
+                vec![
+                    tool_request("run", &arguments),
+                    tool_request(
+                        "spawn_agent",
+                        &format!(
+                            r#"{{"kind":"worker","task":"{check}","isolation":"checkout_with_changes"}}"#
+                        ),
+                    ),
+                    reply_with("waiting"),
+                    reply_with("the delegate checked"),
+                ],
+            ),
+            (check, vec![reply_with("checked")]),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.distrust("vendor");
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new(task).with_home(Some(home.path.clone())),
+            &mut confirmer,
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("out.txt")).ok(),
+            Some("one\n".to_string()),
+            "{marker}: the run did not write through the link"
+        );
+        let asked = every_request(&received);
+        assert!(
+            !asked.iter().any(|body| body.contains(LINKED_TARGET)),
+            "{marker}: the name a link in an unvouched tree chose reached the model: {asked:?}"
+        );
+        assert!(
+            workspace
+                .touched_files()
+                .iter()
+                .all(|name| !name.contains(LINKED_TARGET)),
+            "{marker}: the name a link chose was recorded as touched"
+        );
+        assert!(
+            asked.iter().any(|body| body.contains(task)
+                && body.contains(
+                    "Not carried: `vendor/docs/out.txt` (a link stands in its place or on the \
+                     way to it)."
+                )),
+            "{marker}: the planner was not told the typed name was left for a link: {asked:?}"
+        );
+    }
+}
+
 /// CHECKOUT-23. A file a deny rule covers reading is not carried, even where the driver recorded
 /// the planner writing it before the rule existed, and the delegate and the planner are told it
 /// was left and why.
@@ -60832,6 +61113,112 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
              holds. It does not name a file a program wrote there"
         )),
         "the planner was not told the paths written in the checkout"
+    );
+}
+
+/// CHECKOUT-13, CHECKOUT-14, CHECKOUT-23, LABEL-3. A file a delegate redirected into a directory a
+/// committed link stands for, in a kept checkout, is named to the planner by the directory as the
+/// delegate typed it. The notice for the kept checkout and the result of `apply_checkout` do not
+/// hold the name the link chose, and the apply leaves the file where it is because a link stands
+/// on the way to it.
+#[cfg(unix)]
+#[test]
+fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() {
+    let scratch = Scratch::new("checkout-linked-redirect");
+    let home = Scratch::new("checkout-linked-redirect-home");
+    repository::commit_files_and_links(
+        &scratch.path,
+        &[
+            ("README", "committed\n"),
+            (&format!("vendor/{LINKED_TARGET}/note.txt"), "one\n"),
+        ],
+        &[("vendor/docs", LINKED_TARGET)],
+        "first",
+    );
+    let target = scratch.path.join("vendor").join(LINKED_TARGET);
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("note.txt"), "one\n").unwrap();
+    std::os::unix::fs::symlink(LINKED_TARGET, scratch.path.join("vendor/docs")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-OF-A-LINKED-REDIRECTION",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"REDIRECT-IN-THE-CHECKOUT","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                tool_request(
+                    "apply_checkout",
+                    r#"{"checkout":"c1","paths":["vendor/docs/out.txt"]}"#,
+                ),
+                reply_with("applied"),
+            ],
+        ),
+        (
+            "REDIRECT-IN-THE-CHECKOUT",
+            vec![
+                tool_request(
+                    "run",
+                    r#"{"command":"sed -n p note.txt > out.txt","directory":"vendor/docs"}"#,
+                ),
+                reply_with("redirected"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("PARENT-OF-A-LINKED-REDIRECTION").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    let asked = every_request(&received);
+
+    let made = checkouts_under(&home.path);
+    assert_eq!(made.len(), 1, "the checkout was not kept");
+    assert_eq!(
+        std::fs::read_to_string(made[0].join("vendor").join(LINKED_TARGET).join("out.txt")).ok(),
+        Some("one\n".to_string()),
+        "the redirection did not write through the link in the checkout"
+    );
+    assert!(
+        !asked.iter().any(|body| body.contains(LINKED_TARGET)),
+        "the name a committed link chose reached the model: {asked:?}"
+    );
+    let told: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("PARENT-OF-A-LINKED-REDIRECTION"))
+        .collect();
+    assert!(
+        told.iter().any(|body| body
+            .contains("The driver recorded writes there to `vendor/docs/out.txt`.")),
+        "the planner was not told the typed name of the file written in the checkout: {told:?}"
+    );
+    assert!(
+        told.iter().any(|body| body.contains(
+            "vendor/docs/out.txt: not brought back, since a link stands in its place, and a \
+             link is not followed"
+        )),
+        "the apply did not refuse the typed name for the link on its way: {told:?}"
+    );
+    assert!(
+        !target.join("out.txt").exists(),
+        "the apply wrote through the link into the working directory"
     );
 }
 
@@ -86369,6 +86756,183 @@ fn an_addressed_definition_whose_model_the_managed_layer_denies_sends_nothing_an
     );
 }
 
+/// A config whose `openai` entry is reached over chat completions at `endpoint` and lists
+/// `gpt-5-search-api`, which searches the web before it replies (LABEL-8, BACKEND-19).
+fn a_config_listing_a_search_model(endpoint: &str) -> Config {
+    let mut config = config_for(endpoint);
+    let root: serde_json::Value = serde_json::from_str(&format!(
+        r#"{{"provider": {{"openai": {{"npm": "@ai-sdk/openai-compatible",
+            "options": {{"baseURL": "{endpoint}", "apiKey": "SYNTHETIC_TOKEN"}},
+            "models": {{"gpt-5-search-api": {{}}}}}}}}}}"#
+    ))
+    .expect("json");
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    config
+}
+
+/// LABEL-8, DELEGATE-22. A delegate the planner starts with `spawn_agent` is not requested on a
+/// model that searches the web over chat completions: the definition is refused with the model and
+/// the reason, and its task is never sent. The regression it rejects is a delegate that runs on the
+/// model, whose reply the planner would read as its own context's output.
+#[test]
+fn a_delegate_whose_model_searches_the_web_sends_nothing_and_says_why() {
+    let scratch = Scratch::new("delegate-model-retrieves");
+    let home = Scratch::new("delegate-model-retrieves-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("searching-reader.md"),
+        "---\nname: searching-reader\ndescription: Reads on a search model.\nkind: reader\nmodel: openai/gpt-5-search-api\n---\n\nREAD-ON-A-SEARCH-MODEL\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-SEARCHING-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"searching-reader","task":"CHECK-ON-A-SEARCH-MODEL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-ON-A-SEARCH-MODEL", vec![reply_with("clear")]),
+    ]);
+    let config = a_config_listing_a_search_model(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-TO-SEARCHING-READER").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        !requests
+            .iter()
+            .any(|body| body.contains("gpt-5-search-api\"")),
+        "a request carried the search model: {requests:?}"
+    );
+    assert!(
+        matches!(reporter.delegates_finished.as_slice(), [(_, _, true)]),
+        "the delegate was not reported as not finishing: {:?}",
+        reporter.delegates_finished
+    );
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("searching-reader")
+                && notice.contains("openai/gpt-5-search-api")
+                && notice.contains("searches the web")
+        }),
+        "the refusal named neither the definition, the model nor the reason: {:?}",
+        reporter.notices
+    );
+}
+
+/// LABEL-8, DELEGATE-22. A definition a turn is addressed to is refused on the same ground inside
+/// the driver, where an interface that never ran `definition_named` starts it.
+#[test]
+fn an_addressed_definition_whose_model_searches_the_web_sends_nothing_and_says_why() {
+    let scratch = Scratch::new("address-model-retrieves");
+    let home = Scratch::new("address-model-retrieves-home");
+    define(
+        &home,
+        "searching-reviewer",
+        "kind: reader\nmodel: openai/gpt-5-search-api\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = a_config_listing_a_search_model(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "searching-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "the definition ran"
+    );
+    assert_eq!(received.try_iter().count(), 0, "a request was sent");
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("searching-reviewer")
+                && notice.contains("openai/gpt-5-search-api")
+                && notice.contains("searches the web")
+        }),
+        "the refusal named neither the definition, the model nor the reason: {:?}",
+        reporter.notices
+    );
+}
+
+/// LABEL-8, GOAL-19. A goal check whose `summaryModel` searches the web over chat completions sends
+/// nothing and ends on a reason that names the model and says why, not a sign-in or a file. The
+/// regression it rejects is a judge that runs on the model. The Responses route cannot be built
+/// here, since it is keyed on OpenAI's host, and is pinned beside `side_request_model`.
+#[test]
+fn a_summary_model_that_searches_the_web_sends_no_check() {
+    let (endpoint, received) =
+        serve_sequence(vec![reply_with("MET\nthe second listing shows a.txt")]);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+    let mut check = |config: &Config| {
+        turn::goal(
+            config,
+            &egress,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            bravebot_agent::goal::Check::of(
+                &conversation,
+                "a.txt exists",
+                bravebot_agent::Work::default(),
+            ),
+            Some("an-expensive-session-model"),
+            &mut sink,
+            bravebot_core::trust::TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+    };
+
+    let mut config = a_config_listing_a_search_model(&endpoint);
+    config.summary_model = Some("openai/gpt-5-search-api".to_string());
+    let said = match check(&config) {
+        Err(failure) => failure.to_string(),
+        Ok(_) => panic!("a summary model that searches the web must send no check"),
+    };
+    assert!(
+        said.contains("openai/gpt-5-search-api") && said.contains("searches the web"),
+        "the refusal did not name the model and the reason: {said}"
+    );
+    assert!(
+        !said.contains("sign-in"),
+        "a search model was reported as one needing a sign-in: {said}"
+    );
+    let sent: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        sent.is_empty(),
+        "the search model was sent a check: {sent:?}"
+    );
+}
+
 /// BACKEND-48. A skill naming a model the managed layer denies does not move the turn onto it: the
 /// rounds after the skill loads keep the session's model, and the person is told which file refused.
 #[test]
@@ -87804,6 +88368,44 @@ fn an_advisor_model_the_machine_refuses_is_not_asked() {
     );
 }
 
+/// LABEL-8, ADVISOR-7: a model that searches the web over chat completions is not asked, whichever
+/// route named it, and the planner is told to carry on without it. The regression it rejects is an
+/// advisor request sent to the model, whose reply would reach the planner labelled from a context
+/// that holds none of its pages.
+#[test]
+fn an_advisor_model_that_searches_the_web_is_not_asked() {
+    let scratch = Scratch::new("advisor-retrieves");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        reply_with("done"),
+    ]);
+    let config = a_config_listing_a_search_model(&endpoint);
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("choose the first file to read")
+            .with_advisor(Some("openai/gpt-5-search-api".into())),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    let requests = every_request(&received);
+    assert_eq!(requests.len(), 2, "a request went to the search model");
+    assert!(
+        requests[1].contains("the advisor model searches the web before it replies"),
+        "got: {}",
+        requests[1]
+    );
+    assert!(
+        !requests[1].contains("do not allow the advisor model"),
+        "the settings were blamed for a search model: {}",
+        requests[1]
+    );
+}
+
 /// ADVISOR-8: a model the setting names that the machine refuses does not stop the run or hide the
 /// tool; the refusal is answered when the planner calls, as ADVISOR-7 words it.
 #[test]
@@ -88747,23 +89349,32 @@ fn the_view_of_the_request_labels_a_line_typed_mid_turn_as_typed() {
     std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_by_marker(vec![
-        (
-            "DELEGATE-THE-WORK",
-            vec![
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        (
-            "DO-THE-WORK",
-            vec![
-                tool_request("read_file", r#"{"path":"a.txt"}"#),
-                reply_with("read it"),
-            ],
-        ),
-    ]);
+    // The delegate is held until the parent's second request, so the turn waits on it and takes
+    // the line at that wait, as the test of a prompt typed while a delegate runs does.
+    let (endpoint, _received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-THE-WORK",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "DO-THE-WORK",
+                vec![
+                    tool_request("read_file", r#"{"path":"a.txt"}"#),
+                    reply_with("read it"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "DO-THE-WORK",
+            after: "DELEGATE-THE-WORK",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -88782,6 +89393,10 @@ fn the_view_of_the_request_labels_a_line_typed_mid_turn_as_typed() {
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was never held for the parent's second request"
+    );
     let line = reporter
         .requests
         .iter()

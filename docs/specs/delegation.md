@@ -1199,7 +1199,9 @@ The name is configuration, not content. A definition loads only from a source so
 in, as a person's pick in `/model` is for the parent's.
 
 A model that needs a sign-in this machine has not made is not swapped for the turn's. The delegate
-does not run, and the person is told which definition asked for which model.
+does not run, and the person is told which definition asked for which model. A model that searches
+the web before it replies, reached over chat completions ([LABEL-8](labels.md#LABEL-8)), is refused
+the same way, and the notice says that it searches the web.
 
 A delegate answered by a model other than the one its definition named says so, naming the
 definition and the model it asked for. It is compared the way a session's own model is: against the
@@ -1223,6 +1225,8 @@ definition could ask for one model and have every delegate it starts answered by
 `verified-by: bravebot_agent::agents::a_definition_naming_inherit_names_no_model`
 `verified-by: bravebot_core::delegate::a_definition_may_name_a_model_and_the_spec_carries_it`
 `verified-by: bravebot_agent::turn::a_delegate_uses_the_model_its_definition_selected`
+`verified-by: bravebot_agent::turn::a_delegate_whose_model_searches_the_web_sends_nothing_and_says_why`
+`verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_searches_the_web_sends_nothing_and_says_why`
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_answered_by_a_model_other_than_its_definitions_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution`

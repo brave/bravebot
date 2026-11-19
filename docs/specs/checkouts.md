@@ -300,6 +300,8 @@ each checkout, and the carry holds one capture across copying the rules and the 
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_with_changes_holds_the_tree_the_planner_has`
 `verified-by: bravebot_agent::turn::a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_answered`
 `verified-by: bravebot_agent::turn::a_checkout_with_changes_leaves_a_file_a_later_rule_covers_and_says_so`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_names_a_redirection_through_a_link_by_the_typed_spelling`
+`verified-by: bravebot_agent::turn::a_redirection_spelled_absolute_or_with_a_parent_is_recorded_by_the_typed_spelling`
 `verified-by: bravebot_agent::turn::each_checkout_of_a_fan_out_is_given_the_changes`
 `verified-by: bravebot_agent::turn::a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing`
 `verified-by: bravebot_agent::workspace::the_changes_carried_into_a_checkout_read_as_the_working_directorys_status_does`
@@ -773,10 +775,12 @@ Half built. The driver records the name the planner typed for each file a `write
 `edit_file` wrote in the checkout. It records a redirection's name once the line has ended, where
 the line left a file there and the credential scan did not take it back out. A name is placed by
 its spelling, with `.` and `..` resolved and nothing on disk read, so a link is recorded by its own
-name and not by its target's. A write through a reference is counted. A name outside the checkout,
-in scratch or an added directory, is not recorded. A path a deny rule covered when it was written is
-never recorded, since that write was refused. One a rule added later covers stays recorded, and
-that rule would refuse bringing it back ([CHECKOUT-14](#CHECKOUT-14)). The report and
+name and not by its target's. A redirection is recorded under its directory as the planner typed
+it, followed by the rest of the path, and not under where a link in that directory led. A write
+through a reference is counted. A name outside the checkout, in scratch or an added directory, is
+not recorded. A path a deny rule covered when it was written is never recorded, since that write
+was refused. One a rule added later covers stays recorded, and that rule would refuse bringing it
+back ([CHECKOUT-14](#CHECKOUT-14)). The report and
 `/checkouts` give only these names. `apply_checkout` and `/checkouts apply` also read a status over
 the checkout each time they are used, as `Workspace::checkout_status`, on the terms of
 [CHECKOUT-12](#CHECKOUT-12) with the map's trust over the whole checkout asked of the checkout's own
@@ -792,6 +796,7 @@ printed.
 
 `verified-by: bravebot_agent::workspace::a_checkout_records_the_paths_written_in_it`
 `verified-by: bravebot_agent::turn::a_kept_checkout_is_named_with_the_paths_written_in_it`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 `verified-by: bravebot_agent::workspace::a_checkouts_status_lists_what_changed_there_and_what_was_deleted`
 `verified-by: bravebot_agent::workspace::a_checkouts_status_is_declined_where_a_path_is_distrusted_and_says_what_it_left_out`
 
@@ -877,6 +882,7 @@ not text, is named and left.
 `verified-by: bravebot_agent::turn::a_checkout_file_whose_directory_leaves_the_working_directory_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::turn::a_checkout_file_that_cannot_land_does_not_stop_the_files_after_it`
 `verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
+`verified-by: bravebot_agent::turn::a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling`
 `verified-by: bravebot_ui_bridge::checkouts::a_later_turn_is_told_the_working_directory_was_written_since_the_checkout`
 
 ## How long one lasts

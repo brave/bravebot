@@ -223,13 +223,16 @@ fn origin_command(program: &Path) -> std::process::Command {
 ///   it names can be a login flow that does. The names and kinds are those of the browser opener
 ///   (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list and is repeated here
 ///   so this list reads as complete.
+/// - `SSH_PKCS11_HELPER` is the helper program `ssh-pkcs11-client` execs for a PKCS#11 provider,
+///   read the same way `SSH_SK_HELPER` is for a hardware key.
 ///
 /// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
-const CODE_SELECTORS: [(&str, Names); 10] = [
+const CODE_SELECTORS: [(&str, Names); 11] = [
     ("SSH_ASKPASS", Names::Options),
     ("SSH_ASKPASS_REQUIRE", Names::Options),
     ("SSH_SK_PROVIDER", Names::Options),
     ("SSH_SK_HELPER", Names::Options),
+    ("SSH_PKCS11_HELPER", Names::Options),
     ("DEVELOPER_DIR", Names::Directory),
     selectors::BROWSER,
     ("XDG_DATA_HOME", Names::Directory),
@@ -892,6 +895,17 @@ mod tests {
 
         assert!(withheld("SSH_SK_HELPER", &planted, &session.path));
         assert!(withheld("SSH_SK_HELPER", &genuine, &session.path));
+    }
+
+    /// The regression it rejects: starting `ssh` with `SSH_PKCS11_HELPER` naming a program a
+    /// stage wrote, which `ssh-pkcs11-client` execs for a PKCS#11 provider.
+    #[cfg(unix)]
+    #[test]
+    fn a_pkcs11_helper_is_never_handed_to_the_start() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("pkcs11-helper");
+
+        assert!(withheld("SSH_PKCS11_HELPER", &planted, &session.path));
+        assert!(withheld("SSH_PKCS11_HELPER", &genuine, &session.path));
     }
 
     /// The regression it rejects: leaving `SHELL` as the person's environment has it. `ssh` runs a

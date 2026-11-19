@@ -863,9 +863,11 @@ pub enum Serving {
     /// person at the machine cannot write the file that refused it, so what they are told is which
     /// file refused and why, and nothing about setting a service up.
     Refused {
-        /// The file that refused it, which is the only actionable thing in the answer.
-        file: PathBuf,
-        /// Which of the two lists refused it.
+        /// The file that refused it, which is the only actionable thing in the answer. `None` where
+        /// no file did: the model searches the web before it replies and is refused whatever the
+        /// layer says ([`ModelRefusal::Retrieves`]).
+        file: Option<PathBuf>,
+        /// Which of the lists, or what, refused it.
         why: ModelRefusal,
     },
 }
@@ -906,7 +908,7 @@ fn serving_with(
     // is would report a working Bedrock account for a request that is never sent (BACKEND-48).
     if let Some((file, why)) = config.model_refused(model) {
         return Serving::Refused {
-            file: file.to_path_buf(),
+            file: file.map(Path::to_path_buf),
             why,
         };
     }
@@ -1025,11 +1027,16 @@ pub fn answering(
 /// a session that sets a recorded pick aside, and a delegate definition that names one. A copy per
 /// caller would be three places for the two reasons to drift apart. Read by a person and never by the
 /// planner, which is why this module may look a message up at all.
-pub fn refusal_reason(file: &Path, why: ModelRefusal) -> String {
-    let path = file.display().to_string();
-    match why {
-        ModelRefusal::NotAllowed => t!(managed_model_not_allowed, path = path),
-        ModelRefusal::Denied => t!(managed_model_denied, path = path),
+pub fn refusal_reason(file: Option<&Path>, why: ModelRefusal) -> String {
+    let path = file.map(|file| file.display().to_string());
+    match (why, path) {
+        (ModelRefusal::NotAllowed, Some(path)) => t!(managed_model_not_allowed, path = path),
+        (ModelRefusal::Denied, Some(path)) => t!(managed_model_denied, path = path),
+        // A file refuses the first two and none refuses this one, so a missing path with either of
+        // them is not a state `Config::model_refused` produces.
+        (ModelRefusal::Retrieves, _) | (ModelRefusal::NotAllowed | ModelRefusal::Denied, None) => {
+            t!(model_retrieves).to_string()
+        }
     }
 }
 
@@ -1078,7 +1085,7 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
     let answered = serving(config, &egress, &model);
     // Worded before the answer is spent, which is the only place the file that refused is in hand.
     let refused = match &answered {
-        Serving::Refused { file, why } => Some(refusal_reason(file, *why)),
+        Serving::Refused { file, why } => Some(refusal_reason(file.as_deref(), *why)),
         Serving::Configured | Serving::NothingConfigured { .. } => None,
     };
     match sets_aside(answered, || serving(config, &egress, &config.default_model)) {
@@ -2457,7 +2464,7 @@ mod tests {
         assert_eq!(
             serving(&denied, &egress, "z-ai/glm-4.6"),
             Serving::Refused {
-                file: path,
+                file: Some(path),
                 why: ModelRefusal::Denied,
             }
         );
@@ -2474,7 +2481,7 @@ mod tests {
         assert_eq!(
             serving(&allowing, &egress, "z-ai/some-other-model"),
             Serving::Refused {
-                file: path,
+                file: Some(path),
                 why: ModelRefusal::NotAllowed,
             }
         );

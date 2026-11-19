@@ -207,7 +207,9 @@ the text following the separator byte for byte, as the search tool does
 ### MANIFEST-7: the only path to a screen is the one the plan named
 
 The slots a person may be shown are named from the manifest before the policy exists. Nothing
-widens that set, and nothing releases a slot the plan did not name.
+widens that set, and nothing releases a slot the plan did not name. The release is to the screen:
+`/export` writes that an answer was shown and how many lines it had, and not its words
+([SESSION-17](sessions.md#SESSION-17)).
 
 `verified-by: bravebot_core::manifest::only_the_answered_slot_is_named_for_release`
 `verified-by: bravebot_agent::manifest::only_the_answered_slot_reaches_the_user`

@@ -14,7 +14,8 @@
 //! workspaces the host was given. A session has one controller: the connection that opened it, or
 //! that took it over after the one before had gone. Nobody else can act on it, and its events go
 //! to that connection alone. A controller can answer questions only once it has a view of the
-//! session (`session.view.start`, or `session.attach`), and only the kinds the allowlist offers.
+//! session (`session.view.start`, or `session.attach`), and only the kinds the allowlist offers
+//! that the person gave that client on the host's command line ([`crate::allowlist::Answer`]).
 //!
 //! When a controller's connection ends the session stays open with no controller. The question it
 //! was waiting on is refused, and so is every question the turn asks from then on, so nothing is
@@ -25,7 +26,7 @@
 //! Closing answers `closing` at once and says `session.closed` when that is so. Neither says
 //! whether the last save succeeded.
 
-use crate::allowlist;
+use crate::allowlist::{self, Answer};
 use crate::bridge::Bridge;
 use crate::protocol::{ErrorCode, Event, Failure, Request, Unreadable, response};
 use crate::workers::Workers;
@@ -50,6 +51,8 @@ pub const MAX_LINE: usize = 8 * 1024 * 1024;
 /// never holds up the thread that produced them: a turn reporting progress goes on at once.
 struct Attached {
     connection: u64,
+    /// The answers the person let this connection give.
+    answers: Vec<Answer>,
     lines: mpsc::SyncSender<String>,
     /// The bytes of the lines in `lines` that the writer has not yet taken.
     waiting: Arc<AtomicUsize>,
@@ -63,6 +66,7 @@ impl Attached {
     fn start(
         output: &Sink,
         connection: u64,
+        answers: &[Answer],
         channel: &UnixStream,
         patience: Duration,
     ) -> io::Result<Self> {
@@ -92,6 +96,7 @@ impl Attached {
         });
         Ok(Self {
             connection,
+            answers: answers.to_vec(),
             lines,
             waiting,
             channel: channel.try_clone()?,
@@ -217,14 +222,16 @@ impl Host {
         &self.instance
     }
 
-    /// Serve one client until it closes its end or sends a line that is too long.
+    /// Serve one client until it closes its end or sends a line that is too long. The client may
+    /// give only `answers`, which the person chose for it.
     ///
     /// Sessions the client controlled stay open when this returns, with no controller and their
     /// work going on.
-    pub fn serve(&mut self, channel: UnixStream) -> io::Result<Ended> {
+    pub fn serve(&mut self, channel: UnixStream, answers: &[Answer]) -> io::Result<Ended> {
         self.connections += 1;
         let connection = self.connections;
-        let attached = Attached::start(&self.output, connection, &channel, WRITE_PATIENCE)?;
+        let attached =
+            Attached::start(&self.output, connection, answers, &channel, WRITE_PATIENCE)?;
         if let Ok(mut output) = self.output.lock() {
             *output = Some(attached);
         }
@@ -247,7 +254,7 @@ impl Host {
             }
             match Request::parse(&line) {
                 Ok(request) => {
-                    let outcome = self.dispatch(connection, &request);
+                    let outcome = self.dispatch(connection, answers, &request);
                     write_line(&self.output, connection, &response(request.id, outcome));
                     self.responded();
                 }
@@ -263,10 +270,17 @@ impl Host {
     }
 
     /// Answer one request from `connection`.
-    fn dispatch(&mut self, connection: u64, request: &Request) -> Result<Value, Failure> {
+    fn dispatch(
+        &mut self,
+        connection: u64,
+        answers: &[Answer],
+        request: &Request,
+    ) -> Result<Value, Failure> {
         let operation = allowlist::check(request)?;
+        // Before the session is looked up, so a refused answer reaches no bridge method.
+        allowlist::check_answer(request, answers)?;
         if operation.method == "instance.info" {
-            return Ok(self.describe());
+            return Ok(self.describe(answers));
         }
         let handle = request.optional_string("session");
         if let Some(handle) = &handle {
@@ -276,7 +290,7 @@ impl Host {
             "session.new" => self.new_session(connection, request),
             "session.attach" => {
                 let handle = handle.ok_or_else(|| Failure::bad_request("`session` is required"))?;
-                self.attach(connection, &handle)
+                self.attach(connection, answers, &handle)
             }
             "session.view.start" => {
                 let started = self.bridge.dispatch(request)?;
@@ -284,7 +298,7 @@ impl Host {
                 // answer.
                 if let Some(handle) = &handle {
                     self.bridge
-                        .set_answerable(handle, &allowlist::answerable())?;
+                        .set_answerable(handle, &allowlist::answerable(answers))?;
                 }
                 Ok(started)
             }
@@ -376,11 +390,16 @@ impl Host {
     }
 
     /// Make `connection` the controller of a session whose controller has gone.
-    fn attach(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
+    fn attach(
+        &mut self,
+        connection: u64,
+        answers: &[Answer],
+        handle: &str,
+    ) -> Result<Value, Failure> {
         let owners = Arc::clone(&self.owners);
         let session = handle.to_string();
         self.bridge
-            .attach_view(handle, &allowlist::answerable(), move || {
+            .attach_view(handle, &allowlist::answerable(answers), move || {
                 // Not taken over if the owners cannot be written: the client would be told it
                 // controls a session whose events still go to the connection before it.
                 let mut owners = owners
@@ -417,7 +436,7 @@ impl Host {
         Ok(json!({"state": "closing"}))
     }
 
-    fn describe(&self) -> Value {
+    fn describe(&self, answers: &[Answer]) -> Value {
         let attached = self
             .output
             .lock()
@@ -448,6 +467,8 @@ impl Host {
             "instance": self.instance,
             "inspection": self.inspection,
             "sessions": sessions,
+            // What this client may answer, which it cannot change.
+            "answers": answers.iter().map(|answer| answer.word()).collect::<Vec<_>>(),
         })
     }
 
@@ -545,7 +566,8 @@ fn queue(output: &mut Option<Attached>, line: String) {
 /// An event to the connection that opened its session, or, for one that belongs to no session or
 /// to one not yet registered (it is being opened by the connection attached), to the connection
 /// attached. A client never sees an event of a session it did not open, and an owner that cannot
-/// be read is no owner to send to.
+/// be read is no owner to send to. The startup question goes only to a client that may answer it:
+/// another sees the session waiting on it in the view.
 fn write_event(output: &Sink, owners: &Owners, event: &Event) {
     let owner = match &event.session {
         None => None,
@@ -557,10 +579,10 @@ fn write_event(output: &Sink, owners: &Owners, event: &Event) {
     let Ok(mut output) = output.lock() else {
         return;
     };
-    if output
-        .as_ref()
-        .is_some_and(|a| owner.is_none_or(|owner| owner == a.connection))
-    {
+    if output.as_ref().is_some_and(|a| {
+        owner.is_none_or(|owner| owner == a.connection)
+            && (event.name != "trust.request" || a.answers.contains(&Answer::Trust))
+    }) {
         queue(&mut output, event.to_value().to_string());
     }
 }
@@ -731,7 +753,7 @@ mod tests {
         // The descriptors share one socket, so the writer's writes wait again from here.
         filling.set_nonblocking(false).unwrap();
         let sink: Sink = Arc::new(Mutex::new(None));
-        let attached = Attached::start(&sink, 1, &host_end, patience).unwrap();
+        let attached = Attached::start(&sink, 1, &Answer::ALL, &host_end, patience).unwrap();
         *sink.lock().unwrap() = Some(attached);
         (host_end, client_end, sink)
     }
@@ -850,7 +872,8 @@ mod tests {
     fn a_client_that_keeps_up_is_sent_more_than_the_byte_budget() {
         let (host_end, client_end) = UnixStream::pair().unwrap();
         let sink: Sink = Arc::new(Mutex::new(None));
-        let attached = Attached::start(&sink, 1, &host_end, PATIENCE_LONGER_THAN_TEST).unwrap();
+        let attached =
+            Attached::start(&sink, 1, &Answer::ALL, &host_end, PATIENCE_LONGER_THAN_TEST).unwrap();
         *sink.lock().unwrap() = Some(attached);
         let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
         client_end

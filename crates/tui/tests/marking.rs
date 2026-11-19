@@ -72,6 +72,7 @@ fn quarantining(preview: Vec<String>) -> Session {
     let mut entry = Entry::system("read something");
     let lines = preview.len();
     entry.shown = Some(Shown {
+        as_the_planner_had_it: None,
         origin: "notes.md".to_string(),
         reach: Reach::NotThePlanner,
         label: "(U,priv)".to_string(),
@@ -317,6 +318,7 @@ fn a_long_origin_keeps_the_heading_inside_the_block() {
 fn a_remark_is_drawn_inside_the_margin_it_cannot_forge() {
     let mut session = Session::new("kernel-enforced");
     session.show(Shown {
+        as_the_planner_had_it: None,
         origin: "what the isolated processor said".to_string(),
         reach: Reach::NoModel,
         label: "(U,priv)".to_string(),

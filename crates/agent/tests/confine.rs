@@ -1497,6 +1497,389 @@ fn a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request() {
     }
 }
 
+/// `line` run under `confinement` in `root`, which need not be the session directory of
+/// [`Places`].
+#[cfg(target_os = "macos")]
+fn run_in(root: &Path, line: &str, confinement: &Confinement) -> exec::Ran {
+    let plan = bravebot_agent::cmdline::compile(line, root, None, &mut |_, _| Ok(()))
+        .unwrap_or_else(|error| panic!("`{line}` should compile: {error}"));
+    exec::run_plan_observed(
+        &plan,
+        &Cancel::new(),
+        exec::LIMIT,
+        None,
+        None,
+        Some(confinement),
+        &mut |_| Ok(()),
+    )
+    .unwrap_or_else(|error| panic!("`{line}` should start: {error}"))
+}
+
+/// SANDBOX-12 and SANDBOX-18 on macOS: a directory above a credential location or a persistence
+/// location is not renamed away, so the location is neither read nor written under another name.
+/// The row is the home directory the session opened on, a directory added with `--add-dir`, and
+/// an `allowWrite` entry, each holding the refusals two levels down. The regression it rejects:
+/// a profile that refuses the location at its own path only, which lets `mv ~/.config` through
+/// and then reads `gcloud` and appends to `fish/config.fish` under the new name. The control in
+/// each variant is a write the same stage makes in the row, which shows the row is granted, and
+/// a read of the credential at its own name, which shows the refusal is the base's.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stage_cannot_rename_the_directory_above_a_credential_or_a_persistence_location() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("ancestor-home");
+    let home = places.home.clone();
+    for (path, contents) in [
+        (".config/gcloud/credentials.db", "GCLOUD-SECRET\n"),
+        (".config/sops/age/keys.txt", "SOPS-SECRET\n"),
+        (".config/fish/config.fish", "fish\n"),
+        ("Library/LaunchAgents/job.plist", "job\n"),
+    ] {
+        let file = home.join(path);
+        std::fs::create_dir_all(file.parent().expect("a parent")).expect("a directory");
+        std::fs::write(file, contents).expect("a file");
+    }
+    let config = home.join(".config");
+    let moved = places.session.join("moved");
+    let beside_home = home.join("moved");
+    let session_on_home =
+        Confinement::here(vec![home.clone()], None, Some(&home)).expect("a platform with a base");
+    let added = Confinement::here(
+        vec![places.session.clone(), config.clone()],
+        None,
+        Some(&home),
+    )
+    .expect("a platform with a base");
+    let listed = places.confinement().with_filesystem(&written(
+        &[],
+        &[],
+        &[&config.display().to_string()],
+        &[],
+    ));
+
+    for (name, root, confinement, row, destination) in [
+        (
+            "session on the home directory",
+            home.clone(),
+            session_on_home,
+            home.clone(),
+            beside_home,
+        ),
+        (
+            "added directory",
+            places.session.clone(),
+            added,
+            config.clone(),
+            moved.clone(),
+        ),
+        (
+            "allowWrite entry",
+            places.session.clone(),
+            listed,
+            config.clone(),
+            moved,
+        ),
+    ] {
+        let control = run_in(
+            &root,
+            &touch(row.join("control.txt").display()),
+            &confinement,
+        );
+        assert!(
+            control.ended_well,
+            "{name}: the row is not granted: {control:?}"
+        );
+        let held = run_in(
+            &root,
+            &cat(config.join("gcloud/credentials.db").display()),
+            &confinement,
+        );
+        assert!(
+            !held.ended_well && !held.stdout.contains("SECRET"),
+            "{name}: the credential is readable at its own name: {held:?}"
+        );
+
+        let mut attempts = vec![
+            (
+                "read",
+                format!(
+                    "mv {} {} && cat {}/gcloud/credentials.db {}/sops/age/keys.txt",
+                    config.display(),
+                    destination.display(),
+                    destination.display(),
+                    destination.display()
+                ),
+            ),
+            (
+                "write",
+                format!(
+                    "mv {} {} && sh -c 'echo x >> {}/fish/config.fish'",
+                    config.display(),
+                    destination.display(),
+                    destination.display()
+                ),
+            ),
+        ];
+        if name == "session on the home directory" {
+            attempts.push((
+                "launch agent",
+                format!(
+                    "mv {h}/Library {h}/moved-library && sh -c 'echo x >> {h}/moved-library/LaunchAgents/job.plist'",
+                    h = home.display()
+                ),
+            ));
+        }
+        for (what, line) in attempts {
+            let ran = run_in(&root, &line, &confinement);
+            assert!(
+                !ran.ended_well,
+                "{name}: {what}: the rename went through: {ran:?}"
+            );
+            assert!(
+                !ran.stdout.contains("SECRET"),
+                "{name}: {what}: a credential was read under a new name: {ran:?}"
+            );
+            assert!(
+                config.exists() && home.join("Library/LaunchAgents/job.plist").exists(),
+                "{name}: {what}: a directory above a refusal was moved"
+            );
+            assert!(!destination.exists(), "{name}: {what}: a directory moved");
+        }
+        assert_eq!(
+            std::fs::read_to_string(config.join("fish/config.fish")).expect("still there"),
+            "fish\n",
+            "{name}: a persistence location was appended to"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("Library/LaunchAgents/job.plist"))
+                .expect("still there"),
+            "job\n",
+            "{name}: a launch agent was appended to"
+        );
+    }
+}
+
+/// SANDBOX-18 on macOS: a persistence location whose directories are not on disk is not reached
+/// by building a tree elsewhere in the home and moving it to the missing name. `~/.config/systemd`
+/// is absent, so `~/.config/systemd/user` could otherwise be made by a rename. The regression it
+/// rejects: a rule for the directories that exist and none for the topmost missing one. The
+/// controls are a write in the home and one beside the missing name in `~/.config`.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_stage_cannot_move_a_tree_to_a_missing_directory_above_a_persistence_location() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("missing-ancestor-home");
+    let home = places.home.clone();
+    std::fs::create_dir_all(home.join(".config")).expect("a directory");
+    std::fs::create_dir_all(home.join("built/user")).expect("a directory");
+    std::fs::write(home.join("built/user/evil.service"), "evil\n").expect("a file");
+    assert!(!home.join(".config/systemd").exists());
+    let confinement =
+        Confinement::here(vec![home.clone()], None, Some(&home)).expect("a platform with a base");
+    let h = home.display();
+
+    for (name, line) in [
+        ("a write in the home", touch(format!("{h}/control.txt"))),
+        (
+            "a write beside the missing name",
+            touch(format!("{h}/.config/beside.txt")),
+        ),
+    ] {
+        let ran = run_in(&home, &line, &confinement);
+        assert!(ran.ended_well, "{name}: not granted: {ran:?}");
+    }
+    for line in [
+        format!("mv {h}/built {h}/.config/systemd"),
+        format!("mkdir {h}/.config/systemd"),
+    ] {
+        let ran = run_in(&home, &line, &confinement);
+        assert!(!ran.ended_well, "`{line}` went through: {ran:?}");
+        assert!(
+            !home.join(".config/systemd").exists(),
+            "`{line}` made the directory above a persistence location"
+        );
+    }
+    assert!(
+        home.join("built/user/evil.service").exists(),
+        "the tree left its place"
+    );
+}
+
+/// SANDBOX-25 on macOS under bypass: the rows a stage is given without a request
+/// do not let it rename the directory above a path the person refused. Each refusal is listed
+/// alone, since the rule for a refused read and the one for a refused write come from different
+/// lists. The regression it rejects: the rule built from the rows the person's lists apply to and
+/// not from the rows bypass adds. The first line is the control that bypass grants the directory.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_bypass_stage_cannot_rename_the_directory_above_a_listed_refusal() {
+    if !can_confine() {
+        return;
+    }
+    for (name, deny_read, deny_write) in [("read", true, false), ("write", false, true)] {
+        let places = Places::new(&format!("unasked-ancestor-{name}"));
+        let refused = places.beside.join("a/b");
+        std::fs::create_dir_all(&refused).expect("a directory");
+        std::fs::write(refused.join("secret"), "SECRET\n").expect("a file");
+        let text = refused.display().to_string();
+        let one = [text.as_str()];
+        let confinement = places
+            .confinement()
+            .with_unasked_writes(true)
+            .with_filesystem(&written(
+                &[],
+                if deny_read { &one } else { &[] },
+                &[],
+                if deny_write { &one } else { &[] },
+            ));
+        let beside = places.beside.display();
+
+        let control = places.run(&touch(format!("{beside}/c")), Some(&confinement));
+        assert!(
+            control.ended_well && places.beside.join("c").exists(),
+            "{name}: bypass does not grant the directory: {control:?}"
+        );
+        for line in [
+            format!("mv {beside}/a {beside}/a2 && cat {beside}/a2/b/secret"),
+            format!("mv {beside}/a {beside}/a2 && sh -c 'echo x >> {beside}/a2/b/secret'"),
+        ] {
+            let ran = places.run(&line, Some(&confinement));
+            assert!(!ran.ended_well, "{name}: `{line}` went through: {ran:?}");
+            assert!(!ran.stdout.contains("SECRET"), "{name}: {ran:?}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(refused.join("secret")).expect("still there"),
+            "SECRET\n",
+            "{name}: the refused file was changed or moved"
+        );
+        assert!(
+            !places.beside.join("a2").exists(),
+            "{name}: a directory moved"
+        );
+    }
+}
+
+/// SANDBOX-12 and SANDBOX-18 on macOS under bypass in a session opened on the home
+/// directory: the rows bypass adds beside the home row do not let a stage rename `~/.config` or
+/// `~/Library` and then read a credential or append to a persistence location under the new name.
+/// The regression it rejects: an ancestor rule written for the session roots alone, which leaves
+/// the entries of the home that bypass grants one by one free to move. The first line is the
+/// control that bypass grants the home, and the second that the credential is refused at its name.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_bypass_stage_in_a_session_on_the_home_cannot_rename_the_directory_above_a_refusal() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("unasked-ancestor-home");
+    let home = places.home.clone();
+    for (path, contents) in [
+        (".config/gcloud/credentials.db", "GCLOUD-SECRET\n"),
+        (".config/fish/config.fish", "fish\n"),
+        ("Library/LaunchAgents/job.plist", "job\n"),
+    ] {
+        let file = home.join(path);
+        std::fs::create_dir_all(file.parent().expect("a parent")).expect("a directory");
+        std::fs::write(file, contents).expect("a file");
+    }
+    let confinement = Confinement::here(vec![home.clone()], None, Some(&home))
+        .expect("a platform with a base")
+        .with_unasked_writes(true);
+    let credential = home.join(".config/gcloud/credentials.db");
+
+    let control = run_in(
+        &home,
+        &touch(home.join("control.txt").display()),
+        &confinement,
+    );
+    assert!(
+        control.ended_well && home.join("control.txt").exists(),
+        "bypass does not grant the home directory: {control:?}"
+    );
+    let held = run_in(&home, &cat(credential.display()), &confinement);
+    assert!(
+        !held.ended_well && !held.stdout.contains("SECRET"),
+        "the credential is readable at its own name: {held:?}"
+    );
+    let h = home.display();
+    for (what, line) in [
+        (
+            "read",
+            format!("mv {h}/.config {h}/moved && cat {h}/moved/gcloud/credentials.db"),
+        ),
+        (
+            "write",
+            format!("mv {h}/.config {h}/moved && sh -c 'echo x >> {h}/moved/fish/config.fish'"),
+        ),
+        (
+            "launch agent",
+            format!(
+                "mv {h}/Library {h}/moved && sh -c 'echo x >> {h}/moved/LaunchAgents/job.plist'"
+            ),
+        ),
+    ] {
+        let ran = run_in(&home, &line, &confinement);
+        assert!(!ran.ended_well, "{what}: the rename went through: {ran:?}");
+        assert!(
+            !ran.stdout.contains("SECRET"),
+            "{what}: a credential was read under a new name: {ran:?}"
+        );
+        assert!(
+            credential.exists() && home.join("Library/LaunchAgents/job.plist").exists(),
+            "{what}: a directory above a refusal was moved"
+        );
+        assert!(!home.join("moved").exists(), "{what}: a directory moved");
+    }
+    assert_eq!(
+        std::fs::read_to_string(home.join(".config/fish/config.fish")).expect("still there"),
+        "fish\n",
+        "a persistence location was appended to"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("Library/LaunchAgents/job.plist")).expect("still there"),
+        "job\n",
+        "a launch agent was appended to"
+    );
+    // A hard link to a refused file is another name for the file, and needs no rule beyond the
+    // refusal of the file itself (SANDBOX-25). These lines pass with or without the rule for the
+    // directories above a refusal. They reject a profile that lifts the refusal of the file or lets
+    // a link through, and the control rejects a profile that refuses every link.
+    let control = run_in(
+        &home,
+        &format!("ln {h}/control.txt {h}/control-link.txt"),
+        &confinement,
+    );
+    assert!(
+        control.ended_well && home.join("control-link.txt").exists(),
+        "a hard link to a file that is not refused was refused: {control:?}"
+    );
+    for (what, line) in [
+        (
+            "read",
+            format!("ln {h}/.config/gcloud/credentials.db {h}/linked && cat {h}/linked"),
+        ),
+        (
+            "write",
+            format!("ln {h}/.config/fish/config.fish {h}/linked && sh -c 'echo x >> {h}/linked'"),
+        ),
+    ] {
+        let ran = run_in(&home, &line, &confinement);
+        assert!(
+            !ran.ended_well && !ran.stdout.contains("SECRET"),
+            "{what}: a hard link reached a refused file: {ran:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join(".config/fish/config.fish")).expect("still there"),
+            "fish\n",
+            "{what}: a persistence location was appended to through a link"
+        );
+    }
+}
+
 /// The regression it rejects: the background path spawning the plain command. A job left running
 /// is the one nobody is watching.
 #[test]
