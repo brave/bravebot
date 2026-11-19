@@ -385,6 +385,17 @@ settles on. The same model in force is the one the roster is read for the window
 level is read, and the one the sign-in a session makes and the refusal of a level a turn learned are asked
 about, so none of them is read for the pick alone.
 
+A choice recorded with `/model` is read back by every later session. A pick made with `/model session`
+is not recorded. It ranks as a pick made in the running session does, above every file and above the
+build, for the session that made it and for no other, so the next session opens on the model it
+would have had without it. It is outranked, as a recorded pick is, by the model a skill names for
+plan mode and by the model a definition names. Under a definition that names a model, `/model
+session` opens no picker, as `/model` does not. `--model` does not change this: it applies to the
+session it starts and a pick made in that session replaces it. The model a session record names is
+the one the service answered with, so a resumed session opens on the recorded pick and not on a
+session-only one, and `/clear`, `/handoff` and `/branch` keep a session-only pick for the session
+that made it.
+
 **Why.** A build made with a default model bakes it in, so this value ranked like the rest of the file would
 lose on every binary made that way: the key would parse, `doctor` would report it, and nothing
 would change outside a source build.
@@ -417,6 +428,9 @@ and the pick is the later of the two.
 `verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_recorded_model_ignoring_a_checkouts`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
+`verified-by: bravebot_tui::app::a_session_only_pick_is_asked_for_over_every_other_source_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_session_only_pick_is_outranked_by_the_plan_model_and_a_definitions_as_a_recorded_one_is`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_pick_opens_on_the_recorded_pick`
 `verified-by: bravebot_cli::running::a_run_asks_for_an_exported_default_where_no_file_names_a_model`
 `verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
 `verified-by: bravebot_tui::app::the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked`
@@ -543,15 +557,50 @@ A configured model may carry a block of options that reaches the request body as
 here parses it, knows what any of its fields mean, or validates them, and it cannot replace what the
 turn itself put in the request.
 
+It also cannot supply the fields that say which tools a request offers, whether or not the turn set
+them. A request built with no tools (a processor, a check, a classifier, a compaction summary, an
+advisor, an aside, a goal check or a planning request) stays one that offers none, and a request that
+offers tools offers the turn's list alone. Each protocol's client holds the names it reads for this
+and skips those keys in `options` and in a chosen variant ([BACKEND-66](#BACKEND-66)):
+
+| Protocol | Keys no option supplies |
+|---|---|
+| Chat-completions | `tools`, `tool_choice`, `functions`, `function_call`, `parallel_tool_calls` |
+| Anthropic Messages | `tools`, `tool_choice`, `mcp_servers` |
+| Google generateContent | `tools`, `toolConfig`, `tool_config` |
+| Ollama chat | `tools`, `tool_choice` |
+| Responses | the fields [BACKEND-61](#BACKEND-61) lists as the request's own |
+
+A key outside the list reaches the body as before, and a key in it is dropped without a note.
+`Model::request_options` in the config crate returns what the person wrote and reserves nothing,
+since only a client knows the names its wire uses. Bedrock merges no options and has no such list.
+
 **Why.** A gateway's routing controls are its own invention, so a schema enumerating them is one that
 has to change when the gateway adds a field, and supporting the shape of gateways generally is what
 makes this something other than support for one of them. It comes from the person's own configuration
 surface and no model output reaches it, so it is trusted as far as a variable they exported would be.
 That footing is what also bounds it: a destination may be named from a file, and a file overwriting
 the model or the messages a turn built would be deciding what was asked rather than where it goes.
+The fields naming a request's tools are held back for a further reason. A service may run a tool
+itself (`web_fetch`, `web_search`, `code_execution`, `googleSearch`, `urlContext`, `codeExecution`, a
+connected server), and a processor, a check or a compaction reads text nobody has read, whose request
+is specified to carry no tool list ([PROC-1](processors.md#PROC-1), [CHECK-1](vetting.md#CHECK-1),
+[COMPACT-2](compaction.md#COMPACT-2)). A list in a model's options would give that request one.
+The list is wider than the fields a body needs: `functions`, `function_call`, `parallel_tool_calls`,
+`mcp_servers` and `tool_config` name or qualify a tool list in the same way, so a request that
+refuses `tools` and accepts them would offer tools by another name. `container` is not held, since it
+names the sandbox a code-execution tool uses and offers no tool of its own. A person who put a tool
+list in options for the planner loses nothing: the planner's request sets its own and the option
+never reached it.
 
 `verified-by: bravebot_aichat::lib::model_options_are_merged_into_the_request_body`
 `verified-by: bravebot_aichat::lib::model_options_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_aichat::lib::options_and_a_variant_cannot_supply_the_keys_naming_a_requests_tools`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_anthropic_tool_keys`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_google_express_tool_keys`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_ollama_tool_keys`
+`verified-by: bravebot_agent::turn::a_processors_request_through_a_gateway_carries_no_tool_list_its_models_options_state`
+`verified-by: bravebot_agent::manifest::the_planning_requests_through_a_gateway_carry_no_tool_list_the_models_options_state`
 `verified-by: bravebot_aichat::lib::a_model_with_no_options_adds_nothing_to_the_body`
 `verified-by: bravebot_config::provider::model_options_are_carried_without_being_interpreted`
 
@@ -561,7 +610,8 @@ the model or the messages a turn built would be deciding what was asked rather t
 A configured model may carry `variants`, a map of a name to an object. A variant the person picked is
 merged into the request body as the model's `options` are ([BACKEND-15](#BACKEND-15)): carried whole,
 never interpreted, and unable to replace a field the turn itself built, which includes the level
-`/effort` chose ([BACKEND-20](#BACKEND-20)) and the model and the messages. Where a variant and the
+`/effort` chose ([BACKEND-20](#BACKEND-20)) and the model and the messages, or to supply a field that
+names the request's tools, which BACKEND-15 lists for each protocol. Where a variant and the
 model's `options` set one field the variant's wins, and a request that names no variant carries the
 options alone, so a model with variants sends the body it sent before it had them. A variant with
 `"disabled": true`, or whose body is not an object, is not listed and cannot be picked.
@@ -589,6 +639,10 @@ a file from deciding what was asked, and keeping the choice a person's is what k
 `verified-by: bravebot_config::provider::a_variant_is_merged_over_the_models_options`
 `verified-by: bravebot_aichat::lib::a_chosen_variant_reaches_the_body_and_none_chosen_adds_nothing`
 `verified-by: bravebot_aichat::lib::a_variant_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_aichat::lib::options_and_a_variant_cannot_supply_the_keys_naming_a_requests_tools`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_anthropic_tool_keys`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_google_express_tool_keys`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_ollama_tool_keys`
 `verified-by: bravebot_agent::turn::a_chosen_variant_is_merged_into_the_planners_request`
 `verified-by: bravebot_tui::app::a_variant_the_model_offers_is_picked_and_reaches_the_next_turn`
 `verified-by: bravebot_tui::app::a_model_offering_no_variants_takes_no_pick`
@@ -4072,7 +4126,8 @@ document is dropped.
 No `thinking` field is sent, and the model's thinking is not sent back. Each model keeps its own
 default, what it writes while thinking is no part of the reply, and a conversation carries no
 thinking block from an earlier round. A model's own `options` reach the body as
-[BACKEND-15](#BACKEND-15) says, and a `thinking` field in them is sent as written. It is not meant to
+[BACKEND-15](#BACKEND-15) says, without supplying `tools`, `tool_choice` or `mcp_servers`, and a
+`thinking` field in them is sent as written. It is not meant to
 be one: a request that asks for thinking and carries a tool call from an earlier round wants the
 thinking before it, which this build does not send back, so the service refuses it from the second
 round of a tool turn (Known costs).
@@ -4130,6 +4185,7 @@ turning prompt caching off for the rest of the session.
 `verified-by: bravebot_aichat::client::an_anthropic_block_naming_no_key_sends_none`
 `verified-by: bravebot_aichat::client::a_refused_anthropic_request_does_not_repeat_the_key`
 `verified-by: bravebot_aichat::client::a_models_options_reach_the_anthropic_body_and_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_anthropic_tool_keys`
 `verified-by: bravebot_aichat::client::a_whole_anthropic_reply_is_read_into_text_calls_model_and_cost`
 `verified-by: bravebot_aichat::client::an_anthropic_stream_is_assembled_from_its_events_and_asks_for_arguments_as_written`
 `verified-by: bravebot_aichat::client::a_failure_reported_mid_stream_is_asked_again_only_where_a_second_attempt_could_pass_it`
@@ -4228,9 +4284,11 @@ A reply ceiling is sent as `maxOutputTokens` only where a person stated one ([BA
 [BACKEND-41](#BACKEND-41)), the models differing in what they allow. The level of
 [BACKEND-21](#BACKEND-21) is a `thinkingBudget`, a schema a task states is `responseMimeType` with
 `responseJsonSchema`, and a model's own `options` reach the body as BACKEND-15 says without replacing
-what the turn built, the `generationConfig` among them joining the settings the turn wrote there. A reply is read whole or as server-sent events, each holding the next parts, and
-a stream is complete once a piece carries a finish reason: one that stops before is a reply that did
-not finish, which is sent again. A call arrives whole and is never assembled from fragments. A prompt
+what the turn built and without supplying `tools`, `toolConfig` or `tool_config`, the
+`generationConfig` among them joining the settings the turn wrote there. A reply is read whole or as
+server-sent events, each holding the next parts, and a stream is complete once a piece carries a
+finish reason: one that stops before is a reply that did not finish, which is sent again. A call
+arrives whole and is never assembled from fragments. A prompt
 the service blocked, and a reply it stopped for what it would have said, are refusals and are not
 asked for again. A call it wrote badly, a rate limit, an unavailable service, a fault of its own and
 a timeout are asked for again, a failure written into a stream being named from the closed set
@@ -4282,6 +4340,7 @@ value, while which models read a budget at all is learned from a refusal as BACK
 `verified-by: bravebot_aichat::client::a_google_express_entry_stating_no_retries_is_asked_once`
 `verified-by: bravebot_aichat::client::a_stop_before_a_google_express_request_is_sent_sends_nothing`
 `verified-by: bravebot_aichat::client::a_models_options_reach_the_google_express_body_and_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_google_express_tool_keys`
 `verified-by: bravebot_aichat::client::a_schema_goes_to_the_service_as_a_json_mime_type_and_a_schema`
 `verified-by: bravebot_aichat::client::a_models_generation_settings_join_the_ones_the_turn_set_and_do_not_replace_them`
 `verified-by: bravebot_aichat::client::a_reply_cut_off_while_reasoning_says_so_and_keeps_its_bill_on_both_paths`
@@ -4967,7 +5026,7 @@ of its own under the role `tool`, naming the function it answers. A result whose
 is said as words. `options.num_ctx` is the session's budget and a quarter of it again, `options.num_predict` the
 reply ceiling where one is stated, and `format` the schema a reply must match where one is asked for.
 A model's `options` in the block join `options` and the body, and never replace the window or the
-ceiling this agent set.
+ceiling this agent set, and never supply `tools` or `tool_choice`.
 
 A streamed reply is read a line at a time, a line the stream has not ended being kept until it has.
 The line that says `done` ends the reply and states its cost: `prompt_eval_count` is the prompt and
@@ -4987,6 +5046,7 @@ short rather than refused.
 `verified-by: bravebot_config::provider::an_entry_naming_an_ollama_sdk_is_reached_in_ollamas_own_protocol`
 `verified-by: bravebot_agent::backend::an_ollama_entry_is_asked_for_a_window_a_quarter_over_the_sessions_budget`
 `verified-by: bravebot_aichat::client::an_ollama_request_asks_the_server_for_the_window_the_session_budgets_for`
+`verified-by: bravebot_aichat::client::options_and_a_variant_cannot_supply_the_ollama_tool_keys`
 `verified-by: bravebot_aichat::client::a_models_options_join_the_window_and_never_replace_it`
 `verified-by: bravebot_aichat::client::an_ollama_stream_is_read_a_line_at_a_time`
 `verified-by: bravebot_aichat::client::an_ollama_stream_that_never_says_it_is_done_is_not_a_reply`
@@ -5391,7 +5451,9 @@ cancel kills it rather than asking it to stop.
 - **A gateway's pass-through options are unvalidated.** A misspelled routing field is a request the
   gateway rejects, or worse one it silently routes somewhere unintended. The alternative is a schema
   that goes stale as the gateway changes, and that trade is what keeps this from being support for
-  one particular gateway.
+  one particular gateway. The one check is a fixed list of keys naming a request's tools, which no
+  option supplies (BACKEND-15); a gateway that names a tool list under a key the list lacks has it
+  carried as any other field.
 
 - **Fields another tool defines are read past in silence.** Somebody who knows the shape will expect
   its cost, modality and package fields to do something here, and they do nothing. That surprise is

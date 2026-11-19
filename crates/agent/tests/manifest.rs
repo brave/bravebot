@@ -517,6 +517,78 @@ fn the_planner_is_shown_capabilities_and_no_tool_names() {
     );
 }
 
+/// BACKEND-15: both planning requests of a manifest run go out with no tool list even when the model
+/// they are sent to states one in its own `options`, and the options that name no tool still
+/// arrive. The regression it rejects is a gateway client that adds each option key the body lacks:
+/// the test above runs through an endpoint that merges no options, so it cannot see it.
+#[test]
+fn the_planning_requests_through_a_gateway_carry_no_tool_list_the_models_options_state() {
+    let scratch = Scratch::new("catalogue-gateway-options");
+    std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let mut config = config_for(&endpoint);
+    let root = json!({"provider": {"gw": {
+        "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+        "models": {"a-model": {"options": {
+            "tools": [{"type": "function", "function": {
+                "name": "OPTION-SUPPLIED-TOOL",
+                "parameters": {"type": "object"}
+            }}],
+            "tool_choice": "required",
+            "functions": [{"name": "OPTION-SUPPLIED-FUNCTION"}],
+            "function_call": "auto",
+            "parallel_tool_calls": true,
+            "top_k": 7
+        }}}
+    }}});
+    config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+    let mut sink = RecordingSink::new();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("show me a.md").with_model(Some("gw/a-model".to_string())),
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    for round in ["shape", "fit"] {
+        let body: serde_json::Value =
+            serde_json::from_str(&received.recv().expect("a planning request"))
+                .expect("a JSON request");
+        for key in [
+            "tools",
+            "tool_choice",
+            "functions",
+            "function_call",
+            "parallel_tool_calls",
+        ] {
+            assert!(
+                body.get(key).is_none(),
+                "the {round} request carried `{key}` from the model's options: {body}"
+            );
+        }
+        assert_eq!(
+            body["top_k"],
+            json!(7),
+            "the {round} request lost an option that names no tool: {body}"
+        );
+    }
+}
+
 /// A screenshot of the thing to be built is the task, so it goes to the planner with the words it
 /// was pasted beside. Both calls carry it: the plan comes out of the second, and a planner fitting
 /// steps to a picture it had been shown and then had taken away would be planning from a memory of

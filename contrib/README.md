@@ -26,9 +26,22 @@ one waiting longest first and the most recent last. A pull request waits from th
 approval, or from when it was opened if that has no time, and a tie goes by number. Any still
 `UNKNOWN` when the wait ends are named on stderr as missing from the list. A failure of `gh` exits 1.
 
+A listed pull request is eligible for the merge queue when at least two people's latest review is an
+approval and none of its review threads is unresolved. `--eligible-file PATH` (`ELIGIBLE_FILE=PATH`)
+writes the eligible ones to `PATH` as `<url>  <title>` lines, an empty file when there are none, and
+leaves stdout as it was. `--enqueue` (`ENQUEUE=1`) prints no list and runs `gh pr merge` for each
+eligible pull request with `--match-head-commit` set to the head that was read, so a push after the
+read is not queued, and with no merge strategy, so the queue and its checks decide the merge. It
+prints the `<url>  <title>` of each one queued, names each one `gh` refused on stderr, tries the
+rest, and exits 1 if any was refused. A pull request with more than 100 review threads is not
+eligible, since the count is not known. If the threads of any candidate cannot be read, nothing is
+queued and the run exits 1.
+
 ```sh
 make review-ready                            # or contrib/review-ready.py
 make review-ready REPO=owner/name REVIEWER=login LIMIT=1000 WAIT=60
+make review-ready ELIGIBLE_FILE=/tmp/eligible.txt
+make review-ready ENQUEUE=1
 ```
 
 `--interval` sets the seconds between reads. `make check-scripts` runs `review-ready-selftest.py`,
@@ -39,6 +52,14 @@ which serves scripted reads from a stand-in `gh` and runs the script and the mak
 A macOS menu bar app that shows the list `make review-ready` prints. The icon shows how many pull
 requests are listed, and choosing one in the menu opens it in the browser. The menu keeps the order
 the make target prints: longest waiting at the top, most recent last.
+
+Below the list is "Add N eligible to merge queue", where N is how many listed pull requests are
+eligible as described under `review-ready.py`. Each refresh passes `ELIGIBLE_FILE` to the make target
+to count them. With none, the item reads "Add 0 eligible to merge queue" and is disabled. Choosing it
+runs `make review-ready ENQUEUE=1`, which reads the pull requests again and queues the eligible ones
+at that moment, then refreshes the menu and shows "Added N to the merge queue". A pull request GitHub
+refuses is named in the menu as an error, which stays until the next add or Refresh Now, and the others
+are still queued.
 
 ```sh
 contrib/review-ready-menubar/install.sh [--interval SECONDS] [--make-args "REVIEWER=login"] [--login] [--dir DIRECTORY]

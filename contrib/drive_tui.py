@@ -39,6 +39,9 @@ A script is one step per line, `timeout` then the keys to send:
 
 Blank lines and `#` comments are ignored. Backslash escapes are the usual ones, plus `\\e` for
 escape and `\\x03` for ctrl-c.
+
+A key the terminal has no byte for is written as the sequence it reports as. Alt-Escape under the
+disambiguation protocol is `\\e[27;3u`, and Ctrl-Escape is `\\e[27;5u`.
 """
 
 import argparse
@@ -87,8 +90,11 @@ def parse_script(text):
         except ValueError:
             raise SystemExit(f"line {number}: expected a timeout in seconds, got {head!r}")
         # Decoded here rather than by the shell, so a script file can carry a carriage return
-        # without depending on how it was quoted on the way in.
-        steps.append((timeout, keys.strip().encode().decode("unicode_escape")))
+        # without depending on how it was quoted on the way in. `\e` is not one of Python's
+        # escapes, so it is turned into one first rather than being left in the step as a
+        # backslash and an `e`, which is what a terminal would have typed.
+        spelled = keys.strip().replace("\\e", "\\x1b")
+        steps.append((timeout, spelled.encode().decode("unicode_escape")))
     return steps
 
 
@@ -109,13 +115,35 @@ PACE = 0.02
 #: asks for: a burst never answers a question.
 DECIDING = "\r\n\t\x03\x04\x1b"
 
+#: One key the terminal reports as a sequence of bytes rather than as one.
+#:
+#: A terminal writes the whole sequence at once, and the reader that takes keys apart reads an ESC
+#: with nothing behind it as the Escape key. Typed a character at a time, `\x1b[27;5u` is therefore
+#: an Escape followed by `[27;5u` as five letters and a digit, not Ctrl-Escape, so no chord on a
+#: key without a byte of its own could be sent at all. Matches the CSI and SS3 forms, which is what
+#: the disambiguation protocol and the cursor keys use.
+KEY_SEQUENCE = re.compile(r"\x1b(?:\[[0-9;:<=>?]*[@-~]|O[A-Za-z])")
+
+
+def keystrokes(keys):
+    """`keys` as the writes a terminal makes: a sequence whole, everything else one at a time."""
+    at = 0
+    while at < len(keys):
+        sequence = KEY_SEQUENCE.match(keys, at)
+        if sequence:
+            yield sequence.group()
+            at = sequence.end()
+        else:
+            yield keys[at]
+            at += 1
+
 
 def type_in(terminal, keys):
     """Type a step in the way a person would, a character at a time."""
-    for character in keys:
-        if character in DECIDING:
+    for stroke in keystrokes(keys):
+        if stroke[0] in DECIDING:
             time.sleep(PACE * 5)
-        os.write(terminal, character.encode())
+        os.write(terminal, stroke.encode())
         time.sleep(PACE)
 
 

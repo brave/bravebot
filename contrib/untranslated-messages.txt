@@ -43,7 +43,6 @@ fr:command-outputs
 fr:command-plugin
 fr:command-sessions
 fr:command-unfinished
-fr:commit-message-untrusted
 fr:configured-start-heading
 fr:desktop-model-retrieves
 fr:doctor-embeddings
@@ -77,6 +76,8 @@ fr:doctor-skills-shared-not-read
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
 fr:hover-panel-close-peek
+fr:keybindings-undeliverable
+fr:keybindings-undeliverable-more
 fr:lsp-none-started
 fr:lsp-server-running
 fr:lsp-started

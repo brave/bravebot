@@ -279,7 +279,11 @@ fields mean, or validates them, so a misspelled routing field is a request the g
 worse one it silently routes somewhere you did not intend.
 
 It cannot replace what the turn itself built. The settings file names a destination, not what was
-asked.
+asked. It also cannot add a tool list: `tools` and `tool_choice` in a model's `options` or in a
+variant are left out of every request, and so are `functions`, `function_call` and
+`parallel_tool_calls` for an OpenAI-compatible gateway, `mcp_servers` for Anthropic and `toolConfig`
+or `tool_config` for Google. The tools a request offers are the ones bravebot chose for it, and a
+request that offers none, such as a processor's or a check's, stays one that offers none.
 
 ### Switching between sets of options with `variants`
 

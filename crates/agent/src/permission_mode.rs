@@ -24,6 +24,8 @@ use crate::confirm::{
     Classified, Confirmer, Decision, OutputRequest, PromptAlert, RunDecision, RunRequest,
     VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
+use bravebot_core::event::Sink;
+use bravebot_core::policy::Policy;
 use bravebot_core::vetting::{Endorsed, Verdict};
 
 /// How much this session asks before it acts.
@@ -258,6 +260,68 @@ impl PermissionMode {
     }
 }
 
+/// What set a permission mode, for the trail (TRACE-12).
+///
+/// A choice the caller makes from what it already knows, never from anything a turn read, so
+/// [`ModeCause::phrase`] is static text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeCause {
+    /// The session asks until something else says otherwise.
+    Default,
+    /// A command-line flag.
+    Flag,
+    /// The person's `permissions.startInAuto` setting.
+    Setting,
+    /// The mode key.
+    Key,
+    /// A click on the mode under the box.
+    Click,
+    /// A slash command, which is `/plan`.
+    Command,
+    /// The person approving a plan.
+    PlanApproval,
+    /// A settings layer taking bypass off the ladder.
+    BypassUnreachable,
+    /// A request from a client that is not the terminal.
+    Request,
+    /// A caller that did not say.
+    Unnamed,
+}
+
+impl ModeCause {
+    /// The words the trail uses for this cause.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            Self::Default => "by default",
+            Self::Flag => "by a command-line flag",
+            Self::Setting => "by the startInAuto setting",
+            Self::Key => "by the mode key",
+            Self::Click => "by a click on the mode",
+            Self::Command => "by the /plan command",
+            Self::PlanApproval => "by approving a plan",
+            Self::BypassUnreachable => "because settings made bypass unreachable",
+            Self::Request => "by a request from the client",
+            Self::Unnamed => "without a cause being given",
+        }
+    }
+}
+
+/// One change of mode, kept until a turn writes it to the trail (TRACE-12).
+#[derive(Debug, Clone, Copy)]
+struct ModeChange {
+    from: PermissionMode,
+    to: PermissionMode,
+    cause: ModeCause,
+}
+
+/// What a handle has not yet put in the trail: the mode the sitting opened in, which only the first
+/// turn writes, and every change since the last write, in the order they happened.
+#[derive(Debug)]
+struct ModeLog {
+    opening: Option<(PermissionMode, ModeCause)>,
+    changes: Vec<ModeChange>,
+}
+
 /// The mode a session is in, readable from a turn that is running while the person changes it.
 ///
 /// Cloning gives another handle on the same mode, so the key that sets it, the confirmer that
@@ -272,6 +336,9 @@ pub struct LiveMode {
     /// Whether the mode was bypass at any moment since this handle was made, which a later
     /// change of mode does not take back (MODE-4).
     bypassed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Shared by every handle, so the turn that writes the trail sees a change made through any
+    /// of them (TRACE-12).
+    log: std::sync::Arc<std::sync::Mutex<ModeLog>>,
     nobody_to_ask: bool,
 }
 
@@ -282,7 +349,58 @@ impl LiveMode {
             bypassed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 mode == PermissionMode::Bypass,
             )),
+            log: std::sync::Arc::new(std::sync::Mutex::new(ModeLog {
+                opening: Some((mode, ModeCause::Default)),
+                changes: Vec::new(),
+            })),
             nobody_to_ask: false,
+        }
+    }
+
+    fn locked(&self) -> std::sync::MutexGuard<'_, ModeLog> {
+        self.log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Say the mode this handle was made with was chosen by `cause`, which is what the trail
+    /// gives for the mode a session opened in (TRACE-12).
+    pub fn opened_by(self, cause: ModeCause) -> Self {
+        if let Some((_, was)) = self.locked().opening.as_mut() {
+            *was = cause;
+        }
+        self
+    }
+
+    /// Open in `mode` because of `cause`. Before the trail has been written and before any change,
+    /// this is the mode the session opened in; after either it is a change like any other.
+    pub fn starting_in(&self, mode: PermissionMode, cause: ModeCause) {
+        let mut log = self.locked();
+        if log.opening.is_some() && log.changes.is_empty() {
+            log.opening = Some((mode, cause));
+            self.store(mode);
+        } else {
+            drop(log);
+            self.set_by(mode, cause);
+        }
+    }
+
+    /// Write what has not been written yet to the trail: the opening mode, once, then each change
+    /// in the order it was made (TRACE-12).
+    pub(crate) fn record_into<S: Sink>(&self, policy: &mut Policy<'_, S>) {
+        let (opening, changes) = {
+            let mut log = self.locked();
+            (log.opening.take(), std::mem::take(&mut log.changes))
+        };
+        if let Some((mode, cause)) = opening {
+            policy.record_permission_mode_opened(mode.name(), cause.phrase());
+        }
+        for change in changes {
+            policy.record_permission_mode_changed(
+                change.from.name(),
+                change.to.name(),
+                change.cause.phrase(),
+            );
         }
     }
 
@@ -317,6 +435,26 @@ impl LiveMode {
     }
 
     pub fn set(&self, mode: PermissionMode) {
+        self.set_by(mode, ModeCause::Unnamed);
+    }
+
+    /// Move to `mode`, and keep the move for the trail where it is a change (TRACE-12). The lock is
+    /// held across the read and the store, so two setters leave their changes in the order they
+    /// took effect.
+    pub fn set_by(&self, mode: PermissionMode, cause: ModeCause) {
+        let mut log = self.locked();
+        let from = self.get();
+        self.store(mode);
+        if from != mode {
+            log.changes.push(ModeChange {
+                from,
+                to: mode,
+                cause,
+            });
+        }
+    }
+
+    fn store(&self, mode: PermissionMode) {
         if mode == PermissionMode::Bypass {
             self.bypassed
                 .store(true, std::sync::atomic::Ordering::Release);

@@ -480,6 +480,9 @@ impl Model {
     /// wins: it is the more specific thing somebody said. A name the model has no variant for adds
     /// nothing, so a pick made for one model does not reach another. `None` where there is nothing
     /// to add.
+    ///
+    /// Nothing is reserved here: the keys come back as the person wrote them. A client skips the
+    /// ones that name a request's tools (BACKEND-15), since only it knows the names its wire uses.
     pub fn request_options(
         &self,
         variant: Option<&str>,

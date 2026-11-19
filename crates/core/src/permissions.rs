@@ -1046,7 +1046,10 @@ impl Permissions {
     /// A name of the workspace that is not UTF-8 reaches here as its lossy rendering, which can
     /// only make a rule cover one more name, never fewer.
     pub fn cover_workspace(&mut self, workspace: &str) {
-        let (backslash_separates, folds_case) = (self.backslash_separates, self.folds_case);
+        // The rules that restrict are stored folded wherever the volume could not be asked, so the
+        // workspace is keyed and compared the same way, as `follow_links` and `copy_beneath` do.
+        let (backslash_separates, folds_case) =
+            (self.backslash_separates, self.restrictions_fold());
         let segments = split(&key_of(workspace, backslash_separates, folds_case));
         for rule in self.deny.iter_mut().chain(self.ask.iter_mut()) {
             rule.cover_workspace(&segments, folds_case);
@@ -4239,6 +4242,99 @@ mod tests {
             other.for_path(Subject::Read, "a.txt"),
             Decision::Unmatched,
             "a different name was read as the same directory"
+        );
+    }
+
+    /// PERM-3, PERM-7. Where the volume could not be asked about case, a `deny` rule on an
+    /// ancestor of the workspace is stored folded, so the workspace is keyed folded too and the
+    /// rule covers the workspace under the relative name the file tools ask by, as it covers the
+    /// full path. A workspace at a mount root is in this state.
+    #[test]
+    fn a_deny_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked()
+     {
+        let mut permissions =
+            rules_where_the_volume_could_not_be_asked(&["Read(//Volumes/**)"], &[], &[]);
+        permissions.cover_workspace("/Volumes/BravePoc");
+        assert_eq!(
+            permissions.for_path(Subject::Read, "/Volumes/BravePoc/secrets/.env"),
+            Decision::Ruled(Ruling::Deny),
+            "the rule stopped covering the full path of the file"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "secrets/.env"),
+            Decision::Ruled(Ruling::Deny),
+            "the rule on an ancestor did not cover the relative name of a file in the workspace"
+        );
+    }
+
+    /// PERM-3, PERM-7. The same for an `ask` rule about writing: where the volume could not be
+    /// asked, an `Edit` rule on an ancestor of the workspace asks for a write under the relative
+    /// name as it does under the full path.
+    #[test]
+    fn an_ask_rule_on_an_ancestor_covers_the_workspace_by_its_relative_name_where_the_volume_could_not_be_asked()
+     {
+        let mut permissions =
+            rules_where_the_volume_could_not_be_asked(&[], &["Edit(//Volumes/**)"], &[]);
+        permissions.cover_workspace("/Volumes/BravePoc");
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/Volumes/BravePoc/secrets/.env"),
+            Decision::Ruled(Ruling::Ask),
+            "the rule stopped covering the full path of the file"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "secrets/.env"),
+            Decision::Ruled(Ruling::Ask),
+            "the rule on an ancestor did not cover the relative name of a file in the workspace"
+        );
+    }
+
+    /// PERM-3, PERM-7. Where the volume could not be asked, a rule on an ancestor written in
+    /// another case than the workspace's name still covers the workspace under its relative name,
+    /// as it does where the volume is known to fold case.
+    #[test]
+    fn a_rule_on_an_ancestor_in_another_case_covers_the_workspace_where_the_volume_could_not_be_asked()
+     {
+        for (written, subject, ruling) in [
+            ("Read(//volumes/**)", Subject::Read, Ruling::Deny),
+            ("Edit(//volumes/**)", Subject::Edit, Ruling::Ask),
+        ] {
+            let mut permissions = match ruling {
+                Ruling::Deny => rules_where_the_volume_could_not_be_asked(&[written], &[], &[]),
+                _ => rules_where_the_volume_could_not_be_asked(&[], &[written], &[]),
+            };
+            permissions.cover_workspace("/Volumes/BravePoc");
+            assert_eq!(
+                permissions.for_path(subject, "secrets/.env"),
+                Decision::Ruled(ruling),
+                "{written} in the {ruling} list did not cover the relative name of a file in a workspace spelled in another case"
+            );
+        }
+    }
+
+    /// PERM-3, PERM-7. Where the volume could not be asked, an `allow` rule on an ancestor of the
+    /// workspace is still compared byte for byte and gains no relative name, so the fold the
+    /// refusals are read in never widens a grant.
+    #[test]
+    fn an_allow_rule_on_an_ancestor_gains_no_relative_name_where_the_volume_could_not_be_asked() {
+        for written in ["Edit(//Volumes/**)", "Edit(//volumes/**)"] {
+            let mut permissions = rules_where_the_volume_could_not_be_asked(&[], &[], &[written]);
+            permissions.cover_workspace("/Volumes/BravePoc");
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "secrets/.env"),
+                Decision::Unmatched,
+                "{written} in the allow list granted a relative name"
+            );
+        }
+        let permissions =
+            rules_where_the_volume_could_not_be_asked(&[], &[], &["Edit(//Volumes/**)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/Volumes/BravePoc/secrets/.env"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Edit, "/volumes/BravePoc/secrets/.env"),
+            Decision::Unmatched,
+            "an allow rule was compared folded where the volume could not be asked"
         );
     }
 

@@ -481,6 +481,55 @@ pub fn host_lines(hosts: &[String]) -> Vec<String> {
     lines
 }
 
+/// Where a yes to the question about a working directory is kept (TRUST-23), as the front end
+/// asking says it.
+pub struct Keeping<'a> {
+    /// The file the yes is written to.
+    pub record: &'a std::path::Path,
+    /// The sentence before the file's name, saying how to take the yes back. It names a command of
+    /// the front end asking, so that front end words it.
+    pub take_back: &'a str,
+}
+
+/// The lines read before the question about a working directory (TRUST-7) is answered in lines:
+/// the directory, what a yes trusts and what is shown either way, then what a yes keeps and the
+/// file it is written to, or that it cannot be kept (TRUST-23).
+///
+/// A session in lines and the local host put the question with these lines, so the two say the
+/// same of a yes. A yes to them says that confined lines run without asking (RUN-5).
+pub fn trust_directory_lines(
+    directory: &std::path::Path,
+    keeping: Option<Keeping<'_>>,
+) -> Vec<String> {
+    let mut lines = vec![
+        bravebot_agent::confirm::shown_path(directory),
+        t!(trust_directory_explained).to_string(),
+        t!(trust_directory_regardless).to_string(),
+        t!(trust_directory_confined_lines).to_string(),
+    ];
+    match keeping {
+        Some(keeping) => lines.extend([
+            t!(trust_directory_remember_explained).to_string(),
+            t!(trust_directory_remember_exact).to_string(),
+            keeping.take_back.to_string(),
+            bravebot_agent::confirm::shown_path(keeping.record),
+        ]),
+        None => lines.push(t!(trust_directory_not_remembered).to_string()),
+    }
+    lines
+}
+
+/// What follows a question put in lines: how to answer it.
+pub fn invitation(question: &str) -> String {
+    format!("{question} {} ", t!(line_answer))
+}
+
+/// Whether a line typed in answer to a question put in lines approves it. Only the affirmative
+/// does: any other line is a person who typed something that was not yes.
+pub fn says_yes(typed: &str) -> bool {
+    typed.trim().to_lowercase() == t!(line_answer_yes)
+}
+
 /// A message the planner wants to send to another background session (MSG-3).
 pub struct Message<'a> {
     /// The target's name, as the roster holds it.

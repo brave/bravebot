@@ -266,7 +266,7 @@ impl Pipeline {
 
 /// How two parts of a plan are joined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(verus_keep_ghost, verus_verify)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Joiner {
     /// `&&`: the right side runs only if the left side succeeded.
     And,

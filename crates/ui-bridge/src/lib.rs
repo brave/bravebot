@@ -59,6 +59,8 @@ pub mod help;
 pub mod hooks;
 #[cfg(unix)]
 pub mod host;
+#[cfg(unix)]
+pub mod host_trust;
 mod key_entry;
 pub mod language;
 pub mod manifest;

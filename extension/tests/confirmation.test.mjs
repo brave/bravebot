@@ -28,6 +28,7 @@ import {
   URL_LIMIT,
 } from "../words.js";
 import { ADDRESS, EXTENSION, flush, world } from "./fake-window.mjs";
+import { occurrences, scripts } from "./scripts.mjs";
 
 beforeEach(() => mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] }));
 afterEach(() => mock.timers.reset());
@@ -1118,4 +1119,32 @@ test("no web page can open, frame or send a message to the window or the worker"
   assert.equal(manifest.content_scripts, undefined);
   assert.ok(!JSON.stringify(manifest).includes("confirm"));
   assert.equal(CONFIRMATION_PORT, "bravebot-confirmation");
+});
+
+// ROUTE-9 and ROUTE-11 give the person's allow in the browser window as the only
+// way to a token (BROWSER-33, BROWSER-34), and the window's allow is the only
+// call of approve() that reaches confirmation.js:100. A second caller of
+// approve(), anywhere outside this file, would let that code decide an action
+// is allowed without the person ever seeing the element or document it acts on.
+test("approve is called only by the window's own code, and spent only by the tools that act", () => {
+  const CODE = scripts();
+  assert.deepEqual(occurrences(CODE, "\\bapprove\\s*\\("), {
+    "approval.js": 1,
+    "confirmation.js": 1,
+  });
+  assert.deepEqual(occurrences(CODE, "\\bspend\\s*\\("), {
+    "approval.js": 1,
+    "tools.js": 2,
+  });
+  // The regex count above matches a call `approve(`, so it would miss a second
+  // caller that imported the function under another name, for example
+  // `import { approve as allow } from "./approval.js"`. Every import of
+  // `approve`'s own name, aliased or not, is pinned to confirmation.js alone.
+  const importers = CODE.filter(({ code }) =>
+    code
+      .join("\n")
+      .match(/import\s*\{[^}]*\}\s*from\s*"\.\/approval\.js"/g)
+      ?.some((block) => /\bapprove\b/.test(block)),
+  ).map(({ name }) => name);
+  assert.deepEqual(importers, ["confirmation.js"]);
 });

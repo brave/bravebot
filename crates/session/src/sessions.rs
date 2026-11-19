@@ -1741,6 +1741,7 @@ pub fn manifest_usage(
         .ok()
         .map(|done| bravebot_agent::Spent {
             tokens: done.tokens,
+            budgeted_tokens: done.budgeted_tokens,
             output_tokens: done.output_tokens,
             context_tokens: done.context_tokens,
             cached: done.cached,

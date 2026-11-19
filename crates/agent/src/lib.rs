@@ -132,7 +132,7 @@ pub use delegate::Delegated;
 pub use live_sandbox::LiveSandbox;
 pub use mode::Mode;
 pub use outcome::{BackendKind, Category, Diagnosis, Ending, RetrySetting, Spent, Work};
-pub use permission_mode::{Confining, LiveMode, PermissionMode};
+pub use permission_mode::{Confining, LiveMode, ModeCause, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};
 pub use scratch::{ScratchDirectory, SessionScratch};

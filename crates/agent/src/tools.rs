@@ -259,9 +259,16 @@ pub struct Output {
     pub ran_git_in: Vec<std::path::PathBuf>,
     /// What the call spent at the model, where it called one.
     ///
-    /// Zero for every tool but the processor. A turn that reported only its own rounds would
-    /// understate what it cost by however much its processors wrote.
+    /// Zero for every tool but a processor, an advisor, a delegate and a check over content nobody
+    /// vouched for. A turn that reported only its own rounds would understate what it cost by
+    /// however much those wrote.
     pub usage: Usage,
+    /// Whether [`Output::usage`] is what a check over content nobody vouched for cost.
+    ///
+    /// Set by the tool that made the check, whether or not the check was made, so it is never
+    /// decided from what the check said. The turn counts such usage in what it spent and leaves it
+    /// out of what a delegate's budget counts (DELEGATE-29).
+    pub usage_is_a_check: bool,
     /// When the call waited on the model, where it called one.
     ///
     /// Travels beside [`Output::usage`] and for the same reason. A processor is a request like any
@@ -1914,8 +1921,11 @@ struct Produced {
     /// saying "the model has read it" about a sentence the driver wrote to explain a refusal is
     /// true, useless, and read by the person as a claim about their file.
     content: bool,
-    /// What the tool spent at the model. Only a processor spends anything.
+    /// What the tool spent at the model. Only a processor, an advisor, a delegate and a check spend
+    /// anything.
     usage: Usage,
+    /// Whether `usage` is a check's, which a delegate's token budget does not count.
+    usage_is_a_check: bool,
     /// Retained so a parent can clip delegate requests to its own waits.
     inference_interval: Option<crate::timing::Interval>,
     /// Set where the check waited on could not be made, so no request completed.
@@ -2021,6 +2031,7 @@ impl Produced {
             task_list: None,
             content: false,
             usage: Usage::default(),
+            usage_is_a_check: false,
             inference_interval: None,
             unanswered: false,
             printed_by: None,
@@ -2271,6 +2282,15 @@ impl Produced {
 
     fn costing(mut self, usage: Usage) -> Self {
         self.usage = usage;
+        self
+    }
+
+    /// Say what a check over content nobody vouched for cost. Set by the tool whether or not the
+    /// check was made, so the turn adds it to what it spent and never to what a delegate's token
+    /// budget counts (DELEGATE-29).
+    fn checking(mut self, usage: Usage) -> Self {
+        self.usage = usage;
+        self.usage_is_a_check = true;
         self
     }
 
@@ -3551,6 +3571,7 @@ fn output_of(
         run_may_change_files: produced.run_may_change_files,
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
+        usage_is_a_check: produced.usage_is_a_check,
         inference_interval: produced.inference_interval,
         unanswered: produced.unanswered,
         printed_by: produced.printed_by,
@@ -4480,7 +4501,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // not the read that followed handed anything over.
     let priced = |produced: Produced| {
         produced
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered)
             .respelling(respelled)
@@ -8607,12 +8628,12 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
                 released_note(format!("{lines}, read"), endorsed),
             )
             .of_content()
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered)
         }
         Err(refused) => (*refused)
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered),
     }
@@ -8868,7 +8889,7 @@ fn check_stopped(subject: impl std::fmt::Display, stopped: &crate::vet::Stopped)
         "stopped: the turn was stopped before the check on {subject} finished, so nothing was \
          decided about it. {subject} was not refused and can be asked for again."
     ))
-    .costing(stopped.usage);
+    .checking(stopped.usage);
     produced.cancelled = Some(crate::outcome::Cancellation {
         attempts: stopped.attempts,
     });
@@ -9556,11 +9577,11 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             tools.beside,
         ) {
             Ok((text, counted, endorsed)) => vetted_text(&slot, text, counted, endorsed)
-                .costing(spent)
+                .checking(spent)
                 .waiting(waited)
                 .unanswered(unanswered),
             Err(refusal) => (*refusal)
-                .costing(spent)
+                .checking(spent)
                 .waiting(waited)
                 .unanswered(unanswered),
         };
@@ -9624,7 +9645,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                         ),
                         detail,
                     )
-                    .costing(spent)
+                    .checking(spent)
                     .waiting(waited)
                     .unanswered(unanswered);
                 }
@@ -9683,7 +9704,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 pass_to_a_processor(tools.beside, &slot)
             );
             return kept_back(mode, tools.auto_vetting, text)
-                .costing(spent)
+                .checking(spent)
                 .waiting(waited)
                 .unanswered(unanswered);
         }
@@ -9711,7 +9732,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 released_note(format!("{kind}, attached"), endorsed),
             )
             .attaching(attached)
-            .costing(spent)
+            .checking(spent)
             .waiting(waited)
             .unanswered(unanswered)
         }
@@ -15130,7 +15151,9 @@ fn propose_plan<S: Sink, C: Confirmer>(
     let outcome = match approval(answers.first()) {
         Approval::LeaveFor(mode) => {
             // Applies to the rest of this turn, as any change of mode does (MODE-8).
-            tools.permission_mode.set(mode);
+            tools
+                .permission_mode
+                .set_by(mode, crate::ModeCause::PlanApproval);
             "The user approved the plan and plan mode has ended. Carry the plan out now."
         }
         Approval::KeepPlanning => {

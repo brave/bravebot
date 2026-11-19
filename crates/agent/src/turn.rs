@@ -1742,7 +1742,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
 
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
-                account.add_usage(delegated.usage);
+                // The whole of what the delegate cost is the turn's spend. Only what its own budget
+                // counted is added to what this run's budget counts (DELEGATE-29).
+                account.add_unbudgeted(delegated.usage);
+                account.budgeted_tokens += delegated.budgeted_tokens;
                 account.requests += delegated.requests;
 
                 let kind = delegated.kind;
@@ -2703,6 +2706,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // the turn's own and the kernel gives it to no run that is a delegate (DELEGATE-7).
     policy = policy.with_delegate_bound(inputs.config.max_running_delegates);
 
+    // The mode the session opened in and each change since the last turn, before the line that
+    // names the mode this turn began in. A delegate shares its parent's handle and leaves the
+    // parent's changes to the parent's trail (TRACE-12).
+    if task.delegate.is_none() {
+        task.permission_mode.record_into(&mut policy);
+    }
     let started_in = task.began_in.unwrap_or_else(|| task.permission_mode.get());
     policy.record_permission_mode(started_in.name());
     // The opening a style takes the place of is the one a person's own turn gets, and
@@ -3504,7 +3513,7 @@ where
         ..Default::default()
     };
     if let Some((_, usage)) = &mcp {
-        account.add_usage(*usage);
+        account.add_unbudgeted(*usage);
     }
     // Reported before the rounds begin, so a turn stopped or failed at the question, before any
     // round closes, still carries the wait in its record.
@@ -3695,6 +3704,10 @@ where
     });
     let conversation = &mut *channels.conversation;
     let reporter = &mut channels.reporter;
+    // A change made during the last round, which no later request is there to read (TRACE-12).
+    if task.delegate.is_none() {
+        task.permission_mode.record_into(policy);
+    }
     round_steps::close_the_rounds(
         policy,
         reporter,
@@ -3749,6 +3762,7 @@ where
         asked_about,
         exposed,
         tokens: state.account.tokens,
+        budgeted_tokens: state.account.budgeted_tokens,
         output_tokens: state.account.output_tokens,
         context_tokens: state.account.context_tokens,
         cached: state.account.cached,
@@ -4041,7 +4055,7 @@ where
             &mut state.may_call_tools,
             task,
             state.steps,
-            state.account.tokens,
+            state.account.budgeted_tokens,
             reporter,
             conversation,
         );
@@ -4718,7 +4732,7 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        state.account.add_call(released.usage, released.completed);
+                        state.account.add_check(released.usage, released.completed);
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.
@@ -5880,6 +5894,7 @@ mod tests {
                         report,
                         kind: "one-round".to_string(),
                         usage: Default::default(),
+                        budgeted_tokens: 0,
                         requests: 0,
                     }),
                 };
@@ -6096,6 +6111,7 @@ mod tests {
                             report,
                             kind: "one-round".to_string(),
                             usage: Default::default(),
+                            budgeted_tokens: 0,
                             requests: 0,
                         }),
                         vouched: handed,
@@ -6193,6 +6209,7 @@ mod tests {
                                 completion_tokens: 200,
                                 cached: Default::default(),
                             },
+                            budgeted_tokens: 1100,
                             requests: 1,
                         }),
                         vouched: handed,
@@ -6293,6 +6310,7 @@ mod tests {
                                     report,
                                     kind: "one-round".to_string(),
                                     usage: Default::default(),
+                                    budgeted_tokens: 0,
                                     requests: 0,
                                 }),
                                 vouched: handed,
@@ -6412,6 +6430,7 @@ mod tests {
                                         report,
                                         kind: "one-round".to_string(),
                                         usage: Default::default(),
+                                        budgeted_tokens: 0,
                                         requests: 0,
                                     }),
                                     vouched: handed,
@@ -6573,6 +6592,7 @@ mod tests {
                                 report,
                                 kind: "one-round".to_string(),
                                 usage: Default::default(),
+                                budgeted_tokens: 0,
                                 requests: 0,
                             }),
                             vouched: handed,
@@ -6741,6 +6761,7 @@ mod tests {
                                     completion_tokens: 100,
                                     ..Default::default()
                                 },
+                                budgeted_tokens: 500,
                                 requests: 1,
                             }),
                             vouched: handed,
@@ -6859,6 +6880,7 @@ mod tests {
                                     ..Default::default()
                                 },
                             },
+                            budgeted_tokens: 1230,
                             requests: 1,
                         }),
                         vouched: handed,

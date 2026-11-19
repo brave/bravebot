@@ -57,6 +57,7 @@ what catches it.
 It is asked for text and given nothing to act with.
 
 `verified-by: bravebot_agent::turn::the_summariser_is_offered_no_tools`
+`verified-by: bravebot_agent::turn::the_summarisers_request_through_a_gateway_carries_no_tool_list_its_models_options_state`
 `verified-by: bravebot_agent::turn::compacting_on_request_grants_itself_nothing_but_reaching_the_model`
 
 <a id="COMPACT-3"></a>

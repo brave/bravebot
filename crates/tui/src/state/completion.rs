@@ -335,7 +335,7 @@ impl Session {
                     return false;
                 }
                 if let Some(command) = self.highlighted_completion() {
-                    return command.name != self.input.trim();
+                    return crate::command_table::enter_takes_the_row(&self.input, &command);
                 }
                 self.highlighted_skill()
                     .zip(typed)
