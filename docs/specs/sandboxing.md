@@ -4453,7 +4453,7 @@ file. A new spawn that looks a name up through
 
   | Variable | Names |
   |---|---|
-  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `MUSL_LOCPATH`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
+  | `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `GCONV_PATH`, `LOCPATH`, `MUSL_LOCPATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`, `PYTHONPATH`, `XDG_DATA_DIRS`, `PYENV_HOOK_PATH` | a list of directories (`Names::Directories`), split as `PATH` is |
   | `LD_ORIGIN_PATH`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX`, `PYTHONHOME`, `DEVELOPER_DIR`, `GIT_EXEC_PATH`, `ASDF_DATA_DIR`, `PYENV_ROOT` | one directory (`Names::Directory`) |
   | `BASH_ENV`, `ASDF_CONFIG_FILE` | one file (`Names::File`) |
   | `NODE_OPTIONS`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, `CLOUDSDK_PYTHON_ARGS`, `NLSPATH`, `SHELLOPTS`, `PS4`, `PYENV_VERSION`, `PYTHONPLATLIBDIR`, every `GIT_CONFIG_` name, every `BASH_FUNC_` name and every `ASDF_<tool>_VERSION` name | options or configuration (`Names::Options`), which can name code whatever they hold |
@@ -5012,7 +5012,7 @@ file. A new spawn that looks a name up through
   | File | Start | Names read | Basis |
   |---|---|---|---|
   | `crates/sandbox/src/macos.rs` | `xcode-select -p`, which `DEVELOPER_DIR` redirects | `DEVELOPER_DIR`, which is in the generic table and is also removed at the call | the binary's strings on macOS 26.6 hold no other upper-case variable name |
-  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES` (in the generic table), `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX`. `systemctl --user` is not an empty-list start. Its four starts (`--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, each through `succeeds`, which sends stdin, stdout and stderr to `/dev/null`) are given `SYSTEMCTL_CODE_SELECTORS`: `DBUS_SESSION_BUS_ADDRESS` (`Names::Options`) and `SYSTEMD_UNIT_PATH` (`Names::Directories`). The bullet on `systemd-inhibit` and `systemctl --user` under "What a checked start does not cover" has the basis and the Linux run of `systemctl`. None of the four passes `edit`, `-H` or `-M` | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_LIBRARY_PATH` and `DYLD_IMAGE_SUFFIX` are not in the generic table and were not shown to change what `launchctl` loads |
+  | `crates/schedule/src/schedule.rs` | `crontab -l` and `crontab -`, `launchctl load` and `unload` | `crontab` names `EDITOR` and `VISUAL` for `crontab -e`, which no start runs. `launchctl` names `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` and `DYLD_FRAMEWORK_PATH` (all in the generic table) and `DYLD_IMAGE_SUFFIX` (not in it). `systemctl --user` is not an empty-list start. Its four starts (`--user daemon-reload` twice, `--user enable --now` and `--user disable --now`, each through `succeeds`, which sends stdin, stdout and stderr to `/dev/null`) are given `SYSTEMCTL_CODE_SELECTORS`: `DBUS_SESSION_BUS_ADDRESS` (`Names::Options`) and `SYSTEMD_UNIT_PATH` (`Names::Directories`). The bullet on `systemd-inhibit` and `systemctl --user` under "What a checked start does not cover" has the basis and the Linux run of `systemctl`. None of the four passes `edit`, `-H` or `-M` | the strings of the macOS binaries for `crontab` and `launchctl`. `DYLD_IMAGE_SUFFIX` is not in the generic table and was not shown to change what `launchctl` loads |
   | `crates/sandbox/src/openshell.rs` | the `openshell` CLI, for each `sandbox` subcommand and for `sandbox exec` | none. The start passes `Inherits::Only(["HOME"])`, so no other variable reaches the CLI | the start's own argument. A changed `HOME` is not checked |
   | `crates/tui/src/powershell.rs` | `xclip` and `xsel`, the clipboard tools that are not `powershell`, `osascript`, `systemd-inhibit` or `wl-copy`, with `pbcopy`, `clip` and `/usr/bin/caffeinate`, which are started through the same function | `xclip` 0.13 and `xsel` 1.2.1 read no variable of their own that selects code, and the libraries they use read names that select a socket, a credential file or data only (`DISPLAY`, `XAUTHORITY`, `XENVIRONMENT`, `XLOCALEDIR`, `XCOMPOSEFILE`). On macOS `pbcopy` and `caffeinate` hold no upper-case variable name in their strings. `systemd-inhibit` and `wl-copy` have lists of their own and are not empty-list starts. `xclip` was run on Linux under Xvfb and `xsel` was not | `xclip.c`, `xclib.c` of xclip 0.13, `xsel.c` of xsel 1.2.1, libX11 1.8.7, libxcb 1.16 and libXau 1.0.11, read for `getenv`, `exec*`, `dlopen` and `popen`; the strings of the macOS binaries for the other two |
   | `crates/agent/src/usability.rs` | the stored-login `gh auth token` | `GH_TOKEN` and the three other token names, which the start removes. Other variables `gh` reads were not looked for in the program | the call's own removals |
@@ -5401,6 +5401,23 @@ shown by running the program, or not entirely:
   - **`aws` script**: the names, and the versions, are in the AWS table above. Run: Homebrew
     `awscli` 2.39.7 and pip `awscli` 1.46.3 (scripts), and the frozen 2.37.12 executable. Version
     2.39.7 was also read from source.
+  - **`DYLD_LIBRARY_PATH` and `DYLD_FRAMEWORK_PATH`, for the Homebrew `aws` script**. Run on macOS
+    26.6, arm64, with the Homebrew `awscli` 2.39.7 bottle (Python 3.15.2, ad hoc signed, no
+    hardened-runtime flag). `DYLD_LIBRARY_PATH` naming a scratch directory holding a
+    `libssl.4.dylib` that re-exports the real one ran its constructor and wrote the marker, and
+    the control without the variable wrote none. `DYLD_FRAMEWORK_PATH` naming a directory with a
+    planted `Python.framework/Versions/3.15/Python` also ran its constructor.
+    `DYLD_FALLBACK_LIBRARY_PATH` did not run the same planted `libssl.4.dylib`, because dyld finds
+    the library at its install name first and never falls back to the directory the name gives.
+    Both names are in the generic table (`Names::Directories`) so every checked start removes
+    one that names a directory a stage may write, the same way `LD_LIBRARY_PATH` does for the
+    Linux loader. The Developer ID release (`/usr/local/bin/bravebot`, team KL8N8XSYF4) is signed
+    with the hardened runtime and no `com.apple.security.cs.allow-dyld-environment-variables`
+    entitlement: a small program with that signature printed `getenv(DYLD_LIBRARY_PATH)=(null)`
+    and no `DYLD_` entry in `environ`, where the same program signed ad hoc kept both, because
+    dyld strips every `DYLD_` name from a hardened-runtime process before `main` runs. A
+    `bravebot` built from source (`target/debug/bravebot`, ad hoc, linker-signed) keeps and
+    forwards the names, which is the build this check protects.
   - **`gio open`**. Run on macOS with Homebrew `gio` 2.90.1: a planted library whose constructor
     writes a marker ran under `GIO_EXTRA_MODULES` and under `GIO_MODULE_DIR`, for `gio open
     x-probe://a` and for `gio open /etc/hosts`, and did not run without them. Source, GLib 2.86.0
