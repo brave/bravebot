@@ -547,6 +547,170 @@ pub enum Containment {
     Held,
 }
 
+/// What [`Policy::plan_needs_approval_held`] knows about a line, gathered before it decides.
+#[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the line, and run_reason reads each on its own"
+)]
+struct RunFacts {
+    /// Private input is fed to a program (RUN-6).
+    releases_private: bool,
+    /// The planner asked for a credential scope or a toolchain list (SANDBOX-26).
+    requested: bool,
+    /// The line names a file to write.
+    writes: bool,
+    /// The line runs in the workspace root.
+    at_root: bool,
+    /// Every step is on the session's vouched list, in the tree the line runs in (RUN-8).
+    vouched: bool,
+    /// A step carries an environment assignment.
+    assignment: bool,
+    /// What the settings file's rules say about the line.
+    rule: crate::permissions::Decision,
+    /// The audited table proves every step reads only paths the person vouched for.
+    read_proven_trusted: bool,
+    /// The line is fed a reference.
+    fed: bool,
+    /// The line is held to a closed sandbox in the directory the person trusted, and their yes
+    /// said such lines run without asking (RUN-5).
+    held: bool,
+    /// The person asked for this exact line to be remembered past the session (RUN-19).
+    remembered: bool,
+}
+
+/// Which question decided whether a line is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunReason {
+    Private,
+    Requested,
+    Writes,
+    OutsideRoot,
+    Assignment,
+    Ruled(crate::permissions::Ruling),
+    ReadProven,
+    Fed,
+    DirectoryTrust,
+    Vouched,
+    Remembered,
+    Unanswered,
+}
+
+impl RunReason {
+    /// Whether the line is put to a person.
+    fn asks(self) -> bool {
+        match self {
+            Self::Private
+            | Self::Requested
+            | Self::Writes
+            | Self::OutsideRoot
+            | Self::Assignment
+            | Self::Fed
+            | Self::Unanswered => true,
+            Self::Ruled(ruling) => ruling != crate::permissions::Ruling::Allow,
+            Self::ReadProven | Self::DirectoryTrust | Self::Vouched | Self::Remembered => false,
+        }
+    }
+}
+
+/// The question that decides whether a line is put to a person, in the order they are asked.
+///
+/// Private input, a requested scope, a write, another tree and an assignment are asked about
+/// before any rule is read, since a rule is matched against programs and arguments and none of
+/// those is in either. A rule is read before the audited table and before any standing answer,
+/// so an `ask` rule is not overturned by one. A fed reference is asked about past the rules and
+/// the table and before the standing answers, none of which records what was fed.
+fn run_reason(facts: RunFacts) -> RunReason {
+    if facts.releases_private {
+        return RunReason::Private;
+    }
+    if facts.requested {
+        return RunReason::Requested;
+    }
+    if facts.writes {
+        return RunReason::Writes;
+    }
+    if !facts.at_root && !facts.vouched {
+        return RunReason::OutsideRoot;
+    }
+    if facts.assignment {
+        return RunReason::Assignment;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = facts.rule {
+        return RunReason::Ruled(ruling);
+    }
+    if facts.read_proven_trusted {
+        return RunReason::ReadProven;
+    }
+    if facts.fed {
+        return RunReason::Fed;
+    }
+    if facts.held {
+        return RunReason::DirectoryTrust;
+    }
+    if facts.vouched {
+        return RunReason::Vouched;
+    }
+    if facts.remembered {
+        return RunReason::Remembered;
+    }
+    RunReason::Unanswered
+}
+
+/// What [`Policy::measure_a_run`] knows about a line, gathered before it labels the output.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OutputFacts {
+    /// The line asked for `scopes` or `unconfined` (SANDBOX-26, SANDBOX-29).
+    requesting: bool,
+    /// The label the audited table proves, where it proves a trusted one.
+    proven: Option<Label>,
+    /// Every step is on the session's vouched list, in the tree the line runs in (RUN-8).
+    vouched: bool,
+    /// A step carries an environment assignment.
+    assignment: bool,
+    /// The integrity of a reference fed to the line, where one is.
+    fed: Option<Integrity>,
+}
+
+/// Which road a line's output label was taken by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputRoad {
+    Requested,
+    Proven,
+    Vouched,
+    VouchedButFed,
+    Opaque,
+}
+
+/// The label a line's output carries, and the road that gave it.
+///
+/// A request gets `opaque` whatever covers the line. Otherwise a proof from the audited table
+/// gives the label it proved, a vouch for every step with no assignment gives `(T,priv)` unless
+/// the line is fed untrusted content, and everything else gets `opaque`.
+pub(crate) fn output_label(facts: OutputFacts, opaque: Label) -> (Label, OutputRoad) {
+    if facts.requesting {
+        return (opaque, OutputRoad::Requested);
+    }
+    if let Some(label) = facts.proven {
+        return (label, OutputRoad::Proven);
+    }
+    if facts.vouched && !facts.assignment {
+        // Met with what was fed in, exactly as [`Policy::read_proven_label`] meets it on the
+        // other road. Vouching for a command is an assertion about what that command does, and
+        // it is not and cannot be an assertion about bytes the user has never seen: `sed` over
+        // a fetched page prints what the page said, so a vouch for `sed` that reached `(T,priv)`
+        // here would put a page into the planner's context as trusted content.
+        //
+        // A `<` redirection is not in this and takes nothing away from it: it names a file, and
+        // a file read under a vouched-for line is already what the vouch is an assertion about.
+        return match facts.fed {
+            Some(Integrity::Untrusted) => (opaque, OutputRoad::VouchedButFed),
+            Some(Integrity::Trusted) | None => (Label::trusted_private(), OutputRoad::Vouched),
+        };
+    }
+    (opaque, OutputRoad::Opaque)
+}
+
 /// The reference monitor for exactly one turn.
 ///
 /// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn. The one copy
@@ -8095,175 +8259,89 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         containment: Containment,
     ) -> bool {
         self.answered_by_directory_trust = false;
-        if plan.releases_private() {
-            self.allow(
-                "approval",
+        let at_root = self.runs_at_the_root(plan);
+        let vouched = self.every_step_vouched(plan);
+        let facts = RunFacts {
+            releases_private: plan.releases_private(),
+            requested: !requested.is_empty(),
+            writes: !plan.writes.is_empty(),
+            at_root,
+            vouched,
+            assignment: plan.carries_an_assignment(),
+            rule: self.permissions.for_pipeline(&Self::plan_words(plan)),
+            read_proven_trusted: self
+                .read_proven_label(plan)
+                .is_some_and(|label| label.is_trusted()),
+            fed: plan.stdin.is_some(),
+            held: containment == Containment::Held
+                && self.confined_lines_were_allowed(plan)
+                && (self.read_proven(plan).is_some() || !self.names_a_distrusted_path(plan)),
+            remembered: self.remembered.covers(plan),
+        };
+        let reason = run_reason(facts);
+        if reason == RunReason::DirectoryTrust {
+            self.answered_by_directory_trust = true;
+        }
+        let said = match reason {
+            RunReason::Private => {
                 "private input into a program, which releases it past this policy, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        if !requested.is_empty() {
-            self.allow(
-                "approval",
-                format!(
-                    "the planner asked for {} on this line, which no vouched entry, remembered line or rule \
-                     records, asking",
-                    requested.join(", ")
-                ),
-            );
-            return true;
-        }
-
-        // A plan that writes has a destination as well as a program, and vouching for a command is
-        // not vouching for where this line sends its output. Asked every time, so a write cannot
-        // arrive unseen behind a program somebody once said yes to.
-        if !plan.writes.is_empty() {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Requested => format!(
+                "the planner asked for {} on this line, which no vouched entry, remembered line or rule \
+                 records, asking",
+                requested.join(", ")
+            ),
+            RunReason::Writes => {
                 "the line names files to write, which is a destination of its own, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        // A plan that runs outside the root has a tree as well as a program, and the only standing
-        // answer that can cover one is an entry that names that tree: `git clean -fd` is a
-        // different proposition in two different trees, and `git log` prints whatever commit
-        // messages the repository it is pointed at happens to hold. Everything else a person
-        // settled in advance is spelled against the root (a rule in the settings file, a line
-        // remembered past the session), so none of it reaches a tree of its own, and the question
-        // is put before the rules for the reason private input is: a rule saying which commands
-        // may run answers the question about running one, not the one about which tree it lands in.
-        if !self.runs_at_the_root(plan) && !self.every_step_vouched(plan) {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::OutsideRoot => {
                 "the line runs outside the workspace root, in a tree no vouched entry names and \
                  no answer spelled against the root covers, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        // A plan carrying an environment assignment has a load and a search path of its own as well
-        // as a program, and a vouched entry records neither: `LD_PRELOAD=./evil.so git log` matches
-        // an entry made for `git log`. An assignment decides what the program loads and reads before
-        // its own arguments are looked at, so it is asked about every time, for the same reason a
-        // write and a tree are.
-        if plan.carries_an_assignment() {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Assignment => {
                 "the line writes an assignment in front of a program, which decides what it loads \
                  before its arguments are read and which no standing answer covers, asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        match self.permissions.for_pipeline(&Self::plan_words(plan)) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for this line, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                return needed;
+                    .to_string()
             }
-            crate::permissions::Decision::Unmatched => {}
-        }
-
-        if self
-            .read_proven_label(plan)
-            .is_some_and(|label| label.is_trusted())
-        {
-            self.allow(
-                "approval",
+            RunReason::Ruled(ruling) => format!(
+                "a rule in the settings file says {ruling} for this line, {}",
+                if reason.asks() { "asking" } else { "no prompt" }
+            ),
+            RunReason::ReadProven => {
                 "every step is an audited call that reads what the line names and the user \
                  vouched for every path it reads, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        // A plan fed a reference has an input as well as a program, and neither a vouched entry
-        // nor a remembered line records it: both are spelled against the program and its arguments,
-        // so one made for `python3 -` fed one page would cover `python3 -` fed another. Asked every
-        // time, whatever the reference's label, because a public body is the one an attacker wrote.
-        // Past the rules, which the person wrote knowing what a line may be fed, and past the proof
-        // road, which has already met the reference's integrity into its label and answers only for
-        // a line that writes nothing.
-        if plan.stdin.is_some() {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Fed => {
                 "the line is fed a reference, which no vouched entry or remembered line records, \
                  asking"
-                    .to_string(),
-            );
-            return true;
-        }
-
-        // Past every question above, which is what keeps this answer to the line it was given
-        // for: private input, a scope, an unconfined start, a write, another tree, an assignment, a
-        // rule and a fed reference all asked before it was reached. What remains is a plain line.
-        // And past the question of whether the line is given a path the map holds untrusted: the
-        // file tools put the same copy to the person (TRUST-4), and a held line that copies an
-        // untrusted file over a trusted one has made the same move. Such a line falls through to
-        // the vouched entry and the remembered line, which a person gave for that exact line.
-        //
-        // A line the audited table proves read-only is not asked about its paths: it copies
-        // nothing, and what it prints keeps the label of the paths it read ([`Policy::before_plan`]),
-        // so `cat /etc/hosts` adds a question that protects nothing. `read_proven` answers from
-        // program names and argv alone and is `None` for a renamed, assigned or redirecting step
-        // and for a program the table does not list, so every other line is still asked about.
-        if containment == Containment::Held
-            && self.confined_lines_were_allowed(plan)
-            && (self.read_proven(plan).is_some() || !self.names_a_distrusted_path(plan))
-        {
-            self.answered_by_directory_trust = true;
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::DirectoryTrust => {
                 "the line is held to a closed sandbox in the directory the person trusted, and \
                  their yes said such lines run without asking, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        if self.every_step_vouched(plan) {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Vouched => {
                 "every step is a command the user vouched for in this tree this session, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        // Last of the four, and the only one whose answer was given in another session. It is
-        // reached only past the questions above it, which is what keeps an entry honest about what
-        // it covers: a recorded line met here with private input fed to it, with a file to write, in
-        // another tree, or with an assignment in front of a program is asked about like any other,
-        // because those were refused before this was consulted.
-        if self.remembered.covers(plan) {
-            self.allow(
-                "approval",
+                    .to_string()
+            }
+            RunReason::Remembered => {
                 "the user asked at a prompt for this exact line to be remembered past the \
                  session, no prompt"
-                    .to_string(),
-            );
-            return false;
-        }
-
-        self.allow(
-            "approval",
-            "nothing can establish that a program changes nothing, and not every step was \
-             vouched for, asking"
-                .to_string(),
-        );
-        true
+                    .to_string()
+            }
+            RunReason::Unanswered => {
+                "nothing can establish that a program changes nothing, and not every step was \
+                 vouched for, asking"
+                    .to_string()
+            }
+        };
+        self.allow("approval", said);
+        reason.asks()
     }
 
     /// Whether a prompt for this plan may offer to record its answer past the session.
@@ -8765,50 +8843,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 .read_proven_label(plan)
                 .filter(|label| label.is_trusted()),
         };
-
-        let (label, why) = if requesting {
-            (
-                opaque,
+        let facts = OutputFacts {
+            requesting,
+            proven,
+            vouched: self.every_step_vouched(plan),
+            assignment: plan.carries_an_assignment(),
+            fed: plan.stdin.map(|label| label.integrity),
+        };
+        let (label, road) = output_label(facts, opaque);
+        let why = match road {
+            OutputRoad::Requested => {
                 "the line asked for `scopes` or `unconfined`, and neither a vouch nor an audited \
-                 call makes what it prints trusted",
-            )
-        } else if let Some(label) = proven {
-            (
-                label,
-                "every step is an audited call whose output is a function of paths the user \
-                 vouched for",
-            )
-        } else if self.every_step_vouched(plan) && !plan.carries_an_assignment() {
-            // Met with what was fed in, exactly as [`Policy::read_proven_label`] meets it on the
-            // other road. Vouching for a command is an assertion about what that command does, and
-            // it is not and cannot be an assertion about bytes the user has never seen: `sed` over
-            // a fetched page prints what the page said, so a vouch for `sed` that reached `(T,priv)`
-            // here would put a page into the planner's context as trusted content. That is the one
-            // thing this repository exists to prevent, and it is the reason the supplied label is
-            // read here rather than only at the prompt.
-            //
-            // A `<` redirection is not in this and takes nothing away from it: it names a file, and
-            // a file read under a vouched-for line is already what the vouch is an assertion about.
-            match plan
-                .stdin
-                .map_or(Integrity::Trusted, |label| label.integrity)
-            {
-                Integrity::Trusted => (
-                    Label::trusted_private(),
-                    "every step is a command the user vouched for in this tree, output and all",
-                ),
-                Integrity::Untrusted => (
-                    opaque,
-                    "every step was vouched for, but the line is fed content nobody vouched \
-                     for, and a program prints what it was given",
-                ),
+                 call makes what it prints trusted"
             }
-        } else {
-            (
-                opaque,
+            OutputRoad::Proven => {
+                "every step is an audited call whose output is a function of paths the user \
+                 vouched for"
+            }
+            OutputRoad::Vouched => {
+                "every step is a command the user vouched for in this tree, output and all"
+            }
+            OutputRoad::VouchedButFed => {
+                "every step was vouched for, but the line is fed content nobody vouched \
+                 for, and a program prints what it was given"
+            }
+            OutputRoad::Opaque => {
                 "a program may print anything, and not every step of this line was vouched for as \
-                 written, where it runs",
-            )
+                 written, where it runs"
+            }
         };
         Ok(PlanLabelled { label, why })
     }
