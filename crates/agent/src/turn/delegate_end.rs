@@ -389,8 +389,8 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
     let finish = finish_of(&delegated, ran);
     // What its own backend reported it spent, which on a failed run is the part that completed.
     let tokens = match &delegated {
-        Ok(delegated) => delegated.usage.total(),
-        Err(_) => partial.tokens,
+        Ok(delegated) => delegated.budgeted_tokens,
+        Err(_) => partial.budgeted_tokens,
     };
     policy.record_delegate_end_within(
         id,

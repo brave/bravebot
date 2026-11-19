@@ -82,7 +82,7 @@ pub(super) fn targets() -> Vec<Target> {
                 let cell = find_on(&buffer, "claude-sonnet");
                 (session, cell)
             },
-            |_, action| *action == Action::ChooseModel,
+            |_, action| *action == Action::ChooseModel(crate::model_prompt::Scope::EverySession),
         ),
         Target::plain(
             "the effort row of the info panel",

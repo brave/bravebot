@@ -35,6 +35,12 @@ pub const STOP_REASON_REFUSAL: &str = "refusal";
 /// The stop reason of a reply that ran into the model's context window.
 pub const STOP_REASON_CONTEXT_FULL: &str = "model_context_window_exceeded";
 
+/// The body fields that say which tools a Messages request offers, which a service may run itself
+/// (`web_fetch`, `web_search`, `code_execution`) or reach through a server it connects to
+/// (`mcp_servers`). A model's `options` are not a source of tool lists, so a request built without
+/// tools offers none.
+pub const TOOL_KEYS: [&str; 3] = ["tools", "tool_choice", "mcp_servers"];
+
 /// The media types this API takes as a picture.
 const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 

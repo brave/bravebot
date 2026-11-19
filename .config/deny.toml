@@ -20,9 +20,29 @@
 all-features = true
 
 [advisories]
-# Empty, and worth keeping empty: an entry is a published advisory this binary ships with
-# anyway. Each takes an id and a reason, and the reason is what a reviewer agrees to.
-ignore = []
+# Worth keeping short: an entry is a published advisory this binary ships with anyway, or one
+# against code it does not compile. Each takes an id and a reason, and the reason is what a
+# reviewer agrees to.
+#
+# The nine heapless advisories below are against heapless 0.8.0, which Cargo.lock holds only
+# because faster-hex 0.10 lists it as a dependency of `cfg(not(feature = "alloc"))`. Cargo
+# cannot evaluate a feature in a target table, so it builds the crate for every build. gix-hash
+# enables faster-hex's `std` feature, which enables `alloc`, so faster-hex's only use of heapless
+# (`heapless::{String, Vec}` in encode.rs) is compiled out and nothing here calls the crate.
+# All nine are patched only in heapless 0.9.4, and gix-hash 0.28 and faster-hex 1.0 still require
+# heapless ^0.8, so no update clears them. Remove these entries when a faster-hex release that
+# requires heapless 0.9 reaches gix-hash (brave/bravebot#4386).
+ignore = [
+    { id = "RUSTSEC-2026-0574", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0575", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0576", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0577", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0578", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0579", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0580", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0581", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+    { id = "RUSTSEC-2026-0582", reason = "heapless 0.8.0 is built but never called: faster-hex uses it only without its `alloc` feature, which gix-hash turns on" },
+]
 # cargo-deny's default scope for an unsound advisory is Scope::Workspace: a diagnostic fires
 # only where a direct dependent of the flagged crate is a workspace member. Most crates in
 # the resolve are transitive, so that default drops an unsound advisory against any of them

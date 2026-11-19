@@ -235,7 +235,10 @@ fn only_the_rest_of_a_run_that_began_with_a_click_that_acted_begins_nothing() {
         .find(|fixture| fixture.name == "the model row of the info panel")
         .expect("the fixture")
         .build)();
-    assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+    assert_eq!(
+        click(&mut session, row, column),
+        Action::ChooseModel(crate::model_prompt::Scope::EverySession)
+    );
 
     // Another cell is not the rest of that run.
     let down = handle_mouse(

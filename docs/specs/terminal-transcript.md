@@ -442,6 +442,17 @@ that answers; every word typed has to match something. The cursor stays on the m
 where that model still matches, and falls to the first match where it does not. A search matching
 nothing says so, and there is nothing to select while it does.
 
+The picker is opened in one of two scopes, and says which in its title and footer. `/model` opens it
+in the scope that records the pick for every session, titled `Select model · every session`.
+`/model session` opens it in the scope that records nothing, titled `Select model · this session
+only`. The footer has two rows: the scope line, `Enter: every session  ·  Tab: this session only` or
+`Enter: this session only  ·  Tab: every session`, and under it the keys, `↑↓ PgUp PgDn choose  ·  ←→
+fold  ·  Esc keep current`. Tab switches the scope in both directions, in the picker at rest and
+while a turn runs, and changes the title and the scope line with it. Tab moves nothing else: the
+search text, the cursor and the folded sections stay as they are. A scope line wider than the panel
+is drawn on a second row, never cut, and the panel is made one row taller for it, so no model is
+hidden behind the footer. A list that fits takes no row from the extra footer row.
+
 **Why.** A gateway's roster runs to hundreds of models, and the picker offers it alongside Brave's
 own and whatever a settings file configured. No arrangement of a list that long makes arrowing to
 one row reasonable, and a name is remembered by a word out of the middle of it, or by the service
@@ -463,6 +474,17 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::the_picker_is_drawn_as_a_centred_panel`
 `verified-by: bravebot_tui::model_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::model_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::model_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
+`verified-by: bravebot_tui::model_prompt::a_picker_opened_by_bare_model_draws_the_every_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::model_prompt::a_picker_opened_by_model_session_draws_the_this_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::model_prompt::tab_changes_what_the_title_and_footer_say_in_both_directions`
+`verified-by: bravebot_tui::model_prompt::the_key_line_is_drawn_whole_in_the_widest_panel`
+`verified-by: bravebot_tui::model_prompt::the_scope_line_is_drawn_whole_at_sixty_columns`
+`verified-by: bravebot_tui::model_prompt::the_scope_line_stays_on_one_row_at_sixty_columns`
+`verified-by: bravebot_tui::model_prompt::the_scope_line_wraps_whole_at_forty_columns`
+`verified-by: bravebot_tui::model_prompt::the_second_footer_row_takes_no_row_from_a_list_that_fits`
+`verified-by: bravebot_tui::app::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
 
 <a id="VIEW-15"></a>
 ### VIEW-15: every model is drawn under the service that will answer it

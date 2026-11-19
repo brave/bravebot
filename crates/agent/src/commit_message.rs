@@ -8,18 +8,18 @@
 //! ([CMD-23](../../../docs/specs/commands.md), [LABEL-8](../../../docs/specs/labels.md)). A
 //! processor's own output carries no provenance vouching could promote (it is labelled by taint
 //! over its transport envelope, never by what it is about), so this is read from the diff's own
-//! label, fixed before the processor ran, and not from the draft `document` comes back as. A
-//! draft about a path nobody vouched for is held back with a note instead, the same shape
-//! [`crate::aside::ask`] offers a `/handoff` brief or an enhancement through.
+//! label, fixed before anything is sent, and not from the draft `document` comes back as. A
+//! diff of a path nobody vouched for is not sent at all: the person is told so with a note, and
+//! no usage is charged.
 //!
 //! The draft goes one place, the person's input box, as text they read, edit and send. Nothing runs
 //! on it. What reaches the planner is the line the person sends, in the way a prompt file's text
 //! does ([CMD-17](../../../docs/specs/commands.md)), and never the diff.
 //!
 //! What this function decides from the diff is limited to two counts the reader reports about its
-//! own answer, whether it showed no file at all and whether it stopped at a cap, and one yes or no
-//! from a credential scan of a diff nobody vouched for. All three are said to the person. No word
-//! of the diff or of the draft is read.
+//! own answer, whether it showed no file at all and whether it stopped at a cap. Both are said to
+//! the person. No word of the diff or of the draft is read. A diff that names a path nobody vouched
+//! for is not given to a processor, and is not scanned either.
 
 use bravebot_aichat::protocol::Usage;
 use bravebot_core::event::Sink;
@@ -76,10 +76,9 @@ pub fn instruction(format: Option<&str>) -> String {
 pub struct Drafted {
     /// The message, released for the person's input box where the planner could have held it.
     ///
-    /// `None` where the diff touched a path nobody has vouched for, which is a draft that has met
-    /// something untrusted (CMD-23, LABEL-8). The person still gets usage charged and a note, the
-    /// same as `/handoff` and an enhancement that met the same thing: the record does not keep it,
-    /// because a record is read back and the box is not a gate.
+    /// `None` where the diff touched a path nobody has vouched for (CMD-23, LABEL-8, PROC-14).
+    /// Nothing of such a diff is scanned or sent, so no message was written and no usage is
+    /// charged, and the person is told so by a note.
     pub message: Option<String>,
     /// Whether the diff was cut at the reader's cap or ran out of time, so the message describes
     /// the part that was read.
@@ -96,7 +95,8 @@ pub enum DraftError {
     Read(String),
     /// The reader showed no file, so there is nothing to describe.
     Nothing,
-    /// The diff holds what looks like a credential, so none of it is sent anywhere.
+    /// The diff holds what looks like a credential, so none of it is sent anywhere. Only a diff of
+    /// vouched paths is scanned.
     Credential,
     /// The processor did not run or failed.
     Processor(ProcessorError),
@@ -177,32 +177,26 @@ pub fn draft<S: Sink>(
         }
     }
 
-    // `scan_a_read` does not read a diff nobody vouched for, so that one is scanned here, with the
-    // counts. It reaches the processor where the planner's read would keep it back, and all that is
-    // taken from the scan is a yes or no that stops the draft, said to the person.
-    let trusted = answer.label().is_trusted();
-    let (nothing, partial, untrusted_credential) = {
-        let counts = policy.render_in_place("commit_message", &answer, |a| {
-            (
-                a.shown.is_empty(),
-                a.cut || a.timed_out,
-                !trusted
-                    && !bravebot_core::credentials::scan(
-                        ".git",
-                        &a.text,
-                        bravebot_core::credentials::run_salt(),
-                    )
-                    .is_empty(),
-            )
+    // CMD-23, PROC-14: a diff that names a path nobody vouched for is not given to a processor.
+    // Nothing of it is scanned or read, so what its bytes say cannot choose between two outcomes,
+    // and no request is made for a draft that would not be offered. This is decided from the
+    // answer's label alone, which is fixed by the paths shown and not by what they hold.
+    if !answer.label().is_trusted() {
+        return Ok(Drafted {
+            message: None,
+            partial: false,
+            substituted: None,
+            usage: Usage::default(),
         });
-        let proof = policy.authorise_display_release(
-            "whether the diff was empty, cut short or held a credential",
-        );
+    }
+
+    let (nothing, partial) = {
+        let counts = policy.render_in_place("commit_message", &answer, |a| {
+            (a.shown.is_empty(), a.cut || a.timed_out)
+        });
+        let proof = policy.authorise_display_release("whether the diff was empty or cut short");
         counts.declassify(&proof)
     };
-    if untrusted_credential {
-        return Err(DraftError::Credential);
-    }
     if nothing {
         return Err(DraftError::Nothing);
     }
@@ -232,17 +226,11 @@ pub fn draft<S: Sink>(
         return Err(DraftError::NoMessage);
     };
     // CMD-23, LABEL-8: the box is sendable, which only a draft about files everybody vouched for
-    // may go into. `trusted` is the diff's own label, fixed above before the processor ran, and
-    // a processor's output is never better than its own transport envelope, which carries no
-    // provenance a path's vouching could promote (`Policy::label_processor_output`); the diff's
-    // own label is what `/handoff` and an enhancement's answer are kept against too, read from
-    // the context the words were produced over rather than from what a processor hands back.
-    let message = trusted.then(|| {
-        let proof = policy.authorise_display_release("a commit message placed in the input box");
-        document.declassify(&proof)
-    });
+    // may go into. Only such a diff reaches this point, so the draft is released to the box.
+    let proof = policy.authorise_display_release("a commit message placed in the input box");
+    let message = document.declassify(&proof);
     Ok(Drafted {
-        message,
+        message: Some(message),
         partial,
         substituted: done.substituted,
         usage: done.usage,

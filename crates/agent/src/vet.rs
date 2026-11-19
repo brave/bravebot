@@ -189,7 +189,8 @@ pub fn run<S: Sink, R: crate::report::Reporter>(
         ],
     };
 
-    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
+    // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty, and a client
+    // never takes the keys that name a tool list from a model's `options` (BACKEND-15), so nothing
     // below adds to it.
     let model = chat.model.unwrap_or(&chat.config.default_model);
     let request = ChatRequest::new(model, messages).giving_up_its_conversation();

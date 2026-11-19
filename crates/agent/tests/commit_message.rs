@@ -16,6 +16,7 @@ mod mock_model;
 use bravebot_agent::commit_message::{DraftError, Source};
 use bravebot_agent::turn;
 use bravebot_agent::workspace::Workspace;
+use bravebot_aichat::protocol::Usage;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::RecordingSink;
 use bravebot_core::trust::TrustStore;
@@ -265,73 +266,55 @@ fn a_diff_holding_a_credential_is_not_sent() {
     );
 }
 
-/// A diff of a file nobody vouched for is scanned too: it reaches the processor, where the planner's
-/// read would have kept it back, so a key in it stops the draft the same way.
+/// CMD-23, LABEL-8, PROC-14: a diff of a path nobody vouched for is not sent to a model, so no
+/// draft is made for the box, which is sendable and takes only words the planner could have held.
+/// The bytes of such a file decide nothing: the outcome is a message of `None`, no usage and no
+/// request whether or not its text matches a credential. An outcome that differed would let whoever
+/// wrote the file choose between two notes and whether a request is made.
 #[test]
-fn an_untrusted_diff_holding_a_credential_is_not_sent() {
-    let scratch = Scratch::new("commit-message-untrusted-credential");
+fn an_unvouched_diff_gives_no_draft_and_no_request_whatever_its_text_holds() {
     let key = format!("AKIA{}", "QWERTYUIOPASDFGH");
-    repository::commit_files(&scratch.path, &[("notes.txt", "one\n")], "first");
-    repository::commit_files(
-        &scratch.path,
-        &[("notes.txt", &format!("one\nkey = {key}\n"))],
-        "second",
-    );
-    let (done, received) = draft(
-        &scratch,
-        |w| {
-            let mut trust = trust_of(w, false);
-            trust.distrust("notes.txt");
-            trust
-        },
-        &Source::Range("HEAD~1..HEAD".to_string()),
-        None,
-        vec![the_model_says("unused")],
-    );
+    for (name, added) in [
+        (
+            "commit-message-unvouched-credential",
+            format!("key = {key}"),
+        ),
+        (
+            "commit-message-unvouched-plain",
+            "nothing of note".to_string(),
+        ),
+    ] {
+        let scratch = Scratch::new(name);
+        repository::commit_files(&scratch.path, &[("notes.txt", "one\n")], "first");
+        repository::commit_files(
+            &scratch.path,
+            &[("notes.txt", &format!("one\n{added}\n"))],
+            "second",
+        );
+        let (done, received) = draft(
+            &scratch,
+            |w| {
+                let mut trust = trust_of(w, false);
+                trust.distrust("notes.txt");
+                trust
+            },
+            &Source::Range("HEAD~1..HEAD".to_string()),
+            None,
+            vec![the_model_says(&format!(
+                "It adds a line.\n{MARKER}\nAdd a line to notes"
+            ))],
+        );
 
-    assert!(
-        matches!(done, Err(DraftError::Credential)),
-        "{:?}",
-        done.as_ref().err()
-    );
-    assert!(
-        received.try_recv().is_err(),
-        "a credential was sent to a model"
-    );
-}
-
-/// CMD-23, LABEL-8: a diff of a path nobody vouched for still drafts a message, the same as a
-/// credential-free diff does, but the message is not offered for the box, since the box is
-/// sendable and only words the planner could have held may go there. Without this, Enter on the
-/// draft would send a model's words about an unvouched file to the planner as the person's own
-/// typed line.
-#[test]
-fn a_diff_of_an_unvouched_path_gives_no_sendable_draft() {
-    let scratch = two_commits("commit-message-unvouched");
-    let reply = the_model_says(&format!(
-        "It renames a function.\n{MARKER}\nRename old to renamed"
-    ));
-    let (done, received) = draft(
-        &scratch,
-        |w| {
-            let mut trust = trust_of(w, false);
-            trust.distrust("src/lib.rs");
-            trust
-        },
-        &Source::Range("HEAD~1..HEAD".to_string()),
-        None,
-        vec![reply],
-    );
-
-    let drafted = done.expect("a draft, held back rather than refused");
-    assert_eq!(
-        drafted.message, None,
-        "a draft about an unvouched path was offered for the box"
-    );
-    assert!(
-        received.recv().is_ok(),
-        "the diff still reached the processor; only the box is held back"
-    );
+        let drafted = done.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(drafted.message, None, "{name}: a draft was offered");
+        assert!(!drafted.partial, "{name}");
+        assert_eq!(drafted.substituted, None, "{name}");
+        assert_eq!(drafted.usage, Usage::default(), "{name}: usage was charged");
+        assert!(
+            received.try_recv().is_err(),
+            "{name}: a request was made for an unvouched diff"
+        );
+    }
 }
 
 /// `Source::range` reads a range the way `read_git` reads a diff's revision, so a name git could

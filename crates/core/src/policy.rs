@@ -8074,29 +8074,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// [RUN-8]: ../../../docs/specs/tools/run.md
     fn every_step_vouched(&self, plan: &crate::command::Plan) -> bool {
-        self.root.is_some()
-            && plan.steps().iter().all(|step| {
-                // Destructured so that a field added to `Step` stops the build here. This key holds
-                // four of the six deliberately, and the two it leaves out are only safe because
-                // something else refuses them first: an assignment is refused by
-                // `Plan::carries_an_assignment`, which every gate consulting this one has to ask
-                // separately, and a route by the write question. A seventh field would have no
-                // such refusal behind it, and left out of this key silently it would be a line
-                // differing from the one that was answered for.
-                let crate::command::Step {
-                    program: _,
-                    resolved,
-                    started_as,
-                    args,
-                    // The person vouched for the expanded arguments, whichever a pattern produced.
-                    matched: _,
-                    environment: _,
-                    expansions: _,
-                    routes: _,
-                } = step;
-                self.programs
-                    .contains(resolved, started_as, args, &plan.directory)
-            })
+        self.root.is_some() && self.programs.covers_every_step(plan)
     }
 
     /// Whether the person's trust of the workspace root said that lines held to a closed sandbox
@@ -8411,19 +8389,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                             _ => keys.clear(),
                         },
                     }
-                    keys.iter()
-                        // A key nothing answers is the answer "nobody has said", which is the weakest
-                        // of them and not an absence to skip over. Dropping it would let one name's
-                        // rule decide for a name it was never written about: an operand holding the
-                        // workspace is asked about the project as well, and the project's rule alone
-                        // would hand back a tree nobody vouched for as trusted. No keys at all is
-                        // the same answer.
-                        .map(|key| {
-                            self.integrity_beneath_in_force(key)
-                                .unwrap_or(Integrity::Untrusted)
-                        })
-                        .reduce(Integrity::meet)
-                        .unwrap_or(Integrity::Untrusted)
+                    // A key nothing answers is the answer "nobody has said", which is the weakest
+                    // of them and not an absence to skip over. Dropping it would let one name's
+                    // rule decide for a name it was never written about: an operand holding the
+                    // workspace is asked about the project as well, and the project's rule alone
+                    // would hand back a tree nobody vouched for as trusted. No keys at all is the
+                    // same answer.
+                    let answers: Vec<Option<Integrity>> = keys
+                        .iter()
+                        .map(|key| self.integrity_beneath_in_force(key))
+                        .collect();
+                    weakest_name(&answers)
                 }
             };
             integrity = integrity.meet(answer);
@@ -8809,6 +8785,31 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// skipped permissions. The name is the mode's own static text, never anything a turn read.
     pub fn record_permission_mode(&mut self, mode: &'static str) {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
+    }
+
+    /// Record the permission mode a session opened in and what chose it (TRACE-12).
+    ///
+    /// Written by the first turn or manifest run of a sitting, since nothing is written to the
+    /// trail before one. `mode` and `cause` are the driver's own static text, never anything a turn
+    /// read.
+    pub fn record_permission_mode_opened(&mut self, mode: &'static str, cause: &'static str) {
+        self.allow(
+            "permission_mode_opened",
+            format!("the session opened in {mode} mode {cause}"),
+        );
+    }
+
+    /// Record one change of permission mode, the mode before it and what caused it (TRACE-12).
+    pub fn record_permission_mode_changed(
+        &mut self,
+        from: &'static str,
+        to: &'static str,
+        cause: &'static str,
+    ) {
+        self.allow(
+            "permission_mode_changed",
+            format!("the permission mode changed from {from} to {to} {cause}"),
+        );
     }
 
     /// [`Policy::record_permission_mode`] for a manifest run, which is not a turn and is not
@@ -9968,6 +9969,34 @@ fn keys_for_the_map(root: &std::path::Path, operand: &str) -> Vec<String> {
 /// The trust map is keyed on names and compares them by segment, so a rule about a directory
 /// answers about `../secret` as readily as about a file inside it. A path that climbs is therefore
 /// one no rule was written about, whatever a rule appears to say.
+/// The integrity of a file asked about under each of its names: trusted only where it has a name
+/// and every name answers trusted. A name nothing answers counts as untrusted, and so does a file
+/// with no name to ask under.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == Integrity::Trusted <==> (answers@.len() > 0 && forall|i: int|
+            0 <= i < answers@.len() ==> #[trigger] answers@[i] == Some(Integrity::Trusted)),
+))]
+fn weakest_name(answers: &[Option<Integrity>]) -> Integrity {
+    if answers.is_empty() {
+        return Integrity::Untrusted;
+    }
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= answers.len(),
+            forall|i: int| 0 <= i < at ==> #[trigger] answers@[i] == Some(Integrity::Trusted),
+        decreases answers.len() - at,
+    ))]
+    while at < answers.len() {
+        if answers[at] != Some(Integrity::Trusted) {
+            return Integrity::Untrusted;
+        }
+        at += 1;
+    }
+    Integrity::Trusted
+}
+
 fn climbs_out(path: &str) -> bool {
     std::path::Path::new(path)
         .components()
@@ -16401,6 +16430,39 @@ five
                 }
             )),
             "{events:?}"
+        );
+    }
+
+    /// TRACE-12: the opening mode and a change of mode are recorded under their own gates, with the
+    /// words the driver chose and nothing else.
+    #[test]
+    fn a_permission_mode_opening_and_change_leave_a_trail() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.record_permission_mode_opened("auto", "by the startInAuto setting");
+        policy.record_permission_mode_changed("auto", "plan", "by the mode key");
+        drop(policy);
+        let details: Vec<(&str, String)> = sink
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::GatePassed { gate, detail } => Some((*gate, detail.clone())),
+                _ => None,
+            })
+            .filter(|(gate, _)| gate.starts_with("permission_mode"))
+            .collect();
+        assert_eq!(
+            details,
+            [
+                (
+                    "permission_mode_opened",
+                    "the session opened in auto mode by the startInAuto setting".to_string()
+                ),
+                (
+                    "permission_mode_changed",
+                    "the permission mode changed from auto to plan by the mode key".to_string()
+                ),
+            ]
         );
     }
 

@@ -738,6 +738,8 @@ impl<'a> Scan<'a> {
         let next = self.peek();
         if next.is_some() {
             self.at += 1;
+            #[cfg(test)]
+            counted::read();
         }
         next
     }
@@ -2507,11 +2509,13 @@ impl Compiler<'_, '_> {
                 // An operand naming the terminal device, judged after expansion so that a pattern
                 // or a `~` working out to the device is caught as the plain spelling is. The
                 // operand is quoted back rather than the program, since the program is usually an
-                // ordinary one and the device is the word that has to change.
+                // ordinary one and the device is the word that has to change. Worded from the
+                // operand the planner wrote, not the name a pattern matched in `/dev`, which
+                // nobody vouched for (CMDLINE-4).
                 if names_a_terminal(Path::new(&expanded)) {
                     return Err(Refused {
                         span: operand.span,
-                        text: expanded,
+                        text: render(&operand.pieces),
                         reason: Reason::Interactive(TERMINAL_DEVICE),
                     }
                     .into());
@@ -3743,36 +3747,50 @@ mod tests {
         assert!(parse(&format!("echo {}", "x".repeat(4096))).is_ok());
     }
 
-    /// A `{` that opens nothing is literal text, and answering for it has to cost a read of the
-    /// line, not the product of every brace in it. The test would hang rather than fail slowly if
-    /// a brace could be read twice at the same depth, or deeper than the grammar goes.
+    /// A `{` that opens nothing is literal text, and answering for it has to cost a bounded number
+    /// of reads of the line, not the product of every brace in it. A brace is read at most once at
+    /// each depth up to [`MAX_NESTING`], and each reading reads at most the line, so a line costs
+    /// at most `MAX_NESTING + 1` reads of itself for each of its characters. The work is counted
+    /// and not timed, and the shortest line is asked first, so a brace read again at the same
+    /// depth fails at 25 braces rather than hanging at 1000.
     #[test]
     fn a_line_of_unclosed_braces_is_answered_at_once() {
-        let started = std::time::Instant::now();
         for braces in [25, 100, 1000] {
-            assert!(parse(&format!("echo {}", "{".repeat(braces))).is_ok());
-            assert!(parse(&format!("echo {}", "{a,".repeat(braces))).is_ok());
+            for line in [
+                format!("echo {}", "{".repeat(braces)),
+                format!("echo {}", "{a,".repeat(braces)),
+            ] {
+                let (parsed, read) = counted::during(|| parse(&line));
+                assert!(parsed.is_ok(), "{braces} braces: {parsed:?}");
+                let bound = (MAX_NESTING + 1) * line.len() * line.len();
+                assert!(
+                    read <= bound,
+                    "{braces} braces: {read} characters were read for a line of {}, past {bound}",
+                    line.len()
+                );
+            }
         }
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "answering for unclosed braces took {:?}",
-            started.elapsed()
-        );
     }
 
     /// An outer brace that gives up on its own reading meets the same `{` again as text. The
     /// reading is the reading of the line, which does not change underneath the scan, so a brace
-    /// that offered no expansion at a depth never offers one there.
+    /// that offered no expansion at a depth never offers one there. The line is one command of
+    /// such braces, refused at its end for the pipe with no program after it, so every brace is
+    /// met again from each brace outside it before the refusal. The shortest line is asked first,
+    /// so a brace read twice fails at 8 repeats rather than hanging at 600.
     #[test]
     fn a_brace_reached_twice_is_answered_twice_not_read_twice() {
-        let started = std::time::Instant::now();
-        let line = format!("echo {}", "{a,{a|".repeat(600));
-        assert!(parse(&line).is_err());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "answering for a brace met twice took {:?}",
-            started.elapsed()
-        );
+        for repeats in [8, 100, 600] {
+            let line = format!("echo {}|", "{a,{a".repeat(repeats));
+            let (parsed, read) = counted::during(|| parse(&line));
+            assert!(parsed.is_err(), "{repeats} repeats: {parsed:?}");
+            let bound = (MAX_NESTING + 1) * line.len() * line.len();
+            assert!(
+                read <= bound,
+                "{repeats} repeats: {read} characters were read for a line of {}, past {bound}",
+                line.len()
+            );
+        }
     }
 
     /// Braces deeper than `(` may nest stand for themselves, like an unclosed brace, rather than
@@ -5052,12 +5070,18 @@ mod tests {
         // is refused as the plain spelling is. Guarded on the device, because the pattern is matched
         // against this machine's `/dev` and a build container need not have one.
         if Path::new("/dev/tty").exists() {
+            let refusal = compile_refused("cat /dev/tt?", &tree.root);
             assert!(
-                matches!(
-                    compile_refused("cat /dev/tt?", &tree.root).reason,
-                    Reason::Interactive(_)
-                ),
+                matches!(refusal.reason, Reason::Interactive(_)),
                 "a pattern working out to the device was not refused"
+            );
+            // `/dev` is a directory nobody vouched for (CMDLINE-4): the refusal is decided from
+            // the name the pattern matched there, but it is worded from the operand the planner
+            // wrote, not the name read out of `/dev`, which could differ from it.
+            assert_eq!(
+                refusal.text, "/dev/tt?",
+                "the refusal quoted the device name the pattern matched rather than the \
+                 planner's own operand: {refusal}"
             );
         }
     }
@@ -5116,5 +5140,29 @@ mod tests {
         let other = compiled("cat \"a b\"", &tree.root);
         assert_eq!(one.steps, other.steps);
         assert_ne!(one.line, other.line);
+    }
+}
+
+/// Counts the characters a scan reads, so a test can bound the work a line costs and not the time
+/// it takes. A clock reading includes whatever else the machine was running, so a bound on elapsed
+/// time fails under load on code that did no more work.
+#[cfg(test)]
+mod counted {
+    use std::cell::Cell;
+
+    thread_local! {
+        static READ: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn read() {
+        READ.set(READ.get() + 1);
+    }
+
+    /// Runs `body` and returns what it returned with the characters it read, counting from nothing
+    /// on this thread.
+    pub(super) fn during<R>(body: impl FnOnce() -> R) -> (R, usize) {
+        READ.set(0);
+        let result = body();
+        (result, READ.get())
     }
 }
