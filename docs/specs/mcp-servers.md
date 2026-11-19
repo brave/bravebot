@@ -2161,6 +2161,17 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
+- **OpenShell matches the hosts it is given by its own rules.** A server in an OpenShell sandbox
+  ([SERVERS-24](#SERVERS-24)) is given each host that every entry of the session's list and of the
+  declaration agrees on, after `HostRule::parse` has read the entry and the session's denied entries
+  have removed any host they overlap. What the sandbox then allows is decided by OpenShell, an
+  external program. `HostRule::parse` reads ASCII letters, digits, `-` and `_` only, so an entry
+  with a non-ASCII name is not read as a rule and is never given to it. How OpenShell compares a
+  name a program
+  asks for in another case, with a trailing dot, under a wildcard or outside ASCII is its own and is
+  not tested here, and a fake `openshell` stands in for it in the tests. A host it matches
+  more widely than the entry says is reachable, because the policy can only allow and no entry can
+  tell the program to refuse a name ([#4041](https://github.com/brave/bravebot/issues/4041), row 35).
 - **`/status` lists the rows of a server's policy and not what a platform grants beneath them.**
   Linux and macOS let a server look at any path, which is no row
   ([SANDBOX-13](sandboxing.md#SANDBOX-13)), and a Windows container reads the system directories its

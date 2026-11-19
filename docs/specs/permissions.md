@@ -1524,6 +1524,15 @@ against them whole. A wrapper added to the table is a decision about both questi
   that runs. A `deny` or `ask` rule then matches more than the program does, which is the safe
   direction, and an `allow` rule does not look through a wrapper at all, so no rule is weaker for
   it.
+- **A mapped IPv6 spelling of a `WebFetch` host is read as text, and what a connection to it reaches
+  is verified on macOS only.** A rule's domain and the fetched host are put in one form by
+  [PERM-1](#PERM-1), so `[::ffff:93.184.216.34]` is the IPv4 address on both sides whatever the
+  operating system does with the spelling. On macOS an IPv6 socket with `IPV6_V6ONLY` off reaches an
+  IPv4 listener through `::ffff:127.0.0.1`. Where an IPv6 socket is IPv6-only by default, as on
+  Windows, the spelling may reach nothing, so a rule can refuse or ask about an address the
+  connection would not have reached. That is the safe direction. Linux and Windows are not verified,
+  so this does not say that no platform connects a mapped spelling to an address other than the IPv4
+  one it names ([#4041](https://github.com/brave/bravebot/issues/4041), row 32).
 - **How many questions a session opens with is the file's to choose.** Every name in
   `additionalDirectories` is one box, so a file naming thirty directories is thirty of them before
   the first prompt can be typed, and the way out of a list somebody does not want to answer is
