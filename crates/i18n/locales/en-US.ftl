@@ -933,6 +933,10 @@ sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern 
 sandbox-rule-names-a-variable = it starts with a variable, and no variable is expanded in a path, so it would be read as a relative path under the session's directory; write the path out, or start it with ~/
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 sandbox-rule-cannot-subtract = this platform cannot hold back a path inside a directory every stage is granted, so a stage is refused instead of started with the path reachable
+# Said to the planner, as the driver's own words, where a refused denyRead or denyWrite entry came from
+# a checkout's settings file. The spelling is not repeated, since a checkout wrote it. $reason is one
+# of the sandbox-rule-* messages above and $file the settings file that holds the entry.
+run-not-confined-checkout-entry = sandbox.filesystem.{ $list } holds an entry in { $file } that cannot be applied ({ $reason }), and a stage started without it would reach the path it holds back; the entry is not repeated here because a checkout's file wrote it
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.

@@ -15291,6 +15291,7 @@ fn the_refusals_hold_for_a_file_a_reference_stands_for() {
             path: read_denied.display().to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         }],
         ..Lists::default()
     };
@@ -15390,6 +15391,7 @@ fn the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass() {
         path: path.display().to_string(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     let lists = || Lists {
         deny_read: vec![entry(&read_denied)],
@@ -15454,6 +15456,7 @@ fn reading_under_the_reach_judges_a_read_and_gives_the_call_its_own_reach_back()
         path: write_denied.display().to_string(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     places.workspace.hold_bypass_reach(Some(places.reach_with(
         "write_file",
@@ -15541,6 +15544,7 @@ fn a_look_holding_a_reach_is_judged_by_the_refusals_of_a_read_and_records_nothin
         path: path.display().to_string(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     let lists = || Lists {
         deny_read: vec![entry(&read_denied)],

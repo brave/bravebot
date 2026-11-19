@@ -300,6 +300,7 @@ fn a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under
         path: path.to_string_lossy().into_owned(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     let _held = scripted_filesystem::hold(Lists {
         allow_read: vec![entry(&moved), entry(&moved.join("gateway-keys.json"))],

@@ -3104,6 +3104,7 @@ mod tests {
             path: path.into(),
             by: by.map(Into::into),
             pinned: false,
+            from_a_checkout: false,
         };
         let settled = |lists| bravebot_config::Filesystem {
             lists,
@@ -3179,6 +3180,7 @@ mod tests {
             path: "~/p".into(),
             by: Some(by.into()),
             pinned: false,
+            from_a_checkout: false,
         };
         let line = filesystem_line(Some(&bravebot_config::Filesystem {
             lists: Lists {

@@ -180,6 +180,15 @@ conditions. A change that put the directory's name in the sentence, or chose whi
 cut or how to word the sentence from a name, would be a violation of shape 1 or 3 and is not
 covered by this paragraph.
 
+The reason in the sentence for a checkout's refused filesystem entry (SANDBOX-25) is chosen from
+the entry's spelling by `resolve` in `bravebot-sandbox`, which already decides from that spelling
+whether the entry is refused. It is a branch on bytes a checkout wrote whose result reaches the
+planner. It is one of five sentences the driver wrote, it carries no byte of the entry, and it
+changes no effect, so it is recorded under Known costs in
+[specs/labels.md](../specs/labels.md) and is not counted among the ten. A sentence that put any part of the
+spelling in it, a reason outside the closed set, or a choice made from the spelling for another
+purpose is a violation of shape 1.
+
 Whether a session directory's `.git` is a file or a directory is file-type metadata, like the link
 count above. The failure sentence for a git step (`crates/agent/src/confine.rs`, SANDBOX-19) reads it with
 `symlink_metadata` and branches on the kind, which says whether the checkout is a linked worktree

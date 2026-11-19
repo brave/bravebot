@@ -538,6 +538,57 @@ mod tests {
         }
     }
 
+    /// Every reason an entry is refused is told to the planner as a sentence of the catalog's, since
+    /// a refused `denyRead` or `denyWrite` entry of a checkout is named by its reason and not by its
+    /// spelling (SANDBOX-25). A reason with no sentence, or one that gave the same sentence as
+    /// another, would leave the planner told nothing about why. The match has no wildcard arm, so a
+    /// reason added to the sandbox crate stops this test compiling until it is listed.
+    #[test]
+    fn every_reason_an_entry_is_refused_for_has_its_own_sentence() {
+        use bravebot_sandbox::rules::Reason;
+        let all = [
+            Reason::NoHome,
+            Reason::Climbs,
+            Reason::GlobOnAWrite,
+            Reason::ConfinesNothing,
+            Reason::PrivateKey,
+            Reason::StateDirectory,
+            Reason::HoldsCredentials,
+            Reason::TooBroad,
+            Reason::NamesAVariable,
+            Reason::Overridden,
+        ];
+        for reason in all {
+            match reason {
+                Reason::NoHome
+                | Reason::Climbs
+                | Reason::GlobOnAWrite
+                | Reason::ConfinesNothing
+                | Reason::PrivateKey
+                | Reason::StateDirectory
+                | Reason::HoldsCredentials
+                | Reason::TooBroad
+                | Reason::NamesAVariable
+                | Reason::Overridden => {}
+            }
+        }
+        let sentences: Vec<&str> = all
+            .iter()
+            .map(|reason| filesystem_reason(*reason))
+            .collect();
+        for (reason, sentence) in all.iter().zip(&sentences) {
+            assert!(
+                !sentence.trim().is_empty(),
+                "{reason:?} has no sentence: {sentence:?}"
+            );
+            assert_eq!(
+                sentences.iter().filter(|other| *other == sentence).count(),
+                1,
+                "{reason:?} shares its sentence with another reason: {sentence}"
+            );
+        }
+    }
+
     /// A denial inside the session directory is not in force where the backend cannot hold it
     /// back, since every stage there is refused. Where it can, and for every entry the backend
     /// has no part in, the answer is what the entry resolved to.
@@ -554,6 +605,7 @@ mod tests {
             path: path.to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         };
         let beside = root.join("beside").join("secret.env");
         let beside = beside.to_str().unwrap();
@@ -614,6 +666,7 @@ mod tests {
             path: path.to_str().unwrap().to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         };
         let lists = Lists {
             allow_write: vec![entry(&shared)],

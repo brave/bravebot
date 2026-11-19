@@ -20,6 +20,7 @@ use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
 use bravebot_core::permissions::{WrapperQuestion, is_wrapper};
 use bravebot_core::policy::Containment;
+use bravebot_i18n::t;
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::Variables;
 use bravebot_sandbox::base::{Prelude, base, credential_locations, run_base, with_security_cache};
@@ -2517,6 +2518,39 @@ impl Confinement {
         })
     }
 
+    /// The sentence refusing a step because a `denyRead` or `denyWrite` entry cannot be applied,
+    /// or `None` where every entry can.
+    fn unapplied_denial_refusal(&self) -> Option<String> {
+        let (item, reason) = self.filesystem.unapplied_denial()?;
+        // An entry a checkout's layer wrote is text the person did not write, and this
+        // sentence reaches the planner as the driver's own. It names the list, the reason (a
+        // closed set the driver wrote) and the file, and leaves the spelling to the screens
+        // that are the person's own (SANDBOX-25). Which of the two is decided from the layer
+        // that wrote the entry, never from the entry.
+        if item.entry.from_a_checkout {
+            return Some(
+                t!(
+                    run_not_confined_checkout_entry,
+                    list = item.list.key(),
+                    file = item
+                        .entry
+                        .by
+                        .as_deref()
+                        .map(crate::confirm::shown_path)
+                        .unwrap_or_default(),
+                    reason = crate::permissions::filesystem_reason(reason)
+                )
+                .to_string(),
+            );
+        }
+        Some(format!(
+            "sandbox.filesystem.{} names `{}`, which cannot be applied, and a stage started \
+             without it would reach the path it holds back",
+            item.list.key(),
+            item.entry.path
+        ))
+    }
+
     /// What `command` is started as under this confinement, or the reason it cannot be.
     ///
     /// Refused rather than started unconfined where the platform's mechanism is missing or will
@@ -2577,13 +2611,8 @@ impl Confinement {
                 Some((name.to_str()?.to_string(), value.to_str()?.to_string()))
             })
             .collect();
-        if let Some(item) = self.filesystem.unapplied_denial() {
-            return Err(not_confined(format!(
-                "sandbox.filesystem.{} names `{}`, which cannot be applied, and a stage started \
-                 without it would reach the path it holds back",
-                item.list.key(),
-                item.entry.path
-            )));
+        if let Some(detail) = self.unapplied_denial_refusal() {
+            return Err(not_confined(detail));
         }
         let mut wanted = self.policy(step, directory, &readable);
         if let Some(proxy) = &proxy {
@@ -9515,6 +9544,7 @@ mod tests {
                     path: (*path).to_string(),
                     by: None,
                     pinned: false,
+                    from_a_checkout: false,
                 })
                 .collect()
         };
@@ -9855,6 +9885,7 @@ mod tests {
                     path: (*path).to_string(),
                     by: None,
                     pinned: false,
+                    from_a_checkout: false,
                 })
                 .collect(),
             ..Lists::default()
