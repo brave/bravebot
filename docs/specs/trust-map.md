@@ -564,7 +564,7 @@ be listed, a read of the file is untrusted and so is the backup the write takes 
 did not finish is never read as a file with no other name. This holds for the label of one path, for
 the question whether a read is quarantined, and for several paths asked together, where one
 unfinished lookup makes the whole answer untrusted. The same holds for the locations an LSP answer
-names ([LSP-3](tools/lsp.md)). A name that is not UTF-8 ends the lookup the same way and is reasoned
+names and the file it was asked at ([LSP-3](tools/lsp.md)). A name that is not UTF-8 ends the lookup the same way and is reasoned
 only on this host, since the file system here does not hold such a name.
 
 `verified-by: bravebot_core::policy::a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted`

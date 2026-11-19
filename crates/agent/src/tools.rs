@@ -15302,8 +15302,8 @@ fn patterns_in(arguments: &Value) -> Vec<Labelled<String>> {
 ///
 /// - The **locations** are a path and two integers read off the server's index. The two integers
 ///   are structure. The path is a name out of a tree nobody need have vouched for, so the kernel
-///   labels the answer from the trust map's entry for each path it names: read as written where
-///   every one is vouched for, and a reference where any is not.
+///   labels the answer from the trust map's entry for each path it names and for the file it was
+///   asked at: read as written where every one is vouched for, and a reference where any is not.
 /// - The **text**, where an operation reports any, is bytes a file chose, and no answer says which
 ///   file chose them: a hover response carries a position and no file. So it is untrusted and comes
 ///   back as a reference, in a vouched-for tree as much as in `vendor/`.
@@ -15510,13 +15510,16 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         }
         // Locations only, which is every operation but hover. The names in it are bytes out of the
         // tree the server indexed, so the kernel labels it from the trust map's entry for each path
-        // and an answer naming a file nobody vouched for is quarantined, as a listing is. A
+        // and for the file it was asked at, and an answer naming or asked at a file nobody vouched
+        // for is quarantined, as a listing is. A
         // `diagnostics` answer names no path the server reported, so it carries no taint.
         None => {
-            let label = match crate::lsp::label_for_locations(policy, tools.workspace, &answer) {
-                Ok(label) => label,
-                Err(denial) => return Produced::problem(format!("refused: {denial}")),
-            };
+            let asked = crate::lsp::asked_file(operation, &relative);
+            let label =
+                match crate::lsp::label_for_locations(policy, tools.workspace, &answer, asked) {
+                    Ok(label) => label,
+                    Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                };
             let origin = format!("what the language server said about {relative}");
             let mut produced = Produced::new(Labelled::new(described, label), relative, note)
                 .marked_untrusted(!label.is_trusted());
