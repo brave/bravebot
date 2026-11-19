@@ -1264,7 +1264,7 @@ command word.
 bare word, with the same roster, search and rows, in the scope that records nothing: Enter puts the
 row in force for this session only and writes nothing to `~/.bravebot/model`, so the next session
 opens on the model it would have had without this one. The bare word opens the picker in the scope
-that records the pick for every session, as it always did, and Tab in the open picker switches
+that records the pick for every session, and Tab in the open picker switches
 between the two scopes in both directions ([VIEW-14](terminal-transcript.md#VIEW-14)). The word is
 matched whole and in lower case, so `/model sessions`, `/model Session` and `/model session now` are
 prompts. In a session started under a definition that fixes the model, `/model session` opens no
