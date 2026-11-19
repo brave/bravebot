@@ -944,6 +944,8 @@ by the ladder, which Ctrl-C follows in the panes as it does in the prompt box.
 The first Ctrl-C of the ladder says on screen that a second one leaves, at the right of the hint line
 and at every width, as the default layout does. The hint line names the chord that moves between the
 list and the prompt only where the list is drawn, since the chord does nothing below 100 columns.
+Where the list is drawn the hint also names Esc as the way back to the prompt. Where the list is not
+drawn the hint does not name Esc.
 
 Below 100 columns the phase always draws the line about width, and draws a refusal or any other
 message on the rows under it, so a message never replaces that line. A message goes at the next key

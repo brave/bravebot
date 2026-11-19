@@ -1598,12 +1598,13 @@ mod no_session {
     /// BOT-17.
     #[test]
     fn the_hint_names_the_panes_chord_only_where_the_panes_are_drawn() {
+        let esc = "Esc to the prompt";
         for columns in [40, 60, 80, 99] {
             let mut session = without_a_session(three_bots(), columns);
             let hint = last_row(&drawn(&mut session, columns, 30));
             assert!(
-                !hint.contains("alt-p") && !hint.contains("moves between"),
-                "the hint names a chord that does nothing at {columns} columns: {hint:?}"
+                !hint.contains("alt-p") && !hint.contains(esc),
+                "the hint names a chord or Esc where the list is not drawn, at {columns} columns: {hint:?}"
             );
             if columns >= 60 {
                 assert!(
@@ -1616,11 +1617,22 @@ mod no_session {
             let mut session = without_a_session(three_bots(), columns);
             let hint = last_row(&drawn(&mut session, columns, 30));
             assert!(
-                hint.contains("alt-p moves between the list and the prompt")
+                hint.contains(esc)
+                    && hint.contains("alt-p")
                     && hint.contains("/layout default for a session"),
                 "{columns}: {hint:?}"
             );
         }
+
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("panes".to_string(), "alt-k".to_string());
+        let mut session = without_a_session(three_bots(), 140);
+        session.adopt_keybindings(&moved);
+        let hint = last_row(&drawn(&mut session, 140, 30));
+        assert!(
+            hint.contains("alt-k") && hint.contains(esc) && !hint.contains("alt-p"),
+            "{hint:?}"
+        );
     }
 
     fn typed_key_event(code: KeyCode, modifiers: KeyModifiers) -> TermEvent {
