@@ -6471,6 +6471,64 @@ fn a_change_of_mode_during_a_turn_is_recorded_once_and_in_order() {
     );
 }
 
+/// TRACE-12: approving a plan the planner proposed ends plan mode, and the trail words the change as
+/// `by approving a plan` for each mode the choice names. A plan that is not approved changes nothing
+/// and writes no change. The faults it rejects are `propose_plan` giving another cause (the key's or
+/// the command's, or none), and a change written for a plan the person declined.
+#[test]
+fn approving_a_plan_is_recorded_as_the_cause_of_leaving_plan_mode() {
+    use bravebot_agent::{LiveMode, PermissionMode};
+    use bravebot_core::ask::Answer;
+    let rows: [(Answer, Option<&str>); 3] = [
+        (
+            Answer::Chosen(vec![0]),
+            Some("the permission mode changed from plan to accept-edits by approving a plan"),
+        ),
+        (
+            Answer::Chosen(vec![1]),
+            Some("the permission mode changed from plan to ask by approving a plan"),
+        ),
+        (Answer::Declined, None),
+    ];
+    for (at, (reply, change)) in rows.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("records-plan-approval-{at}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2("propose_plan", r#"{"plan":"1. edit a.rs"}"#),
+            reply_with("understood"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let live = LiveMode::new(PermissionMode::Plan);
+        let task = Task::new("plan the work").with_permission_mode(live.clone());
+        let mut person = AnswersWith::new(vec![reply]);
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut person,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+        assert_eq!(
+            person.asked.len(),
+            1,
+            "{at}: the plan was not put to the person"
+        );
+
+        let mut expected = vec![
+            "the session opened in plan mode by default",
+            "the turn began in plan mode",
+        ];
+        expected.extend(change);
+        assert_eq!(mode_entries(&sink), expected, "{at}");
+    }
+}
+
 /// An `approval` entry that says "asking" reads as a person having been asked. Where a mode answers
 /// in the person's place nobody was, and a trail that cannot tell the two apart hides the one fact
 /// somebody reading it back came for. A run, a whole-file write and an edit each reach the prompt by

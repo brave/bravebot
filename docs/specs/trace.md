@@ -670,6 +670,11 @@ of an entry is the driver's own static text, so it holds no content ([TRACE-2](#
 `verified-by: bravebot_agent::turn::a_change_of_mode_during_a_turn_is_recorded_once_and_in_order`
 `verified-by: bravebot_core::policy::a_permission_mode_opening_and_change_leave_a_trail`
 `verified-by: bravebot_cli::running::a_traced_run_names_the_mode_it_opened_in_and_what_chose_it`
+`verified-by: bravebot_tui::mode_trail_tests::the_key_a_click_and_the_plan_command_each_name_themselves_in_the_trail`
+`verified-by: bravebot_tui::mode_trail_tests::a_session_the_terminal_opens_names_what_chose_its_mode_in_the_trail`
+`verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
+`verified-by: bravebot_ui_bridge::permission_mode::the_trail_of_a_window_session_names_what_opened_it_in_its_mode_and_each_request_to_change_it`
+`verified-by: bravebot_agent::turn::approving_a_plan_is_recorded_as_the_cause_of_leaving_plan_mode`
 
 ## Known costs
 

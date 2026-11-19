@@ -43841,6 +43841,10 @@ mod chatgpt_failure_tests;
 #[path = "credential_mode_tests.rs"]
 mod credential_mode_tests;
 
+#[cfg(test)]
+#[path = "mode_trail_tests.rs"]
+mod mode_trail_tests;
+
 #[cfg(all(test, unix))]
 #[path = "kept_jobs_tests.rs"]
 mod kept_jobs_tests;
