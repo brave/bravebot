@@ -2702,7 +2702,9 @@ fn a_read_through_a_reference_refused_for_leaving_the_workspace_is_recorded_as_t
     }
 }
 
+#[cfg(unix)]
 const A_DENIED_FILES_BYTES: &str = "SECRET-MARKER-4385";
+#[cfg(unix)]
 const AN_ALLOWED_FILES_BYTES: &str = "ALLOWED-MARKER-4385";
 
 /// One turn in which a listing of `generated` hands back `ref:1` for `generated/result.txt`, a file
