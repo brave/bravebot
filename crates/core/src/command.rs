@@ -448,10 +448,12 @@ pub struct Step {
     /// The argument vector, literal and final.
     pub args: Vec<String>,
     /// Which arguments a filename pattern produced: one entry per entry of [`Step::args`], `true`
-    /// where the word is a name the pattern matched on disk ([CMDLINE-4]).
+    /// where the word came from an unquoted pattern, whether it is a name the pattern matched on
+    /// disk or the pattern itself, passed through as written because nothing matched ([CMDLINE-4]).
     ///
-    /// Set by the compiler from whether the pattern matched, never from the name's bytes. Empty
-    /// where no argument came from a pattern. A list of another length than [`Step::args`]
+    /// Set by the compiler from the shape of the word, never from whether the pattern matched or
+    /// from the name's bytes. Empty where no argument came from a pattern. A list of another
+    /// length than [`Step::args`]
     /// answers for no argument, and [`Step::from_a_pattern`] reads every argument of such a step
     /// as produced by one. Not part of any key: the person is shown and endorses the expanded
     /// arguments either way.
@@ -471,7 +473,8 @@ pub struct Step {
 }
 
 impl Step {
-    /// Whether the argument at `index` is a name a filename pattern matched.
+    /// Whether the argument at `index` came from a filename pattern, matched or passed through as
+    /// written.
     ///
     /// `true` for every argument where [`Step::matched`] is neither empty nor one entry per
     /// argument, since such a list says nothing about which argument is which.

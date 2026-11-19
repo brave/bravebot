@@ -11879,6 +11879,40 @@ fn noted_failure_text<S: Sink>(
     failed_line_text(said, error, unconfined_is_offered(policy, tools))
 }
 
+/// The entry a refusal to confine kept apart from its sentence, with control characters made
+/// visible, as the person is told it (SANDBOX-24).
+///
+/// A `sandbox.network.deniedHosts` entry that is not a host name is a string a checkout wrote, so
+/// it is never in the sentence the planner reads ([`failed_line_text`]). The error holds it beside
+/// that sentence, and this is the only place it is read: the note goes to the person's screen and
+/// the trail, and nothing branches on it.
+fn entry_note(error: &crate::exec::ExecError) -> Option<String> {
+    use crate::exec::{ExecError, SubstitutionFailure};
+    match error {
+        ExecError::NotConfined {
+            entry: Some(entry), ..
+        } => Some(format!(
+            "sandbox.network.deniedHosts has an entry that is not a host name, so the line was \
+             refused: {}",
+            crate::confirm::printable(entry)
+        )),
+        ExecError::Substitution {
+            failure: SubstitutionFailure::Inside(inner),
+            ..
+        } => entry_note(inner),
+        _ => None,
+    }
+}
+
+/// A failed line's result: the sentence for the planner, and where the error holds an entry for
+/// the person alone, that entry in the note ([`entry_note`]).
+fn failed_line_result(text: String, error: &crate::exec::ExecError) -> Produced {
+    match entry_note(error) {
+        Some(note) => Produced::refused_with_a_note(text, note),
+        None => Produced::problem(text),
+    }
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -12376,13 +12410,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // the same request (SANDBOX-17, SANDBOX-29). Read off the error's kind, which the
             // driver chose.
             Err(error) => {
-                let text = match error {
+                let text = match &error {
                     crate::exec::ExecError::NotConfined { .. } => {
                         noted_failure_text(policy, tools, &said, &error)
                     }
                     _ => format!("error: `{said}` did not start: {error}"),
                 };
-                Produced::problem(text).having_started_a_program()
+                failed_line_result(text, &error).having_started_a_program()
             }
         };
     }
@@ -12866,7 +12900,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 (!at_the_root).then_some(told_directory.as_str()),
             );
             let text = noted_failure_text(policy, tools, &said, &error);
-            let mut produced = Produced::problem(text);
+            let mut produced = failed_line_result(text, &error);
             produced.changed_a_file = changed_a_file;
             match stopped {
                 true => {
@@ -15302,8 +15336,8 @@ fn patterns_in(arguments: &Value) -> Vec<Labelled<String>> {
 ///
 /// - The **locations** are a path and two integers read off the server's index. The two integers
 ///   are structure. The path is a name out of a tree nobody need have vouched for, so the kernel
-///   labels the answer from the trust map's entry for each path it names: read as written where
-///   every one is vouched for, and a reference where any is not.
+///   labels the answer from the trust map's entry for each path it names and for the file it was
+///   asked at: read as written where every one is vouched for, and a reference where any is not.
 /// - The **text**, where an operation reports any, is bytes a file chose, and no answer says which
 ///   file chose them: a hover response carries a position and no file. So it is untrusted and comes
 ///   back as a reference, in a vouched-for tree as much as in `vendor/`.
@@ -15510,13 +15544,16 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         }
         // Locations only, which is every operation but hover. The names in it are bytes out of the
         // tree the server indexed, so the kernel labels it from the trust map's entry for each path
-        // and an answer naming a file nobody vouched for is quarantined, as a listing is. A
+        // and for the file it was asked at, and an answer naming or asked at a file nobody vouched
+        // for is quarantined, as a listing is. A
         // `diagnostics` answer names no path the server reported, so it carries no taint.
         None => {
-            let label = match crate::lsp::label_for_locations(policy, tools.workspace, &answer) {
-                Ok(label) => label,
-                Err(denial) => return Produced::problem(format!("refused: {denial}")),
-            };
+            let asked = crate::lsp::asked_file(operation, &relative);
+            let label =
+                match crate::lsp::label_for_locations(policy, tools.workspace, &answer, asked) {
+                    Ok(label) => label,
+                    Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                };
             let origin = format!("what the language server said about {relative}");
             let mut produced = Produced::new(Labelled::new(described, label), relative, note)
                 .marked_untrusted(!label.is_trusted());
@@ -16478,6 +16515,7 @@ mod tests {
             detail: "the network is closed for this session (run.network)".into(),
             before,
             network_closed: false,
+            entry: None,
         };
         let alone = failed_line_text("python3 script.py", &refused(StartedBefore::Nothing), true);
         assert!(!alone.contains("may have run in part"), "{alone}");
@@ -16555,6 +16593,7 @@ mod tests {
             detail: "the network is closed for this session (run.network)".into(),
             before: StartedBefore::Nothing,
             network_closed: true,
+            entry: None,
         };
         let offered = failed_line_text("python3 script.py", &closed, true);
         assert!(offered.contains("'unconfined': true"), "{offered}");

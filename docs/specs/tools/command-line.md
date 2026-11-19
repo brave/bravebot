@@ -257,7 +257,10 @@ Expansion happens against the workspace at compile time, so the person sees the 
 than the pattern. A pattern matching no file is passed to the program as written, as a shell
 without `failglob` does, so `find . -name *.md` gives `find` the pattern `*.md` when no `.md` file
 is where it runs, and the plan shows `*.md`. A pattern that matches is replaced by the files it
-matches, so a pattern meant for the program is written quoted, as in `find . -name '*.md'`.
+matches, so a pattern meant for the program is written quoted, as in `find . -name '*.md'`. The
+word a pattern left as written is still a word an unquoted pattern produced. Where the program does
+not read it as a file, the proof of [CMDLINE-8](#CMDLINE-8) is refused for it as it is for a name
+that matched, as the paragraph on a word a pattern produced below says.
 
 **An option carrying a value is not a file pattern.** A word that starts with a dash and names the
 option before an `=` that comes ahead of any pattern, such as `--include=*.md`, stands for itself.
@@ -284,17 +287,32 @@ person and never spelled into a sentence for the planner. That holds for a file 
 line could not open as well ([CMDLINE-17](#CMDLINE-17)): it is named once, under the directory as
 typed.
 
-**A name a pattern matched is a path only where the program reads it as one.** The compiled plan
-records which arguments a pattern produced. Such an argument counts toward the proof of
+**A word a pattern produced is a path only where the program reads it as one.** The compiled plan
+records which arguments an unquoted pattern produced, whether the word is a name the pattern
+matched or the pattern itself, passed through as written because nothing matched. The mark is
+decided from the shape of the word, never from whether the walk found a name or from the names it
+found, so it does not depend on what a directory holds. Such an argument counts toward the proof of
 [CMDLINE-8](#CMDLINE-8) only in a position where the audited program reads it as a file, and then
-the trust map's answer for that path is its label. In any other position, such as an instruction
-operand like `basename`'s or grep's pattern, an option, or an option's value, the program may print
-the name, and no path in the read set answers for it. The step is then not read-proven, so the line
-is asked about and its output is untrusted. `basename incoming/*` asks and its output is
-quarantined; `basename 'incoming/*'` passes the pattern as written and keeps the proof road; and
-`cat incoming/*` takes its label from what the map says about `incoming/`. A matched name starting
-with `-`, such as a file called `--format=x` matched by `stat -c %s *`, is read as an option and
-refuses the proof the same way.
+the trust map's answer for that path is its label, whether or not anything matched. In any other
+position, such as an instruction operand like `basename`'s or grep's pattern, an option, or an
+option's value, the program may print the word, and no path in the read set answers for it. The
+step is then not read-proven, so the line is asked about and its output is untrusted, whether or
+not a name matched. Otherwise whether `incoming/a*` matched, which is decided by the names in a
+directory nobody vouched for, would decide whether the person is asked and whether the output
+reaches the planner as text. `basename incoming/a*` asks and its output is quarantined whether or
+not a name begins with `a`; `basename 'incoming/a*'` passes the pattern as written and keeps the
+proof road; and `cat incoming/a*` takes its label from what the map says about `incoming/`. A
+matched name starting with `-`, such as a file called `--format=x` matched by `stat -c %s *`, is
+read as an option and refuses the proof the same way. In `ls {a*,b}` the pattern alternative is
+marked and the literal `b` is not.
+
+The line count and the byte count a reference states for what the line printed are those of the
+output. Where no name matched, the program prints the pattern, which is one line of the pattern's
+length. Where names matched, it prints a line for each name printed and the total of their
+lengths, so with several matches both numbers differ from the unmatched case. They are the counts
+every reference to untrusted output carries, and are not the planner learning a name from a
+directory nobody vouched for beyond what [LABEL-3](../labels.md#LABEL-3) already says a count
+states. The difference is recorded under Known costs in [labels.md](../labels.md).
 
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
@@ -357,12 +375,14 @@ everything and asks nothing.
 `verified-by: bravebot_tui::app::a_typed_tilde_and_a_compiled_one_stand_for_the_same_directory`
 `verified-by: bravebot_ui_bridge::retention::worker::a_tilde_in_a_desktop_run_line_stands_for_the_home_directory`
 `verified-by: bravebot_agent::cmdline::each_argument_records_whether_a_pattern_matched_it`
+`verified-by: bravebot_agent::cmdline::brace_alternatives_are_marked_one_by_one`
 `verified-by: bravebot_core::command::a_matched_list_of_another_length_marks_every_argument`
 `verified-by: bravebot_core::policy::a_name_a_pattern_matched_in_an_unvouched_directory_is_not_proven_by_basename`
 `verified-by: bravebot_core::policy::a_pattern_produced_word_the_program_does_not_read_as_a_file_is_not_proven`
 `verified-by: bravebot_core::policy::a_pattern_produced_word_in_an_option_position_is_not_proven`
 `verified-by: bravebot_core::policy::a_pattern_produced_path_the_program_reads_stays_proven`
 `verified-by: bravebot_agent::turn::a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quarantined`
+`verified-by: bravebot_agent::turn::a_pattern_matching_nothing_in_an_unvouched_directory_is_treated_as_one_that_matched`
 
 <a id="CMDLINE-5"></a>
 ### CMDLINE-5: a redirection target is a write destination and takes the write gates
@@ -658,7 +678,8 @@ read-proven, since its operands and the map's rules would be spelled relative to
 A plan with no steps is not read-proven either: the answer to what it read is that there was no
 proof.
 
-The plan's read set is those operand paths, glob-expanded. A name a pattern matched belongs to it
+The plan's read set is those operand paths, glob-expanded. A name a pattern matched, or a pattern
+that matched nothing and is passed through as written, belongs to it
 only where the program reads that name as a file. A step holding a pattern-produced word anywhere
 else, in an instruction operand, an option or an option's value, is not read-proven
 ([CMDLINE-4](#CMDLINE-4)). The output's first label is the meet of
@@ -754,6 +775,7 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_pattern_produced_word_in_an_option_position_is_not_proven`
 `verified-by: bravebot_core::policy::a_pattern_produced_path_the_program_reads_stays_proven`
 `verified-by: bravebot_agent::turn::a_name_a_pattern_matched_in_an_unvouched_directory_reaches_the_planner_quarantined`
+`verified-by: bravebot_agent::turn::a_pattern_matching_nothing_in_an_unvouched_directory_is_treated_as_one_that_matched`
 `verified-by: bravebot_core::policy::a_recursive_search_takes_its_label_from_the_whole_subtree`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::an_environment_assignment_leaves_a_step_unproven`

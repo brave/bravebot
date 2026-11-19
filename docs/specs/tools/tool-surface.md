@@ -8,14 +8,14 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 258
+      - crates/agent/src/tools.rs: 257
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
       - crates/agent/src/tools/tests/reading_together.rs: 1
   - symbol: Produced::refused_with_a_note
     sites:
-      - crates/agent/src/tools.rs: 13
+      - crates/agent/src/tools.rs: 14
       - crates/agent/src/tools/recall.rs: 1
 documented-by: docs/website/docs/reference/tools.md
 ---
@@ -88,7 +88,8 @@ routing string: a turn whose context has met untrusted content can name no refer
 
 `lsp` is the one tool whose result is split across both footings rather than being one or the other:
 the line and character of a location are structure, while the name of the file and the text at the
-location are content, labelled from the files the answer names and quarantined when any is not
+location are content, labelled from the files the answer names and the file it was asked at, and
+quarantined when any is not
 vouched for. [LSP-3](lsp.md#LSP-3) is where that is settled.
 
 `spawn_agent`'s `task` and `each` are the content arguments that may not be untrusted. It decides no

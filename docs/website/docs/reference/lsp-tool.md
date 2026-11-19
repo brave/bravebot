@@ -174,13 +174,23 @@ there is nowhere in three integers for prose to sit. The end line lets the plann
 for exactly the lines of a definition; bravebot does not read them for it. A server that sends no
 range for the whole symbol gives a location with no end line. **The name is content.** It is bytes
 out of the tree the server indexed, so an answer is labelled by the files it names. Each path is
-looked up in the trust map. An answer that names only files you vouched for is read as written. An
+looked up in the trust map. An answer that names only files you vouched for is read as written, if
+the file you asked at is one you vouched for too. An
 answer that names any file you did not vouch for comes back whole as a reference, with none of its
 locations in front of the planner, so somebody who owns `vendor/lib.js` cannot use
 `goToDefinition` to put a sentence in front of the planner through its name. A `goToDefinition` into
 a dependency's source, or a `workspaceSymbol` that matches a vendored file, is such an answer where
 you have not vouched for that tree, and vouching for it is the way to see the locations. An answer
-that names nothing carries no taint.
+that names nothing, and was asked at no file, carries no taint.
+
+The file you asked at is a label input as well, for `goToDefinition`, `findReferences`,
+`goToImplementation`, `incomingCalls`, `outgoingCalls` and `documentSymbol`. Its bytes decide which
+symbol a position resolves to, and so which locations come back and how many. Asked at a file you did
+not vouch for, the answer comes back whole as a reference even where every location it names is in a
+file you vouched for, and so does an answer with no locations, so the planner is not told that
+nothing was found by a file you did not vouch for. A link to a file you did not vouch for is that
+file, under any name it has. `diagnostics`, `hover` and `workspaceSymbol` do not ask at a file in
+this sense and are labelled as described below.
 
 The **text** at a location takes the ordinary treatment, because it is bytes the file chose. A
 signature or a source excerpt from a file nobody vouched for comes back as a reference, so one result
