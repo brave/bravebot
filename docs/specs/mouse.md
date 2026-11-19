@@ -408,7 +408,9 @@ cancels it except the press [MOUSE-47](#MOUSE-47) says does. Rows are counted fr
 drawn, so a list that has scrolled to keep the cursor in view is read as it is drawn. A press on a row
 that is drawn moves the cursor and leaves the rows where they are, whether or not the list has scrolled,
 so a double click in place takes the row pointed at. A key or a turn of the wheel moves the cursor and
-the rows as it always did, with the cursor on the last row drawn once it is past the first page. The
+the rows as it always did, with the cursor on the last row drawn once it is past the first page. Tab in
+the model picker switches its scope ([VIEW-14](terminal-transcript.md#VIEW-14)) and moves neither the
+cursor nor the rows. The
 second press is held to the row and not to the cell: after the wheel has moved the rows, a press on the
 cell of the first row is a first press on the row drawn there now, and one where the first row is
 drawn now takes it. In the model
@@ -478,6 +480,7 @@ cursor ([MOUSE-46](#MOUSE-46)).
 `verified-by: bravebot_tui::model_prompt::a_press_where_the_wheel_has_since_drawn_another_model_is_a_first_press_on_it`
 `verified-by: bravebot_tui::model_prompt::a_key_after_a_press_moves_the_list_as_the_keys_alone_do`
 `verified-by: bravebot_tui::app::tests::pickers::the_model_picker_opened_mid_turn_takes_a_press_the_wheel_and_a_press_outside`
+`verified-by: bravebot_tui::app::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
 `verified-by: bravebot_tui::app::tests::history_search::a_press_on_a_prompt_moves_the_cursor_and_a_second_takes_it_into_the_box`
 `verified-by: bravebot_tui::app::tests::history_search::two_presses_on_different_prompts_or_far_apart_take_nothing`
 `verified-by: bravebot_tui::app::tests::history_search::each_row_drawn_is_the_prompt_a_press_on_it_picks_in_a_window_that_has_slid`

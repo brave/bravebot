@@ -1885,9 +1885,12 @@ granted-rules-too-small = y n'accorde rien : une règle dépasse la hauteur du c
 
 theme-picker-title = thèmes
 theme-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
-model-picker-heading = Choisir un modèle
+model-picker-heading-every-session = Choisir un modèle · toutes les sessions
+model-picker-heading-this-session = Choisir un modèle · cette session seulement
+model-picker-scope-every-session = Entrée : toutes les sessions · Tab : cette session
+model-picker-scope-this-session = Entrée : cette session · Tab : toutes les sessions
 model-picker-keys =
-    ↑↓ PgUp PgDn choisir · ←→ plier · Entrée valider · Échap garder l'actuel
+    ↑↓ PgUp PgDn choisir · ←→ plier · Échap garder l'actuel
 model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
 model-picker-loading = chargement des modèles…
@@ -2839,6 +2842,7 @@ command-context = Montrer ce qui remplit la fenêtre de contexte, par catégorie
 command-limit = Montrer la limite de dépense de la session, la fixer en jetons ou en crédits, ou la retirer
 command-request = Montrer la dernière requête envoyée au modèle, et l'origine de chacune de ses parties
 command-model = Choisir avec quel modèle réfléchir
+command-model-session = Choisir un modèle pour cette session seulement, sans rien enregistrer
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
 command-variant = Choisir un jeu d'options nommé que le modèle propose, les lister, ou abandonner le choix
@@ -4236,6 +4240,7 @@ panel-pull-requests = Pull requests
 panel-issues = Tickets
 # La dernière ligne d'une section du panneau d'informations coupée à la place disponible : le nombre de lignes laissées de côté.
 panel-more-references = +{ $count } de plus
+panel-model-this-session = cette session seulement
 panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
