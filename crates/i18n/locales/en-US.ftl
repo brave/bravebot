@@ -132,6 +132,11 @@ cli-plain-trust-kept =
 cli-plain-trust-remember-where =
     To take it back, run /forget-trust in bravebot without --plain, or delete the lines naming
     this directory from this file:
+# Said in the lines before the local host's startup question about a workspace (HOST-1). The host
+# has no /forget-trust of its own, so it names the command in bravebot.
+local-host-trust-remember-where =
+    To take it back, run /forget-trust in bravebot in this directory, or delete the lines naming
+    this directory from this file:
 
 # Said when a background session is started again and its earlier conversation was read back from
 # its record (BG-1).

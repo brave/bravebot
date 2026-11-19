@@ -91,6 +91,20 @@ fn main() {
     bravebot_ui_bridge::settings::settle_for_process(&process);
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
 
+    // Before any client starts, the person is asked here about each workspace no yes was kept
+    // about, as a session in lines asks (TRUST-23). The answers are read before `launch` and `quit`
+    // are, from the same input.
+    let asked = bravebot_ui_bridge::host_trust::ask_about_each(
+        &workspaces,
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+    );
+    if asked == bravebot_ui_bridge::host_trust::Asked::Stop {
+        return;
+    }
+
     let mut host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
         workspaces,
         settings,

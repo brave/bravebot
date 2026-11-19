@@ -759,7 +759,7 @@ fn what_the_local_host_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values
             ),
         ],
         stdout: kept("host-standard-output.txt").into(),
-        stderr: kept("host-standard-error.txt").into(),
+        stderr: Box::new(kept("host-standard-error.txt")),
         clients: support::ONE_CLIENT,
     });
 

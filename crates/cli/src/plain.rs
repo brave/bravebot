@@ -1434,21 +1434,16 @@ fn opening_trust<R: BufRead, W: Write>(
     // person reading a line at a time, or hearing one, has read the detail by the time they are
     // asked to answer it. That includes what a yes keeps and where.
     let keeping = keeping(root);
-    let mut lines = vec![
-        bravebot_agent::confirm::shown_path(root),
-        t!(trust_directory_explained).to_string(),
-        t!(trust_directory_regardless).to_string(),
-        t!(trust_directory_confined_lines).to_string(),
-    ];
-    match &keeping {
-        Some((store, _)) => lines.extend([
-            t!(trust_directory_remember_explained).to_string(),
-            t!(trust_directory_remember_exact).to_string(),
-            t!(cli_plain_trust_remember_where).to_string(),
-            bravebot_agent::confirm::shown_path(store.path()),
-        ]),
-        None => lines.push(t!(trust_directory_not_remembered).to_string()),
-    }
+    let take_back = t!(cli_plain_trust_remember_where);
+    let lines = bravebot_approval::trust_directory_lines(
+        root,
+        keeping
+            .as_ref()
+            .map(|(store, _)| bravebot_approval::Keeping {
+                record: store.path(),
+                take_back,
+            }),
+    );
     let answer = match asking.put(&lines, t!(trust_directory_title)) {
         Some(Decision::Approve) => bravebot_tui::trust_prompt::Answer::Trust,
         Some(Decision::Reject) => bravebot_tui::trust_prompt::Answer::Decline,
@@ -1676,8 +1671,8 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         // Only the affirmative approves. Any other line is a person who typed something that was
         // not yes, and the end of the input is nobody answering at all.
         let on = self.answering();
-        let typed = self.line(on, &format!("{question} {} ", t!(line_answer)))?;
-        Some(match typed.trim().to_lowercase() == t!(line_answer_yes) {
+        let typed = self.line(on, &bravebot_approval::invitation(question))?;
+        Some(match bravebot_approval::says_yes(&typed) {
             true => Decision::Approve,
             false => Decision::Reject,
         })

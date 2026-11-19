@@ -134,6 +134,9 @@ cli-plain-trust-kept =
 cli-plain-trust-remember-where =
     Pour revenir dessus, lancez /forget-trust dans bravebot sans --plain, ou supprimez de ce
     fichier les lignes qui nomment ce répertoire :
+local-host-trust-remember-where =
+    Pour revenir dessus, lancez /forget-trust dans bravebot dans ce répertoire, ou supprimez de ce
+    fichier les lignes qui nomment ce répertoire :
 # Dit quand une session en arrière-plan est relancée et que sa conversation précédente a été relue
 # depuis son enregistrement (BG-1).
 cli-plain-resumed = Reprise de la conversation précédente de cette session ({ $count }).

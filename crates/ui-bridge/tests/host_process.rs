@@ -228,13 +228,12 @@ impl Host {
             current_dir: None,
             environment: &model_service(endpoint),
             stdout: Stdio::null(),
-            stderr: Stdio::null(),
+            stderr: support::discarded(),
             clients: support::ONE_CLIENT,
         })
     }
 
-    /// As [`Host::start`], given `clients`, each a name and its answers, with its standard error
-    /// kept for the test to read.
+    /// As [`Host::start`], given `clients`, each a name and its answers.
     fn start_giving(scratch: &Scratch, endpoint: &str, clients: &[(&str, &str)]) -> Self {
         Self::launch(Start {
             home: &scratch.home(),
@@ -245,7 +244,7 @@ impl Host {
             current_dir: None,
             environment: &model_service(endpoint),
             stdout: Stdio::null(),
-            stderr: Stdio::piped(),
+            stderr: support::discarded(),
             clients,
         })
     }
@@ -1744,7 +1743,7 @@ fn a_relative_directory_is_refused_even_from_inside_a_workspace() {
         current_dir: Some(&scratch.project()),
         environment: &model_service(&endpoint),
         stdout: Stdio::null(),
-        stderr: Stdio::null(),
+        stderr: support::discarded(),
         clients: support::ONE_CLIENT,
     });
     let mut client = host.client();
@@ -1948,37 +1947,6 @@ fn a_host_that_quits_ends_the_sessions_it_holds_before_it_exits() {
 
 // ---------------------------------------------------------------- named clients and their answers
 
-/// The lines the host writes on its standard error, as they arrive.
-fn what_the_host_says(host: &mut Host) -> mpsc::Receiver<String> {
-    let stderr = host
-        .child
-        .stderr
-        .take()
-        .expect("the host's error output is kept");
-    let (said, lines) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if said.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    lines
-}
-
-/// Waits for a line of the host's that holds `wanted`, failing where none arrives.
-fn says(lines: &mpsc::Receiver<String>, wanted: &str) -> String {
-    let deadline = Instant::now() + PATIENCE;
-    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-        match lines.recv_timeout(left) {
-            Ok(line) if line.contains(wanted) => return line,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-    }
-    panic!("the host never said `{wanted}`")
-}
-
 /// The answers the host reports for the client that asks.
 fn answers_of(client: &mut Client) -> Value {
     client.call("instance.info", json!({}))["answers"].clone()
@@ -2037,7 +2005,6 @@ fn a_launch_of_an_unknown_connected_or_waiting_client_is_refused_and_not_kept() 
     let scratch = Scratch::new();
     let endpoint = a_model_service(ends_the_turn, || {});
     let mut host = Host::start_giving(&scratch, &endpoint, &[("a", "trust"), ("b", "none")]);
-    let said = what_the_host_says(&mut host);
     let first = host.client();
     for (line, refusal) in [
         ("launch zed", "no client is named `zed`"),
@@ -2055,7 +2022,7 @@ fn a_launch_of_an_unknown_connected_or_waiting_client_is_refused_and_not_kept() 
         ),
     ] {
         host.command(line);
-        says(&said, refusal);
+        host.says(refusal);
     }
     first.leave();
     let mut second = host.client();
@@ -2204,5 +2171,211 @@ fn a_reply_of_the_wrong_kind_is_refused_and_the_question_stays_answerable() {
         std::fs::read_to_string(&written).expect("the approved write landed"),
         "written by the model"
     );
+    client.leave();
+}
+
+// ---------------------------------------------------------------- trust asked about at startup
+
+impl Host {
+    /// A host on `workspaces`, left at its startup question about the first, if it puts one.
+    fn unanswered(scratch: &Scratch, endpoint: &str, workspaces: &[&Path]) -> Self {
+        Self::launch_in(
+            Start {
+                home: &scratch.home(),
+                sessions_root: &scratch.root(),
+                workspace: workspaces[0],
+                relay: &scratch.directory.path().join("relay.sock"),
+                settings: None,
+                current_dir: None,
+                environment: &model_service(endpoint),
+                stdout: Stdio::null(),
+                stderr: support::discarded(),
+                clients: support::ONE_CLIENT,
+            },
+            &workspaces[1..],
+        )
+    }
+
+    /// Waits for the host to end, and fails where it does not or ends with a failure.
+    fn stopped(&mut self) {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                assert!(status.success(), "{status}");
+                return;
+            }
+            assert!(Instant::now() < deadline, "the host did not stop");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// The files a yes is kept in, under the home a host was started on.
+fn kept_records(scratch: &Scratch) -> Vec<PathBuf> {
+    std::fs::read_dir(scratch.home().join(".bravebot/trusted"))
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default()
+}
+
+/// Whether a session opened in `workspace` started settled by a kept yes.
+fn opens_trusted(client: &mut Client, workspace: &Path) -> bool {
+    let opened = client.call("session.new", json!({"directory": workspace}));
+    !opened["remembered"].is_null()
+}
+
+/// A workspace a yes was kept about, here by a window, is not asked about. The host says why,
+/// starts its client with nothing typed, and a session there starts trusted.
+#[test]
+fn a_workspace_already_trusted_is_not_asked_about() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let (store, identity) = bravebot_agent::trusted::record_for(
+        Some(&scratch.home().join(".bravebot")),
+        Some(&scratch.home()),
+        &scratch.project(),
+    )
+    .expect("a yes may be kept about the project");
+    assert!(store.keep(&identity, "a-window-session", 1, true));
+
+    let host = Host::unanswered(&scratch, &endpoint, &[&scratch.project()]);
+    let said = host.says_any(&[support::STARTUP_QUESTION, support::NOT_ASKED[0]]);
+    assert!(
+        said.contains("start trusted, because you trusted it"),
+        "{said}"
+    );
+    let mut client = host.client();
+    assert!(opens_trusted(&mut client, &scratch.project()));
+    client.leave();
+}
+
+/// A yes at the startup question is kept, naming no session, and a session the client opens there
+/// starts trusted with no question about it.
+#[test]
+fn a_yes_at_startup_is_kept_and_a_session_there_is_not_asked() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::unanswered(&scratch, &endpoint, &[&scratch.project()]);
+    // The question names the file a yes is written to before it is put.
+    host.says(".bravebot/trusted/");
+    host.says(support::STARTUP_QUESTION);
+    host.command("y");
+    host.says("start trusted, now and later");
+
+    let records = kept_records(&scratch);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let entry = std::fs::read_to_string(&records[0]).unwrap();
+    assert!(entry.contains(r#""session":"""#), "{entry}");
+    // The question said confined lines run without asking, so the kept yes says so too.
+    assert!(entry.contains(r#""confined_lines":true"#), "{entry}");
+    let mut client = host.client();
+    assert!(opens_trusted(&mut client, &scratch.project()));
+    client.leave();
+}
+
+/// A no at the startup question keeps nothing, and a session there asks its client.
+#[test]
+fn a_no_at_startup_keeps_nothing_and_a_session_there_asks() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::unanswered(&scratch, &endpoint, &[&scratch.project()]);
+    host.says(support::STARTUP_QUESTION);
+    host.command("n");
+    host.says("is not trusted and nothing was kept");
+
+    assert_eq!(kept_records(&scratch), Vec::<PathBuf>::new());
+    let mut client = host.client();
+    assert!(!opens_trusted(&mut client, &scratch.project()));
+    client.leave();
+}
+
+/// A workspace where a yes cannot be kept, here the home directory, is not asked about. The host
+/// says each session there asks, and starts its client with nothing typed.
+#[test]
+fn a_workspace_where_a_yes_cannot_be_kept_is_not_asked_about() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::unanswered(&scratch, &endpoint, &[&scratch.home()]);
+    let said = host.says_any(&[support::STARTUP_QUESTION, support::NOT_ASKED[1]]);
+    assert!(
+        said.contains("cannot be kept, so it is not asked about here and each session there asks"),
+        "{said}"
+    );
+    let mut client = host.client();
+    assert!(!opens_trusted(&mut client, &scratch.home()));
+    client.leave();
+    assert_eq!(kept_records(&scratch), Vec::<PathBuf>::new());
+}
+
+/// At the startup question a line that is not yes declines and keeps nothing, and `quit` stops the
+/// host, keeping nothing and starting no client.
+#[test]
+fn a_line_that_is_not_yes_declines_and_quit_stops_the_host() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let other = scratch.directory.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let mut host = Host::unanswered(&scratch, &endpoint, &[&scratch.project(), &other]);
+    host.says(support::STARTUP_QUESTION);
+    host.command("sure");
+    host.says("is not trusted and nothing was kept");
+    host.says(support::STARTUP_QUESTION);
+    host.command("quit");
+    host.says("nothing was kept about");
+    host.stopped();
+
+    assert_eq!(kept_records(&scratch), Vec::<PathBuf>::new());
+    assert!(
+        host.client_within(NOT_STARTED).is_none(),
+        "a client started"
+    );
+}
+
+/// The input ending at the startup question answers no: nothing is kept, and the host stops with no
+/// client started.
+#[test]
+fn the_input_ending_at_the_startup_question_stops_the_host_with_nothing_kept() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::unanswered(&scratch, &endpoint, &[&scratch.project()]);
+    host.says(support::STARTUP_QUESTION);
+    host.end_input();
+    host.says("its input ended at the question");
+    host.stopped();
+
+    assert_eq!(kept_records(&scratch), Vec::<PathBuf>::new());
+    assert!(
+        host.client_within(NOT_STARTED).is_none(),
+        "a client started"
+    );
+}
+
+/// Each workspace is asked about in the order given, and the clients start only once the last has
+/// been answered.
+#[test]
+fn the_clients_start_only_after_the_last_workspace_is_answered() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let other = scratch.directory.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let other = other.canonicalize().unwrap();
+    let mut host = Host::unanswered(&scratch, &endpoint, &[&scratch.project(), &other]);
+    for workspace in [scratch.project(), other.clone()] {
+        let shown = workspace.display().to_string();
+        let mut heard = Vec::new();
+        loop {
+            let line = host.says_any(&[support::STARTUP_QUESTION, &shown]);
+            if line.ends_with(support::STARTUP_QUESTION) {
+                break;
+            }
+            heard.push(line);
+        }
+        assert!(heard.contains(&shown), "{shown}: {heard:?}");
+        assert!(
+            host.client_within(NOT_STARTED).is_none(),
+            "a client started before {shown} was answered"
+        );
+        host.command("n");
+    }
+    let client = host.client();
     client.leave();
 }

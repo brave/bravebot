@@ -573,6 +573,12 @@ fn is_a_question_or_an_end(message: &Value) -> bool {
 
 /// A socket to give a program as its standard error, and the lines it writes there.
 fn a_complaints_socket() -> (Stdio, Arc<Mutex<Vec<String>>>) {
+    let (out, complaints) = a_complaints_stream();
+    (Stdio::from(std::os::fd::OwnedFd::from(out)), complaints)
+}
+
+/// As [`a_complaints_socket`], with the socket as a stream to write to.
+fn a_complaints_stream() -> (UnixStream, Arc<Mutex<Vec<String>>>) {
     let (complaints_in, complaints_out) =
         bravebot_sandbox::process::creating_a_channel(|| UnixStream::pair().expect("a pair"));
     let complaints = Arc::new(Mutex::new(Vec::new()));
@@ -582,10 +588,7 @@ fn a_complaints_socket() -> (Stdio, Arc<Mutex<Vec<String>>>) {
             collecting.lock().expect("not poisoned").push(line);
         }
     });
-    (
-        Stdio::from(std::os::fd::OwnedFd::from(complaints_out)),
-        complaints,
-    )
+    (complaints_out, complaints)
 }
 
 /// What the server is told of the model service at `endpoint`.
@@ -752,7 +755,7 @@ impl Hosted {
         // The host uses a root that already exists only if others cannot reach it.
         std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .unwrap();
-        let (stderr, complaints) = a_complaints_socket();
+        let (stderr, complaints) = a_complaints_stream();
         let host = Host::launch(Start {
             home: &scratch.home(),
             sessions_root: &root,
@@ -762,7 +765,7 @@ impl Hosted {
             current_dir: None,
             environment: &model_service(endpoint),
             stdout: Stdio::null(),
-            stderr,
+            stderr: Box::new(stderr),
             clients: support::ONE_CLIENT,
         });
         let client = host.client();

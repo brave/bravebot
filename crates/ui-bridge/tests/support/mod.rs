@@ -18,7 +18,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// How long a test waits for what it expects before it fails.
@@ -136,7 +138,9 @@ pub struct Start<'a> {
     /// on top of a home, a locale and the keys of the gateway, which are the same for every test.
     pub environment: &'a [(&'a str, &'a OsStr)],
     pub stdout: Stdio,
-    pub stderr: Stdio,
+    /// Where what the host writes on its standard error is copied, besides the lines a test reads
+    /// from [`Host::said`].
+    pub stderr: Box<dyn Write + Send>,
     /// The clients the host is given, each a name and its answers, and each this test binary.
     pub clients: &'a [(&'a str, &'a str)],
 }
@@ -144,16 +148,76 @@ pub struct Start<'a> {
 /// One client that may give every answer the host offers.
 pub const ONE_CLIENT: &[(&str, &str)] = &[("test", "confirm,run,fetch,ask,trust")];
 
+/// Nowhere, for a host whose standard error no test keeps beyond [`Host::said`].
+pub fn discarded() -> Box<dyn Write + Send> {
+    Box::new(std::io::sink())
+}
+
+/// What ends the question the host puts about a workspace at startup, which the host writes with no
+/// line break after it.
+pub const STARTUP_QUESTION: &str = "trust this directory? [y/N] ";
+
+/// What the host says about a workspace it puts no question about at startup.
+pub const NOT_ASKED: [&str; 2] = ["start trusted, because", "cannot be kept"];
+
 /// A local host, ended and waited for when it is dropped.
 pub struct Host {
     pub child: Child,
     pub commands: Option<ChildStdin>,
+    /// The lines the host writes on its standard error, as they arrive, and the question it puts at
+    /// startup as a line of its own.
+    pub said: mpsc::Receiver<String>,
     relay: UnixListener,
     relay_path: PathBuf,
+    /// The thread that copies the host's standard error, and how many bytes it has copied.
+    copying: Option<(JoinHandle<()>, Arc<AtomicUsize>)>,
 }
 
 impl Host {
+    /// A host whose workspace has been asked about and answered no, so its sessions ask their client
+    /// about trust; or one whose workspace was not asked about, where it says it was not.
     pub fn launch(start: Start<'_>) -> Self {
+        let mut host = Self::launch_unanswered(start);
+        host.decline_at_startup();
+        host
+    }
+
+    /// Wait for the host to ask about its workspace or to say it does not, and answer no to the
+    /// question.
+    pub fn decline_at_startup(&mut self) {
+        let said = self.says_any(&[STARTUP_QUESTION, NOT_ASKED[0], NOT_ASKED[1]]);
+        if said.ends_with(STARTUP_QUESTION) {
+            self.command("n");
+        }
+    }
+
+    /// The next line the host says that holds one of `wanted`, failing where none arrives.
+    pub fn says_any(&self, wanted: &[&str]) -> String {
+        let deadline = Instant::now() + PATIENCE;
+        let mut heard = Vec::new();
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match self.said.recv_timeout(left) {
+                Ok(line) if wanted.iter().any(|wanted| line.contains(wanted)) => return line,
+                Ok(line) => heard.push(line),
+                Err(_) => break,
+            }
+        }
+        panic!("the host never said any of {wanted:?}; it said {heard:?}")
+    }
+
+    /// The next line the host says that holds `wanted`.
+    pub fn says(&self, wanted: &str) -> String {
+        self.says_any(&[wanted])
+    }
+
+    /// A host that is left at its startup question, if it puts one.
+    pub fn launch_unanswered(start: Start<'_>) -> Self {
+        Self::launch_in(start, &[])
+    }
+
+    /// As [`Host::launch_unanswered`], with `others` as further workspaces after the one `start`
+    /// names.
+    pub fn launch_in(start: Start<'_>, others: &[&Path]) -> Self {
         let _ = std::fs::remove_file(start.relay);
         let relay = UnixListener::bind(start.relay).expect("a relay socket");
         relay.set_nonblocking(true).unwrap();
@@ -176,6 +240,9 @@ impl Host {
             .arg(start.sessions_root)
             .arg("--workspace")
             .arg(start.workspace);
+        for other in others {
+            command.arg("--workspace").arg(other);
+        }
         if let Some(settings) = start.settings {
             command.arg("--settings").arg(settings);
         }
@@ -192,15 +259,21 @@ impl Host {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(start.stdout)
-            .stderr(start.stderr)
+            .stderr(Stdio::piped())
             .spawn()
             .expect("the host runs");
         let commands = child.stdin.take();
+        let (said, copying) = lines_of(
+            child.stderr.take().expect("the host's error output"),
+            start.stderr,
+        );
         Self {
             child,
             commands,
+            said,
             relay,
             relay_path: start.relay.to_path_buf(),
+            copying: Some(copying),
         }
     }
 
@@ -250,11 +323,61 @@ impl Host {
     }
 }
 
+/// What `source` writes, a line at a time, copied to `copy` as it arrives. A question that ends
+/// with [`STARTUP_QUESTION`] is a line of its own, since the host waits for the answer on the same
+/// line. Read to the end whether or not the lines are wanted, so the host is never left writing to
+/// a full pipe.
+fn lines_of(
+    mut source: impl Read + Send + 'static,
+    mut copy: Box<dyn Write + Send>,
+) -> (mpsc::Receiver<String>, (JoinHandle<()>, Arc<AtomicUsize>)) {
+    let (said, lines) = mpsc::channel();
+    let copied = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&copied);
+    let copying = std::thread::spawn(move || {
+        let mut pending = Vec::new();
+        let mut buffer = [0u8; 8192];
+        while let Ok(read) = source.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            let _ = copy.write_all(&buffer[..read]);
+            let _ = copy.flush();
+            counting.fetch_add(read, Ordering::SeqCst);
+            pending.extend_from_slice(&buffer[..read]);
+            while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+                let line: Vec<u8> = pending.drain(..=end).collect();
+                let _ = said.send(String::from_utf8_lossy(&line[..end]).into_owned());
+            }
+            if pending.ends_with(STARTUP_QUESTION.as_bytes()) {
+                let _ = said.send(String::from_utf8_lossy(&pending).into_owned());
+                pending.clear();
+            }
+        }
+    });
+    (lines, (copying, copied))
+}
+
 impl Drop for Host {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.relay_path);
+        // A test that reads the copy after the host has gone reads all of it. Everything the host
+        // wrote is in the pipe once it has exited, but a program it started can hold the pipe open
+        // for longer, so the copy is done when its end is read or when nothing more arrives.
+        if let Some((copying, copied)) = self.copying.take() {
+            let deadline = Instant::now() + PATIENCE;
+            let mut before = usize::MAX;
+            while !copying.is_finished() && Instant::now() < deadline {
+                let now = copied.load(Ordering::SeqCst);
+                if now == before {
+                    break;
+                }
+                before = now;
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
     }
 }
 

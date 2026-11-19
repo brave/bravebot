@@ -1864,7 +1864,9 @@ terminal interface and the desktop interface read and write one record, under th
 resolves the directory to, so a yes kept in either is honoured by the other and taken back from
 either. A session in lines reads the same record, puts the same lines before its question, and keeps
 a yes on the same terms ([cli.md](cli.md#CLI-14)). A line that is not yes there declines, and keeps
-nothing.
+nothing. The local host puts the same lines and question on its own terminal about each workspace it
+was given, before it starts a client, and keeps a yes on the same terms for the sessions it opens
+there to honour ([local-host.md](local-host.md#HOST-1)).
 A yes is kept only where the answer may be kept and later honoured: there is a state directory, the
 working directory is not a filesystem root, not the user's home and not a directory holding it
 (compared both as named and with links resolved, since `$HOME` is often named through a link the
@@ -1893,7 +1895,8 @@ the path's own bytes, so a key is at most 200 bytes, and two long directories th
 `-` would join have two files. A key of up to 200 bytes is unchanged. The line names the
 directory in full, which directory is at that path (when it was made and, where the platform has one,
 its number on the volume), the session and when. A desktop session is named on its first turn, so a
-line kept before one names no session; the name decides nothing. A line that cannot be written
+line kept before one names no session, and nor does a line the local host keeps at startup; the name
+decides nothing. A line that cannot be written
 leaves the answer as a yes for this session, and the session says so and names the file. A yes to a
 question that said confined lines run without asking ([RUN-5](tools/run.md#RUN-5)) also writes
 `confined_lines`, and a line without it, as every line kept before the field is, says nothing of it: a session
