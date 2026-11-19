@@ -378,8 +378,15 @@ that comes first, the session puts each server's list to you, whole:
 │┃ per-service status and links to the official status pages.                           │
 │                                                                                       │
 │  weather:get_alerts                                                                   │
-│    active_only (boolean), city_name (string), detail (string, summary | standard |    │
-│    full), latitude (number), location_name (string), longitude (number)               │
+│    active_only (boolean)                                                              │
+│    city_name (string)                                                                 │
+│    detail (string)                                                                    │
+│┃ summary                                                                              │
+│┃ standard                                                                             │
+│┃ full                                                                                 │
+│    latitude (number)                                                                  │
+│    location_name (string)                                                             │
+│    longitude (number)                                                                 │
 │┃ Get active weather alerts, watches, warnings, and advisories for a location.         │
 │  1 Yes, offer them    2 No, continue without them    ctrl-c stop the turn  ↑↓ 51 more │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
@@ -388,8 +395,10 @@ that comes first, the session puts each server's list to you, whole:
 Where the server's allow or deny list withheld tools, the heading says so: "one tool was withheld by
 the server's allow or deny list", or "N tools were withheld by the server's allow or deny list".
 
-Each tool is `alias:tool`, then its arguments, then every row of what the server says about it
-behind the `┃` margin, none of it cut: a yes puts exactly this text in front of the model, and
+Each tool is `alias:tool`, then its arguments one to a row, then every row of what the server says
+about it behind the `┃` margin, none of it cut. The values an argument takes are the server's words,
+so each sits on a row of its own behind the margin, under the argument it belongs to, and the
+argument's name and type do not. A yes puts exactly this text in front of the model, and
 the margin marks the words that are the server's. A [check](../security/vetting.md) reads the list
 first, as it reads anything else about to be believed, and its verdict is drawn above it. With
 several servers the checks of their lists are made at the same time, no more than eight at once,

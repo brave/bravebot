@@ -271,10 +271,12 @@ const CARDS = {
     // and the question is put before the server is started, so nothing a server wrote is on it.
     why: 'the declaration the person wrote, the settings file that requested it and the agent’s own lines about it, asked about before the server has said anything',
   },
-  // SERVERS-8: a tool's description is the server's own text, released for a person to read.
+  // SERVERS-8: the values an argument takes are the server's own text, released for a person to read.
   'mcp-tools': {
-    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
-    marks: 'class="mcp-tool-description"',
+    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [{ text: 'unit (string)', choices: [FORGED_CHROME] }], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
+    // The values an argument takes sit in their own marked block, one to a value, with the class
+    // `mcp-tool-description mcp-tool-choice`. The `mcp-call` card holds the description block.
+    marks: 'class="mcp-tool-description mcp-tool-choice"',
   },
   'mcp-call': {
     entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true, askedForPrivateArguments: false, also: [] }),

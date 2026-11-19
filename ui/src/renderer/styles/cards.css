@@ -121,6 +121,8 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A value an argument takes is the server's text like a description, one block to a value. */
+.mcp-tool-choice { padding-top: var(--leo-spacing-xs); padding-bottom: var(--leo-spacing-xs); }
 .mcp-arguments { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; }
 .mcp-arguments dd { margin: 0; }
 /* The later calls one answer also covers: each is its own list of arguments, set apart from the

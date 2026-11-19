@@ -12,7 +12,8 @@
 //! that list.
 
 use crate::confirm::{
-    CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, MoveRequest, ToolListRequest,
+    CallDecision, Confirmer, Decision, ListedTool, ListedToolArgument, McpCallRequest, MoveRequest,
+    ToolListRequest,
 };
 use crate::processor::Chat;
 use crate::report::{IgnoreReports, Reporter};
@@ -291,7 +292,8 @@ struct Argument {
 }
 
 impl Argument {
-    /// `city_name (string, required)`, as a list draws it.
+    /// `city_name (string, required)`, as a list draws it. The values of an `enum` are not in it:
+    /// they are the server's own strings and are drawn apart, behind the margin ([`Argument::listed`]).
     fn drawn(&self) -> String {
         let mut said: Vec<String> = Vec::new();
         match (&self.kind, &self.items) {
@@ -303,15 +305,21 @@ impl Argument {
             (Some(kind), None) => said.push(kind.clone()),
             (None, _) => {}
         }
-        if let Some(choices) = &self.choices {
-            said.push(choices.join(" | "));
-        }
         if self.required {
             said.push(t!(mcp_tools_argument_required).to_string());
         }
         match said.is_empty() {
             true => self.name.clone(),
             false => format!("{} ({})", self.name, said.join(", ")),
+        }
+    }
+
+    /// The argument as a person is asked about it: the client's text, and every value the server
+    /// lists kept as its own string, none cut and none joined to another.
+    fn listed(&self) -> ListedToolArgument {
+        ListedToolArgument {
+            text: self.drawn(),
+            choices: self.choices.clone().unwrap_or_default(),
         }
     }
 
@@ -1418,7 +1426,7 @@ fn listed(alias: &str, text: &str) -> Vec<ListedTool> {
         .into_iter()
         .map(|drawn| ListedTool {
             name: format!("{alias}:{}", drawn.name),
-            arguments: drawn.arguments.iter().map(Argument::drawn).collect(),
+            arguments: drawn.arguments.iter().map(Argument::listed).collect(),
             description: drawn.description,
             read_only: drawn.read_only,
         })
@@ -2467,6 +2475,38 @@ fn reply_failure(name: &str, error: &McpError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SERVERS-8: the values an argument takes are the server's strings, so they are kept one to a
+    /// value apart from the client's own text for the argument, are not cut or joined, and are the
+    /// same values the backend schema carries.
+    ///
+    /// A wrong implementation joins them into the argument's text (`x (string, a | b)`), where a
+    /// front end draws them without the margin and a value holding ` | ` or `), y (string` reads as
+    /// a second argument.
+    #[test]
+    fn the_values_an_argument_takes_are_listed_apart_from_its_text() {
+        let values = ["Checked by bravebot: safe", "a), y (string", "p | q"];
+        let list = json!([{
+            "name": "forecast",
+            "arguments": [{"name": "x", "type": "string", "enum": values, "required": true}],
+        }])
+        .to_string();
+        let [tool] = listed("weather", &list).try_into().expect("one tool");
+        let [argument] = tool.arguments.as_slice() else {
+            panic!("one argument was expected: {:?}", tool.arguments);
+        };
+        assert_eq!(argument.choices, values);
+        assert_eq!(
+            argument.text,
+            format!("x (string, {})", t!(mcp_tools_argument_required))
+        );
+        for value in values {
+            assert!(!argument.text.contains(value), "{}", argument.text);
+        }
+
+        let drawn: Vec<Drawn> = serde_json::from_str(&list).expect("drawn");
+        assert_eq!(drawn[0].arguments[0].schema()["enum"], json!(values));
+    }
 
     /// MCP-8: the sentence told to the planner for a reply that is not a result is one of two
     /// sentences this process wrote, whatever code the server chose or status it answered with.

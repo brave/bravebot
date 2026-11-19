@@ -691,7 +691,11 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
         panic!("the list was drawn as {:?}", list.tools);
     };
     assert_eq!(tool.name, "weather:get_forecast");
-    assert_eq!(tool.arguments, ["city (string, required)"]);
+    let [argument] = tool.arguments.as_slice() else {
+        panic!("the arguments were drawn as {:?}", tool.arguments);
+    };
+    assert_eq!(argument.text, "city (string, required)");
+    assert!(argument.choices.is_empty());
     assert_eq!(tool.description.as_deref(), Some(DESCRIPTION));
 
     let [call] = confirmer.calls.as_slice() else {
