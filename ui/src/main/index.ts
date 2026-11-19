@@ -29,7 +29,7 @@ import { forgetFork, forks, noteFork } from './forks'
 import {
   bot,
   bots,
-  ensureHome,
+  ensureBotHome,
   worksIn,
   ground,
   memory,
@@ -46,13 +46,13 @@ import {
   readBotServers,
   saveBotServers,
   saveForm,
-  migrateBot,
-  owesCarryOver,
+  carryStillOwed,
+  definitionForTurn,
   carryOverPrompt,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { botFolders, isBotModel, isServerSelection, type Bot } from '../shared/bots'
+import { botFolders, isServerSelection, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, noteAnsweredFolders, open as openInApp, preview, search, chooseAttachments, chooseFolder, attachmentPaths } from './files'
@@ -85,7 +85,7 @@ import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
 import { faultReporter } from './window-fault'
-import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
+import { editMemory, memoryHistory, snapshotMemory, tidyMemory } from './memory'
 import { forgetSummons, noteTurnEnded, summons } from './summons'
 import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
 
@@ -253,21 +253,35 @@ async function sendBotTurn(
   const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
-  // The folder the agent confirmed this session runs in, never one the window named. A bot only
-  // works where `worksIn` allows, because grounding seeds a file there.
+  // The folder the agent confirmed this session runs in, never one the window named.
   const folder = rootForSession(session)
-  if (!worksIn(held, folder)) {
+  let allowed = false
+  try {
+    allowed = await worksIn(held, folder)
+  } catch (error) {
+    return { error: { code: 'internal', message: String(error) } }
+  }
+  if (folder === undefined || !allowed) {
     return { error: { code: 'not_this_bots_folder', message: `${held.name} has not been given this folder` } }
   }
 
-  // A bot made before definitions is given one first, and its old memory is recorded as untrusted
-  // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
-  // of a bot whose notes are not yet recorded.
-  const owes = owesCarryOver(held, folder)
-  try {
-    held = await migrateBot(held, (method, params) => bridge!.request(method, params))
-  } catch (error) {
-    return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+  // A bot that already has a definition is sent as it is. Asking the module again would take the
+  // lock and, if that wait failed, refuse the turn as a migration that this bot does not need.
+  let owes = false
+  if (held.definition === null) {
+    // A bot made before definitions is given one first, and its old memory is recorded as untrusted
+    // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
+    // of a bot whose notes are not yet recorded. The carry-over is the answer from before that.
+    try {
+      owes = await carryStillOwed(held.slug, folder)
+    } catch (error) {
+      return { error: { code: 'internal', message: String(error) } }
+    }
+    try {
+      held = await definitionForTurn(held.slug)
+    } catch (error) {
+      return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+    }
   }
   botHandles.set(session, held.slug)
   if (owes) owedCarryOver.add(session)
@@ -344,14 +358,15 @@ function summonedTurn(
       folderOf: rootForSession,
       ownerOf: async (handle, folder) => botHandles.get(handle) ?? (await bots()).find((each) => each.home === folder)?.slug,
       adopt: (handle, slug) => { botHandles.set(handle, slug) },
-      migrate: migrateBot,
-      host: async (handle, slug, folder, request) => {
+      migrate: async (held) => (held.definition !== null ? held : definitionForTurn(held.slug)),
+      host: async (handle, slug, folder) => {
         const held = await bot(slug)
         if (!held) return null
+        if (held.definition !== null) return held
         // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
         // are asked about once the turn that gave the bot one has ended.
-        const owes = owesCarryOver(held, folder)
-        const migrated = await migrateBot(held, request)
+        const owes = await carryStillOwed(slug, folder)
+        const migrated = await definitionForTurn(slug)
         if (owes) owedCarryOver.add(handle)
         return migrated
       },
@@ -758,7 +773,7 @@ app.whenReady().then(() => {
     if (method === 'session.new' || method === 'session.open') {
       const directory = (params as { directory?: unknown } | null)?.directory
       const owner = (await bots()).find((each) => each.home === directory)
-      if (owner && !ensureHome(owner)) {
+      if (owner && !(await ensureBotHome(owner.slug))) {
         return { error: { code: 'bad_request', message: `could not make the folder for ${owner.name}` } }
       }
     }
@@ -960,8 +975,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
     const held = await bot(slug)
-    if (!held || !isBotModel(model)) return null
-    return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
+    if (!held || (model !== null && typeof model !== 'string')) return null
+    return saveBotModel(held.slug, model)
   })
 
   // The window names a bot and a selection; the definition is the row's, so no window chooses which
@@ -979,15 +994,8 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {
-    // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
-    // field on this channel that decides where files land, and the check that it is a folder
-    // somebody opened belongs beside the code that writes there.
-    // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8), and editing one
-    // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
-    // agent does, and `saveFormBot` keeps the name it answers with. Saves run one at a time.
-    const next = await saveForm(value, bridge ? (method, params) => bridge!.request(method, params) : null)
+    const next = await saveForm(value)
     if (!next) return null
-    ensureHome(next)
     offerDirectories(botFolders(next))
     return next
   })
@@ -996,15 +1004,13 @@ app.whenReady().then(() => {
   // definition stays exactly as it was, which is what lets the same session, the same memory and
   // the same face come back together when somebody brings it out again.
   ipcMain.handle('bravebot:bots:retire', async (_event, slug: unknown, retired: unknown) => {
-    if (typeof retired !== 'boolean') return null
     return retireBot(slug, retired)
   })
 
+  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
+
   ipcMain.handle('bravebot:bots:remove', async (_event, slug: unknown) => {
-    const held = await bot(slug)
-    if (!held) return null
-    if ([...botHandles].some(([handle, owner]) => owner === held.slug && runningHandles.has(handle))) throw new Error('Stop this bot’s running conversations before deleting it.')
-    // The definition and app-owned memory copies go. Its session is a session like any other and stays
+    // The definition, the sessions, and the memory files stay, and `bot.delete` removes the history folder. Its session is a session like any other and stays
     // in the agent's own store, and its memory is a file in somebody's checkout that this app did
     // not put there on its own account. Deleting either would make a bot's removal a destructive
     // act, which is not what removing a row from a list looks like.
@@ -1015,13 +1021,10 @@ app.whenReady().then(() => {
     // there, a second deliberate step. The guarantee is the interface's rather than this
     // channel's, and it stays that way on purpose — the demo tears its own bots down through
     // here, and a bot made by a script is a bot a script should be able to take away.
-    await removeBot(held.slug)
-    await removeMemoryHistory(held.slug)
-    return held.slug
+    return removeBot(slug, botRunning(slug))
   })
 
   // Each names a folder, which is checked against the folders this process recorded for the bot.
-  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
   ipcMain.handle('bravebot:bots:memory', async (_event, slug: unknown, directory: unknown) => {
     if (!botRunning(slug)) await tidyMemory(slug, directory)
     return memory(slug, directory)

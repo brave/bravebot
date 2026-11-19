@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 mod accounts;
 mod attachments;
+mod bots;
 mod completion;
 mod editing;
 mod entry;
@@ -704,6 +705,9 @@ pub struct Session {
     /// runs applies to what it starts after that (SANDBOX-22). Moved only with `sandbox`, by
     /// [`Session::set_sandbox_mode`] and [`Session::with_sandbox`].
     live_sandbox: bravebot_agent::LiveSandbox,
+    interface_layout: crate::layout::Layout,
+    bots: crate::bots_pane::State,
+    without_a_session: bool,
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
@@ -1498,6 +1502,9 @@ impl Session {
             laid: Laid::default(),
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
+            interface_layout: crate::layout::Layout::default(),
+            bots: crate::bots_pane::State::default(),
+            without_a_session: false,
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,
@@ -4459,6 +4466,10 @@ impl Session {
     }
 
     pub fn note(&mut self, message: impl Into<String>) {
+        if self.without_a_session {
+            self.bots.say(message.into());
+            return;
+        }
         self.transcript.push(Entry::system(message));
     }
 

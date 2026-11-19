@@ -7,14 +7,17 @@ evidence, and this file is updated when a change materially moves the status bel
 
 ### Status
 
-The design is proposed and waits for a design pull request. Slice 1 is built on the branch
-`bots/slice-1-rows-module`, stacked on the design branch, and waits for a pull request. No other
-slice exists. The design is [design/bots-layer.md](design/bots-layer.md) and the clauses are
-[specs/bots.md](specs/bots.md), which is `proposed`. The clauses and the slices below agree with the
-design.
+The design is merged. Slice 1 is merged. Slice 2a is on `bots/slice-2a-layouts`, rebased onto
+main. Slice 2b is on `bots/slice-2b-layout`, rebased onto slice 2a. Slice 3a is on
+`bots/slice-3-operations`, rebased onto slice 2b. Slice 3b is on `bots/slice-3b-archive`, rebased
+onto slice 3a. Slice 3c is on `bots/slice-3c-record`, rebased onto slice 3b. Slice 4 is on
+`bots/slice-4-form`, rebased onto slice 3c. Slice 5 is on `bots/slice-5-turn`, rebased onto
+slice 4. Slices 6 to 11 are not on this branch. The design is
+[design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
+which is `proposed`. The clauses and the slices below agree with the design.
 
 Slice 1 reads and writes the rows through the `bots` module of `bravebot-agent` and the bridge
-methods `bot.list` and `bot.replace`, which the graphical user interface calls with the folder
+methods `bot.list` and `bot.replace`, which the graphical user interface (GUI) calls with the folder
 Electron gives it as `dataFolder` on each request. The bridge takes the folder on each request
 because starting the bridge with a flag would need the same flag pinned in both programs that start
 it. A write of more than 100 rows through `bot.replace` is refused and writes nothing. The
@@ -26,10 +29,377 @@ still written while the problem is shown.
 
 Slice 1 does not change what the interface does at the ceiling. Its make still cuts the list to 100
 rows, dropping the slug that sorts last, before it calls `bot.replace`, so the refusal at 100 rows
-that the module makes is reached from the interface in slice 3. The rows the bridge returns carry no
+that the module makes is reached from the interface in slice 3a. The rows the bridge returns carry no
 `remembered` or `quiet` field, so slice 1 already stops persisting them. `noteBotMemory`,
 `keepingMemoryMark`, `nudgeDue`, `noteBotNudged` and `QUIET_MAX` in `ui/src/main/bots.ts` run on a
 count of zero until slice 6 removes them.
+
+Slice 2a adds `crates/tui/src/layout.rs`. `Layout` has one value, `default`, and answers what the
+interface draws to the right of the chat (`right_column`) and which keys it claims before the prompt
+reads them (`claims_key`, which claims none). The info panel is that right column: `draw_frame` in
+`render.rs` draws it where the layout says, and `panel::shows_context` asks the layout. `run` in
+`crates/tui/src/app.rs` is a loop over the phases in `crates/tui/src/app/phase.rs`. What follows a
+session is a pure function that tests pin. A manifest record begins no session.
+
+The slice differs from its text. The getter on `Session` is `interface_layout`, because `Session`
+already has a `layout` field for the transcript. The phase types are in `app/phase.rs`. The
+layout's claim is consulted last in `claimed_by_a_mode`, so every existing mode keeps its
+precedence, and slice 2b pins whichever order it chooses. `run` creates `Layout::default()` and
+carries it on `Startup`, and `new_session` applies it with `Session::in_layout`. `--resume` and
+`--from-pr` are not a phase with no session: main opens the Sessions screen over a new session, and
+`resume::choose` is gone, so leaving that screen stays in the session. The phase with no session
+arrives with the bots screen in slice 2b. Three places still decide from the terminal width and the
+session's panel flag and are not behind the layout: `Session::toggle_panel`, `Session::toggle_files`
+and the panel hint in `render/hint.rs`. Slice 2b's entry below says what it does about them.
+
+In a real terminal the first frame, which is the question whether to trust the directory, is
+byte-identical to the base's at 80, 100 and 140 columns. The opening screen draws an animated mascot
+whose face differs on each run, including between two runs of the base, so the screen after the
+answer is not byte-identical. Every cell that differs from the base's lies in the mascot's rows and
+columns, and no other cell differs. The `run` loop has no unit test. The real-terminal run and the
+tests of the pure transitions cover it.
+
+Slice 2b adds the second layout, `Layout::Bots`, and the pane of `crates/tui/src/bots_pane.rs` that
+lists the bots. The pane reads them with `bravebot_agent::bots::list` and never through the bridge. It
+draws each bot's face with `avatar::rows`, as the opening screen does, and draws the bot's name and
+purpose after `render::printable` replaces control characters. A seed with a control character draws a
+face and no text. The empty list, a file that does not parse and a file with dropped entries each draw
+one line under the list. `--layout <name>` is `Start::Layout` and `/layout <name>` is
+`Action::Layout`. A session ends into the phase with no session through `Held::leave_for_layout`, which
+hands the workspace and sandbox on in `LayoutChange`, and `Phase::after_a_session_chose_a_layout`
+returns `Screen::Bots` carrying the session left behind, so the interface's exit line and `--resume`
+find it. `/layout default` from that screen begins a fresh session. The screen is a `Session` with
+`without_a_session` set, drawn by `render::draw_without_a_session` and driven by
+`app/bots_screen.rs`, so the prompt box, its editor and the Ctrl-C ladder of
+[INPUT-4](specs/terminal-input.md#INPUT-4) are the ones a session has. The cases of that ladder that
+concern an idle prompt box run on this box: Esc on a typed line and on an empty one, the first Ctrl-C
+with and without a line, the second press, a key or other input between the two presses, two interrupts
+or two end-of-transmission bytes in one read, a refused way out, a release of the keys, and Ctrl-D. The
+cases about a turn, a summary, an aside, a goal check or a running command do not apply, because the
+screen has none of them. The hooks `session-started` and `session-ended` fire on the session path only,
+so a bots layout opened and left with no session fires neither.
+
+The slice differs from its text in these places:
+
+- `Phase` carries no layout and `event_loop` does not return one. `event_loop` takes a second
+  out-parameter, `layout_change`, beside `switch`, because `Switch` and `Phase::Session` are matched
+  by existing tests whose shape does not change. The layout is on `Screen::Bots`, the only screen of
+  the bots layout, and `Phase::Session` always begins the default layout. A session in the bots
+  layout begins in slice 7.
+- The slice is one commit and ships alone, with `/layout` in the slash menu and the line about a later
+  release on Enter. The owner decided this on 2026-10-29.
+- In the phase with no session the `?` list and the slash menu offer only what the phase takes:
+  `/layout`, leaving, the help and, at 100 columns or wider, the panes chord. The owner decided this on
+  2026-10-29.
+- `/layout` is refused in a session addressed to a definition the next session would not keep, as
+  `--layout` is refused with `--agent`. The owner decided on 2026-10-29 to refuse it in an `--agent`
+  session. The check is the session's standing definition, which a recorded definition also sets, and the
+  session does not tell those two apart, so `/layout` is refused for both. A definition chosen by the
+  `agent` setting is kept by the next session, so `/layout` is carried out there.
+- `/layout` is carried out as it is typed so that it can refuse mid-turn, and is never queued. That
+  adds it to the list of commands that skip the queue, so the one existing test
+  `only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue` gained one entry,
+  with the owner's approval on 2026-10-27. No other existing test changed.
+- `/layout` keeps the sandbox mode and the Model Context Protocol (MCP) servers the earlier session started, as `/resume` and
+  `/clear` keep them, and drops the transcript, what the session read and the workspace's session
+  grants and answers. [BOT-17](specs/bots.md#BOT-17) is reworded to say so. The owner decided this on
+  2026-10-27.
+- `--layout bots` runs the same startup as a bare start before the screen opens: it reads the
+  settings of the directory, builds the workspace, asks about the MCP servers that checkout requests
+  and starts the approved ones. [BOT-9](specs/bots.md#BOT-9) says opening the bots layout asks nothing
+  about the current directory, which holds for the trust question and not for this one. The owner
+  decided on 2026-10-27 to accept it and record it. Starting no server for `--layout bots` needs
+  startup to move to the point a session begins, and the design pull request settles it.
+- The plan's text listed four conditions that refuse `/layout`. [BOT-17](specs/bots.md#BOT-17) lists
+  six. The slice refuses on a turn running, a question waiting, lines queued, a `/loop`, `/goal` or
+  `/after` pending, and an incognito run. The two that need slice 4, an open form and an open
+  confirmation, are added in that slice.
+- `--layout` is refused with every flag and command BOT-17 lists, including `--layout default`, which
+  is accepted only on a bare start of the interface. The shell completion scripts name `--layout`.
+- Enter on a bot says "Starting a session as a bot arrives in a later release." under the list and
+  begins no session. The pane moves a selection through the list, and Enter confirms it with that
+  line. Tab moves nothing while one pane is drawn.
+- The action `panes` moves focus between the prompt and the panes. Its default chord is `alt-p` and a
+  settings file can move it ([INPUT-32](specs/terminal-input.md#INPUT-32), which now says seventeen
+  chords where the session can be suspended and sixteen where it cannot). The panel chord is taken
+  and does nothing in the bots layout: it opens and closes nothing and saves nothing. `/panel` and
+  `/files` are refused with a line, and the hint line does not name the panel chord. The owner decided both on 2026-10-27, after `alt-l` was found to contest an
+  existing test that moves the `watch` action to it. Any person whose settings file already gives
+  `alt-p` to another action gets that action back on its default, as every contested chord does.
+- A layout's claim is consulted last in `claimed_by_a_mode`, so a picker, a delegate view, the
+  scroller or a history search that is open keeps its keys. Tests pin this through `handle_key` and
+  `handle_key_while_working`. Esc no longer stops a turn while the panes hold focus.
+- The pane draws the rows in the order the module returns them, which is file order, and marks no
+  archived row. [BOT-3](specs/bots.md#BOT-3) and [BOT-17](specs/bots.md#BOT-17) say the layout lists
+  archived bots after the bots in use, most recently archived first. That order depends on each
+  row's `retired` field in a file any process can write, so the slice does not apply it. The owner
+  decided on 2026-10-27 to draw as the module returns and to record the gap. The design pull request
+  settles the sentence or the pane changes.
+- The text of the empty line, "No bots yet. Make one in the desktop app, and it is listed here.", and
+  of the line about width are the slice's own wording, since BOT-17 fixes only what each says.
+
+What slice 2a left for 2b is done. The layout carries a phase through `Screen::Bots`,
+`Session::toggle_panel`, `Session::toggle_files` and the panel hint ask the layout, and the order of
+the claim is pinned.
+
+What later slices do. Slices 3a to 3c change nothing in the terminal. Slice 4 inherits a pane that lists rows
+read once when the screen opens, so it has to reread them after a write. The `y` that agrees to an
+archive and the line under the list for a failed write are slice 4. Tab between panes needs a second
+pane. The session that Enter on a bot begins is slice 7. The `bots-none` line names the desktop app and
+changes when the terminal can make a bot.
+
+Rebased onto main. `MOVABLE` is 16 where the session can be suspended and 15 where it cannot:
+upstream already had `todos` and `outputs`, and this slice adds `panes` on `alt-p`. `Start` has
+`Prefilling`, which `begin_session` and `beginning_of` match beside `Start::Layout`. `--resume` opens
+the Sessions screen over a session, so the bots layout is the phase with no session. `/diff` is the
+command that opens the files state, and the bots layout refuses it the way it refuses `/panel`.
+`commands()` returns a vector, and the completion flag list has 57 entries, including `--layout`.
+
+The owner cut slice 3 into three on 2026-11-02. Slice 3a adds `crates/agent/src/bots/operations.rs` to
+the module `bots` of `bravebot-agent`, with `make`, `edit`, `set_model` and `ensure_home`, and the
+bridge methods `bot.make`, `bot.edit`, `bot.set_model` and `bot.ensure_home`. The methods are in
+`DENIED`, so the window cannot send them. Each of the first three is one read-modify-write under the
+lock on `bots.json.lock`. A make composes the slug from the name ([BOT-2](specs/bots.md#BOT-2)),
+refuses at 100 rows before it writes anything, writes the definition with `make_definition` and then
+the row. An edit and a change of model rewrite the definition with `redefine` and then write the
+row, and an edit of a bot with no definition writes the row only. Each stamps `updated`. A make and
+an edit make the home folder with mode 0700 after the row is saved, and `ensure_home` makes the folder
+the row names, for a conversation started or reopened in it. In the GUI, `bravebot:bots:write`,
+`bravebot:bots:model` and the home folder made for `session.new` and `session.open` call the
+bridge methods. `botFromForm`, `saveFormBot`, `ensureHome`, `botHome`, `slugFor` and `isBotModel` are
+deleted, with the two test cases in `bot-model.test.mjs` that pinned `isBotModel` and `slugFor`. The
+methods `bot.replace`, `bot.define`, `bot.redefine` and `bot.migrate` stay. The tests that pinned
+the deleted TypeScript (`bot-model.test.mjs`, `bot-directory.test.mjs`, `bot-store.test.mjs` and
+`session-directory.test.mjs`) are ported to the methods that replace it, and the shared fake
+`ui/scripts/fake-bots.mjs` answers the four methods. `ui/scripts/bot-operations-bridge.test.mjs` runs
+the GUI's calls through the real `bravebot-rpc`.
+
+The evidence for slice 3a is in the pull request description: the scenarios run in the desktop app and the terminal, the test counts, the mutation results, the critiques and their answers, and what was not run. The plan does not repeat them.
+
+Slice 3a differs from its text in these places:
+
+- The plan's text puts the module code in `bots.rs`. It is in `bots/operations.rs`.
+- `bravebot-agent` has no logging dependency and none was added, so the operations log nothing and
+  report through their return values.
+- `make` checks for an incognito run and for a state folder before it validates the form.
+- `MakeRefused::Io` carries no path, so a failed write of a definition at make names
+  `<state directory>/agents`.
+- An edit that changes only the name is refused when the row's definition file was removed by hand,
+  as the GUI's edit was.
+- The GUI's `botHome` export in `ui/src/main/state.ts` is deleted, since nothing else uses it.
+- `slug_for` numbers upward without the GUI's fallback to `Date.now()` after 999. With at most 100
+  rows the fallback cannot be reached.
+- The GUI's make, edit and change of model share one queue with `updateBots`, so a make or an edit
+  cannot interleave with a read followed by `bot.replace`.
+- A read made outside the lock, then a write of the whole list, remains for the row write of
+  `migrateBot` and the counter writes. Slice 3c records a conversation, an archive length, a
+  released session and a forgotten conversation under the lock. The owner left the other writes on
+  `bot.replace` on 2026-11-06. A program that writes between that read and the replace can lose its
+  row.
+- [BOT-6](specs/bots.md#BOT-6) and [BOT-7](specs/bots.md#BOT-7) name tests for the part 3a builds,
+  as [BOT-2](specs/bots.md#BOT-2) to [BOT-5](specs/bots.md#BOT-5) do under the owner's answer of
+  2026-10-29, so they are not in `agents/unverified-clauses.txt`. The owner confirmed on 2026-11-05
+  that this applies to BOT-6 and BOT-7, with each later slice adding its tests to the same clauses.
+  The parts of their text for the terminal's form, archive, restore, delete and migrate stay
+  untested until their slices.
+- A bot made after the read dropped a row takes that row's slug and home folder, because the set of
+  slugs taken holds only the rows kept. The new bot shares the memory files in that home folder
+  with the dropped row's bot, as it does in the GUI today. The next write removes the dropped row, as
+  [BOT-3](specs/bots.md#BOT-3) says.
+- `edit`, `set_model` and `ensure_home` refuse a data folder that cannot be text, as `make` does.
+- `bot.make` and `bot.edit` refuse a null for the name, the purpose or the avatar with `bad_request`.
+- The GUI's model handler no longer checks the model in TypeScript. `isBotModel` is deleted, with its
+  test case ("IPC model validation accepts opaque IDs and rejects malformed inputs"). The rule of the
+  module decides, and the agent's refusal reaches the person with its reason.
+- A refusal with the code `bad_request` no longer sets the persistent bots problem, since it is about
+  what was asked for and not about the file.
+- `make_home` makes nothing for a home that is not absolute for the current system, such as
+  `C:\Users\x\bot-homes\dev` on Linux, and reports that the home was not made. `mkdirSync` in the
+  GUI's `ensureHome` made a relative folder for it.
+- `chooseModel` in `ui/src/renderer/App.tsx` shows a refusal of the model with `setProblem` and
+  reads the bots again. A later success clears the banner before the read, and a resolved null is
+  shown as a missing save. A refusal reaches it now because the module's rule decides the model.
+  The transcript no longer takes `onBotModel`, so the call sits in `chooseModel`.
+
+Slice 3b adds `archive`, `restore` and `delete` to the module in `crates/agent/src/bots/operations.rs`.
+Archive sets `retired` to the time of that archive, including when the bot is already archived.
+Restore sets `retired` to zero, including when it is already zero. Each of those writes sets
+`updated` to the time of the write and leaves every other field as it was. The definition file is
+not opened for write. Delete checks the slug with `is_slug` before any path is composed from it. A
+value that is not a slug removes nothing, and a slug that has no row removes nothing, including no
+folder. When the row exists, delete removes the folder `<data folder>/bots/<slug>` and then the row,
+and the lock is held across both. The row is written only after the folder removal succeeds, so a
+list cannot observe a deletion that is then reverted. A list during the removal still sees the row.
+A replace of that list after the delete puts the row back, and the folder is already gone. That is
+the replace race for a read made outside the lock, then a write of the whole list. Slice 3c leaves
+the writes that still go through `bot.replace` on that path.
+A list taken before the delete starts ends the same way. One desktop process does not read during
+its own delete, because that read shares the queue with the delete and runs after the delete returns.
+A missing folder is success. If the folder
+cannot be removed, the bots file is left as it was and the error names that folder. The removal is recursive and does not read the folder to decide what to
+remove. The module's delete does
+not check `retired` and does not know about turns. The bridge methods are `bot.archive`,
+`bot.restore` and `bot.delete`. They are in `DENIED`, so the window cannot send them. Each request
+carries `dataFolder` from the folder Electron names, as `bot.make` does. In the GUI,
+`bravebot:bots:retire` is still `(slug, retired)`. `retired === true` calls archive and
+`retired === false` calls restore. A `retired` that is not a boolean returns null and calls nothing.
+`bravebot:bots:remove` is still `(slug)`. A delete while a turn of that bot is in progress in this
+program is refused from the desktop's turn table, before the list is read, with the error text the
+handler already uses, and on that refusal nothing is removed. That check stays in the desktop,
+before any bridge delete. Archive, restore and delete run
+on the same queue as `updateBots`. `retireBot` and `removeBot` no longer write the row through
+`saveBot` or `updateBots`. `removeMemoryHistory` stays, because other callers use it, and the delete
+path does not call it. `saveBot`, `updateBots`, `bot.replace`, `bot.define` and `bot.redefine` stay.
+Slice 3b adds no dialog, and the renderer is unchanged. The terminal's confirmation of an archive or
+a delete, and its offer of delete only for an archived bot, are not built.
+
+Slice 3b is built on `bots/slice-3b-archive`. There is no pull request yet, so the evidence is the
+tests on that branch. The plan does not repeat them.
+
+What slice 3c inherits. The owner left the row write of `migrateBot` and the counter writes of
+`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` on `bot.replace`, and left `bot.define`
+and `bot.redefine` in place. Slice 5 still owns the migration's row write. Slice 6 still removes
+the counters.
+
+Slice 3c adds `record_conversation`, `record_archived`, `release_session` and `forget_conversation`
+to the module in `crates/agent/src/bots/operations.rs`. Each is one read-modify-write under the lock
+on `bots.json.lock`, on the same path as `archive`, and none of them rewrites the definition.
+Recording a conversation sets `session` to the given identifier and adds the id and directory to
+`conversations` when that pair is absent. A second note of the same pair still writes and stamps
+`updated`. Recording an archive length raises `archived` only when the value is a finite integer in
+the range the row parser accepts and is strictly greater than the stored length. The comparison is
+under the lock. Releasing a session sets `session` to none and `archived` to zero and keeps the
+conversations entry. A second release writes nothing. Forgetting a conversation removes that id and
+directory from every row that lists the pair, and sets `session` to none and `archived` to zero on
+a row whose `session` equals that id. Directory is not part of that comparison. A row that does not
+change keeps its `updated`. When an operation changes nothing, the file is not written, and that answer does not clear a
+failure already shown. When the row exists, a session that is not an identifier, or a directory
+that is not absolute, is refused and the file is left as it was. A missing row is not an error.
+The bridge
+methods are `bot.record_conversation`, `bot.record_archived`, `bot.release_session` and
+`bot.forget_conversation`. They are in `DENIED`, so the window cannot send them. Each request
+carries `dataFolder` from the folder Electron names. In the GUI, `noteBotSession`,
+`noteBotArchived`, `releaseBotSession` and `forgetBotConversation` call those methods through
+`writeThroughBridge`. `releaseBotSession` still returns before any bridge call when the slug is not
+a slug. The GUI does not read the list to compute the new row. `migrateBot`, `noteBotMemory`,
+`keepingMemoryMark`, `noteBotNudged`, `saveBot`, `updateBots` and `withBot` stay, and so do
+`bot.replace`, `bot.define` and `bot.redefine`. A search of `ui/src/main` still finds row writes
+outside the bridge, in `saveBot`, `migrateBot` and the counter writes. The terminal does not record
+a turn, does not continue a conversation from the layout, and has no delete of a conversation.
+
+The owner decided on 2026-11-06 that the row write of `migrateBot` and the counter writes of
+`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` stay on `bot.replace` until slice 5 and
+slice 6, and that `bot.define` and `bot.redefine` stay. `bot.replace`, `updateBots`, `saveBot` and
+`withBot` stay with them. The done-when that required `bot.replace` to be removed, and a search of
+`ui/src/main` to find no write of the rows outside the bridge, is not the done-when of this slice.
+
+Slice 3c is built on `bots/slice-3c-record`. There is no pull request, so the evidence is the tests
+on that branch. The plan does not repeat them.
+
+Slice 4 is built on `bots/slice-4-form`, stacked on `bots/slice-3c-record`. The branch is pushed
+and equals `2785e7695a70f6938ac760e516a6dda16ede79fc`. There is no pull request.
+The terminal makes, edits, archives, restores and deletes a bot from the list. The form and the
+confirmation live on `bots_pane::State`, beside the listing. A form is make or edit, with plain
+string fields, the active field and a cursor into that string. A confirmation is archive or delete,
+and it remembers the slug and the name it asks about. After a write the pane rereads with
+`bots::list` and shows `Refused`'s display under the list. A new phase, and reusing
+`Session::paste_text`, were rejected: the form is not the prompt box, and `paste_text` folds a long
+paste to a marker and strips invisible characters.
+
+With focus in the list, `n` opens the make form, including when the list is empty. `e` opens the
+edit form for the selected row. `a` opens the archive confirmation only when that row is not
+archived. `r` restores an archived row immediately. `d` opens the delete confirmation only when the
+row is archived, and otherwise shows a line that delete is only for an archived bot. Enter still
+shows the later-release line and starts nothing. These keys are the slice's choice. They are not an
+owner decision. Tab and Shift-Tab move between fields. Shift-Enter and Ctrl-J insert a newline in
+the purpose field only and do not save. Enter saves. Esc cancels, and a cancelled form keeps no
+draft. Archive and delete ask with `y` or `Y`. Any other key, Esc included, keeps the bot.
+
+The make form has name and purpose and no model field. The edit form has name, purpose and model,
+one field to a row, prefilled from the row. On 2026-11-06 the user decided that an empty model field
+clears the stored model. Absent means later turns use the configured default. A field that is empty
+after its blank characters are trimmed is sent as clearing the model. Any other text is sent as
+typed, in one `edit` with the name and the purpose, and the module refuses a bad one. A make passes
+no model and no avatar. The list stays in the order the module returns, which is file order, and an
+archived row has no mark.
+
+A paste into an open form that is drawn lands in the active field whole. It is not folded to a
+marker, and control characters stay in the saved string. They are drawn as pictures. Below 100
+columns a form is not drawn, keeps its text, and no key reaches it. A confirmation open when the
+width goes below 100 columns is cancelled with nothing done, when the frame width is applied.
+`/layout` is refused while a form or a confirmation is open, drawn or not, with a line saying to
+save or cancel it first, and that refusal ends nothing. The first Ctrl-C, only while the form or
+confirmation is drawn, closes a confirmation with nothing done and offers the way out, leaves a form
+that holds text open and offers the way out, and closes an empty form. The second press leaves by
+the existing ladder. Only Esc closes a form that holds text. The form keeps the active field, the
+other fields' labels, the key line and a refusal on screen, and draws only a window of a long
+purpose around the cursor. A confirmation stays drawn when the pane is short, so `y` is not
+answering a question that is off the screen. A paste follows focus. A make selects the new row.
+
+The automated tests are not a real terminal. These done-when cases were not run there: making a bot
+and seeing it in the desktop app after a restart, seeing an edit in that app, a second bot with the
+same name, the hundred and first bot, a null in the name or the purpose, a model over its bound or
+with a line break, a failed write, archive and delete waiting for `y`, delete not offered for a bot
+that is not archived, a make in a terminal started with `--incognito`, a long paste into the purpose
+field, narrowing below 100 columns with a form open and then widening, narrowing with a confirmation
+open, `/layout` while a form or a confirmation is open including a form the narrow terminal does not
+draw, the first Ctrl-C on a confirmation, on a form that holds text and on an empty form, and Esc on
+a form that holds text.
+
+Slice 5 is on `bots/slice-5-turn`, stacked on `bots/slice-4-form`.
+The module holds where a turn runs and the migration of a bot, and the GUI calls both through the
+bridge. `works_in` allows a turn only in the bot's home, a folder the row records a conversation
+in, or a folder the main process recorded from its own directory picker in this run. The path is
+compared as the system gives it. A trailing slash or a dot segment does not match. A home that is
+not a directory is refused, and a recorded folder or a folder opened in this run is not refused
+for that reason. A folder whose name is not text is refused. The check sends nothing.
+`sendBotTurn` still sends the turn, with the files and pastes staged for it, and it calls the
+check with the folder the agent confirmed for the session. A bot that already has a definition
+is not migrated on the way in, so a lock wait or a file the module cannot read does not refuse
+that turn as a failed migration. `mayOpenSessionIn` is not changed. A
+folder it accepts because the main process offered it is still refused for a turn.
+
+`migrate` reads the row under the lock on `bots.json.lock`, calls `migrate_definition` with the
+slug, the purpose, the model and the old memory folder taken from the row, and writes the name
+the agent answers with onto the row before it releases the lock. The old memory folder is the
+directory of the first conversation, or the home when there is none. A bot that already has a
+definition is returned as it is, and the agent is not asked. A failure, or a name that is not a
+slug, writes no row. A row write that fails after the definition file was created removes that
+file before the lock is released, so another process waiting on the lock does not see it, and
+the next attempt uses the same name instead of `<slug>-2`. If that removal fails, the error
+names the file and the next attempt takes the next name. A `create_new_file` whose write fails
+removes the file it created. If that removal also fails, the name stays taken. The
+untrusted-memory record stays, and writing it again does not add a second line. `owes_carry_over` is true only for a bot with no definition when the
+confirmed folder is that old memory folder. `sendBotTurn` asks it before the migration. The
+bridge methods are `bot.works_in`, `bot.migrate` and `bot.owes_carry_over`. They are in `DENIED`,
+so the window cannot send them. `bot.migrate` now does this row write. The earlier bridge method
+that only wrote the definition stays as `definitions::migrate` for the test that does not touch
+the row. The GUI no longer has `migrateBot`, `owesCarryOver` or `oldMemoryFolder`.
+
+Two shapes were rejected. The GUI still computing the old memory folder and passing it to
+`bot.migrate`, then writing the row with `bot.replace`, would leave that folder in the GUI and
+the row write outside the lock. One bridge method that both checked the folder and sent the turn
+would send from the check, and `sendBotTurn` would no longer be the send.
+
+What this slice does not do. Slice 6 still removes the briefing and the counters.
+`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` still write through `bot.replace`.
+`bot.replace`, `bot.define` and `bot.redefine` stay. A migration of a legacy row rewrites the row
+without `remembered` or `quiet`, because the module's row has neither field. The nudge is decided
+before that rewrite, and the turn is addressed to the definition, so the dropped fields are not
+what is sent. The terminal does not begin a session as a bot. Enter on a bot still says that
+starting a session comes in a later release, and begins none. A folder moved to with `/cd` is not
+part of this check, because no terminal session runs as a bot yet. The GUI's refusal line stays
+the one it already used: the bot has not been given this folder.
+
+BOT-9 leaves `agents/unverified-clauses.txt` because the folder rule this slice builds is pinned.
+The terminal's check of a folder moved to with `/cd` is still not built, and the by-construction
+line of BOT-9 says so.
+
+The desktop was not launched. These cases were not run there: a turn of a bot shown unchanged, a
+turn requested for a folder outside the three refused in the running app before it is sent, and a
+legacy bot's first turn migrated and answered on a live model. The automated tests pin the three
+folders, the migration's row write, and that the source of `sendBotTurn` names the folder
+refusal before `turn.send`. That last check reads the function's text. It does not call it.
 
 The order of the remaining work:
 
@@ -140,8 +510,8 @@ for bots, so each terminal function is in the bots layout.
      TypeScript computed, and switch the GUI's reading and writing of the rows to them, so the GUI no
      longer reads or writes the `bots` key of `bravebot-ui.json` ([BOT-4](specs/bots.md#BOT-4),
      [BOT-5](specs/bots.md#BOT-5)). Reads and writes change in the same slice, so the GUI and the
-     terminal never hold different stores. Slice 3 replaces the replace method with the module's
-     operations. The module moves the rows already in that key to the new file when
+     terminal never hold different stores. Slices 3a to 3c replace the replace method with the
+     module's operations. The module moves the rows already in that key to the new file when
      it does not exist. The GUI sorts the rows it draws with `localeCompare`, as it does today. The
      slice edits the `bravebot-agent` row of [layering.md](specs/layering.md) to name the module.
    - Done when a bot made in the GUI after this slice is in `bots.json`, is listed after a restart and
@@ -173,11 +543,11 @@ for bots, so each terminal function is in the bots layout.
      which the `--resume` picker becomes a screen of, so the seam carries real behaviour. The info panel's
      column is chosen through the layout. There is no visible change. [BOT-17](specs/bots.md#BOT-17)
      states the phases and the design has the transitions.
-   - Done when `cargo test -p bravebot-tui` passes unchanged and, in a real terminal, the first frame at
-     80, 100 and 140 columns equals main's, the panel is drawn at 100 columns and not below, `--resume`
-     with Esc begins a fresh session and with Ctrl-C begins none and fires no hooks, and `/resume` and
-     `/clear` behave as before. The
-     pull request describes where the seam falls in `crates/tui/src/app.rs`, `render.rs` and `keys.rs`.
+   - Done when `cargo test -p bravebot-tui` passes and, in a real terminal, the first frame at
+     80, 100 and 140 columns equals main's, the panel is drawn at 100 columns and not below, and
+     `--resume`, `/resume` and `/clear` behave as they do on main. `--resume` opens the Sessions
+     screen over a new session, so Escape stays in that session. The pull request describes where
+     the seam falls in `crates/tui/src/app.rs`, `render.rs` and `keys.rs`.
 2b. **The bots layout lists the bots in the terminal.**
    - Add the second layout of `bravebot-tui` ([BOT-17](specs/bots.md#BOT-17)) with a pane that lists
      the bots with their faces ([BOT-18](specs/bots.md#BOT-18)), reading them through the module, with the keys, focus, width rule and empty line of
@@ -192,11 +562,12 @@ for bots, so each terminal function is in the bots layout.
      face and no text.
      `/layout bots` ends the default session and `/layout default` returns to a fresh one, the ended
      session is found by `--resume`, and nothing the ended session read is in the new one. `/layout`
-     is refused while a turn runs, while a question waits, while lines are queued and in an
-     `--incognito` run (and, from slice 4, with a form or a confirmation open), and ends nothing when refused. `--layout` is refused, naming both flags, with
+     is refused while a turn runs, while a question waits, while lines are queued, while a `/loop`,
+     `/goal` or `/after` is pending, in a session addressed to a definition from `--agent` or a record and in an `--incognito` run (and, from slice 4, with a form or a
+     confirmation open), and ends nothing when refused. `--layout` is refused, naming both flags, with
      each flag and command [BOT-17](specs/bots.md#BOT-17) lists, in a test that reads the command
      line's own lists of one-shot flags and of commands that start no session, and `--layout default`
-     is the same as no flag. In the bots layout `/branch`, `/resume`, `/manifest` and `/panel` are
+     is the same as no flag. In the bots layout `/branch`, `/resume`, `/manifest`, `/panel` and `/files` are
      refused, the layout draws no info panel, and each pane it draws is a pane for the selection of
      [MOUSE-1](specs/mouse.md#MOUSE-1), whose list gains them. The no-session phase draws the prompt box,
      which takes `/layout`, the key help and quitting and follows [INPUT-4](specs/terminal-input.md#INPUT-4):
@@ -204,49 +575,88 @@ for bots, so each terminal function is in the bots layout.
      and a second press leaves, and Esc at the top level of a pane returns focus to the prompt. The phase
      starts with focus in the bots list. The tests of INPUT-4's ladder run on this box. At 80 columns `--layout bots` draws the prompt box and the
      line about width with focus in the prompt box, `/layout default` and the quit ladder work, and at 100
-     columns the list is drawn. Verified with `cargo test -p bravebot-tui` and
+     columns the list is drawn. A mode open over the session (the picker, a delegate view, the
+     scroller, a history search) is tested against the bots layout's claim through both `handle_key`
+     and `handle_key_while_working`, pinning whichever order 2b chooses, since 2a leaves the claim
+     last and no test can see the order with one layout. A refused `/panel` or `/files`, and the
+     panel chord where it is refused, leave the panel flag and the saved panel preference unchanged
+     (`Session::toggle_panel` writes it with `bravebot_session::store::save_panel`), and the hint in
+     `render/hint.rs` does not offer a chord the layout refuses. [BOT-17](specs/bots.md#BOT-17) does
+     not say what the panel chord (`bindings().is_panel`, reached from `navigate` and `files_key`)
+     does in the bots layout, so 2b decides it and writes it into BOT-17 in the same change. 2b adds
+     the layout to `Phase` and to what `event_loop` returns, so `/layout` can end a session into the
+     no-session phase of another layout. Verified with `cargo test -p bravebot-tui` and
      `make check-spec`.
-3. **The module holds the row operations, and the GUI calls them through the bridge.**
-   - The GUI's TypeScript stops computing the rows. Each operation below becomes the module's, and the
-     replace method of slice 1 is removed.
-   - Add the writes to the module: the slug
-     composition, the ceiling, and the operations of [BOT-7](specs/bots.md#BOT-7) and
-     [BOT-8](specs/bots.md#BOT-8) (make, edit, set the model, archive, restore, delete, forget a
-     deleted conversation, record a conversation, record the archive length, release a session), with
-     the definition written first through `make_definition` and
-     `redefine`, `updated` stamped on every write, `retired` stamped on each archive, and an edit of a
-     bot with no definition writing the row only.
+3a. **The module makes, edits and sets the model of a bot and makes its home folder, and the GUI calls
+   them through the bridge.** Built. The Status above describes it.
+   - Add the writes to the module: the slug composition, the ceiling, and the operations of
+     [BOT-7](specs/bots.md#BOT-7) that make a bot, edit it and set its model, each one read-modify-write
+     under the lock, with the definition written first through `make_definition` and `redefine`,
+     `updated` stamped on every write, and an edit of a bot with no definition writing the row only.
    - Add the making of a bot's home folder to the module, with mode 0700
      ([BOT-4](specs/bots.md#BOT-4)), made on a make, on a save from the form and when a conversation
      is started or reopened in it, and the first-run rules of that clause: the folders and the file
      are made by the first bot, and a write is refused where `home::writable()` names no folder.
-   - Add the bridge methods and keep them out of the window's list
-     ([BOT-6](specs/bots.md#BOT-6)). Switch the GUI's make, edit, set the model
-     (`bravebot:bots:model`), archive, restore and delete, its `noteBotSession`, `noteBotArchived` and
-     `releaseBotSession`, and its making of the home folder, to the bridge through its existing handlers, with no dialog. The GUI writes no `bots` key of
-     `bravebot-ui.json` after this.
+   - Add the bridge methods `bot.make`, `bot.edit`, `bot.set_model` and `bot.ensure_home` and keep them
+     out of the window's list ([BOT-6](specs/bots.md#BOT-6)). Switch the GUI's make, edit, set the model
+     (`bravebot:bots:model`) and its making of the home folder to the bridge through its existing
+     handlers, with no dialog, and delete the TypeScript they used (the slug composition, the form's
+     validation, the calls that write a definition and the making of the home folder). The methods
+     `bot.replace`, `bot.define`, `bot.redefine` and `bot.migrate` stay.
    - Done when, in the GUI, a bot made with a name and a purpose is listed after a restart, the
      definition file exists first with the purpose as its body, an edit rewrites the definition, a
-     refused definition writes no row, a bot made with a taken name has the slug `<slug>-2` and its
-     own definition, and a delete leaves the definition, the sessions and the memory files and removes
-     the row and the folder `<data folder>/bots/<slug>` and no other folder. The hundred and first
-     bot is refused with every row kept, rows are written in the byte order of the slug, and a
-     name or purpose with a null character and a model over its bound or with a line break are refused. An edit of a bot
-     with no definition writes no definition, a failed write of the file is shown with its path, an
-     edit remakes a home removed by hand, every write stamps `updated`, and archiving an archived bot
-     stamps `retired` again. A delete of a bot with a turn in progress in the GUI is refused. With
-     no `~/.bravebot` and no data folder, the first bot made makes both with mode 0700, the file and
-     the home folder. A make is refused, naming the path, while a `bravebot-ui.json` that does not
-     parse exists and no `bots.json` does. A write interrupted before the rename leaves the file as it
-     was, two writers at once lose no row, a lock held by a program that stopped is released, and a
-     write that waits past the limit for a held lock is refused naming the lock file. The form refuses a name or purpose with a null character,
-     the form's Save button and the details pane's save on leaving a field are unchanged, a turn that
-     ends in the GUI records its conversation and the archive's length through the bridge, a turn
-     that ends in the home folder at a numbered prompt sets `lastHome` and a turn that ends
-     elsewhere leaves it, a
-     search of `ui/src/main` finds no write of the rows outside the bridge, and a test pins that the
-     methods are absent from the window's list.
-4. **The terminal makes, edits, archives, restores and deletes a bot.**
+     refused definition writes no row, and a bot made with a taken name has the slug `<slug>-2` and its
+     own definition. The hundred and first bot is refused with every row kept, rows are written in the
+     byte order of the slug, and a name or purpose with a null character and a model over its bound or
+     with a line break are refused. An edit of a bot with no definition writes no definition, a failed
+     write of the file is shown with its path, an edit remakes a home removed by hand, and every write
+     stamps `updated`. With no `~/.bravebot` and no data folder, the first bot made makes both with mode
+     0700, the file and the home folder. A make is refused, naming the path, while a `bravebot-ui.json`
+     that does not parse exists and no `bots.json` does. A write interrupted before the rename leaves
+     the file as it was, two writers at once lose no row, a lock held by a program that stopped is
+     released, and a write that waits past the limit for a held lock is refused naming the lock file.
+     The form refuses a name or purpose with a null character, the form's Save button and the details
+     pane's save on leaving a field are unchanged, a search of `ui/src/main` finds no write of a bot
+     made, edited or given a model outside the bridge, and a test pins that the methods are absent from
+     the window's list. Verified with `cargo test -p bravebot-agent bots`,
+     `cargo test -p bravebot-ui-bridge`, `cd ui && node --test scripts/*.test.mjs` and
+     `make check-spec`.
+3b. **The module archives, restores and deletes a bot, and the GUI calls them through the bridge.** Built. The Status above describes it.
+   - Add the operations of [BOT-7](specs/bots.md#BOT-7) and [BOT-8](specs/bots.md#BOT-8) that archive
+     a bot, restore it and delete it, with `retired` stamped on each archive and `updated` on each
+     write. A delete removes the row and the folder `<data folder>/bots/<slug>`, composed from the slug
+     the person gave and checked first, and no other folder.
+   - Add the bridge methods for them and keep them out of the window's list
+     ([BOT-6](specs/bots.md#BOT-6)). Switch the GUI's archive, restore and delete to the bridge through
+     its existing handlers, with no dialog. The GUI keeps its refusal of a delete while a turn of the
+     bot is in progress.
+   - Done when, in the GUI, a delete leaves the definition, the sessions and the memory files and
+     removes the row and the folder `<data folder>/bots/<slug>` and no other folder, archiving an
+     archived bot stamps `retired` again, and a delete of a bot with a turn in progress in the GUI is
+     refused.
+3c. **The module records what happened to a row, and the GUI calls those operations through the bridge.** Built. The Status above describes it.
+   - Add the operations of [BOT-7](specs/bots.md#BOT-7) and [BOT-11](specs/bots.md#BOT-11) that record
+     a conversation, record the archive length, release a session and forget a deleted conversation,
+     with the bridge methods for them, kept out of the window's list
+     ([BOT-6](specs/bots.md#BOT-6)). Switch the GUI's `noteBotSession`, `noteBotArchived`,
+     `releaseBotSession` and `forgetBotConversation` to the bridge through its existing handlers.
+   - The owner decided on 2026-11-06 that the row write of `migrateBot` and the counter writes of
+     `noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` stay on `bot.replace` until slice 5 and
+     slice 6, and that `bot.define` and `bot.redefine` stay. `bot.replace`, `updateBots`, `saveBot`
+     and `withBot` stay. The done-when that required `bot.replace` to be removed, and a search of
+     `ui/src/main` to find no write of the rows outside the bridge, is not the done-when of this
+     slice. A search of `ui/src/main` still finds the row writes of `saveBot`, `migrateBot` and the
+     counters.
+   - Done when a turn that ends in the GUI records its conversation and the archive length through the
+     bridge, a release sets `session` to none and `archived` to zero and keeps the conversation, a
+     forgotten conversation is removed from every row that lists it, and each of those writes stamps
+     `updated` and leaves the definition file unchanged.
+4. **The terminal makes, edits, archives, restores and deletes a bot.** Built. The Status above describes it.
+   - Slice 2b's pane reads the rows once, when the phase with no session opens
+     (`bots_pane::State::read`). Reread them after each write of this slice. Slice 2b leaves out the
+     refusal of `/layout` with a form or a confirmation open, so add it here.
+   - `State::press` in `bots_pane.rs` swallows every key that carries Ctrl or Alt, so the list never types
+     one. Revisit that when this slice binds a chord in the list.
    - Add the form that makes and edits a bot to the layout, with a model field in the edit form and no
      folder field, and the actions that archive, restore and delete. Archive and delete ask for a
      confirmation that names the bot, answered with `y`, and delete is offered only for an archived bot.
@@ -264,7 +674,7 @@ for bots, so each terminal function is in the bots layout.
      Ctrl-C closes a confirmation with nothing done, leaves a form that holds text open and offers the way
      out, and closes an empty form, and only Esc closes a form that holds text.
 5. **The module holds where a turn runs and the migration of a bot, and the GUI calls them
-   through the bridge.**
+   through the bridge.** Built. The Status above describes it.
    - Add the rule for where a turn runs ([BOT-9](specs/bots.md#BOT-9)) to the module, checked before
      each turn of a bot is sent, with a bridge method the GUI's main process calls before it sends
      a bot's turn, and switch the GUI's copy of the rule to it. The GUI's separate check of
@@ -292,6 +702,15 @@ for bots, so each terminal function is in the bots layout.
    run today, and `drive-bot-memory.mjs` stops at its first check of the briefing file, so its later checks
    do not run.
 7. **The terminal talks to a bot.**
+   - Enter on a bot in slice 2b's pane says that starting a session as a bot comes in a later release,
+     and begins none (`bots-pick-later` in `en-US.ftl`). Replace that line with the session this slice
+     begins, and give `Phase::Session` the bots layout, which slice 2b leaves as the default.
+   - Slice 2b draws the line about width only in the phase with no session. A session in the bots
+     layout below 100 columns draws the chat alone with that line ([BOT-17](specs/bots.md#BOT-17)),
+     which nothing draws yet. The in-session paths of the layout (`Layout::refuses`, the panes column
+     of `RightColumn`, the refusals of `/panel` and `/files`, the hint and the claim) are reached only
+     through tests in slice 2b, since no production path begins a session in the bots layout. Run them
+     in a real terminal here.
    - Draw the layout's chat and prompt input panes. A session started as a bot addresses every turn to
      the row's definition ([BOT-10](specs/bots.md#BOT-10)), runs in the home folder, a folder the
      person moved to with `/cd` in this run or a folder the row records, and shows a line naming the
@@ -377,4 +796,95 @@ Questions slice 1 raised for the owner:
 - Whether a clause that a later slice completes may name tests for the part an earlier slice
   builds. [BOT-2](specs/bots.md#BOT-2) to [BOT-5](specs/bots.md#BOT-5) do, and neither
   [specs/README.md](specs/README.md) nor
-  [development/spec-enforced-development.md](development/spec-enforced-development.md) says.
+  [development/spec-enforced-development.md](development/spec-enforced-development.md) says. Answered
+  yes by the owner on 2026-10-29: [BOT-17](specs/bots.md#BOT-17) and [BOT-18](specs/bots.md#BOT-18)
+  name the tests of slice 2b, and the files it adds are governed by `docs/specs/bots.md`.
+
+Questions slice 2b raised for the owner:
+
+- The order and mark of archived rows in the bots list, described above under the differences of slice
+  2b. The pane draws file order with no mark until the design says how archived rows are placed
+  without an order that depends on the file's `retired` values.
+- MCP server startup and its approval question happen at launch for `--layout bots`, as the previous
+  deviation says. Whether BOT-9 or the startup changes is not decided.
+- `/layout bots` then `/layout default` drops the record of the session left before the new one, so the
+  exit line of the new session names only its own record and says nothing when it recorded nothing.
+  The earlier session stays findable with `--resume`. Whether the exit line should name both is not
+  decided.
+- With focus in the list the prompt box shows its cursor although it drops typing. A cue for which
+  of the two has focus is not specified.
+- With focus in the list, typed text is dropped until Esc or the panes chord returns focus to the
+  prompt, as [BOT-17](specs/bots.md#BOT-17) says. `--layout bots` and `/layout bots` already start
+  there when the list is drawn. `bots_screen::opened` calls `start_in_the_list_where_it_is_drawn`.
+  Below 100 columns the list is not drawn, so focus is the prompt. `Focus` defaults to `Prompt` on
+  the struct, and a session that is already open keeps that default.
+
+Requests from Brian Bondy on 2026-11-19, on https://github.com/brave/bravebot/pull/4356. The accepted
+design stays a layout. Nothing in this list replaces it.
+
+- The phase with no session starts in the list, so the prompt takes nothing until Esc or the panes
+  chord. Alt-P is that chord, and iTerm2 makes it hard to press. `n`, `e`, `a`, `r` and `d` work
+  without it. Enter on a row says a session as a bot arrives in a later release. The owner decided
+  on 2026-11-19 that the default panes chord will not stay Alt-P. The chord that replaces it is not
+  chosen. A settings file can still move it ([INPUT-32](specs/terminal-input.md#INPUT-32)). A
+  different Alt letter does not arrive in iTerm2 either, unless Option is set to send Esc.
+- The prompt in the phase with no session takes `/layout`, the key help, and quitting. A session
+  started as a bot is slice 7, which is when that prompt runs a turn.
+- The form does not take Up and Down. Tab moves between fields. Whether Up and Down should move in a
+  field is not decided.
+- Esc cancels a form and keeps no draft. That is a known cost in [specs/bots.md](specs/bots.md).
+- The terminal form does not change the avatar. Whether it should is not decided.
+- The selection mark is drawn at the top of the row, and the list margin was called visually wrong.
+  Neither change is decided.
+- Placing the bots list on the sessions screen, the one Left opens on an empty prompt, and renaming
+  that screen, is not the layout. It is not decided.
+
+Questions slice 3a raised for the owner:
+
+- What replaces the row write of `migrateBot` and the counter writes of `noteBotMemory`,
+  `keepingMemoryMark` and `noteBotNudged` in `ui/src/main/bots.ts`. They go through `bot.replace`, the
+  entry for slice 3c lists no operation for them, and slice 6 removes the counters. Answered by the
+  owner on 2026-11-06: they stay on `bot.replace`. Slice 5 owns the migration's row write and slice 6
+  removes the counters. `bot.replace`, `updateBots`, `saveBot` and `withBot` stay until those slices.
+- Whether slice 3c removes `bot.define` and `bot.redefine`. The GUI has no caller of either after
+  slice 3a. Four unit tests in `crates/ui-bridge/src/definitions.rs` cover them
+  (`a_bot_is_answered_with_the_name_its_definition_was_given`,
+  `an_edit_the_agent_refuses_or_cannot_find_is_a_bad_request`,
+  `an_edit_rewrites_the_file_made_for_the_bot` and `a_refused_bot_writes_nothing`), and removing the
+  methods removes those tests. Answered by the owner on 2026-11-06: `bot.define` and `bot.redefine`
+  stay, with those tests.
+- Whether the operations of the module should log a refused write or a home folder that could not be
+  made. `bravebot-agent` has no logging dependency, so they log nothing and report through their
+  return values, and logging needs a dependency added to the crate.
+- An edit of a bot whose definition file was removed by hand is refused, including an edit that
+  changes only the name, as the GUI's edit was. Whether such an edit should write the row is not
+  decided.
+- Whether a bot made after the read dropped a row should avoid that row's slug. Until that is decided
+  it takes the slug and the home folder of the dropped row.
+- What the desktop does when a make or an edit saves the row and the home folder cannot be made.
+  [BOT-4](specs/bots.md#BOT-4) says in its paragraph on a bot's home folder that the module "reports
+  whether it could be made", and its test
+  `a_row_saved_while_its_home_cannot_be_made_is_kept_and_says_so` pins that the row is kept and
+  `home_made` is false. The bridge answers `"homeMade": false` for `bot.make`, `bot.edit` and
+  `bot.ensure_home`. The main process reads only `answer.bot` from a make or an edit, so the window shows
+  nothing, and a conversation in that home is refused later with "could not make the folder for
+  <name>". Seen with `ud/bot-homes` replaced by a regular file. The base ignored the result of
+  `ensureHome` after a make in the same way. Whether the desktop should show that the home was not
+  made when it saves is not decided.
+- What the model picker's "Automatic (Default)" entry should do for a bot. It writes the model string
+  `automatic-bravebot` (`DEFAULT_MODEL` in `crates/config/src/lib.rs`) and does not clear the model, so
+  the row and the definition carry that string. Nothing in the renderer calls `writeBotModel(slug, null)`,
+  and the preload types the model as a `string`. Clearing works through the bridge and the module with
+  `model: null`. The base writes the string in the same way. Whether the entry should clear the model is
+  not decided.
+- `make check-ui-walkthrough` already fails on the unchanged base `16171073`, in a build with the
+  builder's service credentials and in a build without them, and slice 3a neither causes nor fixes it,
+  so the check is not a gate for this slice and whether to fix it is not decided.
+- `saveBot` does not clear an error toast already on screen. A model refusal from the details pane
+  can stay up after a successful form save. The toast does not block input. `chooseModel` on a bot
+  session clears the toast through `settleBotModelWrite`. The form save is left unfixed (#4352).
+
+What slices 3b and 3c inherit from the GUI run. A failed write is drawn in a toast that truncates the
+path with an ellipsis on screen, and the full text is in the page. The toast text starts with Electron's
+`Error invoking remote method 'bravebot:bots:write': BridgeError:` before the agent's reason, so 3b and
+3c refusals will read the same way until the handlers change.

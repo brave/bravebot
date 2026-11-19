@@ -50,6 +50,7 @@ import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
 import { useEnhance } from './use-enhance'
+import { settleBotModelWrite } from './bot-model-write'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, setExperience, dropConversation, experienceError } from './experience'
@@ -446,9 +447,8 @@ export function App(): React.JSX.Element {
     if (!current || current.running) return
     try {
       if (current.bot) {
-        const saved = await window.bravebot.writeBotModel(current.bot.slug, model)
-        if (!saved) throw new Error('Could not save the bot’s model.')
-        await readBots()
+        const saved = await settleBotModelWrite(window.bravebot.writeBotModel(current.bot.slug, model), setProblem, readBots)
+        if (!saved) return
       }
       setLive((old) => old?.handle === current.handle && !old.running ? pickModel(old, model) : old)
     } catch (error) { setProblem(String(error)) }

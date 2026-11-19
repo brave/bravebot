@@ -1600,8 +1600,7 @@ only; a project or local file that sets it is ignored and reported by `bravebot 
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Sixteen actions can be moved and nothing else can (fifteen on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
-
+Seventeen actions can be moved and nothing else can (sixteen on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 | Action | Default | What it does |
 |---|---|---|
 | `background` | `ctrl-b` | move the command a turn is waiting on to the background |
@@ -1620,6 +1619,7 @@ Sixteen actions can be moved and nothing else can (fifteen on Windows, which has
 | `suspend` | `ctrl-z` | suspend the session to the shell ([Interactive mode](../using/interactive-mode.md#suspending-to-the-shell)) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([Interactive mode](../using/interactive-mode.md#undoing-an-edit)) |
 | `enhance` | `ctrl-p` | rewrite the line to be more specific ([Interactive mode](../using/interactive-mode.md#enhancing-a-prompt)) |
+| `panes` | `alt-p` | move focus between the prompt and the panes of the bots layout |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
@@ -1631,13 +1631,12 @@ are not rebindable.
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
 actions *trading* chords is not a conflict and both get what they asked for. `scope`, `undo`,
-`suspend` and `enhance` are among the newest of the sixteen, so a file that already gave `ctrl-n`, `ctrl-_`, `ctrl-z` or `ctrl-p` to
+`suspend` and `enhance` are among the newest of the seventeen, so a file that already gave `ctrl-n`, `ctrl-_`, `ctrl-z` or `ctrl-p` to
 another action now asks for a chord the new action stands on, and that action is back on its default
 until the file moves `scope`, `undo`, `suspend` or `enhance` as well. `outputs` is newer still and
 stands on `alt-l`, so a file that gave `alt-l` to another action has that action back on its default
 until the file moves `outputs` too. `todos` is as new and stands on `alt-a`, so a file that gave `alt-a`
 to another action has that action back on its default until the file moves `todos` too. `peek` is as new and stands on `alt-v`, so a file that gave `alt-v` to another action has that action back on its default until the file moves `peek` too.
-
 The block layers per action the way `env` does, so a project file moving one action says nothing about
 the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 

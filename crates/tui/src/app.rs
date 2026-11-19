@@ -66,6 +66,7 @@ use directories::*;
 mod keys;
 // The glob for what this file and its tests call. The four `pub` ones stay public as
 // `bravebot_tui::app::..`, the path `tests/references.rs` names them by.
+pub(crate) use keys::holds_ctrl_without_alt;
 use keys::*;
 pub use keys::{Action, handle_key, handle_key_while_working, handle_mouse};
 
@@ -83,6 +84,11 @@ use opening::*;
 mod records;
 pub(crate) use records::coverage_causes;
 use records::*;
+
+mod bots_screen;
+
+mod phase;
+use phase::{Phase, Screen};
 
 mod session_commands;
 use session_commands::*;
@@ -502,9 +508,19 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     };
     let line = line.as_str();
 
+    if session.without_a_session() {
+        return dispatch_without_a_session(session, line);
+    }
+    if let Some(refused) = session.interface_layout().refuses(line) {
+        session.note(refused);
+        return Action::Redraw;
+    }
     if line.trim() == EXIT_COMMAND {
         session.quit();
         return Action::Quit;
+    }
+    if let Some(name) = argument_to(line, LAYOUT_COMMAND) {
+        return layout_command(session, name);
     }
     if line.trim() == MODEL_COMMAND {
         return ask_which_model(session, crate::model_prompt::Scope::EverySession);
@@ -924,6 +940,60 @@ fn open_outputs(session: &mut Session) -> Action {
         session.note(t!(outputs_none));
     }
     Action::Redraw
+}
+
+fn dispatch_without_a_session(session: &mut Session, line: &str) -> Action {
+    if line.trim() == EXIT_COMMAND {
+        session.quit();
+        return Action::Quit;
+    }
+    if let Some(name) = argument_to(line, LAYOUT_COMMAND) {
+        return layout_command(session, name);
+    }
+    session.note(t!(bots_choose_a_bot_first));
+    Action::Redraw
+}
+
+fn layout_command(session: &mut Session, name: &str) -> Action {
+    let Some(layout) = crate::layout::Layout::from_name(name) else {
+        let names = crate::layout::Layout::names();
+        session.note(match name.is_empty() {
+            true => t!(layout_needs_a_name, names = names),
+            false => t!(layout_unknown, name = name, names = names),
+        });
+        return Action::Redraw;
+    };
+    if let Some(refused) = layout_refusal(session, bravebot_core::incognito::engaged()) {
+        session.note(refused);
+        return Action::Redraw;
+    }
+    if layout == session.interface_layout() {
+        session.note(t!(layout_already_open, name = layout.name()));
+        return Action::Redraw;
+    }
+    Action::Layout(layout)
+}
+
+fn layout_refusal(session: &Session, incognito: bool) -> Option<String> {
+    if session.status != Status::Idle {
+        return Some(t!(layout_refused_running).to_string());
+    }
+    if !session.queued.is_empty() {
+        return Some(t!(layout_refused_queued).to_string());
+    }
+    if session.bots().form_open() || session.bots().confirmation_open() {
+        return Some(t!(layout_refused_form).to_string());
+    }
+    if !session.loops().is_empty() || session.goal().is_some() {
+        return Some(t!(layout_refused_pending).to_string());
+    }
+    if incognito {
+        return Some(t!(layout_refused_incognito).to_string());
+    }
+    if session.standing_definition().is_some() && !session.standing_is_by_setting() {
+        return Some(t!(layout_refused_agent).to_string());
+    }
+    None
 }
 
 /// The next thing the queue is holding for the loop, if the session is free to take it.
@@ -1406,6 +1476,14 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     {
         return Action::None;
     }
+    match paste_for_an_open_form(session, text) {
+        FormPaste::Ignored => return Action::None,
+        FormPaste::Inserted | FormPaste::Noted => return Action::Redraw,
+        FormPaste::NotOurs => {}
+    }
+    if session.panes_have_the_keys() {
+        return Action::None;
+    }
     // A picture copied to the clipboard reaches a terminal as a paste of nothing at all, since the
     // terminal hands over text and there is none. Said before anything else looks at the text,
     // because an empty paste is no more a drop than it is a prompt, and left to `paste_text` it
@@ -1424,6 +1502,35 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     Action::Redraw
 }
 
+enum FormPaste {
+    NotOurs,
+    Ignored,
+    Noted,
+    Inserted,
+}
+
+fn paste_for_an_open_form(session: &mut Session, text: &str) -> FormPaste {
+    if session.bots().confirmation_open() {
+        return FormPaste::Ignored;
+    }
+    if !session.bots().form_open() {
+        return FormPaste::NotOurs;
+    }
+    if !session.panes_are_drawn() {
+        return FormPaste::Ignored;
+    }
+    if !session.panes_have_the_keys() {
+        return FormPaste::NotOurs;
+    }
+    if text.is_empty() {
+        let chord = session.bindings().paste_name();
+        session.note_once(t!(paste_arrived_empty, chord = chord));
+        return FormPaste::Noted;
+    }
+    session.bots_mut().paste_into_form(text);
+    FormPaste::Inserted
+}
+
 /// Bring what is on the clipboard into the prompt.
 ///
 /// Separated from the loop so it can be tested without a terminal, and taking the read as an
@@ -1431,6 +1538,27 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
 fn take_from_clipboard(session: &mut Session, pasted: crate::clipboard::Pasted) {
     use crate::clipboard::Pasted;
     use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
+
+    match &pasted {
+        Pasted::Text(text) => match paste_for_an_open_form(session, text) {
+            FormPaste::NotOurs => {}
+            FormPaste::Ignored | FormPaste::Noted | FormPaste::Inserted => return,
+        },
+        Pasted::Image(_) if session.bots().form_open() && session.panes_have_the_keys() => {
+            let chord = session.bindings().paste_name();
+            session.note_once(t!(paste_arrived_empty, chord = chord));
+            return;
+        }
+        _ if session.bots().confirmation_open()
+            || (session.bots().form_open() && session.panes_have_the_keys()) =>
+        {
+            return;
+        }
+        _ => {}
+    }
+    if session.panes_have_the_keys() {
+        return;
+    }
 
     // Whatever the answer was, it is the current one, so the hint has served its purpose. It comes
     // back at the next focus change if the picture is still there and still wanted.
@@ -1844,6 +1972,7 @@ pub enum Start {
     Prefilling(String, Option<String>),
     /// A new session with the Sessions screen open over it, to pick one up (`--resume`).
     Choose,
+    Layout(crate::layout::Layout),
     /// The same, opened for the sessions linked to one pull request, given by number or address.
     ChooseFromPr(String),
     /// A session read back off disk, continuing where it left off.
@@ -1909,6 +2038,7 @@ struct Startup {
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
+    layout: crate::layout::Layout,
     start: Start,
     named: Option<String>,
     links: Links,
@@ -1916,6 +2046,12 @@ struct Startup {
     /// Whether the command line asked for auto with `--auto` (AUTO-1).
     asked_for_auto: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
+}
+
+struct LayoutChange {
+    layout: crate::layout::Layout,
+    workspace: Workspace,
+    sandbox: crate::sandbox_command::Sandboxed,
 }
 
 /// Run the interface until the user leaves.
@@ -1970,29 +2106,44 @@ pub fn run(
         }
     };
 
-    let result = match start {
-        // The Sessions screen refuses Enter on one of these, and `--resume` refuses it too. If a
-        // record still arrives here, loading its empty conversation as a turn would continue a run
-        // that cannot be continued.
-        Start::Resuming(record) if record.manifest.is_some() => Ok(Ended::Left(None)),
-        // `--resume` and `--from-pr` open the Sessions screen over an ordinary new session, once it
-        // has begun, so leaving the screen is an ordinary session rather than nothing.
-        mut start => {
-            // A `/resume` ends the loop with the record it chose, and the next one begins from it
-            // exactly as a session started with `--resume` does, so what comes back is what that
-            // flag restores and nothing a second path decided. The servers outlive the switch:
-            // they were started for this process, not for one conversation.
-            let mut workspace = workspace.clone();
-            // Only the first session is the one the command line named a definition for. A
-            // session `/resume` switches to works under the definition its own record names.
-            let mut named = agent;
-            // Likewise: a link the command line gave belongs to the session it opened.
-            let mut links = links;
-            // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the
-            // command lasts until the process ends.
-            let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
-            loop {
+    // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the command
+    // lasts until the process ends. The servers outlive a switch: they were started for this
+    // process, not for one conversation.
+    let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
+    let mut workspace = workspace.clone();
+    // Only the first session is the one the command line named a definition for. A session
+    // `/resume` switches to works under the definition its own record names.
+    let mut named = agent;
+    // Likewise: a link the command line gave belongs to the session it opened.
+    let mut links = links;
+    let layout = crate::layout::Layout::default();
+
+    // `--resume` and `--from-pr` begin a session. The Sessions screen opens over it once it has
+    // begun, so leaving the screen is that session rather than nothing. A manifest record begins
+    // none: loading its empty conversation as a turn would continue a run that cannot be continued.
+    let mut phase = Phase::starting_with(start);
+    let result = loop {
+        phase = match phase {
+            Phase::NoSession(Screen::Bots { left, carrying }) => {
+                if let Some(carried) = carrying {
+                    workspace = carried.workspace;
+                    sandbox = carried.sandbox;
+                }
+                let exit = bots_screen::run(
+                    &mut terminal,
+                    confinement.clone(),
+                    sockets_with_a_path_reachable,
+                    sandbox.clone(),
+                );
+                Phase::after_the_bots_screen(exit, left)
+            }
+            Phase::Session { start, carrying } => {
+                if let Some(carried) = carrying {
+                    workspace = carried.workspace;
+                    sandbox = carried.sandbox;
+                }
                 let mut switch = None;
+                let mut layout_change = None;
                 let ended = event_loop(
                     &mut terminal,
                     config,
@@ -2002,6 +2153,7 @@ pub fn run(
                         confinement: confinement.clone(),
                         sockets_with_a_path_reachable,
                         sandbox: sandbox.clone(),
+                        layout,
                         start,
                         named: named.take(),
                         links: std::mem::take(&mut links),
@@ -2011,17 +2163,15 @@ pub fn run(
                     },
                     moments,
                     &mut switch,
+                    &mut layout_change,
                 );
-                match (ended, switch) {
-                    (Ok(_), Some(next)) => {
-                        workspace = next.workspace;
-                        sandbox = next.sandbox;
-                        start = Start::Resuming(next.record);
-                    }
-                    (ended, _) => break ended,
+                match layout_change {
+                    Some(change) => Phase::after_a_session_chose_a_layout(ended, change),
+                    None => Phase::after_a_session(ended, switch),
                 }
             }
-        }
+            Phase::Over(ended) => break ended,
+        };
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
@@ -2582,6 +2732,7 @@ struct SessionBasis {
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
+    layout: crate::layout::Layout,
     skip_permissions: bool,
     asked_for_auto: bool,
     /// Whether a `bravebot://open` link started the session, which then never reads
@@ -2641,6 +2792,7 @@ fn new_session(
         confinement,
         sockets_with_a_path_reachable,
         sandbox,
+        layout,
         skip_permissions,
         asked_for_auto,
         from_link,
@@ -2650,6 +2802,7 @@ fn new_session(
     let mut session = Session::new(confinement)
         .with_sockets_with_a_path_reachable(sockets_with_a_path_reachable)
         .with_sandbox(sandbox)
+        .in_layout(layout)
         .with_stored_history()
         .in_workspace(workspace.root())
         .on_tier(config)
@@ -2816,6 +2969,7 @@ fn begin_session(
         confinement,
         sockets_with_a_path_reachable,
         sandbox,
+        layout,
         start,
         named,
         links,
@@ -2827,6 +2981,7 @@ fn begin_session(
         confinement,
         sockets_with_a_path_reachable,
         sandbox,
+        layout,
         skip_permissions,
         asked_for_auto,
         from_link: matches!(start, Start::Prefilling(..)),
@@ -2875,13 +3030,14 @@ fn begin_session(
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
-        // These five begin a new record. `Choose` and `ChooseFromPr` open the Sessions screen over
-        // it, in `apply_the_command_line`.
+        // These begin a new record. `Choose` and `ChooseFromPr` open the Sessions screen over
+        // it, in `apply_the_command_line`. `Layout` is the session `/layout default` begins.
         Start::Fresh
         | Start::Sending(..)
         | Start::Prefilling(..)
         | Start::Choose
-        | Start::ChooseFromPr(_) => (
+        | Start::ChooseFromPr(_)
+        | Start::Layout(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -3053,6 +3209,10 @@ fn start_the_session(
 /// terminal, and a generic backend's error type carries no bounds to convert from.
 ///
 /// Returns the session left behind, where there is one to pick up again.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the loop is called once from run, and layout_change is how /layout leaves the session"
+)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
@@ -3061,6 +3221,7 @@ fn event_loop(
     startup: Startup,
     moments: &mut bravebot_agent::hooks::SessionMoments,
     switch: &mut Option<Switch>,
+    layout_change: &mut Option<LayoutChange>,
 ) -> io::Result<Ended> {
     let skip_permissions = startup.skip_permissions;
     let Begun {
@@ -3265,6 +3426,11 @@ fn event_loop(
                 {
                     return Ok(ended);
                 }
+            }
+            Action::Layout(layout) => {
+                let (change, ended) = held.leave_for_layout(servers, layout);
+                *layout_change = Some(change);
+                return Ok(ended);
             }
             Action::Link(kind, argument) => {
                 link_session(held.session, held.stored, kind, &argument)
@@ -4078,6 +4244,9 @@ fn drain_worker_until_stopped(
         handle(message);
     })
 }
+
+#[cfg(test)]
+mod layout_tests;
 
 #[cfg(test)]
 mod tests {
@@ -27493,6 +27662,7 @@ mod tests {
                 ISSUES_COMMAND,
                 JOBS_COMMAND,
                 LANGUAGE_COMMAND,
+                LAYOUT_COMMAND,
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
                 LSP_COMMAND,

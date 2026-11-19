@@ -5,8 +5,16 @@ status: proposed
 governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/bots.rs
+  - crates/agent/src/bots/operations.rs
   - crates/agent/src/memory.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/main.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/bots_screen.rs
+  - crates/tui/src/app/phase.rs
+  - crates/tui/src/bots_pane.rs
+  - crates/tui/src/layout.rs
+  - crates/tui/src/state/bots.rs
   - crates/ui-files/src/main.rs
   - crates/ui-bridge/src/bots.rs
   - crates/ui-bridge/src/bridge.rs
@@ -34,7 +42,15 @@ presents them. It does not change what a bot is. [definition-memory.md](definiti
 what a bot is, how its memory is kept and what the GUI does with it today, and this file takes
 that as given.
 
-Nothing here is built. The reasoning and the trust analysis are in
+Built so far are the module that reads and writes the rows and the bridge methods the GUI calls
+it through (slice 1), the layout seam and the phase with no session (slice 2a), the bots layout
+that lists the bots, opened by `--layout bots` and `/layout bots` (slice 2b), and the module's make,
+edit, set the model and home folder operations with the bridge methods the GUI calls them through
+(slice 3a), and archive, restore and delete with the bridge methods the GUI calls them through
+(slice 3b), and the operations that record a conversation, an archive length, a released session
+and a forgotten conversation, with the bridge methods the GUI calls them through (slice 3c). The
+terminal does not record a turn, does not continue a conversation from the layout, and has no
+delete of a conversation. Still not built are a session as a bot, the forms and the memory. The reasoning and the trust analysis are in
 [../design/bots-layer.md](../design/bots-layer.md). Where each clause is built, and in what order,
 is in [../PLAN.md](../PLAN.md).
 
@@ -104,6 +120,11 @@ folds case.
 
 `verified-by: bravebot_agent::bots::a_slug_is_runs_of_lowercase_letters_and_digits_joined_by_single_hyphens`
 `verified-by: bravebot_agent::bots::every_entry_the_rules_drop_is_reported_with_its_reason`
+`verified-by: bravebot_agent::bots::operations::a_slug_is_composed_from_the_name_as_the_spec_says`
+`verified-by: bravebot_agent::bots::operations::a_slug_another_row_holds_takes_a_number`
+`verified-by: bravebot_agent::bots::operations::a_composed_slug_is_always_a_slug`
+`verified-by: bravebot_agent::bots::operations::a_taken_name_is_numbered_and_each_bot_has_a_definition_of_its_own`
+`verified-by: by-construction (the GUI's slug composition, slugFor, is deleted, so ui/scripts/bot-operations-bridge.test.mjs makes two bots with one name through the real bravebot-rpc and asserts that the slugs are custodian and custodian-2 and that each has a definition of its own, and ui/scripts/bot-store.test.mjs asserts that ui/src/main/bots.ts and ui/src/main/index.ts hold no slugFor; make check-ui runs both)`
 
 <a id="BOT-3"></a>
 ### BOT-3: a name, a purpose, a model and an avatar are bounded text, and 100 bots is the ceiling
@@ -189,8 +210,19 @@ it.
 `verified-by: bravebot_agent::bots::rows_past_the_hundredth_are_reported_with_their_slugs`
 `verified-by: bravebot_agent::bots::rows_are_written_in_the_byte_order_of_the_slug`
 `verified-by: bravebot_agent::bots::a_hundred_and_first_row_is_refused_and_every_row_is_kept`
+`verified-by: bravebot_agent::bots::operations::a_form_that_breaks_a_bound_is_refused_and_nothing_is_written`
+`verified-by: bravebot_agent::bots::operations::a_model_and_an_avatar_at_their_bounds_are_accepted`
+`verified-by: bravebot_agent::bots::operations::an_edit_that_breaks_a_bound_or_names_no_bot_is_refused`
+`verified-by: bravebot_agent::bots::operations::a_model_that_breaks_the_bound_or_a_missing_bot_is_refused_when_setting_it`
+`verified-by: bravebot_agent::bots::operations::the_hundred_and_first_bot_is_refused_and_no_definition_is_written`
+`verified-by: bravebot_agent::bots::operations::the_hundredth_bot_is_made`
+`verified-by: bravebot_agent::bots::operations::a_row_the_read_drops_is_removed_by_the_write`
+`verified-by: bravebot_agent::bots::operations::rows_come_out_in_the_byte_order_of_the_slug`
+`verified-by: bravebot_ui_bridge::bots::a_refused_make_edit_or_home_is_answered_with_the_reason_and_the_code_for_it`
+`verified-by: bravebot_ui_bridge::bots::a_null_name_purpose_or_avatar_is_a_bad_request_and_a_null_model_is_none`
 `verified-by: bravebot_ui_bridge::bots::what_a_read_dropped_and_a_file_it_could_not_use_are_answered_beside_the_rows`
 `verified-by: by-construction (localeCompare is JavaScript's and a Rust test cannot run it, so ui/scripts/bot-rows-bridge.test.mjs writes slugs of digits and hyphens through the real bravebot-rpc and asserts that the file holds them in byte order and that this is the order localeCompare gives in English, that a hand-edited file is listed in file order, a repaired row is listed repaired and a Windows path is accepted, and that a dropped row and a row past the 100th are each reported; ui/scripts/bot-store.test.mjs asserts the report reaches the window as one text naming each entry with its reason, and the path of a file that could not be read; make check-ui runs both)`
+`verified-by: by-construction (the GUI's validation of a form, botFromForm, is deleted, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a make with a null character in the name or in the purpose is refused and writes no bots file and no definition, that the 101st make is refused with every row kept and no definition written for it, and that the refusal is shown with its reason; make check-ui runs it)`
 
 <a id="BOT-4"></a>
 ### BOT-4: the rows are the file `~/.bravebot/bots.json`, which the terminal and the GUI read and write
@@ -307,8 +339,31 @@ face from. A bot the terminal makes takes its slug as the seed, so both programs
 `verified-by: bravebot_agent::bots::nothing_to_move_leaves_no_bots_file`
 `verified-by: bravebot_agent::bots::an_old_file_that_cannot_be_converted_is_named_and_nothing_is_written`
 `verified-by: bravebot_agent::bots::nothing_is_moved_where_nothing_may_be_written`
+`verified-by: bravebot_agent::bots::operations::the_first_make_creates_the_state_directory_the_file_the_data_folder_and_the_home_privately`
+`verified-by: bravebot_agent::bots::operations::a_row_saved_while_its_home_cannot_be_made_is_kept_and_says_so`
+`verified-by: bravebot_agent::bots::operations::a_make_is_refused_naming_the_old_file_while_it_cannot_be_converted`
+`verified-by: bravebot_agent::bots::operations::a_make_after_the_rows_moved_from_the_old_file_keeps_them`
+`verified-by: bravebot_agent::bots::operations::a_file_that_does_not_parse_is_never_overwritten`
+`verified-by: bravebot_agent::bots::operations::a_data_folder_that_cannot_be_written_into_a_row_refuses_the_make`
+`verified-by: bravebot_agent::bots::operations::a_write_that_fails_before_the_rename_leaves_the_file_as_it_was`
+`verified-by: bravebot_agent::bots::operations::two_writers_at_once_lose_no_row`
+`verified-by: bravebot_agent::bots::operations::a_lock_a_stopped_program_left_behind_is_not_held`
+`verified-by: bravebot_agent::bots::operations::a_lock_held_past_the_wait_refuses_every_write_naming_the_lock_and_writes_nothing`
+`verified-by: bravebot_agent::bots::operations::a_lock_held_past_the_wait_leaves_a_definition_as_it_was_for_an_edit_and_a_model_change`
+`verified-by: bravebot_agent::bots::operations::a_data_folder_that_cannot_be_text_refuses_an_edit_a_model_change_and_an_ensure_before_any_row_is_dropped`
+`verified-by: bravebot_agent::bots::operations::an_edit_makes_a_home_that_was_removed_by_hand`
+`verified-by: bravebot_agent::bots::operations::setting_the_model_does_not_make_a_home_that_is_missing`
+`verified-by: bravebot_agent::bots::operations::an_archive_and_a_restore_do_not_make_a_home_that_is_missing`
+`verified-by: bravebot_agent::bots::operations::ensuring_a_home_makes_a_missing_one_privately`
+`verified-by: bravebot_agent::bots::operations::ensuring_a_home_changes_no_row_and_says_when_it_could_not_be_made`
+`verified-by: bravebot_agent::bots::operations::ensuring_the_home_of_a_bot_nobody_made_or_from_a_file_that_does_not_parse_is_refused`
+`verified-by: bravebot_agent::bots::operations::a_home_the_row_names_is_the_one_made_whatever_the_data_folder`
+`verified-by: bravebot_agent::incognito::a_private_session_refuses_to_make_edit_or_ensure_a_bot_and_writes_nothing`
+`verified-by: bravebot_agent::incognito::a_private_session_refuses_to_archive_restore_or_delete_a_bot_and_writes_nothing`
+`verified-by: bravebot_agent::home::a_machine_that_names_no_state_directory_refuses_to_make_edit_or_ensure_a_bot`
 `verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-rows-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes is in bots.json and not in bravebot-ui.json, that a bot is listed again by a bridge started afterwards, that the rows of an old bravebot-ui.json written in the old forms move unchanged and in order and the old file is left as it was, that they move when another key holds half of a surrogate pair as JSON.stringify writes it, that a second start does not read the old key again, that an absent or empty key leaves no bots file, and that an old file that does not parse, or whose bots key is not an array, gives no rows, names its path and refuses a make; ui/scripts/bot-store.test.mjs asserts that the desktop sends the data folder Electron names and never reads or writes the bots key of bravebot-ui.json, that a write the agent refuses is shown with its reason and the bot is not shown as saved, and that a file that could not be read is never written over; make check-ui runs both)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes has its home folder, that an edit makes a home that was removed by hand and a change of model does not, that ensuring the home makes it again and answers false for a bot that does not exist, and that bravebot-ui.json never holds a bots key; ui/scripts/bot-store.test.mjs asserts that bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore and bot.delete each carry the data folder Electron names; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs all three)`
 
 <a id="BOT-5"></a>
 ### BOT-5: one module of `bravebot-agent` reads and writes the rows, and both clients call it
@@ -361,7 +416,13 @@ come from"), whichever crate holds the code.
 
 `verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
 `verified-by: bravebot_ui_bridge::bots::the_methods_are_denied_to_the_host_and_offered_to_no_client`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs asserts that it reads and writes the rows only through bot.list and bot.replace, with changes made at the same moment each reaching the file, that the agent not running gives no rows and writes nothing, and that neither method is among those a window may send; make check-ui runs it)`
+`verified-by: bravebot_ui_bridge::bots::the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client`
+`verified-by: bravebot_ui_bridge::bots::a_bot_made_edited_and_given_a_model_through_the_bridge_is_listed_after_a_restart`
+`verified-by: bravebot_ui_bridge::bots::a_refused_make_edit_or_home_is_answered_with_the_reason_and_the_code_for_it`
+`verified-by: bravebot_ui_bridge::bots::each_refusal_of_a_make_or_an_edit_is_answered_with_its_own_message_and_code`
+`verified-by: bravebot_ui_bridge::bots::a_wrongly_typed_or_missing_field_is_a_bad_request_before_anything_is_written`
+`verified-by: bravebot_agent::bots::operations::a_bot_is_made_with_its_definition_its_row_and_its_home`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs asserts that it reads the rows through bot.list and replaces them through bot.replace, that it makes, edits and changes the model of a bot through bot.make, bot.edit and bot.set_model and makes a home folder through bot.ensure_home, each with the data folder Electron names, that changes made at the same moment, a make, an edit and a change of model among them, each reach the file, that the agent not running gives no rows and writes nothing, that ui/src/main/bots.ts and ui/src/main/index.ts no longer hold botFromForm, saveFormBot, ensureHome, bot.define or bot.redefine, and that none of bot.list, bot.replace, bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore and bot.delete is among those a window may send; ui/scripts/bot-operations-bridge.test.mjs runs a make, an edit, a change of model and the making of a home folder through the real bravebot-rpc and asserts the rows, the definition and the folder they leave; make check-ui runs both)`
 
 ## Making and changing a bot
 
@@ -400,7 +461,17 @@ the methods this design adds follow it.
 person first. Nothing here shows that the renderer displays fetched pages, which is what would let a
 window be taken over.
 
-`verified-by: none`
+`verified-by: bravebot_ui_bridge::bots::the_methods_that_make_and_change_a_bot_are_denied_to_the_host_and_offered_to_no_client`
+`verified-by: bravebot_tui::app::layout_tests::n_opens_a_make_form_and_e_opens_the_selected_row`
+`verified-by: bravebot_tui::app::layout_tests::shift_enter_and_ctrl_j_break_the_purpose_only_and_do_not_save`
+`verified-by: bravebot_tui::app::layout_tests::escape_drops_a_form_and_the_next_one_starts_empty`
+`verified-by: bravebot_tui::app::layout_tests::a_long_paste_lands_in_the_purpose_whole_and_a_picture_does_not`
+`verified-by: bravebot_tui::app::layout_tests::a_paste_follows_focus_and_an_empty_paste_into_the_form_says_why`
+`verified-by: bravebot_tui::app::layout_tests::an_inactive_field_shows_the_rest_of_the_text`
+`verified-by: bravebot_tui::app::layout_tests::a_long_purpose_keeps_the_model_field_the_keys_and_the_refusal_on_screen`
+`verified-by: bravebot_tui::app::layout_tests::a_control_character_is_drawn_as_a_picture_and_kept_in_the_field`
+`verified-by: bravebot_tui::bots_form::a_long_paste_is_stored_whole_and_a_control_character_is_saved`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs reads the list of methods the window may send out of ui/src/main/index.ts and asserts that none of bot.make, bot.edit, bot.set_model, bot.ensure_home, bot.archive, bot.restore, bot.delete, bot.record_conversation, bot.record_archived, bot.release_session, bot.forget_conversation, bot.list, bot.replace, bot.define, bot.redefine, bot.migrate, bot.owes_carry_over and bot.works_in is in it, so the window reaches the methods named here only through the main process; ui/scripts/session-directory.test.mjs asserts that session.new and session.open make the bot's home folder through bot.ensure_home before the request is forwarded; make check-ui runs both. That the handlers keep the channel names and arguments the window sends, and that no dialog is shown, is not asserted by a test)`
 
 <a id="BOT-7"></a>
 ### BOT-7: the definition is written first, and the row only after it
@@ -414,10 +485,11 @@ disagree about what the bot is for. Setting the model is the same two writes, an
 edit form offers it as a model field that takes an identifier [BOT-3](#BOT-3) accepts. It is not
 offered while a turn of the bot is running, as the GUI's model picker is disabled then. The model
 belongs to the bot, so the change applies to every conversation of the bot, and the next turn of an
-open session runs under it. The make form has no model field. An edit changes the row's name, purpose, model and avatar only,
+open session runs under it. The make form has no model field. An empty model field in the terminal's edit form clears the stored model, so a later turn uses the configured default. Any other text is stored as typed, and a model the module refuses is left unchanged. An edit changes the row's name, purpose, model and avatar only,
 and not the fields that record what happened. A bot that has no definition has its row written and no
-definition made. After the definition is rewritten the row is read again and only those four fields
-are laid over it, so a conversation recorded while the rewrite ran is kept. Saves run one at a time,
+definition made. The module reads the row once, under the lock of [BOT-4](#BOT-4), and writes the
+definition and then the row before it releases the lock, so a conversation another program records
+meanwhile is kept: that program waits for the lock, or finished before the read. Saves run one at a time,
 and each reads the row as the save before left it. A write of the file that fails is reported with the
 path and the reason, and the save is shown as failed. The definition is written before the row, so a
 make whose row fails leaves a definition with no row, and an edit whose row fails leaves the new
@@ -449,7 +521,41 @@ evaluated before the migration. The GUI calls both through the bridge and no lon
 `migrateBot`, `owesCarryOver` or `oldMemoryFolder`. The terminal does not refuse a bot that has no
 definition.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::operations::a_bot_is_made_with_its_definition_its_row_and_its_home`
+`verified-by: bravebot_agent::bots::operations::a_definition_the_agent_refuses_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::a_definition_name_that_is_not_a_slug_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::a_definition_that_cannot_be_written_saves_no_row`
+`verified-by: bravebot_agent::bots::operations::the_definition_is_written_first_and_stays_when_the_row_cannot_be_saved`
+`verified-by: bravebot_agent::bots::operations::an_edit_rewrites_the_definition_and_keeps_what_happened`
+`verified-by: bravebot_agent::bots::operations::an_edit_that_names_no_model_leaves_it_and_one_that_clears_it_removes_it`
+`verified-by: bravebot_agent::bots::operations::an_edit_whose_definition_is_refused_saves_no_row_change`
+`verified-by: bravebot_agent::bots::operations::an_edit_of_a_bot_whose_definition_is_gone_saves_nothing`
+`verified-by: bravebot_agent::bots::operations::an_edit_of_a_bot_with_no_definition_writes_the_row_and_makes_none`
+`verified-by: bravebot_agent::bots::operations::setting_the_model_rewrites_the_definition_then_the_row_and_clears_with_none`
+`verified-by: bravebot_ui_bridge::bots::a_bot_made_edited_and_given_a_model_through_the_bridge_is_listed_after_a_restart`
+`verified-by: bravebot_ui_bridge::bots::each_refusal_of_a_make_or_an_edit_is_answered_with_its_own_message_and_code`
+`verified-by: bravebot_ui_bridge::bots::a_set_model_request_without_a_model_is_refused_and_leaves_the_bots_model_alone`
+`verified-by: bravebot_agent::bots::operations::a_lock_held_past_the_wait_leaves_a_definition_as_it_was_for_an_edit_and_a_model_change`
+`verified-by: bravebot_agent::bots::operations::archiving_a_bot_that_is_archived_stamps_retired_again_and_leaves_the_definition`
+`verified-by: bravebot_agent::bots::operations::restoring_sets_retired_to_zero_and_each_write_stamps_updated`
+`verified-by: bravebot_agent::bots::operations::an_archive_or_a_restore_of_a_missing_bot_writes_nothing`
+`verified-by: bravebot_tui::bots_form::a_make_writes_the_definition_body_and_the_reread_list_holds_the_bot`
+`verified-by: bravebot_tui::bots_form::an_edit_rewrites_the_definition_body`
+`verified-by: bravebot_tui::bots_form::a_second_bot_with_the_same_name_takes_the_slug_with_a_number`
+`verified-by: bravebot_tui::bots_form::the_hundred_and_first_bot_is_refused_and_every_row_is_kept`
+`verified-by: bravebot_tui::bots_form::a_name_or_a_purpose_with_a_null_is_refused_and_the_file_is_unchanged`
+`verified-by: bravebot_tui::bots_form::a_model_over_the_bound_or_with_a_newline_is_refused_and_the_stored_model_is_unchanged`
+`verified-by: bravebot_tui::bots_form::an_empty_model_field_clears_the_model_and_any_other_text_is_stored`
+`verified-by: bravebot_tui::bots_form::a_failed_write_names_the_path_and_keeps_the_list`
+`verified-by: bravebot_tui::bots_form::archive_and_delete_wait_for_y_and_restore_does_not`
+`verified-by: bravebot_tui::bots_form_incognito::an_incognito_make_says_so_and_writes_nothing`
+`verified-by: bravebot_agent::bots::operations::a_legacy_bot_is_migrated_with_the_model_and_the_old_memory_folder_from_its_row`
+`verified-by: bravebot_agent::bots::operations::a_bot_that_already_has_a_definition_is_not_migrated_again`
+`verified-by: bravebot_agent::bots::operations::a_failed_migration_or_a_name_that_is_not_a_slug_writes_no_row`
+`verified-by: bravebot_agent::bots::operations::a_migration_whose_row_cannot_be_saved_removes_the_definition_and_the_retry_uses_the_same_name`
+`verified-by: bravebot_agent::bots::operations::owes_carry_over_is_true_only_for_a_bot_with_no_definition_in_its_old_memory_folder`
+`verified-by: bravebot_ui_bridge::bots::a_legacy_bot_migrated_through_the_bridge_keeps_the_definition_and_a_failure_leaves_the_row`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that the definition file holds the purpose as its body after a make, is rewritten by an edit, and has its model line set and removed by a change of model, with the row and the definition agreeing after each, and that archiving a bot that is already archived stamps retired again, leaves the definition bytes unchanged, sets retired to zero on a restore, and changes updated on each of those writes; ui/scripts/bot-store.test.mjs asserts that a make, an edit and a change of model the agent refuses are not shown as saved and are reported with the path and the reason the agent gave; make check-ui runs both. The recording operations are built, and ui/scripts/bot-operations-bridge.test.mjs asserts them through the real bravebot-rpc. The migration of a bot made before definitions is built: ui/scripts/bot-operations-bridge.test.mjs asserts that a legacy bot migrated through the bridge has the definition name on the row and the definition file written, and that a failed migration leaves the row; ui/scripts/bot-model.test.mjs asserts that the main process calls bot.migrate with the data folder and the slug and does not send a directory, a purpose or a model, and that a refusal of the folder returns before turn.send)`
 
 <a id="BOT-8"></a>
 ### BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
@@ -476,7 +582,17 @@ earlier bot had.
 edited by hand. Sessions and memories are records of what happened. What a delete removes is what
 the GUI's delete removes today, and the module does the removal for both programs.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::operations::deleting_a_bot_removes_its_row_and_its_history_folder_and_nothing_else`
+`verified-by: bravebot_agent::bots::operations::a_delete_whose_history_folder_is_already_gone_removes_the_row`
+`verified-by: bravebot_agent::bots::operations::a_history_folder_that_cannot_be_removed_leaves_the_row`
+`verified-by: bravebot_agent::bots::operations::a_removal_that_fails_does_not_publish_the_row_deletion`
+`verified-by: bravebot_agent::bots::operations::a_slug_that_is_not_one_removes_nothing_and_a_missing_bot_removes_no_folder`
+`verified-by: bravebot_ui_bridge::bots::a_bot_archived_restored_and_deleted_through_the_bridge`
+`verified-by: bravebot_ui_bridge::bots::a_bad_slug_or_a_missing_row_refuses_before_a_folder_is_removed`
+`verified-by: bravebot_tui::app::layout_tests::delete_is_not_offered_for_a_bot_that_is_not_archived`
+`verified-by: bravebot_tui::bots_form::delete_is_not_offered_for_a_bot_that_is_not_archived_and_removes_nothing`
+`verified-by: bravebot_tui::bots_form::archive_and_delete_wait_for_y_and_restore_does_not`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a delete removes the row and the folder under the data folder at bots/<slug> and no other folder, and that the definition, a session file in the state directory's sessions folder, a memory file in a folder the bot worked in, the home folder and a sibling folder under bots all remain; ui/scripts/bot-store.test.mjs invokes the function the remove handler calls, with the running flag set, through the fake bridge and a real folder, and asserts the refusal is thrown without a list read, including when the bridge cannot list the rows, that bot.delete was not sent, and that the row and the folder remain; make check-ui runs both)`
 
 ## Talking to a bot
 
@@ -535,7 +651,13 @@ refused as a row whose definition does not resolve is ([BOT-10](#BOT-10)), namin
 **Why not only the bot's folder.** A bot works in the folders a person sends it into. The GUI
 already lets a bot take a project folder, and the terminal does the same.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::operations::a_turn_runs_in_its_home_a_recorded_folder_or_a_folder_opened_in_this_run`
+`verified-by: bravebot_agent::bots::operations::a_folder_outside_those_three_is_refused`
+`verified-by: bravebot_agent::bots::operations::a_path_that_differs_by_a_trailing_slash_or_a_dot_segment_is_refused`
+`verified-by: bravebot_agent::bots::operations::a_home_that_is_not_a_directory_is_refused`
+`verified-by: bravebot_agent::bots::operations::a_folder_whose_name_is_not_text_is_refused`
+`verified-by: bravebot_ui_bridge::bots::a_turn_folder_checked_through_the_bridge_allows_only_the_three`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-directory.test.mjs asserts that worksIn calls the bridge, that the home is allowed, a not-yet-chosen absolute path is refused, an undefined folder is refused, a folder chosen in this run is allowed and the one beside it is not, a recorded conversation folder is allowed after a fresh load, a cancelled picker leaves the path refused, an offered directory that mayOpenSessionIn accepts is refused, a path that differs by a trailing slash or a dot segment is refused, and a home that is not a directory is refused while another folder is not; ui/scripts/session-directory.test.mjs keeps its assertions on mayOpenSessionIn; make check-ui runs both. The terminal's check of a folder moved to with /cd is not built. The module refuses a folder whose name is not text with the same answer as a folder outside the three, and the bridge only receives text, so the GUI does not show a separate line for it. A turn in the home directory, in a folder that holds it, or with that directory opened beside the session, is not refused here. Slice 7 still has that refusal)`
 
 <a id="BOT-10"></a>
 ### BOT-10: every turn of a bot's session in the terminal addresses the bot's definition
@@ -575,7 +697,10 @@ the bot.
 
 When a turn of a bot's session ends, the terminal records the session's identifier and folder in the
 row, as the GUI does: the row's `session` becomes that identifier and the conversation is added
-to `conversations` once. A turn that fails records the identifier too, when the agent's answer to the
+to `conversations` once. When the row exists, a session that is not an identifier, or a directory
+that is not absolute, is refused and the file is left as it was. A missing row is left as it was
+and is not an error, including when that session or directory would have been refused. A note that
+does not write the file leaves a failure already shown. A turn that fails records the identifier too, when the agent's answer to the
 failure carries one, as the GUI records it on `turn.error` as well as `turn.done`. The identifier
 is read off what the agent answered, never off anything the person typed. A session continued in the bots layout is the row's `session` or one chosen from the
 row's `conversations`, each shown with its folder.
@@ -610,7 +735,12 @@ the same conversations in both surfaces. Reading session records for a slug woul
 record does not have, and a conversation can run in any folder, so a slug in the record would leave two
 lists to keep equal. A slug in the record is a product alternative this design leaves open.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::operations::a_recorded_conversation_sets_the_session_and_is_added_once`
+`verified-by: bravebot_agent::bots::operations::a_conversation_the_parser_would_not_keep_is_refused_and_writes_nothing`
+`verified-by: bravebot_agent::bots::operations::an_archive_length_only_rises`
+`verified-by: bravebot_agent::bots::operations::releasing_a_session_clears_it_and_keeps_the_conversation`
+`verified-by: bravebot_agent::bots::operations::forgetting_a_deleted_conversation_removes_it_from_every_row_that_lists_it`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a recorded conversation sets the session and is added once, that a second note of the same pair does not add it again, that an archive length only rises, that a release sets session to none and archived to zero and keeps the conversation, and that a forgotten conversation is removed from every row that lists it and releases a row whose session equals that id, with updated stamped on each write and the definition bytes unchanged; ui/scripts/bot-store.test.mjs asserts that a note which does not write the file leaves a failure already shown; make check-ui runs both. The terminal does not record a turn, does not continue a conversation from the layout, and has no delete of a conversation)`
 
 <a id="BOT-12"></a>
 ### BOT-12: a bot's session is refused with incognito
@@ -777,14 +907,21 @@ A layout decides which panes are drawn around the chat and which keys reach them
 session, the transcript, the approvals or the margin drawn around untrusted content, which are one
 implementation shared by every layout.
 
-`/layout <name>` ends the current session and opens the named layout with no carried session, so nothing a
-session read, was granted or holds carries into the next one. The ended session is already recorded
+`/layout <name>` ends the current session and opens the named layout with no carried session. The
+transcript, what the session read, the directories it added, the paths and hosts it was let reach and
+the answers it was given, and the file watches its hooks began do not carry into the next one. The sandbox mode
+and the Model Context Protocol servers the session started do carry, as they do across `/resume` and
+`/clear`, so a mode typed with `/sandbox` and a server the person approved last until the process
+ends. The ended session is already recorded
 and is found by `--resume`, and a bot's conversation is already recorded in its row
 ([BOT-11](#BOT-11)). The command is refused, with a line saying why and nothing ended, while a turn is
 running, while a question is waiting for an answer, while lines are queued, while a form or a
 confirmation is open, drawn or not, with a line saying to save or cancel it first, while a `/loop`,
 `/goal` or `/after` is pending, and in a run started with
-`--incognito`, whose session writes no record to find again. It does not wait for the turn to end, as
+`--incognito`, whose session writes no record to find again, and in a session that works under an
+agent definition that `--agent` or a record gave, since the next session would not keep it. A
+definition the `agent` setting chose does not refuse it, since the next session is addressed to the
+same definition. It does not wait for the turn to end, as
 `/branch` does ([SESSION-31](sessions.md#SESSION-31)), because the screen would change later with
 nothing typed.
 
@@ -795,13 +932,27 @@ conversations begins a session in the bots layout, after the folder startup ques
 ([BOT-9](#BOT-9)). `/layout default` begins a fresh session in the default layout. Archiving the bot
 whose session is open ends the session and returns to the phase with none. The phase with no session
 draws the prompt box, which takes only `/layout`, the key help and quitting, and any other line is
-refused with a line saying to choose a bot first. The prompt box follows
+refused with a line saying to choose a bot first. The key list and the slash menu offer only what the
+box takes. The prompt box follows
 [INPUT-4](terminal-input.md#INPUT-4): Esc on it discards a half-typed line and does nothing on an empty
 one, and Ctrl-C leaves only on the last rung of its ladder, so one press never ends the interface. In the
 panes Esc goes back one level, and at the top level of a pane it returns focus to the prompt, as it does
 in a session. The phase starts with focus in the bots list, so a person can choose a bot without a
 chord. A person leaves the phase for a default session with `/layout default`, and leaves the interface
 by the ladder, which Ctrl-C follows in the panes as it does in the prompt box.
+
+The first Ctrl-C of the ladder says on screen that a second one leaves, at the right of the hint line
+and at every width, as the default layout does. The hint line names the chord that moves between the
+list and the prompt only where the list is drawn, since the chord does nothing below 100 columns.
+Where the list is drawn the hint also names Esc as the way back to the prompt. Where the list is not
+drawn the hint does not name Esc.
+
+Below 100 columns the phase always draws the line about width, and draws a refusal or any other
+message on the rows under it, so a message never replaces that line. A message goes at the next key
+that reaches the screen, whichever pane has the focus. While the list has the focus a paste and a drop
+reach no prompt box, and Ctrl-C, Ctrl-D and the suspend chord ([INPUT-47](terminal-input.md#INPUT-47))
+reach their handlers from the list. When rows still sit in `bravebot-ui.json` because they could not
+be moved ([BOT-4](#BOT-4)), the list does not say there are no bots and draws a line naming that file.
 
 `--layout <name>` goes only with a bare start of the interactive interface. It is refused, naming
 both flags, with `--resume`/`-r`, `--continue`/`-c`, `--fork`/`-f` and `--from-pr`; with
@@ -823,10 +974,13 @@ refused and not ignored, for the reason [CLI-13](cli.md#CLI-13) gives about a se
 
 **Keys and focus.** The bots layout is a mode over the session, as the delegate view is and as the
 info panel's files state is ([FILES-3](files-mode.md#FILES-3)). The prompt
-and the chat keep the keys they have in any session. A chord moves focus from the prompt to the panes,
-and Esc returns to the prompt. The chord is not one the input spec takes already
-([INPUT-32](terminal-input.md#INPUT-32), [INPUT-47](terminal-input.md#INPUT-47) and
-[INPUT-48](terminal-input.md#INPUT-48)), and the slice's pull request adds it to the table of keys. In a pane, Up and Down or `j` and `k` move through a list, Enter picks,
+and the chat keep the keys they have in any session. The action `panes` moves focus from the prompt to
+the panes, and pressed again it moves focus back. Its default chord is `alt-p`, and a settings file
+can move it as it moves the other actions ([INPUT-32](terminal-input.md#INPUT-32)). Esc at the top
+level of a pane also returns focus to the prompt. In the default layout the chord types its
+letter. The bindings report it as a chord, and the layout does not take the key. The panel chord ([PANEL-5](info-panel.md#PANEL-5)) is taken and does
+nothing in the bots layout: it does not open or close the info panel, which the layout does not draw,
+and it does not write the saved choice of whether the panel is open. In a pane, Up and Down or `j` and `k` move through a list, Enter picks,
 Tab moves to the next pane, and Esc goes back one level. A list is drawn as the `--resume` picker is
 drawn, and a refusal or a failed write that names its path is a line under the list, as that picker
 draws one. Archive and delete ask as that picker's delete asks, with a question naming the bot: `y`
@@ -852,7 +1006,8 @@ In the bots layout, `/branch` and `/resume` are refused with a line naming `--fo
 since either would leave a session with no bot in a layout that holds only bots
 ([BOT-11](#BOT-11)). `/manifest` is refused in a bot's session, as `--mode manifest` is refused with
 an addressed run ([CLI-17](cli.md#CLI-17)). `/panel` and `/files` are refused, since the layout draws no info
-panel. `/rewind` follows the rule `/undo` does ([BOT-14](#BOT-14)). `/clear` and `/handoff` open a new
+panel, and they leave the panel's open state and its saved choice as they were. The hint line does
+not name the panel chord in the bots layout. `/rewind` follows the rule `/undo` does ([BOT-14](#BOT-14)). `/clear` and `/handoff` open a new
 session of the same bot, which is added to the row after its first turn and whose record names no
 definition ([BOT-10](#BOT-10), [BOT-11](#BOT-11)). `/memory`, `/mcp` and every other command work as
 in any session.
@@ -883,7 +1038,122 @@ definition) is unchanged. It does not open the bots layout and does not read the
 session it starts is not recorded in a row. `--layout bots` given with `--agent` is refused, since a
 bot's session is addressed to the definition of its row and the flag would name a second one.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::layout_tests::no_bots_draws_one_line_saying_how_to_make_one`
+`verified-by: bravebot_tui::app::layout_tests::the_list_names_the_keys_that_apply_to_the_selected_row`
+`verified-by: bravebot_tui::app::layout_tests::narrowing_keeps_a_forms_text_and_cancels_a_confirmation`
+`verified-by: bravebot_tui::app::layout_tests::layout_is_refused_while_a_form_or_a_confirmation_is_open`
+`verified-by: bravebot_tui::app::layout_tests::the_first_ctrl_c_on_a_form_or_a_confirmation_follows_the_ladder`
+`verified-by: bravebot_tui::app::layout_tests::a_short_pane_still_draws_the_confirmation`
+`verified-by: bravebot_tui::app::layout_tests::a_one_row_pane_names_the_bot_and_says_how_to_agree`
+`verified-by: bravebot_tui::bots_form::a_make_selects_the_new_bot`
+`verified-by: bravebot_tui::app::layout_tests::a_paste_while_the_form_is_not_drawn_or_a_confirmation_is_open_changes_nothing`
+`verified-by: bravebot_tui::app::layout_tests::a_file_that_does_not_parse_shows_no_rows_and_names_its_path`
+`verified-by: bravebot_tui::app::layout_tests::a_row_reads_a_bounded_prefix_of_a_purpose_with_no_length_bound`
+`verified-by: bravebot_tui::app::layout_tests::a_row_with_a_multi_megabyte_purpose_draws_the_same_row_as_its_first_screenful`
+`verified-by: bravebot_tui::app::layout_tests::rows_still_in_the_desktops_file_are_not_called_no_bots`
+`verified-by: bravebot_tui::app::layout_tests::an_unreadable_file_is_named_and_the_old_rows_line_is_not_drawn_beside_it`
+`verified-by: bravebot_tui::app::layout_tests::dropped_entries_are_a_line_naming_the_file`
+`verified-by: bravebot_tui::app::layout_tests::the_panes_need_100_columns_and_the_prompt_box_is_drawn_at_any_width`
+`verified-by: bravebot_tui::app::layout_tests::a_session_in_the_bots_layout_draws_the_panes_and_no_info_panel`
+`verified-by: bravebot_tui::app::layout_tests::a_drag_in_one_pane_never_copies_the_other`
+`verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_pane_is_dropped_when_the_pane_stops_being_drawn`
+`verified-by: bravebot_tui::app::layout_tests::the_arrows_and_j_and_k_move_through_the_list_and_stop_at_its_ends`
+`verified-by: bravebot_tui::app::layout_tests::the_marker_is_drawn_on_the_selected_bot`
+`verified-by: bravebot_tui::app::layout_tests::enter_on_a_bot_says_so_and_begins_no_session`
+`verified-by: bravebot_tui::app::layout_tests::tab_with_one_pane_drawn_moves_nothing`
+`verified-by: bravebot_tui::app::layout_tests::escape_returns_focus_to_the_prompt`
+`verified-by: bravebot_tui::app::layout_tests::the_chord_moves_focus_both_ways_and_nothing_where_no_pane_is_drawn`
+`verified-by: bravebot_tui::app::layout_tests::narrowing_the_terminal_returns_focus_to_the_prompt`
+`verified-by: bravebot_tui::app::layout_tests::the_shortcut_list_names_the_panes_chord_in_the_bots_layout`
+`verified-by: bravebot_tui::app::layout_tests::the_shortcut_list_of_the_default_layout_does_not_name_the_panes_chord`
+`verified-by: bravebot_tui::app::layout_tests::in_the_default_layout_the_chord_types_its_letter_as_before`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_in_the_panes_follows_the_ladder`
+`verified-by: bravebot_tui::app::layout_tests::the_panel_chord_does_nothing_in_the_bots_layout`
+`verified-by: bravebot_tui::app::layout_tests::the_prompt_box_follows_the_ladder_of_the_input_spec`
+`verified-by: bravebot_tui::app::layout_tests::a_line_other_than_a_layout_help_or_quitting_is_refused`
+`verified-by: bravebot_tui::app::layout_tests::layout_quitting_and_the_key_list_are_taken_at_any_width`
+`verified-by: bravebot_tui::app::layout_tests::layout_names_the_layouts_that_exist_when_it_is_refused`
+`verified-by: bravebot_tui::app::layout_tests::the_chords_of_actions_that_need_a_session_do_nothing`
+`verified-by: bravebot_tui::app::layout_tests::no_key_and_no_enter_hands_the_loop_an_action_the_screen_does_not_carry_out`
+`verified-by: bravebot_tui::app::layout_tests::a_frame_is_drawn_after_an_event_that_changes_the_screen_and_not_after_a_timeout`
+`verified-by: bravebot_tui::app::layout_tests::a_refusal_below_100_columns_is_drawn_under_the_line_about_width_and_the_next_key_clears_it`
+`verified-by: bravebot_tui::app::layout_tests::the_message_of_a_refused_line_goes_with_the_next_key_wherever_the_focus_is`
+`verified-by: bravebot_tui::app::layout_tests::a_key_that_takes_a_message_away_in_the_loop_owes_the_frame_that_removes_it`
+`verified-by: bravebot_tui::app::layout_tests::a_paste_or_a_drop_while_the_list_has_the_keys_reaches_no_box`
+`verified-by: bravebot_tui::app::layout_tests::a_picture_pasted_while_the_list_has_the_keys_names_no_chord`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_and_ctrl_d_reach_the_ladder_from_the_list`
+`verified-by: bravebot_tui::app::layout_tests::the_suspend_chord_reaches_its_handler_from_the_list`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_moved_onto_ctrl_alt_c_or_d_does_not_reach_the_prompt_from_the_list`
+`verified-by: bravebot_tui::app::layout_tests::a_drag_in_the_list_never_copies_the_prompt_box_and_the_reverse`
+`verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_list_is_dropped_when_a_resize_below_100_columns_stops_drawing_it`
+`verified-by: bravebot_tui::app::layout_tests::the_first_ctrl_c_says_the_next_one_leaves_at_every_width`
+`verified-by: bravebot_tui::app::layout_tests::a_key_that_takes_the_offer_back_takes_its_line_off_the_screen`
+`verified-by: bravebot_tui::app::layout_tests::the_panel_chord_and_the_chords_that_need_a_session_take_the_offer_back_and_say_so`
+`verified-by: bravebot_tui::app::layout_tests::the_panes_chord_takes_the_offer_back_and_says_so_where_no_list_is_drawn`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_takes_back_the_note_of_a_cleared_line_that_offered_no_exit`
+`verified-by: bravebot_tui::app::layout_tests::the_panes_chord_takes_the_offer_back_and_says_so_where_the_list_is_drawn`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_with_no_offer_to_take_back_owes_no_frame`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_that_takes_the_offer_back_in_the_loop_owes_the_frame_that_removes_it`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_with_no_offer_standing_owes_no_frame_in_the_loop`
+`verified-by: bravebot_tui::app::layout_tests::the_hint_names_the_panes_chord_only_where_the_panes_are_drawn`
+`verified-by: bravebot_tui::app::layout_tests::a_step_quits_changes_layout_or_stays`
+`verified-by: bravebot_tui::app::layout_tests::the_key_list_holds_only_what_the_phase_takes`
+`verified-by: bravebot_tui::app::layout_tests::the_key_list_names_the_suspend_chord_the_phase_takes`
+`verified-by: bravebot_tui::app::layout_tests::the_slash_menu_holds_only_what_the_phase_takes`
+`verified-by: bravebot_tui::app::layout_tests::a_session_in_the_default_layout_still_offers_everything`
+`verified-by: bravebot_tui::app::layout_tests::the_screen_takes_the_name_off_the_title_of_the_session_it_follows`
+`verified-by: bravebot_tui::app::layout_tests::branch_resume_and_manifest_are_refused`
+`verified-by: bravebot_tui::app::layout_tests::the_panel_commands_and_chord_change_neither_the_flag_nor_the_saved_choice`
+`verified-by: bravebot_tui::app::layout_tests::files_is_refused_with_its_own_line_where_a_file_was_written`
+`verified-by: bravebot_tui::app::layout_tests::the_default_layout_given_the_same_keys_opens_the_panel_and_saves_the_choice`
+`verified-by: bravebot_tui::app::layout_tests::the_pane_reads_the_bots_file_through_the_module`
+`verified-by: bravebot_tui::app::layout_tests::an_idle_session_ends_into_the_layout_named`
+`verified-by: bravebot_tui::app::layout_tests::it_is_refused_with_a_line_while_a_turn_runs_lines_wait_or_a_loop_goal_or_after_is_pending`
+`verified-by: bravebot_tui::app::layout_tests::typed_mid_turn_it_is_refused_at_once_and_never_waits`
+`verified-by: bravebot_tui::app::layout_tests::the_layout_already_open_is_said_and_ends_nothing`
+`verified-by: bravebot_tui::app::layout_tests::a_session_working_under_an_agent_definition_is_refused_and_ends_nothing`
+`verified-by: bravebot_tui::app::layout_tests::a_definition_the_agent_setting_chose_does_not_refuse_the_layout`
+`verified-by: bravebot_tui::app::layout_tests::the_command_is_in_the_table_and_spells_the_layouts`
+`verified-by: bravebot_tui::app::layout_tests::an_open_mode_keeps_its_keys_through_both_handlers`
+`verified-by: bravebot_tui::app::layout_tests::escape_in_the_panes_does_not_stop_a_turn_and_ctrl_c_does`
+`verified-by: bravebot_tui::app::layout_tests::the_bots_layout_starts_with_no_session_and_the_default_begins_one`
+`verified-by: bravebot_tui::app::layout_tests::a_session_that_chose_the_bots_layout_ends_into_its_screen_with_what_it_left`
+`verified-by: bravebot_tui::app::layout_tests::leaving_the_screen_begins_a_fresh_session_or_ends_the_interface`
+`verified-by: bravebot_tui::app::layout_tests::the_first_session_fires_the_moment_once_and_a_session_begun_by_layout_does_not_fire_it_again`
+`verified-by: bravebot_tui::app::layout_tests::leaving_ends_what_the_session_was_granted_and_carries_what_resume_carries`
+`verified-by: bravebot_tui::app::layout_tests::the_window_moves_only_when_the_selection_leaves_it`
+`verified-by: bravebot_tui::app::layout_tests::the_last_page_keeps_the_marker_moving_up_the_screen`
+`verified-by: bravebot_tui::app::layout_tests::a_window_that_changes_height_keeps_the_selection_in_view`
+`verified-by: bravebot_tui::app::layout_tests::the_list_is_drawn_before_the_notes_under_it_where_both_cannot_fit`
+`verified-by: bravebot_tui::app::layout_tests::escape_clears_a_typed_line_without_quitting`
+`verified-by: bravebot_tui::app::layout_tests::escape_on_an_empty_line_does_nothing_and_twice_clears_and_stays`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_on_a_line_takes_it_and_offers_and_the_second_press_leaves`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_on_an_empty_box_offers_without_claiming_a_line_went`
+`verified-by: bravebot_tui::app::layout_tests::a_key_between_the_two_presses_withdraws_the_offer`
+`verified-by: bravebot_tui::app::layout_tests::input_that_is_not_a_key_withdraws_the_offer`
+`verified-by: bravebot_tui::app::layout_tests::two_interrupts_in_one_read_do_not_leave_and_arm_nothing`
+`verified-by: bravebot_tui::app::layout_tests::two_end_of_transmissions_in_one_read_do_not_leave`
+`verified-by: bravebot_tui::app::layout_tests::a_refused_way_out_says_so_in_the_message_of_the_screen`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_d_leaves_only_from_an_empty_box_and_on_the_second_press`
+`verified-by: bravebot_tui::app::layout_tests::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::layout_tests::letting_go_of_the_keys_in_either_order_still_leaves`
+`verified-by: bravebot_tui::layout_incognito::layout_is_refused_with_a_line_and_ends_nothing`
+`verified-by: bravebot_cli::flags::layout_tests::every_entry_of_the_commands_own_lists_is_refused`
+`verified-by: bravebot_cli::flags::layout_tests::every_flag_and_command_the_spec_lists_is_refused`
+`verified-by: bravebot_cli::flags::layout_tests::a_flag_taken_out_earlier_and_a_bare_task_are_refused_by_name`
+`verified-by: bravebot_cli::flags::layout_tests::a_bare_start_is_accepted`
+`verified-by: bravebot_cli::layout_flag_tests::a_name_no_layout_answers_to_is_refused_naming_the_layouts`
+`verified-by: bravebot_cli::layout_flag_tests::an_empty_name_is_refused_as_a_missing_one_is`
+`verified-by: bravebot_cli::layout_flag_tests::a_parsed_layout_opens_that_layout_and_default_is_a_fresh_session`
+`verified-by: bravebot_cli::layout_flag_tests::a_missing_name_is_refused`
+`verified-by: bravebot_cli::layout_flag_tests::default_is_accepted_and_the_last_name_wins`
+`verified-by: bravebot_cli::layout_flag::a_name_no_layout_answers_to_is_refused_with_the_names_that_exist`
+`verified-by: bravebot_cli::layout_flag::a_line_that_is_not_a_bare_start_is_refused_naming_both_flags`
+`verified-by: bravebot_cli::layout_flag::the_order_of_the_arguments_does_not_change_the_refusal`
+`verified-by: bravebot_cli::layout_flag::the_version_and_the_help_win_over_the_layout_wherever_it_is_given`
+`verified-by: bravebot_cli::layout_flag::the_usage_text_lists_every_layout_name`
+`verified-by: bravebot_tui::keybindings::the_panes_chord_is_alt_p_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_panes_chord_is_contested_like_every_other`
 
 <a id="BOT-18"></a>
 ### BOT-18: the terminal draws a bot's face beside its name and leaves its avatar as it is
@@ -901,7 +1171,9 @@ seed, and the seed of every other bot is left as it is.
 already has the drawing. Five rows to a bot makes a long list, and the face can be taken out of the
 list later if the list looks too packed.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::layout_tests::each_bot_is_drawn_with_the_face_its_seed_describes_and_is_as_tall_as_the_face`
+`verified-by: bravebot_tui::app::layout_tests::the_bots_are_drawn_in_the_order_the_module_returned_them`
+`verified-by: bravebot_tui::app::layout_tests::control_characters_are_replaced_and_a_seed_is_never_drawn_as_text`
 
 ## Known costs
 
@@ -910,6 +1182,12 @@ list later if the list looks too packed.
   its memory is withheld, and from `/memory`, which lists the memory as withheld
   ([MEMORY-12](definition-memory.md#MEMORY-12)). The memory pane does not mark the folder, so a bot that does not mention it
   looks as if it keeps nothing. The GUI behaves the same today.
+- **A write removes the entries the read dropped.** The read drops a row that fails the rules of
+  [BOT-3](#BOT-3) and every row past the 100th, and the next write does not put them back. A hand-edited
+  mistake in a row loses that row on the next write. [COMPAT-001](../best-practices/compatibility.md#COMPAT-001)
+  says a reader must not discard data it cannot parse, and this clause does. The owner accepted it on
+  2026-10-22. The read reports each dropped entry with its reason, and the GUI shows the report before
+  the write removes the entry. The GUI's own save did the same before the module existed.
 - **A purpose has no length bound.** It is the body of the definition read into every turn, so a long
   one costs tokens on every turn and can exceed the model's context. It is also stored in the shared
   file, which is read whole ([BOT-3](#BOT-3)).
@@ -960,8 +1238,6 @@ list later if the list looks too packed.
   bot's working folder inside the state directory.** The bot keeps no memory there
   ([MEMORY-2](definition-memory.md#MEMORY-2)), and a folder holding the state directory leaves its
   definition unread ([SKILL-3](skills.md#SKILL-3)). Both fail safe.
-- **Clearing a bot's model from the edit form is not specified.** The row keeps the model it has until
-  a later change says what an empty field means.
 - **What `/memory` does in the bots layout before a session exists is not specified.** The command
   works in a bot's session ([BOT-13](#BOT-13)).
 - **Each bot in the list is five rows tall because of its face, so a long list is tall.** The face can be

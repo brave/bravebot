@@ -901,3 +901,11 @@ test('a bot is thinking only while no tool of the turn is running, whatever foll
   assert.equal(live.thinking(at([running, t.turnStarted(2), t.narrated('Next')])), true, 'a tool left from an earlier turn does not count')
   assert.equal(live.thinking(at([t.turnStarted(1), running], 'working')), false)
 })
+
+test('a model the agent refuses for a bot is put on the banner and the list is read again', () => {
+  const source = readFileSync('src/renderer/App.tsx', 'utf8')
+  const start = source.indexOf('const chooseModel = useCallback')
+  assert.ok(start > 0, 'the handler is not where this test looks for it')
+  const handler = source.slice(start, source.indexOf('const chooseMode = useCallback', start))
+  assert.match(handler, /settleBotModelWrite\(window\.bravebot\.writeBotModel\(current\.bot\.slug, model\), setProblem, readBots\)/)
+})

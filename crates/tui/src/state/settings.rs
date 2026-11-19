@@ -17,6 +17,15 @@ impl Session {
         self
     }
 
+    pub fn in_layout(mut self, layout: crate::layout::Layout) -> Self {
+        self.interface_layout = layout;
+        self
+    }
+
+    pub fn interface_layout(&self) -> crate::layout::Layout {
+        self.interface_layout
+    }
+
     /// The sandbox mode the next turn's programs run under.
     pub fn sandbox_mode(&self) -> bravebot_sandbox::SandboxMode {
         self.sandbox.choice.mode
@@ -1020,6 +1029,10 @@ impl Session {
     /// and the next widening would bring back a panel nobody remembered opening. A press to close
     /// always closes, so a panel left open before the terminal was narrowed can be put away.
     pub fn toggle_panel(&mut self) {
+        if !self.interface_layout.draws_the_info_panel() {
+            self.note(t!(layout_draws_no_info_panel));
+            return;
+        }
         // The key hides the panel from either state, and the state goes with it (FILES-3).
         if self.files.take().is_some() | self.peek.take().is_some() {
             self.panel = false;
