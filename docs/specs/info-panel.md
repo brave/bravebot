@@ -20,14 +20,14 @@ issues and pull requests it is for and has met, the model and effort it runs on,
 cache, its token total, the language servers and MCP servers it has started, and its plan, and the
 checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)). A session
 gets its own links from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
-[`set_link`](tools/set-link.md) for an address the person typed. It lists the other issues and pull
+[`set_link`](tools/set-link.md) for an address the person typed, and, where it has none, from the
+planner's own commands ([PANEL-18](#PANEL-18)). It lists the other issues and pull
 requests it has met, which [PANEL-16](#PANEL-16) collects from the lines the person typed and from the
 planner's own tool-call arguments. A session does not get its
 links from what `gh pr create` prints. That needs a reader that branches on untrusted run output
 ([RUN-4](tools/run.md#RUN-4)), which is an exception no maintainer has accepted, so it is
-not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). The sections of
-met items are collected without it, and an issue the agent creates with `gh issue create` is listed
-only once a later argument or typed line names its number. How a session
+not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). PANEL-18 reads
+the command the planner wrote and the exit status, and never the output. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
 is closed is proposed in [background-sessions.md](background-sessions.md) and not built.
@@ -401,7 +401,8 @@ says the work is finished reads as work still going.
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
 with `/issue` and `/pr`, or `--issue` and `--pr`, or recorded by `set_link` for an address the person
-typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the rows of the
+typed ([SETLINK-1](tools/set-link.md#SETLINK-1)), or inferred from the planner's own commands
+([PANEL-18](#PANEL-18))), the planner's own `todo_write` rows, the rows of the
 Pull requests and Issues sections, which are the items [PANEL-16](#PANEL-16) collects from the lines
 the person typed and from the planner's own tool-call arguments once the gate that reads them has said the
 context is trusted; the driver's own counters (the context
@@ -457,7 +458,8 @@ starts none) is refused with them rather than dropping them.
 
 The planner's [`set_link`](tools/set-link.md) gives the session a link under the same check, and
 only for an address that is a whole word of a line the person typed ([SETLINK-1](tools/set-link.md#SETLINK-1)). It
-replaces the link of that kind and is written to the record as `/issue` is.
+replaces the link of that kind and is written to the record as `/issue` is. A link inferred from
+the planner's commands ([PANEL-18](#PANEL-18)) is recorded only while the slot is empty.
 
 `verified-by: bravebot_agent::turn::an_address_the_person_typed_reaches_set_link_and_leaves_the_turn`
 
@@ -755,6 +757,37 @@ migration.
 `verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
 `verified-by: bravebot_tui::state_directory::a_recorded_choice_is_readable_only_by_its_owner`
 
+<a id="PANEL-18"></a>
+### PANEL-18: a link is inferred from the command that created the item
+
+A session whose pull request or issue link is empty takes one from the planner's own commands. A
+`run` call whose line is `gh pr create`, `gh issue create` or `pr-fix.py open`, that ran and exited
+with status 0, makes the session wait for an item of that kind. The first later call whose arguments
+name an item of that kind by its words, with the kind stated and not assumed ([PANEL-16](#PANEL-16)),
+is the session's link of that kind, as the address of that item. A `--help` or `-h` in the same
+command segment is not a creation. A call is read against the creations before it and then, if it
+creates, noted, so the item a creating call names itself (a `Part of` line in its body) is not
+taken. The `pr-fix.py` steps `start`, `continue`, `ci`, `comments`, `check`, `push`, `review` and
+`reply` name the pull request they work on, in `brave/bravebot`, and `open` and `issue` name none,
+since their number is an issue.
+
+An inferred link fills an empty slot and nothing else. It never replaces a link the person gave or
+`set_link` recorded, and it is written to the record as they are. It is read only where
+[PANEL-16](#PANEL-16) reads, so a context that has met something untrusted infers none, and a
+front end that keeps no links infers none.
+
+**Why.** A session that opens a pull request by command leaves the session with no link, though the
+planner wrote the number in every later command. The inference reads the planner's own words and the
+exit status, which the driver made. It reads no output, so what a program printed cannot choose a
+link ([RUN-4](tools/run.md#RUN-4), [PANEL-11](#PANEL-11)).
+
+`verified-by: bravebot_agent::links::a_line_that_creates_an_item_is_read_from_its_words_and_help_creates_nothing`
+`verified-by: bravebot_agent::links::a_pr_fix_step_names_the_pull_request_it_works_on_and_open_names_none`
+`verified-by: bravebot_agent::links::the_first_item_of_the_created_kind_a_later_call_names_is_the_link_and_only_once`
+`verified-by: bravebot_agent::links::a_reference_named_before_any_creation_is_not_kept_for_later`
+`verified-by: bravebot_agent::references::the_pull_request_a_clean_creation_is_followed_by_becomes_the_sessions_link`
+`verified-by: bravebot_session::sessions::an_inferred_link_fills_an_empty_slot_and_never_replaces_one`
+
 ## Known costs
 
 - **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
@@ -770,9 +803,11 @@ migration.
   and pickers read their own events and none of them reads the pointer, so a pointer on the border
   when one opens keeps its shape until the prompt closes and the pointer next moves.
 
-- **An issue the agent creates appears only when a later argument or typed line names its number
+- **An issue the agent creates is listed only when a later argument or typed line names its number
   ([PANEL-16](#PANEL-16)).** The address `gh issue create` prints is a program's output and is never
   read, so the list does not hold it until something the person or the planner wrote names it.
+  The session's own link is inferred the same way ([PANEL-18](#PANEL-18)), from the first later
+  call that names an item of the created kind, which may be an item other than the created one.
 
 - **A command a rule then refuses still counts ([PANEL-16](#PANEL-16)).** The command is read where
   the planner's argument is read, before the checks that refuse it, so the items it names are listed

@@ -2584,6 +2584,8 @@ struct State<'s> {
     wakeup: Option<Wakeup>,
     watches: Vec<crate::watch::Armed>,
     links: Vec<crate::links::LinkSet>,
+    /// What the turn's own commands created, from which the session's links are inferred (PANEL-18).
+    inferring: crate::links::Inferring,
     /// The issues and pull requests this turn has named, which each is reported once from
     /// (PANEL-16).
     references: Vec<crate::links::Reference>,
@@ -3625,6 +3627,7 @@ where
         // about several files.
         watches: Vec::new(),
         links: Vec::new(),
+        inferring: crate::links::Inferring::default(),
         references: Vec::new(),
         armed: 0,
         // How many questions the planner has put to its advisor this turn, which the bound on them
