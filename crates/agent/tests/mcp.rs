@@ -8547,3 +8547,232 @@ fn no_more_checks_are_made_at_once_than_the_reads_of_one_round() {
         "the checks held open at one moment were not the eight a round may read"
     );
 }
+
+/// A server like the weather server, except that every call is answered by `failure`, which is
+/// given the request and builds the whole HTTP response.
+fn serve_failing_calls(failure: fn(&Value) -> String) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let response = match request.get("method").and_then(Value::as_str) {
+                Some("tools/call") => failure(&request),
+                _ => answered(&body, "get_forecast"),
+            };
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// A JSON-RPC error with code `code`, in a 200 reply.
+fn rejecting_with(request: &Value, code: i64) -> String {
+    let reply = json!({
+        "jsonrpc": "2.0",
+        "id": request.get("id"),
+        "error": {"code": code, "message": "x"},
+    })
+    .to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+        reply.len()
+    )
+}
+
+/// A reply with the HTTP status `status` and no body.
+fn answering_with_status(status: u16) -> String {
+    format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+}
+
+/// What the planner was sent as the answer to its call of the forecast tool, after a turn that
+/// made the call to `session`'s server.
+fn what_the_planner_was_told_of_a_call(session: Session, scratch: &Scratch) -> String {
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("show me the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let all: Vec<String> = chat.try_iter().collect();
+    the_answer_the_planner_got(&all)
+}
+
+/// MCP-8 and LABEL-3: a code a server chose in a JSON-RPC error, and a status an HTTP server
+/// answered with, are numbers the server picked, and neither reaches the planner. The planner is
+/// told a sentence this process wrote, and it is the same whatever the number is.
+///
+/// A wrong implementation puts the error's own text in the sentence (it holds the code and the
+/// status), so the digits reach the planner and two numbers give two sentences.
+#[test]
+fn a_code_or_a_status_a_server_chose_never_reaches_the_planner_over_http() {
+    let told = |failure: fn(&Value) -> String| {
+        let scratch = Scratch::new("mcp-failed-http");
+        let (url, _server) = serve_failing_calls(failure);
+        let session = session(&url, &scratch, true);
+        what_the_planner_was_told_of_a_call(session, &scratch)
+    };
+    let rejected = told(|request| rejecting_with(request, 1337133713371337));
+    assert_eq!(rejected, told(|request| rejecting_with(request, -32000)));
+    let unusable = told(|_| answering_with_status(599));
+    assert_eq!(unusable, told(|_| answering_with_status(400)));
+    assert_eq!(unusable, told(|_| answering_with_status(503)));
+    for sentence in [&rejected, &unusable] {
+        assert!(
+            sentence.contains("calling weather:get_forecast failed"),
+            "the failure is not told: {sentence}"
+        );
+        assert!(
+            !sentence.chars().any(|c| c.is_ascii_digit()),
+            "a number the server chose reached the planner: {sentence}"
+        );
+    }
+    assert_ne!(rejected, unusable);
+}
+
+/// A local server that fails every call with the JSON-RPC error code `CODE`.
+const REJECTING_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":CODE,"message":"x"}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+/// The same property over stdio: the code a local server chose does not reach the planner.
+#[test]
+fn a_code_a_server_chose_never_reaches_the_planner_over_stdio() {
+    let told = |code: i64| {
+        let scratch = Scratch::new("mcp-failed-stdio");
+        let source = REJECTING_SERVER.replace("CODE", &code.to_string());
+        let reached = reach_script(&scratch, &source, &[])?;
+        let session = Session::new(
+            vec![reached],
+            scratch.project(),
+            Some(scratch.state()),
+            true,
+            Managed::default(),
+        );
+        Some(what_the_planner_was_told_of_a_call(session, &scratch))
+    };
+    let Some(first) = told(1337133713371337) else {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    };
+    let second = told(-32000).expect("confinement was there a moment ago");
+    assert_eq!(first, second, "the code changed what the planner was told");
+    assert!(
+        first.contains("calling weather:get_forecast failed"),
+        "{first}"
+    );
+    assert!(
+        !first.chars().any(|c| c.is_ascii_digit()),
+        "a number the server chose reached the planner: {first}"
+    );
+}
+
+/// A 200 reply whose body is `length` bytes of text that is not JSON.
+fn answering_with_text(length: usize) -> String {
+    let body = "x".repeat(length);
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}"
+    )
+}
+
+/// MCP-8: the byte count of a reply with no JSON in it is a number the server chose, and it does
+/// not reach the planner.
+///
+/// A wrong implementation puts the error's own text in the sentence, which reads `returned no json
+/// payload (N bytes)`, so the count reaches the planner and two lengths give two sentences.
+#[test]
+fn a_byte_count_a_server_chose_never_reaches_the_planner_over_http() {
+    let told = |length: usize| {
+        let scratch = Scratch::new("mcp-no-payload-http");
+        let (url, _server) = match length {
+            4242 => serve_failing_calls(|_| answering_with_text(4242)),
+            _ => serve_failing_calls(|_| answering_with_text(17)),
+        };
+        let session = session(&url, &scratch, true);
+        what_the_planner_was_told_of_a_call(session, &scratch)
+    };
+    let long = told(4242);
+    assert_eq!(
+        long,
+        told(17),
+        "the length changed what the planner was told"
+    );
+    assert!(
+        long.contains("calling weather:get_forecast failed: the server's reply could not be used"),
+        "{long}"
+    );
+    assert!(
+        !long.chars().any(|c| c.is_ascii_digit()) && !long.contains("payload"),
+        "the server's reply left a trace in what the planner was told: {long}"
+    );
+}
+
+/// A local server that answers every call with a line that is not UTF-8.
+const GARBLING_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '\377\376\n'
+      ;;
+  esac
+done
+"#;
+
+/// MCP-8: a line a local server wrote that cannot be read is told to the planner as the fixed
+/// sentence for an unusable reply, and not as the reader's own `could not read a reply` text.
+///
+/// A wrong implementation formats the error's own text into the sentence, which holds the
+/// reader's words about what was wrong with the line.
+#[test]
+fn a_line_a_local_server_wrote_that_cannot_be_read_is_told_in_the_fixed_sentence() {
+    let scratch = Scratch::new("mcp-unreadable-stdio");
+    let Some(reached) = reach_script(&scratch, GARBLING_SERVER, &[]) else {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    };
+    let session = Session::new(
+        vec![reached],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let told = what_the_planner_was_told_of_a_call(session, &scratch);
+    assert!(
+        told.contains("calling weather:get_forecast failed: the server's reply could not be used"),
+        "{told}"
+    );
+    assert!(
+        !told.contains("could not read a reply") && !told.contains("utf-8"),
+        "the reader's own words reached the planner: {told}"
+    );
+}

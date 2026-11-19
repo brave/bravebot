@@ -2111,8 +2111,8 @@ This spec cannot land without these. Each is named by what the clause says rathe
   somewhere, and does not start confined.
 - **No interface shows a server's stderr.** A server's diagnostics are discarded in the full-screen
   interface, the plain interface, a one-shot run and the desktop application ([SERVERS-25](#SERVERS-25)).
-  A server that fails says only what its failure's code and method say, and the way to read its
-  own output is to run it by hand.
+  A server that fails outside a call says only what its failure's code and method say, and a
+  failed call does not say its code at all. The way to read its own output is to run it by hand.
 - **A server too slow for its handshake is left out.** A stdio server that has not answered
   `initialize`, `tools/list` or, where it declared prompts, `prompts/list` within its startup bound is
   stopped and left out of the session ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request

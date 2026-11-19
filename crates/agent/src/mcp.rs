@@ -2445,15 +2445,73 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
         Ok(result) => Called::Answered(result),
         Err(McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
         Err(error @ (McpError::Server { .. } | McpError::Unusable(_))) => {
-            Called::Unusable(format!("error: calling {name} failed: {error}"))
+            Called::Unusable(reply_failure(&name, &error))
         }
         Err(error) => Called::Problem(format!("error: calling {name} failed: {error}")),
     }
 }
 
+/// The sentence the planner is told when a server replied and the reply is not a result.
+///
+/// One of two sentences this process wrote, chosen by which kind of reply it was. The error's own
+/// text is left out: a JSON-RPC code is a number the server chose, and the detail of an unusable
+/// reply holds the HTTP status the server answered with or a byte count of its body (MCP-8).
+fn reply_failure(name: &str, error: &McpError) -> String {
+    let said = match error {
+        McpError::Server { .. } => "the server rejected the call",
+        _ => "the server's reply could not be used",
+    };
+    format!("error: calling {name} failed: {said}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MCP-8: the sentence told to the planner for a reply that is not a result is one of two
+    /// sentences this process wrote, whatever code the server chose or status it answered with.
+    ///
+    /// A wrong implementation formats the error's `Display` into the sentence, which holds the
+    /// code and the status, so two codes or two statuses give two sentences and the digits appear.
+    #[test]
+    fn a_reply_that_is_not_a_result_is_told_in_one_of_two_fixed_sentences() {
+        let rejected = |code: i64| {
+            reply_failure(
+                "weather:forecast",
+                &McpError::Server {
+                    code,
+                    method: "tools/call".to_string(),
+                },
+            )
+        };
+        let unusable = |detail: &str| {
+            reply_failure("weather:forecast", &McpError::Unusable(detail.to_string()))
+        };
+
+        let sentence = rejected(1337133713371337);
+        assert_eq!(sentence, rejected(-32000));
+        assert_eq!(sentence, rejected(i64::MAX));
+        let other = unusable("https://x.example/mcp returned HTTP 599");
+        assert_eq!(other, unusable("https://x.example/mcp returned HTTP 400"));
+        assert_eq!(
+            other,
+            unusable("tools/call returned no json payload (4242 bytes)")
+        );
+        assert_ne!(
+            sentence, other,
+            "a rejection is told from an unusable reply"
+        );
+        for told in [&sentence, &other] {
+            assert!(
+                told.starts_with("error: calling weather:forecast failed: "),
+                "{told}"
+            );
+            assert!(
+                !told.chars().any(|c| c.is_ascii_digit()),
+                "a number a server chose reached the sentence: {told}"
+            );
+        }
+    }
 
     /// A server only a manifest run calls is never asked for a prompt by a turn: the request is
     /// refused before anything is sent. The server's address answers nothing, so a request that

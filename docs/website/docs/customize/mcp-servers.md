@@ -535,11 +535,11 @@ A tool that ran and reported its own failure is handled like any other result: y
 server said about it behind the margin, and the model is handed a reference to it and told the
 call failed. The model is never sent the server's account of the failure.
 
-Every other failure is reported in bravebot's own words, which name the tool, the protocol method
-and the code the server answered with, and nothing the server wrote. A server that fails for a
-reason only its own sentence gives, or a reply bravebot cannot parse, therefore shows a code and a
-method and nothing more. A server's own error output is discarded in every interface, so to read
-it run the server by hand.
+Every other failure is reported in bravebot's own words, which name the tool and never a code or a
+status the server chose. A server that fails for a reason only its own sentence gives, or a reply
+bravebot cannot parse, therefore shows only that the server rejected the call or that its reply
+could not be used, and the model is told the same. A server's own error output is discarded in
+every interface, so to read it run the server by hand.
 
 ### Asking again
 
