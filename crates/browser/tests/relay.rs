@@ -2463,6 +2463,20 @@ fn declared(directory: &Path, group: Option<&str>) -> String {
             .iter()
             .map(|pair| format!(" --choice {pair}"))
             .collect(),
+        // The arguments a row of a plan's apply step may fill, with their kinds.
+        Some("bookmarks-write") => " --apply create_bookmark_folder:title=new \
+                                    --apply move_bookmark:url=entry \
+                                    --apply move_bookmark:folder=row,entry \
+                                    --apply rename_bookmark:url=entry \
+                                    --apply rename_bookmark:title=new \
+                                    --apply add_reading_list_entry:url=entry \
+                                    --apply add_reading_list_entry:title=entry,new"
+            .split_whitespace()
+            .fold(String::new(), |line, word| line + " " + word),
+        Some("tabs-manage") => {
+            " --apply pin_tab:url=entry --apply group_tabs:urls=entries --apply group_tabs:title=new"
+                .to_string()
+        }
         _ => String::new(),
     };
     let (alias, asked, bound, group) = match group {

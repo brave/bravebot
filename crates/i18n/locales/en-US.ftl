@@ -1671,6 +1671,7 @@ mcp-image-unpinned = { $image } could not be pinned: { $reason }. Give the image
 mcp-image-not-a-reference = it is not an image reference
 mcp-image-refused = its registry answered { $status }, which is so of a private image or one that does not exist
 mcp-choice-needs-a-pair = --choice needs a tool and an argument, written <TOOL>:<ARGUMENT>
+mcp-apply-needs-a-kind = --apply needs a tool, an argument and a kind, written <TOOL>:<ARGUMENT>=<entry|entries|new|row>, several kinds joined by commas
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -1711,6 +1712,9 @@ mcp-problem-choice =
 mcp-problem-choice-without-asking = choice_arguments needs ask_every_call to be true
 mcp-problem-backend = backend is not openshell
 mcp-problem-backend-image = image must be one container image reference, given with backend openshell
+mcp-problem-apply =
+    apply_arguments must be an object of tool names, each with an object of argument names and one or more of entry, entries, new or row joined by commas
+mcp-problem-apply-while-asking = apply_arguments needs ask_every_call to be false
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1756,6 +1760,7 @@ mcp-declaration-exclude-tools = exclude tools: { $names }
 mcp-declaration-asks-every-call = every call is asked about, and no answer to one is remembered
 # The arguments a declaration says a choice may fill, each as tool:argument.
 mcp-declaration-choice-arguments = arguments that take a choice: { $pairs }
+mcp-declaration-apply-arguments = arguments a plan's apply step may fill: { $named }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
@@ -1962,7 +1967,8 @@ mcp-tools-offered =
 mcp-tools-none = { $alias } lists no tool it can offer
 mcp-tools-explained =
     The model will read each tool's name, its arguments and what the server says about it, as
-    shown here. Every call is still put to you. Say no if a description gives instructions.
+    shown here. Every call is still put to you, or shown on a plan you approve. Say no if a
+    description gives instructions.
 mcp-tools-not-listed =
     { $count ->
         [one] one more tool is not listed: its name or its arguments cannot be offered
@@ -2795,12 +2801,38 @@ plan-explained =
     the whole program, decided before anything was read. nothing it reads can add a step,
     drop one, or send anything anywhere this plan does not already name.
 plan-not-its-writes =
-    approving the plan is not approving its writes or its calls to a server's tools. each
-    one is still put to you as it comes up.
+    approving the plan answers the calls to a server's tools it shows, and is not approving its
+    writes. each write is still put to you as it comes up, as is a call something else asks
+    about, such as a rule or a server's declaration.
 plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it
 plan-no = don't
+
+## Approving the calls a plan's apply step resolved to, as one list
+
+apply-title = make these calls to { $server }?
+apply-verb = Make
+apply-calls = { $count ->
+    [one] { $count } call to { $server }
+   *[other] { $count } calls to { $server }
+    }
+apply-after = after call { $call }
+apply-hidden = { $count ->
+    [one] (and one character that draws as nothing)
+   *[other] (and { $count } characters that draw as nothing)
+    }
+apply-dropped = { $count ->
+    [one] one proposed row was dropped: it { $why }
+   *[other] { $count } proposed rows were dropped: they { $why }
+    }
+apply-explained =
+    an isolated processor proposed these calls from what was read. every value behind the bar
+    came from that list or that processor, and is sent exactly as shown. nothing else is called.
+apply-nothing-yet =
+    none of them has been made, so declining leaves everything as it is.
+apply-yes = make them all
+apply-no = don't
 # Where a question is a line on a terminal rather than a panel: what a yes looks like, and the one
 # answer that approves. Any other line, and the end of the input, refuses. Shared by every question
 # put in lines, so one affirmative covers them all.

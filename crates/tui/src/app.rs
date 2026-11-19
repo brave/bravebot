@@ -1528,6 +1528,7 @@ fn manifest_step_asks(message: &crate::remote_confirm::ToMain) -> bool {
             | ToMain::Exposure(_)
             | ToMain::ToolList(_)
             | ToMain::McpCall(_)
+            | ToMain::Apply(_)
     )
 }
 
@@ -4017,6 +4018,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::Manifest(_) => Reply::Manifest(Decision::Reject),
         ToMain::ToolList(_) => Reply::ToolList(Decision::Reject),
         ToMain::McpCall(_) => Reply::McpCall(CallDecision::reject()),
+        ToMain::Apply(_) => Reply::Apply(bravebot_agent::confirm::ApplyDecision::unasked()),
         ToMain::Move(_) => Reply::Move(Decision::Reject),
         ToMain::Path(_) => Reply::Path(Decision::Reject),
         ToMain::Host(_) => Reply::Host(Decision::Reject),

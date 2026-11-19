@@ -672,9 +672,11 @@ impl Unasked {
     }
 
     /// See [`Confining::confirm_manifest`].
-    pub fn manifest(&self) -> Option<Decision> {
-        match self.mode.get() {
-            PermissionMode::Bypass => Some(Decision::Approve),
+    /// The answer and the name of the mode that gave it.
+    pub fn manifest(&self) -> Option<(Decision, &'static str)> {
+        let mode = self.mode.get();
+        match mode {
+            PermissionMode::Bypass => Some((Decision::Approve, mode.name())),
             PermissionMode::Ask
             | PermissionMode::AcceptEdits
             | PermissionMode::Plan
@@ -930,9 +932,18 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// question, and a person in plan mode who wants a run planned before it touches anything is
     /// asking for exactly what this mode does.
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
+        self.confirm_manifest_noting_the_mode(request).0
+    }
+
+    /// The answer and, where bypassing gave it, the mode, read from one look at the mode, so a plan
+    /// nobody saw answers no call's question for a person (MANIFEST-15, MODE-8).
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
         match self.unasked.manifest() {
-            Some(answer) => answer,
-            None => self.asking().confirm_manifest(request),
+            Some((answer, mode)) => (answer, Some(mode)),
+            None => (self.asking().confirm_manifest(request), None),
         }
     }
 
@@ -1010,6 +1021,15 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// A call to a server declared to ask every call is asked in bypass too: the person chose that
     /// for the server when they declared it, and the mode that answers the other questions does not
     /// take that choice back (SERVERS-21).
+    /// Put to the person in every mode, bypass and plan mode included: the list is the trusted
+    /// selector of the calls a processor proposed, and no mode is a person reading it.
+    fn confirm_apply(
+        &mut self,
+        request: &crate::confirm::ApplyRequest,
+    ) -> crate::confirm::ApplyDecision {
+        self.asking().confirm_apply(request)
+    }
+
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,

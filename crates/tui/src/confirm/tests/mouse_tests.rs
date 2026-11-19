@@ -217,6 +217,19 @@ fn questions_of(kind: Kind) -> Vec<Row> {
         Kind::Manifest => vec![row("manifest", vec![interrupt()], |terminal| {
             format!("{:?}", ask_manifest(terminal, &a_plan(&["move a note"])))
         })],
+        Kind::Apply => vec![row("apply", vec![interrupt()], |terminal| {
+            let request = bravebot_agent::confirm::ApplyRequest {
+                alias: "brave-bookmarks-write".into(),
+                list: "marks".into(),
+                calls: vec![bravebot_agent::confirm::ApplyCall {
+                    tool: "create_bookmark_folder".into(),
+                    arguments: vec![("title".into(), "Work".into(), "the processor".into())],
+                    after: None,
+                }],
+                dropped: Vec::new(),
+            };
+            format!("{:?}", ask_apply(terminal, &request))
+        })],
         Kind::ToolList => vec![row("tool list", vec![interrupt()], |terminal| {
             format!("{:?}", ask_tool_list(terminal, &tool_list()))
         })],

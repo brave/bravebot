@@ -725,6 +725,11 @@ a rule a person wrote ([MODE-6](permission-modes.md#MODE-6) says the same of a m
 declaration says every call is asked about is the exception: its calls ask whatever a rule or a
 standing answer says ([SERVERS-21](#SERVERS-21)).
 
+A call a manifest plan fixed puts no question where nothing else decides it: approving the plan,
+whose line showed the call with every argument, answers it
+([manifest.md](manifest.md#MANIFEST-15)). A rule, a declaration asking every call and private
+arguments decide first, as they do here.
+
 **The routing field of a call is the alias and the tool, and never the arguments.**
 [PERM-1](permissions.md#PERM-1) matches a specifier against a routing field and nothing else, for the
 reason that routing is trusted before it reaches a gate while observed bytes are not. For a call the
@@ -2623,3 +2628,21 @@ the server wrote. A change of one of them to `Stream::Inherited` is found by a r
 `verified-by: bravebot_cli::running::a_session_in_lines_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_cli::running::a_one_shot_run_shows_nothing_a_servers_stderr_writes`
 `verified-by: bravebot_sandbox::openshell::a_discarded_stderr_is_the_null_device_for_the_program_in_the_sandbox`
+
+<a id="SERVERS-26"></a>
+### SERVERS-26: a declaration may name what a row of an `apply` step may fill
+
+`--apply tool:argument=kind` names an argument a row of a manifest's `apply` step may fill and the
+one or more kinds it may take: `entry`, `entries`, `new` or `row`
+([manifest.md](manifest.md#MANIFEST-16)). Only a local stdio server that does not ask every call may
+hold one. It is part of what the person approves for the server, and `mcp get`, `mcp list` and the
+approval question show it.
+
+**Why.** Every argument a row fills is one a processor chose, so which arguments it may fill is the
+person's to say about each tool. A server asking every call has said each of its calls is put on its
+own, which a list of calls would undo.
+
+`verified-by: bravebot_config::mcp::apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call`
+`verified-by: bravebot_config::mcp::apply_arguments_that_are_not_tools_with_argument_words_are_a_problem_of_that_entry`
+`verified-by: bravebot_config::mcp::apply_arguments_are_in_the_digest_only_where_there_are_any`
+`verified-by: bravebot_browser::install::the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill`

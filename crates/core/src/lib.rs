@@ -28,6 +28,7 @@
 use vstd::prelude::*;
 
 pub mod ambient;
+pub mod apply;
 pub mod ask;
 pub mod cancel;
 mod canonical;

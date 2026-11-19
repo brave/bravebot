@@ -15,13 +15,13 @@ use crate::progress::{printable, printable_path};
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
-    Home, Person, choices_line, drawn, indent, no_state_directory, problem, say,
+    Home, Person, applies_line, choices_line, drawn, indent, no_state_directory, problem, say,
 };
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
-    self, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field, Problem, Projects,
-    Standing, Timeouts, Unreadable,
+    self, ApplyArguments, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field,
+    Problem, Projects, Standing, Timeouts, Unreadable,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -125,7 +125,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--openshell <image>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--apply <tool>:<argument>=<kind>]... [--openshell <image>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
@@ -473,6 +473,12 @@ fn declared(
                     .ok_or_else(|| argument(t!(mcp_choice_needs_a_pair)))?;
                 choose(pair, &mut typed.choices)?;
             }
+            "--apply" => {
+                let named = inline
+                    .or(value.map(String::as_str))
+                    .ok_or_else(|| argument(t!(mcp_apply_needs_a_kind)))?;
+                apply(named, &mut typed.applies)?;
+            }
             "--startup-timeout" => {
                 typed.startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
             }
@@ -549,13 +555,14 @@ fn declared(
 }
 
 /// The flags that also take their value joined to them as `--flag=value`.
-const JOINED: [&str; 8] = [
+const JOINED: [&str; 9] = [
     "--env",
     "--tools",
     "--exclude-tools",
     "--allowed-hosts",
     "--openshell",
     "--choice",
+    "--apply",
     "--bearer-env",
     "--header-env",
 ];
@@ -577,6 +584,7 @@ struct Typed {
     ask_every_call: bool,
     openshell: Option<String>,
     choices: ChoiceArguments,
+    applies: ApplyArguments,
 }
 
 impl Typed {
@@ -598,6 +606,7 @@ impl Typed {
             ask_every_call,
             openshell,
             choices,
+            applies,
         } = self;
         let timeouts = Timeouts::new(startup, tool).map_err(Refusal::Problem)?;
         match transport {
@@ -626,6 +635,7 @@ impl Typed {
                     .and_then(|declaration| declaration.filtering(tools, exclude_tools))
                     .map(|declaration| declaration.asking_every_call(ask_every_call))
                     .and_then(|declaration| declaration.choosing(choices))
+                    .and_then(|declaration| declaration.applying(applies))
                     .map(|declaration| declaration.timing(timeouts))
                     .map_err(Refusal::Problem)?;
                 shares_nothing(&declaration).map_err(argument)?;
@@ -645,6 +655,9 @@ impl Typed {
             }
             Some(Transport::Http(_)) if openshell.is_some() => {
                 Err(Refusal::Problem(Problem::Remote("backend")))
+            }
+            Some(Transport::Http(_)) if !applies.is_empty() => {
+                Err(Refusal::Problem(Problem::Remote("apply_arguments")))
             }
             Some(Transport::Http(url)) => Declaration::http(url)
                 .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
@@ -726,6 +739,25 @@ fn choose(pair: &str, choices: &mut ChoiceArguments) -> Result<(), Refusal> {
         .entry(tool.to_string())
         .or_default()
         .insert(name.to_string());
+    Ok(())
+}
+
+/// One `--apply` word, `<tool>:<argument>=<kind>`, kept with the others. Whether the names are
+/// words a tool may be offered under, and the kind one of `entry`, `entries`, `new` or `row`, is the
+/// declaration's to check.
+fn apply(named: &str, applies: &mut ApplyArguments) -> Result<(), Refusal> {
+    let (tool, rest) = named
+        .split_once(':')
+        .filter(|(tool, _)| !tool.is_empty())
+        .ok_or_else(|| argument(t!(mcp_apply_needs_a_kind)))?;
+    let (name, kind) = rest
+        .split_once('=')
+        .filter(|(name, kind)| !name.is_empty() && !kind.is_empty())
+        .ok_or_else(|| argument(t!(mcp_apply_needs_a_kind)))?;
+    applies
+        .entry(tool.to_string())
+        .or_default()
+        .insert(name.to_string(), kind.to_string());
     Ok(())
 }
 
@@ -1123,6 +1155,7 @@ pub(crate) fn report(
                     rows.push(format!("{under}{}", t!(mcp_openshell, image = image)));
                 }
                 rows.extend(choices_line(declaration).map(|line| format!("{under}{line}")));
+                rows.extend(applies_line(declaration).map(|line| format!("{under}{line}")));
                 let request = file.map(|file| {
                     match grant(
                         alias,

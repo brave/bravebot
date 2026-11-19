@@ -38,7 +38,7 @@ use bravebot_mcp::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -115,6 +115,8 @@ pub struct Reached {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The arguments of its tools the declaration says a row of an `apply` step may fill.
+    apply_arguments: bravebot_config::mcp::ApplyArguments,
     /// The headers and bearer token the declaration names, as the environment gave them when the
     /// server was started, which a server moved during a turn is reached with (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -143,6 +145,7 @@ impl Reached {
             exclude_tools: Vec::new(),
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
             headers: Vec::new(),
             sandboxed: None,
             sandbox: None,
@@ -180,6 +183,13 @@ impl Reached {
     /// (SERVERS-22).
     pub fn choosing(mut self, choice_arguments: ChoiceArguments) -> Self {
         self.choice_arguments = choice_arguments;
+        self
+    }
+
+    /// The same server, with the arguments of its tools its declaration says a row of an `apply`
+    /// step may fill.
+    pub fn applying(mut self, apply_arguments: bravebot_config::mcp::ApplyArguments) -> Self {
+        self.apply_arguments = apply_arguments;
         self
     }
 
@@ -370,6 +380,8 @@ struct Server {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The arguments of its tools the declaration says a row of an `apply` step may fill.
+    apply_arguments: bravebot_config::mcp::ApplyArguments,
     /// The headers and bearer token its first connection sent, which a move sends to the new
     /// destination as well (SERVERS-18).
     headers: Vec<(String, String)>,
@@ -491,6 +503,7 @@ impl Session {
                     exclude_tools: reached.exclude_tools,
                     ask_every_call: reached.ask_every_call,
                     choice_arguments: reached.choice_arguments,
+                    apply_arguments: reached.apply_arguments,
                     headers: reached.headers,
                     _home: reached.home,
                     sandboxed: reached.sandboxed,
@@ -1052,6 +1065,13 @@ impl Session {
     fn choice_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeSet<String>> {
         let server = self.0.servers.iter().find(|server| server.alias == alias)?;
         server.choice_arguments.get(tool)
+    }
+
+    /// The kind each argument of the tool `tool` of the server reached as `alias` may take in a
+    /// row of an `apply` step, as its declaration says.
+    fn apply_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeMap<String, String>> {
+        let server = self.0.servers.iter().find(|server| server.alias == alias)?;
+        server.apply_arguments.get(tool)
     }
 
     /// Whether answer 2 was given about this tool in this project.
@@ -1654,6 +1674,8 @@ pub struct Callable {
 pub struct CallableArgument {
     pub name: String,
     pub kind: Option<String>,
+    /// The type of each item, where the argument is an array and the list says.
+    pub items: Option<String>,
     pub required: bool,
 }
 
@@ -2009,6 +2031,12 @@ impl Offer {
         self.session.choice_arguments(alias, tool)
     }
 
+    /// The kind each argument of the tool `tool` of the server `alias` may take in a row of an
+    /// `apply` step, where its declaration names any.
+    pub fn apply_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeMap<String, String>> {
+        self.session.apply_arguments(alias, tool)
+    }
+
     /// The arguments of the tool `tool` of the server `alias` that are offered as a choice: those
     /// its declaration names, less those the server lists an argument `<argument>_ref` for itself
     /// (SERVERS-22). That argument is the server's, and a call that gives it is sent as written.
@@ -2047,6 +2075,7 @@ impl Offer {
                     .map(|argument| CallableArgument {
                         name: argument.name.clone(),
                         kind: argument.kind.clone(),
+                        items: argument.items.clone(),
                         required: argument.required,
                     })
                     .collect(),
@@ -2223,6 +2252,20 @@ fn fill_from_a_choice<'a, S: Sink>(
     }))
 }
 
+/// Whether any text in `value`, a name or a string, holds a character the call's question writes
+/// out because it would draw as nothing or as something else (PROMPT-13).
+fn holds_a_hidden_character(value: &Value) -> bool {
+    match value {
+        Value::String(text) => bravebot_core::invisible::spelled_code(text).hidden > 0,
+        Value::Array(items) => items.iter().any(holds_a_hidden_character),
+        Value::Object(pairs) => pairs.iter().any(|(name, item)| {
+            bravebot_core::invisible::spelled_code(name).hidden > 0
+                || holds_a_hidden_character(item)
+        }),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
 /// Put one call to the person and make it (SERVERS-7).
 ///
 /// A `deny` rule refuses it before anybody is asked. Then it asks, unless a rule allows the tool or
@@ -2234,6 +2277,12 @@ fn fill_from_a_choice<'a, S: Sink>(
 /// declaration says takes one, always asks. The question draws the number, and the number is put
 /// into the argument only after the answer, by [`Policy::carry_a_choice`] (ROUTE-10, MCP-14).
 /// `slots` holds the choices of the turn making the call, and a plan has none to give.
+///
+/// `plan_approved` says the person approved the plan whose line showed this call with every
+/// argument it sends, which answers the default question (MANIFEST-15). A plan run in plan mode,
+/// or one bypassing approved, passes false, so the call is asked at its step there. A call whose
+/// arguments hold a character the plan's line draws as nothing is asked at its step too, where the
+/// question writes each one out.
 #[expect(
     clippy::too_many_arguments,
     reason = "the arguments are the policy, offer, egress, confirmer, reporter and the alias, tool and arguments of a call"
@@ -2252,6 +2301,7 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     tool: &str,
     arguments: &Value,
     slots: Option<&mut SlotStore>,
+    plan_approved: bool,
 ) -> Called {
     let name = format!("{alias}:{tool}");
     if let Err(denial) = policy.before_mcp_call_rules(alias, tool) {
@@ -2289,6 +2339,8 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     // An answer recorded for the tool before the declaration said so is not read.
     let standing = if every_call {
         McpStanding::AskedEveryCall
+    } else if plan_approved && !holds_a_hidden_character(arguments) {
+        McpStanding::PlanApproved
     } else if session.stands(alias, tool) {
         McpStanding::StoppedAsking
     } else {
@@ -2448,6 +2500,77 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
         reporter,
         alias,
         |policy| session.call(policy, egress, alias, tool, arguments.clone()),
+    );
+    match answered {
+        Ok(result) => Called::Answered(result),
+        Err(McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
+        Err(error @ (McpError::Server { .. } | McpError::Unusable(_))) => {
+            Called::Unusable(reply_failure(&name, &error))
+        }
+        Err(error) => Called::Problem(format!("error: calling {name} failed: {error}")),
+    }
+}
+
+/// A typed value as JSON. The resolver typed it as the tool's list declares, so this only carries
+/// it, and a number the resolver keeps finite always has a JSON form.
+fn wire(sent: bravebot_core::apply::Sent) -> Value {
+    use bravebot_core::apply::Sent;
+    match sent {
+        Sent::Text(text) => Value::String(text),
+        Sent::Integer(number) => Value::from(number),
+        Sent::Number(number) => {
+            serde_json::Number::from_f64(number).map_or(Value::Null, Value::Number)
+        }
+        Sent::Switch(on) => Value::Bool(on),
+        Sent::Array(values) => Value::Array(values.into_iter().map(wire).collect()),
+    }
+}
+
+/// Make call `index` of a list the person approved for an `apply` step, through the gate that
+/// spends the grant their answer minted for exactly that call (`docs/design/manifest-apply.md`).
+///
+/// Nobody is asked here: the list was the question, and it covered this call with every value
+/// shown. A `deny` rule is read again first, as for every call, and a move the server answers with
+/// is put to the person as [`call`] puts it. The reply is classified as [`call`] classifies it, so
+/// a failure the server reported is told apart by the protocol's `isError` and never by its text.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the call's policy, offer, egress, people to ask and the approved list, as `call` takes"
+)]
+pub(crate) fn call_applied<S: Sink, C: Confirmer, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    offer: &Offer,
+    egress: &bravebot_net::Egress,
+    confirmer: &mut C,
+    reporter: &mut R,
+    alias: &str,
+    index: usize,
+    resolved: &Labelled<bravebot_core::apply::Resolved>,
+) -> Called {
+    let (tool, arguments) = match policy.carry_applied_call(alias, index, resolved) {
+        Ok(carried) => carried,
+        Err(denial) => return Called::Problem(format!("refused: {denial}")),
+    };
+    let name = format!("{alias}:{tool}");
+    if let Err(denial) = policy.before_mcp_call_rules(alias, &tool) {
+        return Called::Problem(format!("refused: {denial}"));
+    }
+    // Each value was typed by the resolver as the vouched list gives its argument.
+    let arguments = Value::Object(
+        arguments
+            .into_iter()
+            .map(|(key, sent)| (key, wire(sent)))
+            .collect(),
+    );
+    let session = &offer.session;
+    let answered = following_a_move(
+        policy,
+        session,
+        egress,
+        confirmer,
+        reporter,
+        alias,
+        |policy| session.call(policy, egress, alias, &tool, arguments.clone()),
     );
     match answered {
         Ok(result) => Called::Answered(result),
