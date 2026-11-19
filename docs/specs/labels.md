@@ -89,7 +89,7 @@ guards:
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
       - crates/agent/src/tools/tests/activity.rs: 3
-      - crates/agent/src/tools/tests/editing.rs: 6
+      - crates/agent/src/tools/tests/editing.rs: 8
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
       - crates/agent/src/turn.rs: 10
@@ -143,7 +143,7 @@ guards:
       - crates/core/src/policy.rs: 1
   - symbol: Policy::promote_reference_for_read
     sites:
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/core/src/policy.rs: 7
   - symbol: Policy::destination_from_reference
     sites:

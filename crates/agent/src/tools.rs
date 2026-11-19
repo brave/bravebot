@@ -4881,6 +4881,27 @@ fn materialise_held<S: Sink>(
         let mut opened = Vec::new();
         for slot in wanted {
             let was_unread = slots.is_unread(slot);
+            if was_unread {
+                // A rule covers the file, not the spelling of it (PERM-7). The name the slot
+                // stored was judged when it was issued, and the file it lands on may have
+                // changed since: a link put there afterwards reaches a file a rule covers under
+                // a name no rule spells. The same question a `path_ref` is asked, before the
+                // file is opened, and worded about the slot because the path came out of a
+                // directory nobody vouched for. Decided from the path and the rules, never from
+                // anything the file holds.
+                let stored = policy
+                    .promote_reference_for_read(tool, "slot", slot, slots)
+                    .map_err(|denial| format!("refused: {denial}"))?
+                    .into_trusted()
+                    .map_err(|_| "error: the reference was not promoted".to_string())?;
+                refuse_denied_path_as(
+                    policy,
+                    workspace,
+                    Purpose::Read,
+                    &stored,
+                    &slot.to_string(),
+                )?;
+            }
             // A picture or PDF is opened as one, from the driver's table of extensions as
             // `read_file` decides it, so nothing read chooses. Read as text it would be refused
             // as binary, and a slot that holds one has to say so for a check to look at the file.
