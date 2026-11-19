@@ -8575,6 +8575,31 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("permission_mode", format!("the turn began in {mode} mode"));
     }
 
+    /// Record the permission mode a session opened in and what chose it (TRACE-12).
+    ///
+    /// Written by the first turn or manifest run of a sitting, since nothing is written to the
+    /// trail before one. `mode` and `cause` are the driver's own static text, never anything a turn
+    /// read.
+    pub fn record_permission_mode_opened(&mut self, mode: &'static str, cause: &'static str) {
+        self.allow(
+            "permission_mode_opened",
+            format!("the session opened in {mode} mode {cause}"),
+        );
+    }
+
+    /// Record one change of permission mode, the mode before it and what caused it (TRACE-12).
+    pub fn record_permission_mode_changed(
+        &mut self,
+        from: &'static str,
+        to: &'static str,
+        cause: &'static str,
+    ) {
+        self.allow(
+            "permission_mode_changed",
+            format!("the permission mode changed from {from} to {to} {cause}"),
+        );
+    }
+
     /// [`Policy::record_permission_mode`] for a manifest run, which is not a turn and is not
     /// called one in the trail.
     pub fn record_manifest_permission_mode(&mut self, mode: &'static str) {
@@ -16123,6 +16148,39 @@ five
                 }
             )),
             "{events:?}"
+        );
+    }
+
+    /// TRACE-12: the opening mode and a change of mode are recorded under their own gates, with the
+    /// words the driver chose and nothing else.
+    #[test]
+    fn a_permission_mode_opening_and_change_leave_a_trail() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        policy.record_permission_mode_opened("auto", "by the startInAuto setting");
+        policy.record_permission_mode_changed("auto", "plan", "by the mode key");
+        drop(policy);
+        let details: Vec<(&str, String)> = sink
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::GatePassed { gate, detail } => Some((*gate, detail.clone())),
+                _ => None,
+            })
+            .filter(|(gate, _)| gate.starts_with("permission_mode"))
+            .collect();
+        assert_eq!(
+            details,
+            [
+                (
+                    "permission_mode_opened",
+                    "the session opened in auto mode by the startInAuto setting".to_string()
+                ),
+                (
+                    "permission_mode_changed",
+                    "the permission mode changed from auto to plan by the mode key".to_string()
+                ),
+            ]
         );
     }
 

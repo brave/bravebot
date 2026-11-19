@@ -6320,6 +6320,157 @@ fn a_turn_records_the_mode_it_began_with() {
     }
 }
 
+/// The details of the entries a trail holds under the three mode gates, in the order written.
+fn mode_entries(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "permission_mode" | "permission_mode_opened" | "permission_mode_changed",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// TRACE-12: the mode a session opened in is written once, by the first turn, with what chose it,
+/// ahead of the line naming the mode that turn began in. A second turn of the same sitting does not
+/// repeat it.
+#[test]
+fn a_session_records_the_mode_it_opened_in() {
+    use bravebot_agent::{LiveMode, ModeCause, PermissionMode};
+    let scratch = Scratch::new("records-the-opening-mode");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![reply_with("one"), reply_with("two")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    let live = LiveMode::new(PermissionMode::Auto).opened_by(ModeCause::Flag);
+    let task = Task::new("what is 2 + 2?").with_permission_mode(live.clone());
+    let mut sink = RecordingSink::new();
+    for _ in 0..2 {
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::Unattended,
+            &mut sink,
+        )
+        .expect("turn runs");
+    }
+
+    assert_eq!(
+        mode_entries(&sink),
+        [
+            "the session opened in auto mode by a command-line flag",
+            "the turn began in auto mode",
+            "the turn began in auto mode",
+        ]
+    );
+}
+
+/// TRACE-12: a change made between two turns is written by the next one, with the mode before it
+/// and what caused it, ahead of the line naming the mode that turn began in.
+#[test]
+fn a_change_of_mode_between_turns_is_recorded() {
+    use bravebot_agent::{LiveMode, ModeCause, PermissionMode};
+    let scratch = Scratch::new("records-a-change-between-turns");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![reply_with("one"), reply_with("two")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    let live = LiveMode::new(PermissionMode::Ask);
+    let task = Task::new("what is 2 + 2?").with_permission_mode(live.clone());
+    let mut sink = RecordingSink::new();
+    let run = |sink: &mut RecordingSink| {
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::Unattended,
+            sink,
+        )
+        .expect("turn runs");
+    };
+    run(&mut sink);
+    live.set_by(PermissionMode::Plan, ModeCause::Command);
+    // Setting the mode it is already in is not a change.
+    live.set_by(PermissionMode::Plan, ModeCause::Key);
+    run(&mut sink);
+
+    assert_eq!(
+        mode_entries(&sink),
+        [
+            "the session opened in ask mode by default",
+            "the turn began in ask mode",
+            "the permission mode changed from ask to plan by the /plan command",
+            "the turn began in plan mode",
+        ]
+    );
+}
+
+/// TRACE-12: a mode chosen while a turn runs is written once and in order, between the line naming
+/// the mode the turn began in and the refusal the new mode causes.
+#[test]
+fn a_change_of_mode_during_a_turn_is_recorded_once_and_in_order() {
+    use bravebot_agent::PermissionMode;
+    let scratch = Scratch::new("records-a-change-during-a-turn");
+    std::fs::write(scratch.path.join("notes.md"), "original").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"second"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let live = bravebot_agent::LiveMode::new(PermissionMode::Ask);
+    let task = Task::new("rewrite the notes").with_permission_mode(live.clone());
+    let mut recording =
+        RecordingConfirmer::approving_while_the_mode_changes(&live, PermissionMode::Plan);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let order: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "permission_mode" | "permission_mode_opened" | "permission_mode_changed",
+                detail,
+            } => Some(detail.clone()),
+            Event::GateBlocked {
+                gate: "permission_mode",
+                ..
+            } => Some("refused".to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "the session opened in ask mode by default",
+            "the turn began in ask mode",
+            "the permission mode changed from ask to plan without a cause being given",
+            "refused",
+        ]
+    );
+}
+
 /// An `approval` entry that says "asking" reads as a person having been asked. Where a mode answers
 /// in the person's place nobody was, and a trail that cannot tell the two apart hides the one fact
 /// somebody reading it back came for. A run, a whole-file write and an edit each reach the prompt by

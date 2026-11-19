@@ -1345,7 +1345,14 @@ fn prepare_the_run(
         .with_output_schema(output_schema)
         .with_run_limits(limits)
         .with_permissions(permissions)
-        .with_permission_mode(bravebot_agent::LiveMode::unattended(permission_mode))
+        .with_permission_mode(
+            bravebot_agent::LiveMode::unattended(permission_mode).opened_by(
+                match (skip_permissions, starts_in) {
+                    (false, None) => bravebot_agent::ModeCause::Default,
+                    _ => bravebot_agent::ModeCause::Flag,
+                },
+            ),
+        )
         // The words the command line put in the planner's system prompt (CLI-19). A manifest run
         // was refused above, so this task is a turn's.
         .with_system_prompts(prompts)

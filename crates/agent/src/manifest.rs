@@ -972,6 +972,7 @@ fn plan<S: Sink, R: Reporter>(
         sink,
     )
     .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    task.permission_mode.record_into(&mut policy);
     policy.record_manifest_permission_mode(task.permission_mode.get().name());
 
     reporter.phase(Phase::Planning);

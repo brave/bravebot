@@ -208,6 +208,10 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // retracts a plan-mode notice an earlier turn left in the conversation, since the prompt
     // says nothing for a mode other than plan.
     let chosen = task.permission_mode.get();
+    // In the order they were made, once each, before the notice that follows from them (TRACE-12).
+    if task.delegate.is_none() {
+        task.permission_mode.record_into(policy);
+    }
     if let Some(notice) = state.told_mode.change_notice(chosen) {
         // A notice is only ever into plan mode or out of it, so the conversation now says plan
         // mode is on exactly when the mode chosen is plan. The tag carries that, so the record is
