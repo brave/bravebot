@@ -5061,6 +5061,19 @@ fn refuse_denied_path<S: Sink>(
     refuse_denied_path_as(policy, workspace, purpose, path, path)
 }
 
+/// Whether a `deny` rule refuses a write to `path` now: the walk every write tool makes before
+/// it asks the person, asked again by the workspace right before the bytes are released, so a link
+/// put at the destination while the question was open is judged by the file it leads to
+/// (PERM-7, TRUST-10). The refusal text is not used: the workspace words its own, about the name
+/// the person was shown.
+pub(crate) fn refuse_write_by_rules<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &str,
+) -> Result<(), String> {
+    refuse_denied_path(policy, workspace, Purpose::Effect, path)
+}
+
 /// Whether a `deny` rule refuses a read of `path`, asked exactly as a read tool asks it, for a
 /// caller that has no planner to word a refusal for: a file a person asked to see is refused for
 /// the same names as a file a call asked to read.
@@ -6638,7 +6651,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // and the question is put again for.
     let mut edited_by_person = false;
 
-    let (scanned, reviewed) = loop {
+    let (scanned, reviewed, reach) = loop {
         let body_label = body.label();
 
         // What this would leave in the tree, before it is put to anybody and before a byte of it is
@@ -6696,6 +6709,10 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         // below is drawn from it and so is the line the person is told afterwards, which is the
         // same comparison and so is made once.
         let landed = landing_of(workspace, &proposed_path);
+        // What the destination reaches as the question is drawn, which the write compares with
+        // what it reaches when the bytes are released. Taken before the questions below, so a link
+        // put in place between them and the write is not read as what was asked.
+        let reach = workspace.reach_of(&proposed_path);
         let reviewed = review_a_write(
             policy,
             "write_file",
@@ -6788,7 +6805,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             }
             standing.keep(policy, answer);
         }
-        break (scanned, reviewed);
+        break (scanned, reviewed, reach);
     };
     // Read once the loop is done, since an edit replaced the body and its label with the person's.
     let body_label = body.label();
@@ -6797,7 +6814,13 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // this exact value. Issued for the path the question named, which an edit does not change.
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
-    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_at)) {
+    match workspace.write_endorsed_at_revision(
+        policy,
+        &path,
+        &body,
+        Some(approved_at),
+        Some(&reach),
+    ) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -6908,6 +6931,9 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         )
     });
     let intent = Intent::of_a_write(replaces);
+    // What the destination reaches as the question is drawn, which the write compares with what it
+    // reaches when the bytes are released.
+    let reach = workspace.reach_of(&proposed_path);
 
     // How many bytes the file will hold, counted where the URI is turned back into them and shown
     // to the person who is asked. A count, as a reference's byte count is.
@@ -6965,6 +6991,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         &path,
         label,
         Some(approved_at),
+        Some(&reach),
         |file, proof| {
             use std::io::Write;
             // No detail of why it did not decode: the error would name a byte of the URI.
@@ -7824,6 +7851,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // and inside the kernel. The pre-image is the labelled value the read produced rather than
     // the copy released to locate the passage in.
     let landed = landing_of(workspace, &proposed_path);
+    let reach = workspace.reach_of(&proposed_path);
     let reviewed = review_a_write(
         policy,
         "edit_file",
@@ -7889,7 +7917,14 @@ fn edit_file<S: Sink, C: Confirmer>(
     let occurrences = replaced.occurrences;
     // The path as the planner gave it, not the copy promoted above for the read. A write routed
     // on a promoted value would be routed by the model's own proposal.
-    match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current, read_at) {
+    match workspace.write_endorsed_if_unchanged_reaching(
+        policy,
+        &proposed,
+        &body,
+        &current,
+        read_at,
+        Some(&reach),
+    ) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -13243,6 +13278,9 @@ fn download_url<S: Sink, C: Confirmer>(
         )
     });
     let intent = Intent::of_a_write(replaces);
+    // What the destination reaches as the question is drawn, which the write compares with what it
+    // reaches when the bytes are released.
+    let reach = workspace.reach_of(&proposed_path);
 
     // Always put to the person, whatever the trust map would have said about the path: the bytes
     // are nobody's and the file is somebody's, so the pair is the one thing they can answer for.
@@ -13318,6 +13356,7 @@ fn download_url<S: Sink, C: Confirmer>(
         &path,
         label,
         Some(approved_at),
+        Some(&reach),
         |file, proof| {
             use std::io::Write;
             loop {

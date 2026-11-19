@@ -118,11 +118,11 @@ pub use error::{Remedy, WorkspaceError};
 use named_settings::{
     landed_path, lexically_clean, named_settings_names, names_one_path, same_file,
 };
-pub(crate) use other_names::OtherKeys;
 #[cfg(unix)]
 use other_names::directory_identity;
 #[cfg(unix)]
 use other_names::distinct_identity;
+pub(crate) use other_names::{Aimed, OtherKeys};
 
 /// How a directory is told from another: the device and inode it is, or `None` where they cannot
 /// be read.
@@ -1815,6 +1815,20 @@ impl Workspace {
         expected: &str,
         read_at: Stamp,
     ) -> Result<PathBuf, WorkspaceError> {
+        self.write_endorsed_if_unchanged_reaching(policy, path, contents, expected, read_at, None)
+    }
+
+    /// [`Workspace::write_endorsed_if_unchanged`] for a write whose question was drawn when the
+    /// destination reached `asked`: the write is refused if it reaches something else now.
+    pub(crate) fn write_endorsed_if_unchanged_reaching<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        contents: &Labelled<String>,
+        expected: &str,
+        read_at: Stamp,
+        asked: Option<&Aimed>,
+    ) -> Result<PathBuf, WorkspaceError> {
         // Checked before the write gates so a stale edit is reported as staleness rather than
         // consuming the single-use endorsement. Reading the path is itself gated, below. The stamp
         // is compared here for the same reason, and again in the write, where it is atomic with
@@ -1832,7 +1846,7 @@ impl Workspace {
             }
             Ok(())
         })?;
-        self.write_endorsed_at_revision(policy, path, contents, Some(read_at))
+        self.write_endorsed_at_revision(policy, path, contents, Some(read_at), asked)
     }
 
     /// The path as a plain string, for a check made on the user's behalf.
@@ -1868,15 +1882,18 @@ impl Workspace {
         path: &Labelled<String>,
         contents: &Labelled<String>,
     ) -> Result<PathBuf, WorkspaceError> {
-        self.write_endorsed_at_revision(policy, path, contents, None)
+        self.write_endorsed_at_revision(policy, path, contents, None, None)
     }
 
+    /// `asked` is what the destination reached when the person was asked, for a write that was put
+    /// to a person. The write is refused if it reaches something else now (TRUST-10, PERM-7).
     pub(crate) fn write_endorsed_at_revision<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
         path: &Labelled<String>,
         contents: &Labelled<String>,
         expected: Option<Stamp>,
+        asked: Option<&Aimed>,
     ) -> Result<PathBuf, WorkspaceError> {
         policy.before_capability(Capability::FileWrite)?;
 
@@ -1885,8 +1902,41 @@ impl Workspace {
         // routed anywhere.
         let relative = policy.before_endorsed_destination("file_write", "path", path)?;
         policy.before_action("file_write", "contents", Role::Content, contents)?;
+        self.refuse_if_redirected(policy, &relative, asked)?;
 
         self.write_after_gates(policy, relative, contents, expected)
+    }
+
+    /// Refuse a write that does not reach the file the person was asked about. A link or a hard
+    /// link can have been put at the name while the question was open, and the person approved
+    /// the name they were shown (PERM-7, TRUST-10).
+    ///
+    /// Where `asked` is given, what `relative` lands on and the hard links of that file are
+    /// compared with what they were when the question was drawn. The approval covered the typed
+    /// name, which the grant fixes, and those two are all the approval and protected-path
+    /// questions read beside it, so an unchanged reach gets the same answers and a changed one is
+    /// refused whichever rule would have covered it, without a second question. The deny rules
+    /// are asked about the file reached now in every case, the same walk the write tools make
+    /// before the question, so the two cannot differ. A name that no longer resolves is left to
+    /// the write's own confinement check, which refuses it with its own reason. Only the names
+    /// the file system gives and the person's rules are read, never file contents. The write of a
+    /// trusted path
+    /// ([`Workspace::write`]) is not asked: the person's own restores and the memory writes are
+    /// not a planner's destination.
+    fn refuse_if_redirected<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        relative: &str,
+        asked: Option<&Aimed>,
+    ) -> Result<(), WorkspaceError> {
+        let redirected = || WorkspaceError::Redirected {
+            path: relative.to_string(),
+        };
+        let now = self.reach_of(relative);
+        if now.resolves() && asked.is_some_and(|asked| *asked != now) {
+            return Err(redirected());
+        }
+        crate::tools::refuse_write_by_rules(policy, self, relative).map_err(|_| redirected())
     }
 
     /// Write a file. The path is routing; the contents are content.
@@ -1945,6 +1995,7 @@ impl Workspace {
         path: &Labelled<String>,
         label: bravebot_core::label::Label,
         expected: Option<Stamp>,
+        asked: Option<&Aimed>,
         fill: impl FnOnce(
             &mut std::fs::File,
             &bravebot_core::policy::Declassification,
@@ -1959,6 +2010,10 @@ impl Workspace {
             Role::Content,
             &Labelled::new(String::new(), label),
         )?;
+        // The file replaces the name by a rename, which does not follow a link at it. The same
+        // question is asked as for any other write, so the answer does not depend on how the bytes
+        // arrive.
+        self.refuse_if_redirected(policy, &relative, asked)?;
 
         self.write_released(policy, relative, label, expected, |resolved, proof| {
             let parent = resolved
