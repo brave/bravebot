@@ -1885,6 +1885,220 @@ fn a_refused_line_names_the_unconfined_route_only_where_the_session_accepts_it()
     }
 }
 
+/// SANDBOX-24: a `sandbox.network.deniedHosts` entry that is not a host name fails the line, and
+/// the sentence `run` gives the planner, in the foreground and the background, names no byte of the
+/// entry, while the person's note carries it. The regression it rejects is the entry quoted into the
+/// sentence, which hands a checkout's text to the planner as the driver's own words, and the
+/// entry dropped from the note, which leaves the person with no entry to fix.
+#[cfg(unix)]
+#[test]
+fn a_denied_host_that_is_no_host_name_is_told_to_the_person_and_not_the_planner() {
+    let scratch = Scratch::new("run-denied-not-a-host");
+    for (arm, said, note) in refused_for_a_denied_entry(&scratch, held_with_a_planted_entry(), true)
+    {
+        assert_the_planner_was_told_no_entry(arm, &said);
+        assert!(
+            note.contains(PLANTED_ENTRY),
+            "{arm}: the person was not told the entry: {note}"
+        );
+    }
+}
+
+/// SANDBOX-24: the sentence is the same wherever the `allowedHosts` that holds the list is
+/// written: the person's own file, the file `--settings` names outside the workspace, or the
+/// managed file, each read by the same layering the entry point settles, with the checkout's
+/// own `deniedHosts` entry in its project file. The regression it rejects is a refusal that
+/// still names the entry for a list that came from one layer and not the others.
+#[cfg(unix)]
+#[test]
+fn a_denied_host_that_is_no_host_name_is_not_told_whichever_layer_holds_the_list() {
+    let allowing = r#"{"sandbox": {"network": {"allowedHosts": ["a.example"]}}}"#;
+    for layer in ["home", "settings flag", "managed"] {
+        let scratch = Scratch::new("run-denied-not-a-host-layers");
+        let checkout = scratch.path.join("checkout");
+        let elsewhere = scratch.path.join("elsewhere");
+        let home = elsewhere.join("home");
+        let named = elsewhere.join("named.json");
+        let managed = elsewhere.join("managed.json");
+        std::fs::create_dir_all(
+            bravebot_config::project_settings_file(&checkout)
+                .parent()
+                .expect("a directory"),
+        )
+        .expect("a checkout");
+        std::fs::create_dir_all(&home).expect("a home");
+        std::fs::write(
+            bravebot_config::project_settings_file(&checkout),
+            format!(r#"{{"sandbox": {{"network": {{"deniedHosts": ["{PLANTED_ENTRY}"]}}}}}}"#),
+        )
+        .expect("the checkout's settings");
+        match layer {
+            "home" => std::fs::write(bravebot_config::user_settings_file(&home), allowing),
+            "settings flag" => std::fs::write(&named, allowing),
+            _ => std::fs::write(&managed, allowing),
+        }
+        .expect("the layer under test");
+        let settings = bravebot_config::Settings::layered_reaching(
+            Some(home),
+            Some(&checkout),
+            named.exists().then_some(named.as_path()),
+            &[],
+            true,
+        );
+        let resolved = bravebot_config::sandbox_network::resolve(
+            &settings,
+            &bravebot_config::Managed::at(&managed),
+        );
+        assert!(
+            resolved.hosts.allowed.is_some(),
+            "{layer}: the layer set no list, so this is not the case under test"
+        );
+        assert!(
+            resolved
+                .hosts
+                .denied
+                .iter()
+                .any(|denied| denied.entry == PLANTED_ENTRY),
+            "{layer}: the checkout's entry was not read: {:?}",
+            resolved.hosts.denied
+        );
+        for (arm, said, note) in refused_for_a_denied_entry(&scratch, resolved.hosts, true) {
+            assert_the_planner_was_told_no_entry(&format!("{layer}, {arm}"), &said);
+            assert!(note.contains(PLANTED_ENTRY), "{layer}, {arm}: {note}");
+        }
+    }
+}
+
+/// SANDBOX-24: a session whose workspace the person did not trust is told the same sentence, in
+/// the foreground and the background, and the person is still given the entry. The regression it
+/// rejects is a sentence built from the entry on the road a session takes when it holds no trust
+/// for the workspace.
+#[cfg(unix)]
+#[test]
+fn a_denied_host_that_is_no_host_name_is_not_told_in_a_workspace_nobody_trusted() {
+    let scratch = Scratch::new("run-denied-not-a-host-untrusted");
+    for (arm, said, note) in
+        refused_for_a_denied_entry(&scratch, held_with_a_planted_entry(), false)
+    {
+        assert_the_planner_was_told_no_entry(arm, &said);
+        assert!(note.contains(PLANTED_ENTRY), "{arm}: {note}");
+    }
+}
+
+/// SANDBOX-24: the person's note carries the entry with its control characters made visible, so an
+/// entry holding a newline or an escape cannot start a line of its own or restyle the screen, and
+/// the planner's sentence still names no byte of it. The regression it rejects is the entry put in
+/// the note as the checkout wrote it.
+#[cfg(unix)]
+#[test]
+fn the_note_for_a_denied_host_that_is_no_host_name_shows_its_control_characters() {
+    use bravebot_config::sandbox_network::{HostEntry, Hosts, OnUnlisted};
+    let scratch = Scratch::new("run-denied-not-a-host-controls");
+    let hosts = Hosts {
+        allowed: Some(vec![HostEntry {
+            entry: "listed.example".to_string(),
+            by: None,
+        }]),
+        denied: vec![HostEntry {
+            entry: "two words\nsecond line\u{1b}[31m".to_string(),
+            by: None,
+        }],
+        on_unlisted: Some(OnUnlisted::Refuse),
+    };
+    for (arm, said, note) in refused_for_a_denied_entry(&scratch, hosts, true) {
+        assert!(said.contains("is not a host name"), "{arm}: {said}");
+        assert!(!said.contains("two words"), "{arm}: {said}");
+        assert!(!said.contains("second line"), "{arm}: {said}");
+        assert!(note.contains("two words"), "{arm}: {note:?}");
+        assert!(!note.contains('\n'), "{arm}: {note:?}");
+        assert!(!note.contains('\u{1b}'), "{arm}: {note:?}");
+    }
+}
+
+/// A `deniedHosts` entry that is not a host name and reads as a sentence addressed to the planner.
+#[cfg(unix)]
+const PLANTED_ENTRY: &str = "planted words for the planner";
+
+/// A host list that holds the stage to `listed.example` and carries [`PLANTED_ENTRY`] as a denial.
+#[cfg(unix)]
+fn held_with_a_planted_entry() -> bravebot_config::sandbox_network::Hosts {
+    use bravebot_config::sandbox_network::{HostEntry, Hosts, OnUnlisted};
+    Hosts {
+        allowed: Some(vec![HostEntry {
+            entry: "listed.example".to_string(),
+            by: None,
+        }]),
+        denied: vec![HostEntry {
+            entry: PLANTED_ENTRY.to_string(),
+            by: None,
+        }],
+        on_unlisted: Some(OnUnlisted::Refuse),
+    }
+}
+
+/// What the planner was told must say which setting and why, and carry no byte of the entry.
+#[cfg(unix)]
+fn assert_the_planner_was_told_no_entry(arm: &str, said: &str) {
+    assert!(
+        said.contains("sandbox.network.deniedHosts"),
+        "{arm}: {said}"
+    );
+    assert!(said.contains("is not a host name"), "{arm}: {said}");
+    assert!(!said.contains("planted"), "{arm}: {said}");
+    assert!(!said.contains("for the planner"), "{arm}: {said}");
+}
+
+/// What the planner was told and the person's note, for a foreground and a background `echo hi`
+/// held to `hosts` in a workspace that is trusted or not, as `(arm, text, note)`.
+#[cfg(unix)]
+fn refused_for_a_denied_entry(
+    scratch: &Scratch,
+    hosts: bravebot_config::sandbox_network::Hosts,
+    trusted: bool,
+) -> Vec<(&'static str, String, String)> {
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    if trusted {
+        trust.trust(".");
+    }
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "run a command");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::ShellExec]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let _held = crate::tools::scripted_hosts::hold(hosts);
+    let mut ran = |arm: &'static str, arguments: Value| {
+        let produced = with_tools(&workspace, |tools| {
+            tools.confine_runs = true;
+            tools.sandbox = WorkspaceWrite;
+            tools.profile = Some(std::path::Path::new("/profile"));
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &arguments,
+            )
+        });
+        (arm, told(&mut policy, &produced.text), produced.note)
+    };
+    vec![
+        ran("foreground", json!({"command": "echo hi"})),
+        ran(
+            "background",
+            json!({"command": "echo hi", "background": true}),
+        ),
+    ]
+}
+
 /// SANDBOX-17: a program the platform cannot confine, after an earlier part of the line or
 /// an earlier stage of its pipeline started, is told as a program that was not started and
 /// says which of those may have run, as `run` gives it to the planner. The regressions it

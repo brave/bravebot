@@ -11879,6 +11879,40 @@ fn noted_failure_text<S: Sink>(
     failed_line_text(said, error, unconfined_is_offered(policy, tools))
 }
 
+/// The entry a refusal to confine kept apart from its sentence, with control characters made
+/// visible, as the person is told it (SANDBOX-24).
+///
+/// A `sandbox.network.deniedHosts` entry that is not a host name is a string a checkout wrote, so
+/// it is never in the sentence the planner reads ([`failed_line_text`]). The error holds it beside
+/// that sentence, and this is the only place it is read: the note goes to the person's screen and
+/// the trail, and nothing branches on it.
+fn entry_note(error: &crate::exec::ExecError) -> Option<String> {
+    use crate::exec::{ExecError, SubstitutionFailure};
+    match error {
+        ExecError::NotConfined {
+            entry: Some(entry), ..
+        } => Some(format!(
+            "sandbox.network.deniedHosts has an entry that is not a host name, so the line was \
+             refused: {}",
+            crate::confirm::printable(entry)
+        )),
+        ExecError::Substitution {
+            failure: SubstitutionFailure::Inside(inner),
+            ..
+        } => entry_note(inner),
+        _ => None,
+    }
+}
+
+/// A failed line's result: the sentence for the planner, and where the error holds an entry for
+/// the person alone, that entry in the note ([`entry_note`]).
+fn failed_line_result(text: String, error: &crate::exec::ExecError) -> Produced {
+    match entry_note(error) {
+        Some(note) => Produced::refused_with_a_note(text, note),
+        None => Produced::problem(text),
+    }
+}
+
 /// Run a program, after a person approves the exact arguments.
 ///
 /// The order is the whole of the safety argument, and it is the same order a write goes through:
@@ -12376,13 +12410,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // the same request (SANDBOX-17, SANDBOX-29). Read off the error's kind, which the
             // driver chose.
             Err(error) => {
-                let text = match error {
+                let text = match &error {
                     crate::exec::ExecError::NotConfined { .. } => {
                         noted_failure_text(policy, tools, &said, &error)
                     }
                     _ => format!("error: `{said}` did not start: {error}"),
                 };
-                Produced::problem(text).having_started_a_program()
+                failed_line_result(text, &error).having_started_a_program()
             }
         };
     }
@@ -12866,7 +12900,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 (!at_the_root).then_some(told_directory.as_str()),
             );
             let text = noted_failure_text(policy, tools, &said, &error);
-            let mut produced = Produced::problem(text);
+            let mut produced = failed_line_result(text, &error);
             produced.changed_a_file = changed_a_file;
             match stopped {
                 true => {
@@ -16481,6 +16515,7 @@ mod tests {
             detail: "the network is closed for this session (run.network)".into(),
             before,
             network_closed: false,
+            entry: None,
         };
         let alone = failed_line_text("python3 script.py", &refused(StartedBefore::Nothing), true);
         assert!(!alone.contains("may have run in part"), "{alone}");
@@ -16558,6 +16593,7 @@ mod tests {
             detail: "the network is closed for this session (run.network)".into(),
             before: StartedBefore::Nothing,
             network_closed: true,
+            entry: None,
         };
         let offered = failed_line_text("python3 script.py", &closed, true);
         assert!(offered.contains("'unconfined': true"), "{offered}");

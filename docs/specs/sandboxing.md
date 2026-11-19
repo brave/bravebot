@@ -3306,7 +3306,14 @@ own reasons bring, the remote scope's hosts and its toolchain's registries, so t
 different lists. One proxy is started for each distinct list the first time a stage needs it, and
 is kept for the rest of the process. A denied entry that is not a rule fails the stage, since
 dropping it would let the host through, and so does a proxy that cannot be started: a stage is
-never started without the filter its list asks for. An `accept` that fails, as one does with no
+never started without the filter its list asks for. The sentence the planner reads for a denied entry
+that is not a rule says that a `sandbox.network.deniedHosts` entry is not a host name and names no
+byte of the entry, since the entry is a checkout's content where the checkout wrote it. The entry,
+with its control characters made visible, goes to the person in the note of the refusal and in
+`doctor`, which also names the file that wrote it. The sentence is the same wherever the
+`allowedHosts` that holds the list was written (the person's file, the file `--settings` names, the
+managed file), in the foreground and the background, and in a workspace the person did not trust. An
+`accept` that fails, as one does with no
 descriptor left, is retried after a pause that doubles from 5 milliseconds up to a second and starts
 again at the next connection accepted, so the proxy does not hold a core while the descriptors stay
 spent. A connection its client abandoned before it was accepted is passed over with no pause, so a
@@ -3523,6 +3530,12 @@ says nothing about them.
 `verified-by: bravebot_agent::host_proxy::a_stage_holds_the_defaults_its_own_reasons_bring_and_no_others`
 `verified-by: bravebot_agent::host_proxy::a_denied_host_is_refused_although_a_default_covers_it`
 `verified-by: bravebot_agent::host_proxy::a_denied_entry_that_is_no_rule_fails_and_an_allowed_one_is_dropped`
+`verified-by: bravebot_agent::host_proxy::the_sentence_for_a_denied_entry_that_is_no_rule_names_no_byte_of_it`
+`verified-by: bravebot_agent::tools::tests::confinement::a_denied_host_that_is_no_host_name_is_told_to_the_person_and_not_the_planner`
+`verified-by: bravebot_agent::tools::tests::confinement::a_denied_host_that_is_no_host_name_is_not_told_whichever_layer_holds_the_list`
+`verified-by: bravebot_agent::tools::tests::confinement::a_denied_host_that_is_no_host_name_is_not_told_in_a_workspace_nobody_trusted`
+`verified-by: bravebot_agent::tools::tests::confinement::the_note_for_a_denied_host_that_is_no_host_name_shows_its_control_characters`
+`verified-by: bravebot_cli::doctor::doctor_names_a_denied_host_that_is_no_host_name_with_controls_visible`
 `verified-by: bravebot_agent::host_proxy::a_list_is_served_by_one_proxy_and_another_list_by_another`
 `verified-by: bravebot_agent::confine::only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list`
 `verified-by: bravebot_agent::confine::a_stage_with_a_host_list_is_pointed_at_the_proxy_that_applies_it`

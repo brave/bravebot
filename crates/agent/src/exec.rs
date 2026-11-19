@@ -581,6 +581,11 @@ pub enum ExecError {
         /// session's settings and the backend's capabilities. A line with no profile would then
         /// have the network open, which the result says where it names that route (SANDBOX-29).
         network_closed: bool,
+        /// A `sandbox.network.deniedHosts` entry that is not a host name, as the setting spelled
+        /// it, where that is why the program could not be confined. It is a string a checkout
+        /// wrote, so it is for the person's screen and is never part of this error's text, which
+        /// the planner reads (SANDBOX-24).
+        entry: Option<String>,
     },
     /// The user asked the turn to stop while this was running, and it has been killed.
     Cancelled,
@@ -642,12 +647,14 @@ impl ExecError {
                 program,
                 detail,
                 network_closed,
+                entry,
                 ..
             } => Self::NotConfined {
                 program,
                 detail,
                 before,
                 network_closed,
+                entry,
             },
             other => other,
         }

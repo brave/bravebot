@@ -453,7 +453,7 @@ impl Confinement {
     /// only one the stage's policy reaches by IP. A stage with no egress is given none: it reaches
     /// nothing. Where the proxy cannot be started the stage is refused, since starting it without
     /// the filter is the unfiltered reach the list exists to remove.
-    fn host_proxy(&self, step: &Step) -> Result<Option<Arc<Proxy>>, String> {
+    fn host_proxy(&self, step: &Step) -> Result<Option<Arc<Proxy>>, crate::host_proxy::Refused> {
         let Some(hosts) = &self.hosts else {
             return Ok(None);
         };
@@ -487,7 +487,11 @@ impl Confinement {
             crate::host_proxy::list_for(&allowed, &spelled(&hosts.denied), remote, &toolchains)?;
         crate::host_proxy::proxy_for(&list)
             .map(Some)
-            .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))
+            .map_err(|error| {
+                crate::host_proxy::Refused::new(format!(
+                    "the allowed-hosts proxy could not start: {error}"
+                ))
+            })
     }
 
     /// This confinement with the state directory in force, as [`crate::home::directory`] answers
@@ -2528,11 +2532,14 @@ impl Confinement {
             detail,
             before: crate::exec::StartedBefore::Nothing,
             network_closed: false,
+            entry: None,
         };
         if let Some(detail) = self.directory_refusal() {
             return Err(not_confined(detail));
         }
-        let proxy = self.host_proxy(step).map_err(not_confined)?;
+        let proxy = self
+            .host_proxy(step)
+            .map_err(|refused| refused_as_not_confined(step, &refused))?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
         let identified = self.identified(step);
         let chosen = identified.as_ref().and_then(Identified::command);
@@ -2600,6 +2607,7 @@ impl Confinement {
                 detail,
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: true,
+                entry: None,
             });
         }
         if let Some(detail) = cannot_hold_to_the_proxy(&wanted, &capabilities) {
@@ -2645,6 +2653,7 @@ impl Confinement {
                 detail: error.to_string(),
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: false,
+                entry: None,
             })
     }
 }
@@ -2734,6 +2743,7 @@ pub(crate) fn begin(
                 detail: refusal.to_string(),
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: false,
+                entry: None,
             });
         }
         let prepared = confinement.prepared(&command, step, directory)?;
@@ -2785,6 +2795,7 @@ impl Container {
                 detail: other.to_string(),
                 before: crate::exec::StartedBefore::Nothing,
                 network_closed: false,
+                entry: None,
             }),
         }
     }
@@ -3784,6 +3795,18 @@ pub fn foreseen_under_the_session_network(
 /// A server's policy under the session network, and the variables that point it at the proxy.
 type Held = Result<(SandboxPolicy, Vec<(String, String)>), String>;
 
+/// A refused allowed-hosts list as the error a step is stopped with. The sentence is fixed; the
+/// entry travels beside it for the person alone.
+fn refused_as_not_confined(step: &Step, refused: &crate::host_proxy::Refused) -> ExecError {
+    ExecError::NotConfined {
+        program: step.program.clone(),
+        detail: refused.to_string(),
+        before: crate::exec::StartedBefore::Nothing,
+        network_closed: false,
+        entry: refused.entry().map(str::to_string),
+    }
+}
+
 /// The decision [`held_to_the_session_network`] makes, with the way a host list is applied left to
 /// `limit`, so that a launch and a view of one cannot decide differently.
 fn held_under_the_session_network(
@@ -3820,7 +3843,8 @@ fn held_under_the_session_network(
         &spelled(&hosts.denied),
         false,
         &toolchains,
-    )?;
+    )
+    .map_err(|refused| refused.to_string())?;
     let (held, environment) = limit(policy, &list)?;
     match cannot_hold_to_the_proxy(&held, capabilities) {
         Some(detail) => Err(detail),
