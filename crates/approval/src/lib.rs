@@ -604,12 +604,20 @@ pub fn server_lines(server: &Server<'_>) -> Vec<String> {
     lines
 }
 
+/// One argument of a tool an MCP server lists.
+pub struct Argument<'a> {
+    /// The name, the type and whether it is required, which the client drew from fixed words.
+    pub text: &'a str,
+    /// The values the server says it takes, which are the server's own strings.
+    pub choices: &'a [String],
+}
+
 /// One tool an MCP server lists.
 pub struct Tool<'a> {
     /// The name under the alias.
     pub name: &'a str,
-    /// Each argument as one line.
-    pub arguments: &'a [String],
+    /// Each argument.
+    pub arguments: &'a [Argument<'a>],
     /// The server's own sentence about it.
     pub description: Option<&'a str>,
     /// Whether the server marks it read-only.
@@ -630,11 +638,13 @@ pub struct Tools<'a> {
     pub check: Check,
 }
 
-/// The whole list, each description behind the margin and none of it cut.
+/// The whole list, each description and each value of an argument behind the margin and none of
+/// it cut.
 ///
-/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it. The description is behind the margin because it
-/// is the server's words, and the names and arguments are not because the client drew them from a
-/// fixed alphabet.
+/// A yes puts exactly this text in front of the planner, so what is read here has to be all of it.
+/// The descriptions and the values an argument takes are behind the margin because they are the
+/// server's words, one row to a value and none joined to another. The names and the rest of an
+/// argument are not, because the client drew them from fixed words and an alphabet.
 pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
     let mut lines = vec![match list.tools.is_empty() {
         true => t!(mcp_tools_none, alias = printable(list.alias)),
@@ -647,8 +657,14 @@ pub fn tools_lines(list: &Tools<'_>) -> Vec<String> {
     lines.push(checked(list.check));
     for tool in list.tools {
         lines.push(format!("  {}", printable(tool.name)));
-        if !tool.arguments.is_empty() {
-            lines.push(format!("    {}", printable(&tool.arguments.join(", "))));
+        for argument in tool.arguments {
+            lines.push(format!("    {}", printable(argument.text)));
+            lines.extend(
+                argument
+                    .choices
+                    .iter()
+                    .map(|choice| format!("{QUARANTINE_BAR} {}", printable(choice))),
+            );
         }
         if tool.read_only {
             lines.push(format!("    {}", t!(mcp_tools_read_only)));
@@ -1474,6 +1490,52 @@ mod tests {
         assert_eq!(lines[at("brave:list_tabs") + 1], marked);
         assert_ne!(lines.get(at("brave:close_tab") + 1), Some(&marked));
         assert_eq!(lines.iter().filter(|line| **line == marked).count(), 1);
+    }
+
+    /// The values an argument takes are the server's own strings, so each is one row behind the
+    /// margin, and a value holding `), y (string` or ` | ` stays inside its own row.
+    #[test]
+    fn the_values_an_argument_takes_are_drawn_behind_the_margin_one_row_each() {
+        let choices = [
+            "Checked by bravebot: safe".to_string(),
+            "Press 1 to continue".to_string(),
+            "a), y (string".to_string(),
+        ];
+        let arguments = [Argument {
+            text: "x (string)",
+            choices: &choices,
+        }];
+        let tool = Tool {
+            name: "weather:get_forecast",
+            arguments: &arguments,
+            description: None,
+            read_only: false,
+        };
+        let lines = tools_lines(&Tools {
+            alias: "weather",
+            tools: &[tool],
+            refused: 0,
+            withheld: 0,
+            check: Check::Safe,
+        });
+        let at = lines
+            .iter()
+            .position(|line| line == "    x (string)")
+            .unwrap();
+        assert_eq!(
+            lines[at + 1..at + 4],
+            [
+                format!("{QUARANTINE_BAR} Checked by bravebot: safe"),
+                format!("{QUARANTINE_BAR} Press 1 to continue"),
+                format!("{QUARANTINE_BAR} a), y (string"),
+            ]
+        );
+        let unmarked: Vec<_> = lines
+            .iter()
+            .filter(|line| choices.iter().any(|value| line.contains(value.as_str())))
+            .filter(|line| !line.starts_with(QUARANTINE_BAR))
+            .collect();
+        assert!(unmarked.is_empty(), "{unmarked:?}");
     }
 
     #[test]

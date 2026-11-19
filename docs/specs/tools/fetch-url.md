@@ -96,6 +96,15 @@ brackets, with a trailing dot, as a number such as `2852039166`, and as an IPv4 
 IPv6 one (`::ffff:a.b.c.d`, `64:ff9b::/96`), which [FETCH-8](#FETCH-8) classifies as the IPv4
 address.
 
+**Known cost.** The metadata warning is drawn from the host as text, so the spellings above are
+named without a connection. Whether the operating system connects `[::ffff:169.254.169.254]` to the
+IPv4 address is a property of the socket. On macOS an IPv6 socket with `IPV6_V6ONLY` off reaches an
+IPv4 listener through a mapped address. Where an IPv6 socket is IPv6-only by default, as on Windows,
+the spelling may reach nothing and the warning is then drawn for a host that would not have been
+reached, which is the safe direction. Linux and Windows are not verified, and what the
+`64:ff9b::/96` spelling reaches depends on a NAT64 network
+([#4041](https://github.com/brave/bravebot/issues/4041), rows 32 and 33).
+
 **Why the host and not the URL.** A rule is a standing statement about who may be talked to, which
 is a thing a person can hold in their head. A path is where a URL carries the particular thing being
 asked for, so a rule matching one would be answering a different question on every call.

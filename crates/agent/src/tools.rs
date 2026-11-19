@@ -342,6 +342,10 @@ pub struct Output {
     ///
     /// Travels back for the reason a link does: the list is held by whatever owns the session.
     pub references: Vec<crate::links::Reference>,
+    /// The kind of item the command this call ran created, where it ran, exited cleanly and its
+    /// words were `gh pr create`, `gh issue create` or `pr-fix.py open` (PANEL-18). Read from the
+    /// planner's own command and never from what the program printed.
+    pub created: Option<crate::links::LinkKind>,
     /// The delegates the kernel approved, for the turn to start.
     ///
     /// Started by the turn because a delegate outlives the call that asked for one: the call
@@ -1954,6 +1958,8 @@ struct Produced {
     link: Option<crate::links::LinkSet>,
     /// The issues and pull requests the call's arguments named, as [`Output::references`].
     references: Vec<crate::links::Reference>,
+    /// The kind of item the command created, as [`Output::created`].
+    created: Option<crate::links::LinkKind>,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -2048,6 +2054,7 @@ impl Produced {
             watch: None,
             link: None,
             references: Vec::new(),
+            created: None,
             delegate: Vec::new(),
             wake_after: 1,
             loaded: None,
@@ -2335,6 +2342,7 @@ impl Produced {
         self.link = Some(crate::links::LinkSet {
             kind,
             url: url.into(),
+            inferred: false,
         });
         self
     }
@@ -3588,6 +3596,7 @@ fn output_of(
         watch: produced.watch,
         link: produced.link,
         references: produced.references,
+        created: produced.created,
         delegate: produced.delegate,
         wake_after: produced.wake_after,
         loaded: produced.loaded,
@@ -4881,6 +4890,27 @@ fn materialise_held<S: Sink>(
         let mut opened = Vec::new();
         for slot in wanted {
             let was_unread = slots.is_unread(slot);
+            if was_unread {
+                // A rule covers the file, not the spelling of it (PERM-7). The name the slot
+                // stored was judged when it was issued, and the file it lands on may have
+                // changed since: a link put there afterwards reaches a file a rule covers under
+                // a name no rule spells. The same question a `path_ref` is asked, before the
+                // file is opened, and worded about the slot because the path came out of a
+                // directory nobody vouched for. Decided from the path and the rules, never from
+                // anything the file holds.
+                let stored = policy
+                    .promote_reference_for_read(tool, "slot", slot, slots)
+                    .map_err(|denial| format!("refused: {denial}"))?
+                    .into_trusted()
+                    .map_err(|_| "error: the reference was not promoted".to_string())?;
+                refuse_denied_path_as(
+                    policy,
+                    workspace,
+                    Purpose::Read,
+                    &stored,
+                    &slot.to_string(),
+                )?;
+            }
             // A picture or PDF is opened as one, from the driver's table of extensions as
             // `read_file` decides it, so nothing read chooses. Read as text it would be refused
             // as binary, and a slot that holds one has to say so for a check to look at the file.
@@ -12807,6 +12837,11 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             produced.ran_a_program = true;
             produced.changed_a_file = changed_a_file;
             produced.command_failed = !ran.succeeded();
+            // What the line created, from its own words and only where it ran and exited cleanly
+            // (PANEL-18). The line is the one the planner wrote, which the gate above released.
+            if ran.succeeded() && tools.keeping_links {
+                produced.created = crate::links::creation_in_command(&line);
+            }
             produced.started_a_program = true;
             produced.ran_git_in = plan
                 .steps()

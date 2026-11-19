@@ -933,9 +933,9 @@ primitive, and the tool surface the planner sees must be decided by names people
 
 **How it is built.** Listing a server's tools returns one list, labelled untrusted, that the client
 drew from the server's reply and keeps nothing else of. Per tool it holds the word, the description,
-and each argument as its name, its type, the values it may take where it names at most sixteen, and
-whether it is required, and whether the server marks the tool read-only with MCP's `readOnlyHint`
-annotation, the one annotation it keeps. An argument's own description is dropped: nobody reads it at the list, and
+and each argument as its name, its type and whether it is required, and apart from those the
+values it may take where it names at most sixteen, and whether the server marks the tool read-only
+with MCP's `readOnlyHint` annotation, the one annotation it keeps. An argument's own description is dropped: nobody reads it at the list, and
 it would still reach the planner. In a description, each control character but a line break, and
 each character that reorders or hides text, is made a space, and it is cut at 1024 characters.
 
@@ -952,7 +952,12 @@ That list is put to the person at the start of the first turn they ask for, or o
 ([MANIFEST-15](manifest.md#MANIFEST-15)), whole. It shows each
 tool's name as `alias:tool`, its arguments, that it is read-only as the server says where the
 server marks it so, and every row of its description behind the margin with
-none of it cut, since a yes puts exactly this text in front of the planner. A check reads it first,
+none of it cut, since a yes puts exactly this text in front of the planner. The values an argument
+takes are the server's own strings, held to a length and to printable text and not to the alphabet
+of an argument's name, so each is drawn behind the margin as a description is, one row to a value,
+and none is joined into the argument's own row. A value holding `), y (string` therefore stays one
+row of the server's text. The argument's name, type and whether it is required are drawn without
+the margin, since the client wrote them from the alphabet of an argument's name and fixed words. A check reads it first,
 as it reads anything else about to be promoted ([CHECK-10](vetting.md#CHECK-10)), and its verdict is
 drawn above the list. The checks of every list to be put are made at the same time, no more than
 eight at one moment (the number of reads one round makes, [TURN-10](turns.md#TURN-10)) and the next
@@ -1002,6 +1007,12 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::protocol::an_argument_is_its_name_type_and_whether_it_is_required`
 `verified-by: bravebot_mcp::protocol::a_tool_its_server_marks_read_only_is_drawn_as_one_and_no_other`
 `verified-by: bravebot_approval::lib::a_tool_the_server_marks_read_only_says_so_and_no_other_does`
+`verified-by: bravebot_approval::lib::the_values_an_argument_takes_are_drawn_behind_the_margin_one_row_each`
+`verified-by: bravebot_agent::mcp::the_values_an_argument_takes_are_listed_apart_from_its_text`
+`verified-by: bravebot_tui::confirm::mcp::a_tool_list_draws_every_description_row_behind_the_margin`
+`verified-by: bravebot_cli::plain::the_values_an_argument_takes_are_asked_about_behind_the_margin_in_lines`
+`verified-by: bravebot_ui_bridge::acp::the_values_an_argument_takes_are_drawn_behind_the_margin_for_an_editor`
+`verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 `verified-by: bravebot_mcp::protocol::the_list_is_the_same_whatever_order_the_server_sent`
 `verified-by: bravebot_mcp::protocol::a_long_list_is_capped_and_the_rest_counted`
 `verified-by: bravebot_mcp::protocol::a_server_without_the_method_lists_no_tool`
@@ -2116,8 +2127,8 @@ This spec cannot land without these. Each is named by what the clause says rathe
   somewhere, and does not start confined.
 - **No interface shows a server's stderr.** A server's diagnostics are discarded in the full-screen
   interface, the plain interface, a one-shot run and the desktop application ([SERVERS-25](#SERVERS-25)).
-  A server that fails says only what its failure's code and method say, and the way to read its
-  own output is to run it by hand.
+  A server that fails outside a call says only what its failure's code and method say, and a
+  failed call does not say its code at all. The way to read its own output is to run it by hand.
 - **A server too slow for its handshake is left out.** A stdio server that has not answered
   `initialize`, `tools/list` or, where it declared prompts, `prompts/list` within its startup bound is
   stopped and left out of the session ([SERVERS-15](#SERVERS-15)). A handshake stuck where no request
@@ -2155,6 +2166,17 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
+- **OpenShell matches the hosts it is given by its own rules.** A server in an OpenShell sandbox
+  ([SERVERS-24](#SERVERS-24)) is given each host that every entry of the session's list and of the
+  declaration agrees on, after `HostRule::parse` has read the entry and the session's denied entries
+  have removed any host they overlap. What the sandbox then allows is decided by OpenShell, an
+  external program. `HostRule::parse` reads ASCII letters, digits, `-` and `_` only, so an entry
+  with a non-ASCII name is not read as a rule and is never given to it. How OpenShell compares a
+  name a program
+  asks for in another case, with a trailing dot, under a wildcard or outside ASCII is its own and is
+  not tested here, and a fake `openshell` stands in for it in the tests. A host it matches
+  more widely than the entry says is reachable, because the policy can only allow and no entry can
+  tell the program to refuse a name ([#4041](https://github.com/brave/bravebot/issues/4041), row 35).
 - **`/status` lists the rows of a server's policy and not what a platform grants beneath them.**
   Linux and macOS let a server look at any path, which is no row
   ([SANDBOX-13](sandboxing.md#SANDBOX-13)), and a Windows container reads the system directories its

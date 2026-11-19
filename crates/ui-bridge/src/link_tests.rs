@@ -68,10 +68,12 @@ fn a_link_set_by_a_turn_that_failed_reaches_the_record_and_leaves_the_rewind_poi
         LinkSet {
             kind: LinkKind::Issue,
             url: ISSUE.to_string(),
+            inferred: false,
         },
         LinkSet {
             kind: LinkKind::PullRequest,
             url: PULL.to_string(),
+            inferred: false,
         },
     ]);
 

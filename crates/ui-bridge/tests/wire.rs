@@ -2272,14 +2272,25 @@ fn a_standing_mcp_answer_takes_an_approval_and_a_literal_true() {
 /// the authority the agent took out of the destination (SERVERS-7, SERVERS-8, SERVERS-11).
 #[test]
 fn the_mcp_questions_carry_what_a_card_draws() {
-    use bravebot_agent::confirm::{ListedTool, McpCallRequest, MoveRequest, ToolListRequest};
+    use bravebot_agent::confirm::{
+        ListedTool, ListedToolArgument, McpCallRequest, MoveRequest, ToolListRequest,
+    };
     let tools = wire::mcp_tools_request(
         1,
         &ToolListRequest {
             alias: "weather".into(),
             tools: vec![ListedTool {
                 name: "weather:get_forecast".into(),
-                arguments: vec!["city (string, required)".into()],
+                arguments: vec![
+                    ListedToolArgument {
+                        text: "city (string, required)".into(),
+                        choices: Vec::new(),
+                    },
+                    ListedToolArgument {
+                        text: "unit (string)".into(),
+                        choices: vec!["metric".into(), "a), y (string".into()],
+                    },
+                ],
                 description: Some("the forecast".into()),
                 read_only: true,
             }],
@@ -2291,7 +2302,11 @@ fn the_mcp_questions_carry_what_a_card_draws() {
     );
     assert_eq!(
         tools["tools"],
-        json!([{"name": "weather:get_forecast", "arguments": ["city (string, required)"],
+        json!([{"name": "weather:get_forecast",
+            "arguments": [
+                {"text": "city (string, required)", "choices": []},
+                {"text": "unit (string)", "choices": ["metric", "a), y (string"]},
+            ],
             "description": "the forecast", "read_only": true}])
     );
     assert_eq!(tools["refused"], 2);

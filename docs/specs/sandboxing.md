@@ -3397,6 +3397,36 @@ address, so a name whose answer holds one that is not public is refused whatever
 `localhost` resolves to `::1` as well as `127.0.0.1` on most machines, so a program reaches a
 loopback service through the proxy as `127.0.0.1`, with that address listed.
 
+A name the list allows can resolve to a mapped IPv6 address, and the tunnel is opened to that address
+as the lookup gave it. The list compares a mapped spelling as the IPv4 address it carries, so the
+decision does not depend on the socket. What the connection reaches does. On macOS an IPv6 socket
+with `IPV6_V6ONLY` off reaches an IPv4 listener through `::ffff:127.0.0.1`. Where an IPv6 socket is
+IPv6-only by default, a mapped address may reach nothing, and the tunnel is then not opened. The
+proxy listens on the IPv4 loopback address only, and Windows refuses a stage held to a list, so no
+proxy serves a stage there. What a mapped address reaches on Linux is not verified, so a host on
+which it reaches something other than the IPv4 address it names is possible
+([#4041](https://github.com/brave/bravebot/issues/4041), row 32).
+
+A `64:ff9b::/96` spelling is compared as the IPv4 address it carries, and by text only. Where it
+leads depends on a NAT64 gateway on the network, so what a connection to it reaches is not verified
+([#4041](https://github.com/brave/bravebot/issues/4041), row 33).
+
+A name outside ASCII is compared by the list as written, after ASCII lowercasing. An entry reads ASCII
+letters, digits, `-` and `_`, so an entry cannot spell such a name, and the proxy applies no IDNA
+conversion to a `CONNECT` request, as [PERM-1](permissions.md#PERM-1) applies none to a fetched host.
+A rule there on an international name covers both spellings, and this list does not. A `CONNECT` for
+`bücher.example` is not covered by a denied entry `xn--bcher-kva.example`, and an allowed
+`*.example` covers it, so it is allowed. The name is then resolved as written. The macOS system
+resolver gives the same addresses for `bücher.de` and `xn--bcher-kva.de`, and for `ｅxample.com`
+(U+FF45) as for `example.com`. A denied name is therefore reached by a spelling the resolver reads as
+it when two things hold: the stage is held to a list, and an allowed wildcard such as `*.com` covers
+the spelling while the denied entry names the name exactly. The tunnel is then opened to the
+addresses of the denied name. The resolved addresses are checked only against the denied entries that
+name an address, and an address that is not public is still refused. Whether another resolver
+converts such a name is not verified ([#4041](https://github.com/brave/bravebot/issues/4041), row 34).
+The missing conversion on a `CONNECT` host is a defect and is tracked in
+[#4394](https://github.com/brave/bravebot/issues/4394).
+
 The tests that hold a stage to the proxy through the namespace need a kernel that lets an
 unprivileged user make one. They say so and do not run where it does not, so a green run there
 says nothing about them.
@@ -3586,6 +3616,19 @@ text is compared as the bytes it is. Case is not folded, since the entry names o
 pattern, and a volume that holds the two forms apart is refused more than the entry spells and never
 less. A recorded writable directory and a `PATH` entry that do not exist, spelled in different
 forms, are compared by name only ([SANDBOX-30](#SANDBOX-30)).
+
+A glob in `denyRead` folds by the comparison above and does not ask the volume, so what a volume does
+with case does not change what a glob names. The folding of a glob is verified on macOS only.
+Windows cannot subtract from a grant, so a stage that a `denyRead` would reach is refused there and
+none runs with the path held back; whether the folding of a glob holds on NTFS is not verified. On
+Linux an ext4 or f2fs directory can carry a per-directory `casefold` flag. A glob is expanded by
+listing each directory and compares every name in both cases. The test that expands a glob over
+names in several cases does not set the flag, and no test runs a stage over a directory with the
+flag set. An entry with no wildcard is resolved by the volume, as above, and that is not verified
+over a flagged directory either
+([#4041](https://github.com/brave/bravebot/issues/4041), row 36). The trust map has such a test on
+real directories ([#4279](https://github.com/brave/bravebot/issues/4279)); a stage over a flagged
+directory has none.
 
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one

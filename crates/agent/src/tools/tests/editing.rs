@@ -935,6 +935,133 @@ fn a_deferred_read_a_rule_denies_does_not_name_the_file() {
     );
 }
 
+/// A rule covers the file, so a reference whose file became a link to a denied one after the
+/// reference was issued is refused when the file is opened, and the slot is left unread. Judged
+/// from the stored path and the rules and never from what the file holds; what comes back names the
+/// slot and not either file.
+#[cfg(unix)]
+#[test]
+fn a_deferred_read_of_a_file_that_became_a_link_to_a_denied_file_is_refused_and_left_unread() {
+    let scratch = Scratch::new("deferred-link-denied");
+    std::fs::write(scratch.path.join("listed.txt"), "text\n").unwrap();
+    std::fs::write(scratch.path.join("secret.txt"), "SECRET-4385").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(secret.txt)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink).with_permissions(permissions);
+    let mut slots = SlotStore::new();
+    policy
+        .defer(
+            "list_files",
+            SlotId::new("ref:1"),
+            "listed.txt",
+            &Labelled::trusted("listed.txt".to_string()),
+            5,
+            &mut slots,
+        )
+        .expect("the file is reserved");
+
+    // The listing was harmless when the reference was issued.
+    std::fs::remove_file(scratch.path.join("listed.txt")).unwrap();
+    std::os::unix::fs::symlink("secret.txt", scratch.path.join("listed.txt")).unwrap();
+
+    let Err(refusal) = materialise(
+        &mut policy,
+        &workspace,
+        &mut slots,
+        "spawn_processor",
+        &[SlotId::new("ref:1")],
+    ) else {
+        panic!("a link to a denied file was opened through a reference");
+    };
+    assert!(
+        refusal.contains("ref:1"),
+        "the refusal does not say which slot failed: {refusal}"
+    );
+    for name in ["listed.txt", "secret.txt"] {
+        assert!(
+            !refusal.contains(name),
+            "the refusal named {name}, which a reference withholds: {refusal}"
+        );
+    }
+    assert!(
+        slots.is_unread(&SlotId::new("ref:1")),
+        "a refused read left the slot filled or marked read"
+    );
+    assert!(
+        slots.take_for_reading(&SlotId::new("ref:1")).is_err(),
+        "a refused read handed out bytes"
+    );
+}
+
+/// The same for a hard link: the other name of a denied file is the file, and no link is followed
+/// to say so, so the walk for a file's other names is what finds it.
+#[cfg(unix)]
+#[test]
+fn a_deferred_read_of_a_file_that_became_a_hard_link_to_a_denied_file_is_refused() {
+    let scratch = Scratch::new("deferred-hard-link-denied");
+    std::fs::write(scratch.path.join("listed.txt"), "text\n").unwrap();
+    std::fs::write(scratch.path.join("secret.txt"), "SECRET-4385").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(secret.txt)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink).with_permissions(permissions);
+    let mut slots = SlotStore::new();
+    policy
+        .defer(
+            "list_files",
+            SlotId::new("ref:1"),
+            "listed.txt",
+            &Labelled::trusted("listed.txt".to_string()),
+            5,
+            &mut slots,
+        )
+        .expect("the file is reserved");
+
+    std::fs::remove_file(scratch.path.join("listed.txt")).unwrap();
+    std::fs::hard_link(
+        scratch.path.join("secret.txt"),
+        scratch.path.join("listed.txt"),
+    )
+    .unwrap();
+
+    let Err(refusal) = materialise(
+        &mut policy,
+        &workspace,
+        &mut slots,
+        "spawn_processor",
+        &[SlotId::new("ref:1")],
+    ) else {
+        panic!("a hard link to a denied file was opened through a reference");
+    };
+    assert!(
+        refusal.contains("ref:1")
+            && !refusal.contains("listed.txt")
+            && !refusal.contains("secret.txt"),
+        "the refusal does not name the slot alone: {refusal}"
+    );
+    assert!(
+        slots.is_unread(&SlotId::new("ref:1")),
+        "a refused read left the slot filled or marked read"
+    );
+}
+
 /// The failure a tool reports for the directory `docs`, in a tree where `docs` is a link
 /// to an entry named `landed` that `make` creates. A walk opens where `docs` lands, so the
 /// error opening it carries that name.

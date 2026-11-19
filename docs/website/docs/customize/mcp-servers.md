@@ -378,8 +378,15 @@ that comes first, the session puts each server's list to you, whole:
 │┃ per-service status and links to the official status pages.                           │
 │                                                                                       │
 │  weather:get_alerts                                                                   │
-│    active_only (boolean), city_name (string), detail (string, summary | standard |    │
-│    full), latitude (number), location_name (string), longitude (number)               │
+│    active_only (boolean)                                                              │
+│    city_name (string)                                                                 │
+│    detail (string)                                                                    │
+│┃ summary                                                                              │
+│┃ standard                                                                             │
+│┃ full                                                                                 │
+│    latitude (number)                                                                  │
+│    location_name (string)                                                             │
+│    longitude (number)                                                                 │
 │┃ Get active weather alerts, watches, warnings, and advisories for a location.         │
 │  1 Yes, offer them    2 No, continue without them    ctrl-c stop the turn  ↑↓ 51 more │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
@@ -388,8 +395,10 @@ that comes first, the session puts each server's list to you, whole:
 Where the server's allow or deny list withheld tools, the heading says so: "one tool was withheld by
 the server's allow or deny list", or "N tools were withheld by the server's allow or deny list".
 
-Each tool is `alias:tool`, then its arguments, then every row of what the server says about it
-behind the `┃` margin, none of it cut: a yes puts exactly this text in front of the model, and
+Each tool is `alias:tool`, then its arguments one to a row, then every row of what the server says
+about it behind the `┃` margin, none of it cut. The values an argument takes are the server's words,
+so each sits on a row of its own behind the margin, under the argument it belongs to, and the
+argument's name and type do not. A yes puts exactly this text in front of the model, and
 the margin marks the words that are the server's. A [check](../security/vetting.md) reads the list
 first, as it reads anything else about to be believed, and its verdict is drawn above it. With
 several servers the checks of their lists are made at the same time, no more than eight at once,
@@ -535,11 +544,11 @@ A tool that ran and reported its own failure is handled like any other result: y
 server said about it behind the margin, and the model is handed a reference to it and told the
 call failed. The model is never sent the server's account of the failure.
 
-Every other failure is reported in bravebot's own words, which name the tool, the protocol method
-and the code the server answered with, and nothing the server wrote. A server that fails for a
-reason only its own sentence gives, or a reply bravebot cannot parse, therefore shows a code and a
-method and nothing more. A server's own error output is discarded in every interface, so to read
-it run the server by hand.
+Every other failure is reported in bravebot's own words, which name the tool and never a code or a
+status the server chose. A server that fails for a reason only its own sentence gives, or a reply
+bravebot cannot parse, therefore shows only that the server rejected the call or that its reply
+could not be used, and the model is told the same. A server's own error output is discarded in
+every interface, so to read it run the server by hand.
 
 ### Asking again
 

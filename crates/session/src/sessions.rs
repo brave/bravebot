@@ -2831,18 +2831,25 @@ impl Handle {
     /// Keep each link a turn recorded with `set_link`, the later of two of one kind winning.
     ///
     /// Each address is read as a link again by [`Url::read`] before it is kept, so one that fails
-    /// the check of `/issue` and `/pr` sets nothing. Returns whether the turn recorded any, so a
-    /// front end knows to show the links the record now holds.
+    /// the check of `/issue` and `/pr` sets nothing. A link the turn inferred from the commands it
+    /// ran (PANEL-18) is kept only where the record holds none of that kind, so it never replaces one
+    /// the person gave or `set_link` recorded. Returns whether the record changed or a link was
+    /// recorded, so a front end knows to show the links the record now holds.
     pub fn apply_links(&mut self, links: &[bravebot_agent::links::LinkSet]) -> bool {
         use bravebot_agent::links::LinkKind;
+        let mut kept = false;
         for set in links {
             let kind = match set.kind {
                 LinkKind::Issue => Link::Issue,
                 LinkKind::PullRequest => Link::PullRequest,
             };
+            if set.inferred && self.link(kind).is_some() {
+                continue;
+            }
             self.set_link(kind, Url::read(&set.url));
+            kept = true;
         }
-        !links.is_empty()
+        kept
     }
 
     /// The notes a person has typed on this session, oldest first.
@@ -6378,6 +6385,7 @@ mod tests {
         let set = |kind, url: &str| LinkSet {
             kind,
             url: url.to_string(),
+            inferred: false,
         };
         assert!(handle.apply_links(&[
             set(LinkKind::Issue, ISSUE),
@@ -6393,6 +6401,48 @@ mod tests {
             None,
             "an address the check refuses was kept"
         );
+    }
+
+    /// PANEL-18: a link a turn worked out from the commands it ran is kept only where the record
+    /// holds none of that kind, and one a person gave or `set_link` recorded is never replaced.
+    ///
+    /// The faults it rejects: an inferred link replacing an existing one, an inferred link not
+    /// being kept where the record holds none, and an inferred link of one kind setting the other.
+    #[test]
+    fn an_inferred_link_fills_an_empty_slot_and_never_replaces_one() {
+        use bravebot_agent::links::{LinkKind, LinkSet};
+        const PULL: &str = "https://github.com/brave/bravebot/pull/4376";
+        const TYPED: &str = "https://github.com/brave/bravebot/pull/1270";
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-apply-inferred-links");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let inferred = |kind, url: &str| LinkSet {
+            kind,
+            url: url.to_string(),
+            inferred: true,
+        };
+
+        assert!(handle.apply_links(&[inferred(LinkKind::PullRequest, PULL)]));
+        assert_eq!(handle.link(Link::PullRequest), Some(PULL));
+        assert_eq!(handle.link(Link::Issue), None, "the other kind was set");
+
+        handle.apply_links(&[inferred(
+            LinkKind::PullRequest,
+            "https://github.com/brave/bravebot/pull/9999",
+        )]);
+        assert_eq!(
+            handle.link(Link::PullRequest),
+            Some(PULL),
+            "an inferred link replaced the link the record held"
+        );
+
+        handle.set_link(Link::PullRequest, Url::read(TYPED));
+        assert!(!handle.apply_links(&[inferred(LinkKind::PullRequest, PULL)]));
+        assert_eq!(handle.link(Link::PullRequest), Some(TYPED));
     }
 
     /// PANEL-12: setting a link, which `set_link` and `/issue` both do through [`Handle::set_link`],

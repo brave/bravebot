@@ -29022,10 +29022,12 @@ mod tests {
             LinkSet {
                 kind: LinkKind::Issue,
                 url: ISSUE.to_string(),
+                inferred: false,
             },
             LinkSet {
                 kind: LinkKind::PullRequest,
                 url: PULL.to_string(),
+                inferred: false,
             },
         ]);
         keep_the_links_of(&finished, &mut stored, &mut session);

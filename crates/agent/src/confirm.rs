@@ -1584,9 +1584,10 @@ pub struct ManifestRequest {
 /// The tools an MCP server offers, put to the person before any of them is offered (SERVERS-8).
 ///
 /// The list as the client drew it and nothing else of the server's reply: each tool's name, its
-/// arguments and its description. A yes promotes exactly this text into the planner's context and
-/// records a digest of it, so what is drawn has to be all of it, the description included, and
-/// that is why the description is here uncut and marked by whoever draws it.
+/// arguments, the values each argument takes and its description. A yes promotes exactly this
+/// text into the planner's context and records a digest of it, so what is drawn has to be all of
+/// it, and that is why the description and each value are here uncut and marked by whoever draws
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolListRequest {
     /// The alias the person gave the server.
@@ -1608,12 +1609,27 @@ pub struct ToolListRequest {
 pub struct ListedTool {
     /// `alias:word`, the name a person reads and a rule matches.
     pub name: String,
-    /// Each argument, as its name with its type and whether it is required after it.
-    pub arguments: Vec<String>,
+    /// Each argument, as its name with its type and whether it is required after it, and apart
+    /// from that the values the server says it takes.
+    pub arguments: Vec<ListedToolArgument>,
     /// The server's own sentence about the tool, where it wrote one.
     pub description: Option<String>,
     /// Whether the server marks the tool read-only. Its word, not a check of what the tool does.
     pub read_only: bool,
+}
+
+/// One argument of a listed tool, as it is drawn (SERVERS-8).
+///
+/// The name comes from the alphabet of `bravebot_mcp::protocol::is_argument_name` and the type
+/// from a fixed list, so `text` is drawn as the client's own. The values are the server's own
+/// strings: any printable text up to a bound, so each is drawn behind the margin as a description
+/// is, one row to a value, and none is joined into `text`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedToolArgument {
+    /// `city (string, required)`: the name, the type and whether it is required.
+    pub text: String,
+    /// The values the argument takes where the server lists them, in the order it wrote them.
+    pub choices: Vec<String>,
 }
 
 /// A call to an MCP server's tool the planner has asked for (SERVERS-7).

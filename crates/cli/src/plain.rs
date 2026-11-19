@@ -892,6 +892,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                     said.not_served.is_some(),
                 ),
                 not_served: said.not_served.as_deref(),
+                draw_the_reply: false,
             },
         );
     }
@@ -1877,14 +1878,29 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         self.ask(&lines, t!(expose_title))
     }
 
-    /// The whole list, each description behind the margin and none of it cut.
+    /// The whole list, each description and each value of an argument behind the margin and none
+    /// of it cut.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        let arguments: Vec<Vec<bravebot_approval::Argument<'_>>> = request
+            .tools
+            .iter()
+            .map(|tool| {
+                tool.arguments
+                    .iter()
+                    .map(|argument| bravebot_approval::Argument {
+                        text: &argument.text,
+                        choices: &argument.choices,
+                    })
+                    .collect()
+            })
+            .collect();
         let tools: Vec<bravebot_approval::Tool<'_>> = request
             .tools
             .iter()
-            .map(|tool| bravebot_approval::Tool {
+            .zip(&arguments)
+            .map(|(tool, arguments)| bravebot_approval::Tool {
                 name: &tool.name,
-                arguments: &tool.arguments,
+                arguments,
                 description: tool.description.as_deref(),
                 read_only: tool.read_only,
             })
@@ -5107,6 +5123,50 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// SERVERS-8 in lines: each value an argument takes is on a row of its own behind the margin,
+    /// directly under that argument, and the argument's own text is not.
+    ///
+    /// A wrong implementation reads the wrong field of the argument, or leaves the values out, so
+    /// a value is drawn on no row at all or beside the argument with no margin.
+    #[test]
+    fn the_values_an_argument_takes_are_asked_about_behind_the_margin_in_lines() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+            Vec::new(),
+        );
+        asking.confirm_tool_list(&ToolListRequest {
+            alias: "weather".to_string(),
+            tools: vec![bravebot_agent::confirm::ListedTool {
+                name: "weather:get_forecast".to_string(),
+                arguments: vec![bravebot_agent::confirm::ListedToolArgument {
+                    text: "unit (string)".to_string(),
+                    choices: vec!["metric".to_string(), "a), y (string".to_string()],
+                }],
+                description: None,
+                read_only: false,
+            }],
+            refused: 0,
+            withheld: 0,
+            verdict: Verdict::Safe,
+            reason: None,
+        });
+        let drawn = String::from_utf8(asking.output).expect("text");
+        assert_eq!(
+            behind_the_margin(&drawn),
+            vec!["metric", "a), y (string"],
+            "{drawn}"
+        );
+        let rows: Vec<&str> = drawn.lines().collect();
+        let at = rows
+            .iter()
+            .position(|row| *row == "    unit (string)")
+            .unwrap_or_else(|| panic!("the argument has no row of its own: {drawn}"));
+        assert!(
+            rows[at + 1].ends_with(" metric") && rows[at + 2].ends_with(" a), y (string"),
+            "the values are not directly under the argument: {drawn}"
+        );
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.
