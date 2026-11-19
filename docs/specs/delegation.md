@@ -462,8 +462,8 @@ reach are exactly what they were.
 **What the comparison reads.** Two counts the driver holds, the tokens its backends reported for
 requests that are not checks and a figure from a vouched definition or a public call field. It
 reads no reply or tool result, so no decision is taken from untrusted bytes
-([LABEL-5](labels.md#LABEL-5)). The size of what a processor wrote is the one exception, and
-it is not changed here ([#4013](https://github.com/brave/bravebot/issues/4013)).
+([LABEL-5](labels.md#LABEL-5)). The size of what a processor wrote is the one exception: it still
+counts toward the budget ([#4013](https://github.com/brave/bravebot/issues/4013)).
 
 `verified-by: bravebot_core::delegate::a_later_definition_meets_the_budget_of_the_one_it_replaces`
 `verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
