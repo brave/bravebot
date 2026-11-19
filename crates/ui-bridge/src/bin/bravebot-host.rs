@@ -138,6 +138,10 @@ fn main() {
     }
     // Every channel has been shut, so each client's connection ends and its thread returns.
     for client in running {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a client's thread that panicked has already lost its connection, and the host stops either way"
+        )]
         let _ = client.join();
     }
     stop(&host);

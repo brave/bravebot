@@ -56,10 +56,7 @@ fn ask_about<R: BufRead, W: Write>(
     output: &mut W,
 ) -> Asked {
     let shown = shown_path(workspace);
-    let mut say = |line: &str| {
-        let _ = writeln!(output, "{line}");
-        let _ = output.flush();
-    };
+    let mut say = |line: &str| show(output, &format!("{line}\n"));
     let Ok(directory) = workspace.canonicalize() else {
         say(&format!(
             "bravebot-host: {shown} cannot be resolved, so each session there asks whether to trust it"
@@ -100,21 +97,16 @@ fn ask_about<R: BufRead, W: Write>(
     for line in &lines {
         say(line);
     }
-    let _ = write!(
+    show(
         output,
-        "{}",
-        bravebot_approval::invitation(bravebot_i18n::t!(trust_directory_title))
+        &bravebot_approval::invitation(bravebot_i18n::t!(trust_directory_title)),
     );
-    let _ = output.flush();
     let mut typed = String::new();
     let read = input.read_line(&mut typed);
     // The person's own Enter ended the line on a terminal. Where the input is not one, nothing
     // did, and what follows would be written after the question.
-    let _ = writeln!(output);
-    let mut say = |line: &str| {
-        let _ = writeln!(output, "{line}");
-        let _ = output.flush();
-    };
+    show(output, "\n");
+    let mut say = |line: &str| show(output, &format!("{line}\n"));
     let yes = match read {
         Ok(0) => {
             say(&format!(
@@ -152,4 +144,124 @@ fn ask_about<R: BufRead, W: Write>(
         ),
     });
     Asked::Answered
+}
+
+/// Write `text` to the person's terminal and flush it.
+fn show<W: Write>(output: &mut W, text: &str) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "where the terminal cannot be written to, there is nowhere else to tell the person, and the answer read decides what happens"
+    )]
+    let _ = output
+        .write_all(text.as_bytes())
+        .and_then(|()| output.flush());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A home to keep answers in, a profile apart from it, and a workspace in neither.
+    struct Scratch {
+        home: tempfile::TempDir,
+        profile: tempfile::TempDir,
+        workspace: tempfile::TempDir,
+    }
+
+    impl Scratch {
+        fn new() -> Self {
+            let made = || tempfile::tempdir().expect("make a scratch directory");
+            Scratch {
+                home: made(),
+                profile: made(),
+                workspace: made(),
+            }
+        }
+
+        /// Ask about the workspace with `input` as what the person typed, and return what the host
+        /// did and wrote.
+        fn ask(&self, input: &mut impl BufRead) -> (Asked, String) {
+            let mut output = Vec::new();
+            let asked = ask_about_each(
+                &[self.workspace.path().to_path_buf()],
+                Some(self.home.path()),
+                Some(self.profile.path()),
+                input,
+                &mut output,
+            );
+            (
+                asked,
+                String::from_utf8(output).expect("the host writes text"),
+            )
+        }
+
+        fn kept(&self) -> bool {
+            let directory = self
+                .workspace
+                .path()
+                .canonicalize()
+                .expect("resolve the workspace");
+            trusted::honoured(
+                Some(self.home.path()),
+                Some(self.profile.path()),
+                &directory,
+            )
+            .is_some()
+        }
+    }
+
+    /// Input whose every read fails.
+    struct Unreadable;
+
+    impl std::io::Read for Unreadable {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("the terminal went away"))
+        }
+    }
+
+    impl BufRead for Unreadable {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            Err(std::io::Error::other("the terminal went away"))
+        }
+
+        fn consume(&mut self, _: usize) {}
+    }
+
+    #[test]
+    fn a_yes_is_kept_and_the_clients_may_start() {
+        let scratch = Scratch::new();
+        let (asked, _) = scratch.ask(&mut &b"y\n"[..]);
+        assert_eq!(asked, Asked::Answered);
+        assert!(scratch.kept(), "a yes is kept about the workspace");
+    }
+
+    #[test]
+    fn a_line_that_is_not_text_is_a_no_and_the_clients_may_start() {
+        let scratch = Scratch::new();
+        let (asked, written) = scratch.ask(&mut &b"\xff\n"[..]);
+        assert_eq!(asked, Asked::Answered);
+        assert!(
+            !scratch.kept(),
+            "nothing is kept for a line that is not text"
+        );
+        assert!(
+            written.contains("is not trusted and nothing was kept"),
+            "the host says nothing was kept: {written}"
+        );
+    }
+
+    #[test]
+    fn input_that_cannot_be_read_stops_the_host_and_keeps_nothing() {
+        let scratch = Scratch::new();
+        let (asked, written) = scratch.ask(&mut Unreadable);
+        assert_eq!(asked, Asked::Stop);
+        assert!(
+            !scratch.kept(),
+            "nothing is kept when the input cannot be read"
+        );
+        assert!(
+            written.contains("cannot read its input (the terminal went away)"),
+            "the host says why it stops: {written}"
+        );
+    }
 }
