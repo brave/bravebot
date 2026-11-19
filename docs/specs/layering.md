@@ -94,8 +94,10 @@ The kernel is where decisions derived from content are *taken*, not where they b
 
 `bravebot-tui` and `bravebot-cli` show quarantined content to the person watching. A terminal is
 not a context, and an agent that will not say which file it is working on has protected nobody.
-Everything shown is marked with a margin the renderer draws, and has its control characters
-replaced, so the content cannot draw its own. A control character is replaced by the mark for it and
+Everything shown is marked with a margin the renderer draws, except the answer of a manifest run
+written to a terminal, which has no margin and is drawn the same way otherwise. Everything shown has
+its control characters replaced, so the content cannot draw its own. A control character is replaced
+by the mark for it and
 none is dropped: U+0000 to U+001F by the Control Pictures, DEL by `␡`, and each C1 control by
 `‹U+XXXX›`. None draws as one of the enclosed alphanumerics U+2480 to U+249F; a name that holds the
 characters `‹U+0085›` or `␡` itself draws the same as the control it spells. Both crates also
@@ -105,7 +107,9 @@ control, a zero-width character, a variation selector, a tag character) as `‹U
 zero-width or tag character cannot hide in one. The cost is that an emoji's joiner and variation
 selector are written out as `‹U+XXXX›` too, in every row the terminal client draws through its
 `printable`: code blocks, command output, thinking text, messages and notes, so an emoji sequence
-reads as its parts. A complete colour code in output drawn for
+reads as its parts. The command line's `printable_lines` writes them out the same way, so a manifest
+answer written to a terminal that holds a joined emoji reads as its parts as well; the exact bytes
+are kept for a pipe or a file. A complete colour code in output drawn for
 reading is taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)). So is one in
 the text of a program's output that the planner may read, which the information-flow kernel does
 for both ([RUN-21](tools/run.md#RUN-21)).
@@ -127,6 +131,8 @@ for both ([RUN-21](tools/run.md#RUN-21)).
 `verified-by: bravebot_agent::servers::the_path_in_an_approval_that_was_not_recorded_is_drawn`
 `verified-by: bravebot_agent::servers::the_path_in_a_note_about_unreadable_declarations_is_drawn`
 `verified-by: bravebot_cli::background::a_bidirectional_control_in_a_session_name_or_directory_is_written_out`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_has_its_control_characters_drawn`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_keeps_its_line_breaks`
 `verified-by: bravebot_cli::auth::the_aws_failure_a_sign_in_prints_is_drawn`
 `verified-by: bravebot_cli::auth::a_key_file_path_with_control_characters_is_drawn_where_it_is_named`
 `verified-by: bravebot_cli::auth::the_path_named_when_a_kept_key_cannot_be_read_again_is_drawn`

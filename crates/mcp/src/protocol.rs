@@ -386,7 +386,10 @@ fn kind(property: &Value) -> Option<&'static str> {
     }
 }
 
-/// The values an `enum` lists, where they are a few short strings.
+/// The values an `enum` lists: up to `MAX_CHOICES` strings of printable text, each up to
+/// `MAX_CHOICE` characters. They are the server's own words, held to a length and to printable
+/// text and not to the alphabet of an argument's name, so a front end draws each one as server
+/// text behind the margin and never joins one into the client's own text (SERVERS-8).
 fn choices(property: &Value) -> Option<Vec<String>> {
     let listed = property.get("enum")?.as_array()?;
     if listed.is_empty() || listed.len() > MAX_CHOICES {

@@ -538,6 +538,14 @@ environment chose. A path
 the person's environment chose is drawn like one a checkout chose, so no site decides by where a
 path came from.
 
+A manifest run's answer is the text of a slot released as it came. When stdout is a terminal it is
+drawn like the words beside it, each line break kept, so an escape sequence in a file the plan read
+cannot set the window title or conceal the lines written after the answer. Written to a pipe or a
+file it is the exact bytes, and the `--json` result object escapes its own text. Whether to draw is
+decided from the stream and the mode, never from the text. Drawing writes out an emoji's joiner
+(U+200D) and variation selectors as `‹U+XXXX›`, as [LAYER-3](layering.md#LAYER-3) says, so a joined
+emoji in a terminal answer reads as its parts.
+
 The managed file's path is fixed for the platform when bravebot is built, so neither a checkout nor
 the environment chooses it. The `bravebot` command line draws it anyway where it names it
 (`auth.rs` `managed_path`, `doctor.rs` `managed_layer`, `import.rs` `pinned_lines`, and the
@@ -591,6 +599,9 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_writes_out_a_checkouts_bidirectional_and_hidden_characters`
 `verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
 `verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_has_its_control_characters_drawn`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_keeps_its_line_breaks`
+`verified-by: bravebot_cli::main::only_a_manifest_answer_going_to_a_terminal_is_drawn`
 `verified-by: bravebot_cli::progress::the_lines_of_a_call_draw_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::main::a_pick_set_aside_or_refused_draws_its_name_and_reason_as_pictures`
 `verified-by: bravebot_cli::main::a_stored_manifest_report_draws_its_text_as_pictures`

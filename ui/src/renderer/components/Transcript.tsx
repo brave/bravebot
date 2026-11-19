@@ -2780,8 +2780,9 @@ function Card({
             gives instructions.
           </p>
 
-          {/* Each description is the server's text, drawn as text in a marked block, so it never
-              reads as this app's own words (SERVERS-8). */}
+          {/* Each description and each value an argument takes is the server's text, drawn as text
+              in a marked block, one block to a value, so none reads as this app's own words
+              (SERVERS-8). */}
           <ul className="mcp-tools-list" data-deciding="all">
             {request.tools.map((tool) => (
               <li key={tool.name}>
@@ -2793,7 +2794,12 @@ function Card({
                   <ul className="mcp-tool-arguments">
                     {tool.arguments.map((argument, index) => (
                       <li key={index}>
-                        <code>{argument}</code>
+                        <code>{argument.text}</code>
+                        {argument.choices.map((choice, at) => (
+                          <blockquote key={at} className="mcp-tool-description mcp-tool-choice" data-tooltip="Written by the server">
+                            {choice}
+                          </blockquote>
+                        ))}
                       </li>
                     ))}
                   </ul>

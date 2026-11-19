@@ -1642,6 +1642,15 @@ fn check_the_model_can_serve_the_run(
     Ok(model)
 }
 
+/// Whether the reply is written with its control characters replaced: a manifest run's answer,
+/// not asked for as a result object (`--json` and `--json-stream` both set `as_json`), going to a
+/// terminal. The answer is a slot released as it came, which a terminal would act on. Every other
+/// stream gets the exact bytes (CLI-5). The three inputs are facts about the run and the stream,
+/// never about the reply's text.
+fn draws_the_reply(mode: Mode, as_json: bool, stdout_is_terminal: bool) -> bool {
+    mode == Mode::Manifest && !as_json && stdout_is_terminal
+}
+
 /// The turn or the manifest, and what is reported of how it ended, with the id of the session
 /// record the turn wrote where it wrote one, and whether the turn ended with an answer, which is
 /// what a turn that wrote no record has to be told apart from a turn that failed by.
@@ -1934,6 +1943,9 @@ fn run_and_report(
                 clean: outcome.clean && declined.is_empty(),
                 ending,
                 not_served: not_served.as_deref(),
+                // A manifest answer is the slot's text as it came, and a terminal is where it
+                // would act. The result object escapes its own text, so it is left as it is.
+                draw_the_reply: draws_the_reply(mode, as_json, std::io::stdout().is_terminal()),
             };
             // Nothing of a reply that is off its schema goes where a pipe would take it for the
             // shape it asked for. With `--json` the object holds it, beside the status that says so.
@@ -3029,6 +3041,7 @@ mod tests {
             clean: false,
             ending: Ending::Refused,
             not_served: None,
+            draw_the_reply: false,
         });
 
         assert_eq!(reply, "ok\n");
@@ -3065,6 +3078,88 @@ mod tests {
         );
     }
 
+    /// A manifest answer is a slot's text as it came, so on a terminal an escape in it would set the
+    /// window title or conceal the lines written after it. Drawn, no control character but the line
+    /// break reaches the stream (LAYER-3).
+    #[test]
+    fn a_manifest_answer_written_to_a_terminal_has_its_control_characters_drawn() {
+        let (reply, beside) = written(&Finished {
+            reply: "notes\u{1b}]0;owned\u{7}\u{1b}[8m",
+            notices: &[],
+            attempt: None,
+            model: None,
+            clean: false,
+            ending: Ending::Refused,
+            not_served: None,
+            draw_the_reply: true,
+        });
+
+        assert_eq!(reply, "notes\u{241b}]0;owned\u{2407}\u{241b}[8m\n");
+        assert_eq!(
+            reply.chars().find(|c| c.is_control() && *c != '\n'),
+            None,
+            "a control character reached the terminal: {reply:?}"
+        );
+        assert!(beside.contains("a policy gate refused"), "got: {beside}");
+    }
+
+    /// An answer of several lines keeps its line breaks when it is drawn.
+    #[test]
+    fn a_manifest_answer_written_to_a_terminal_keeps_its_line_breaks() {
+        let (reply, _) = written(&Finished {
+            reply: "one\ntwo\u{1b}\nthree",
+            notices: &[],
+            attempt: None,
+            model: None,
+            clean: true,
+            ending: Ending::Done,
+            not_served: None,
+            draw_the_reply: true,
+        });
+
+        assert_eq!(reply, "one\ntwo\u{241b}\nthree\n");
+    }
+
+    /// The answer is drawn only for a manifest run that is not asked for as a result object and
+    /// writes to a terminal. A run that drew in any other mode would change an ordinary reply the
+    /// planner wrote with formatting, and one that drew for a pipe or for `--json` would change
+    /// bytes a program reads.
+    #[test]
+    fn only_a_manifest_answer_going_to_a_terminal_is_drawn() {
+        for mode in [Mode::Turn, Mode::Manifest] {
+            for as_json in [false, true] {
+                for terminal in [false, true] {
+                    assert_eq!(
+                        draws_the_reply(mode, as_json, terminal),
+                        mode == Mode::Manifest && !as_json && terminal,
+                        "{mode:?} json {as_json} terminal {terminal}"
+                    );
+                }
+            }
+        }
+        assert!(draws_the_reply(Mode::Manifest, false, true));
+        assert!(!draws_the_reply(Mode::Manifest, true, true));
+        assert!(!draws_the_reply(Mode::Manifest, false, false));
+        assert!(!draws_the_reply(Mode::Turn, false, true));
+    }
+
+    /// A pipe or a file is read by a program, which needs the bytes the slot held.
+    #[test]
+    fn a_reply_not_written_to_a_terminal_keeps_its_exact_bytes() {
+        let (reply, _) = written(&Finished {
+            reply: "notes\u{1b}]0;owned\u{7}\u{1b}[8m",
+            notices: &[],
+            attempt: None,
+            model: None,
+            clean: true,
+            ending: Ending::Done,
+            not_served: None,
+            draw_the_reply: false,
+        });
+
+        assert_eq!(reply, "notes\u{1b}]0;owned\u{7}\u{1b}[8m\n");
+    }
+
     /// Without `--trace` the trail is not written at all, rather than written somewhere quieter.
     #[test]
     fn an_untraced_run_writes_no_trail() {
@@ -3076,6 +3171,7 @@ mod tests {
             clean: true,
             ending: Ending::Done,
             not_served: None,
+            draw_the_reply: false,
         });
 
         assert_eq!(reply, "ok\n");
@@ -3200,6 +3296,7 @@ mod tests {
             clean: true,
             ending: Ending::Done,
             not_served: None,
+            draw_the_reply: false,
         });
         let stopped = bravebot_agent::manifest::Attempt {
             proposed: Some(name.to_string()),
@@ -3234,6 +3331,7 @@ mod tests {
             clean: true,
             ending: Ending::Done,
             not_served: None,
+            draw_the_reply: false,
         });
         assert!(
             beside.contains(&format!("{pictured} was skipped:\nnot trusted")),
@@ -3336,6 +3434,7 @@ mod tests {
             clean: true,
             ending: Ending::Done,
             not_served: Some(&complaint),
+            draw_the_reply: false,
         });
 
         assert_eq!(
@@ -5496,6 +5595,7 @@ mod tests {
             clean: true,
             ending: Ending::Failed,
             not_served: Some("a-premium-model was not served"),
+            draw_the_reply: false,
         });
 
         assert_eq!(reply, "ok\n");
@@ -5608,6 +5708,7 @@ mod tests {
             clean: true,
             ending: Ending::Done,
             not_served: Some("a-premium-model was not served"),
+            draw_the_reply: false,
         };
 
         let (reply, beside) = written(&substituted);
@@ -5967,6 +6068,7 @@ mod tests {
             clean: true,
             ending: Ending::Done,
             not_served: None,
+            draw_the_reply: false,
         });
         assert_eq!(reply, "ok\n");
         assert!(beside.contains("not usable"), "got: {beside}");

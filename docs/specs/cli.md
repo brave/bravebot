@@ -186,7 +186,10 @@ having seen part of.
 Progress, errors and the audit trail go to stderr, so a one-shot run is pipeable. `--trace` puts
 the trail on stderr beside it: which gate checked what, the label every value carried, and what
 was released. Each line is drawn with its control characters replaced, and so are the notices, the
-plan and the model line written beside the reply ([TRACE-11](trace.md#TRACE-11)). The one thing that
+plan and the model line written beside the reply ([TRACE-11](trace.md#TRACE-11)). A manifest run's
+answer is the text of a slot released as it came, so it is drawn the same way when stdout is a
+terminal, with its line breaks kept; written to a pipe or a file it is the exact bytes, and the
+result object of `--json` escapes its own text and is not drawn. The one thing that
 may take the reply's place on that stream is the result object in
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
 given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
@@ -197,6 +200,10 @@ CLI-36 beside the others.
 
 `verified-by: bravebot_cli::main::stdout_carries_the_reply_and_nothing_else`
 `verified-by: bravebot_cli::main::an_untraced_run_writes_no_trail`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_has_its_control_characters_drawn`
+`verified-by: bravebot_cli::main::a_manifest_answer_written_to_a_terminal_keeps_its_line_breaks`
+`verified-by: bravebot_cli::main::a_reply_not_written_to_a_terminal_keeps_its_exact_bytes`
+`verified-by: bravebot_cli::running::a_manifest_answer_piped_onward_keeps_the_bytes_the_slot_held`
 `verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
 
 <a id="CLI-6"></a>

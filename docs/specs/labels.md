@@ -1184,6 +1184,15 @@ arrives at all.
   after one run. A call that got no reply, because its connection closed or its bound passed, ends
   the run. [MCP-5](mcp.md#MCP-5) says which failures are replies.
 
+  The sentence is one of two the driver wrote, chosen by which kind of failure it was: a JSON-RPC
+  error, or a reply that cannot be used. It holds the name of the tool the planner called and
+  nothing the server chose. The error code a server picked, the HTTP status it answered with and the
+  byte count of a reply are numbers the server chooses, so they are not in the sentence and are
+  not a cost ([MCP-8](mcp.md#MCP-8)).
+
+  `verified-by: bravebot_agent::mcp::a_code_or_a_status_a_server_chose_never_reaches_the_planner_over_http`
+  `verified-by: bravebot_agent::mcp::a_code_a_server_chose_never_reaches_the_planner_over_stdio`
+
   Suppose a server, or a page that steers a tool the server relays, is hostile. Everything that buys
   it is on this list:
 

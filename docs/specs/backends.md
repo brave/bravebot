@@ -5232,6 +5232,11 @@ cancel kills it rather than asking it to stop.
   bounded set writes the allow list, which is the half that cannot be got around by a name nobody
   thought of. A gateway whose roster grows is the case this costs most: a new slug reaches a machine
   whose file only denies.
+  The comparison is exact in case as well. Whether a service accepts a model name written in
+  another case is not known. Where a service does, a deny entry written in one case does not
+  refuse the name written in another, which that
+  service answers as the same model. An allow list is not affected, since a name it does not hold in
+  that case is not allowed ([#4041](https://github.com/brave/bravebot/issues/4041), row 37).
 
 - **The refusal is made where a model is settled, and a model picked mid-session is not checked
   again.** The same cost BACKEND-39 carries and for the same reason: `/model` offers only what the
