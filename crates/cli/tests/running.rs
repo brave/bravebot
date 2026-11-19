@@ -4748,6 +4748,51 @@ fn a_manifest_plan_nobody_could_approve_exits_on_the_refused_status() {
     assert_eq!(object["refusals"][0]["gate"], "manifest_plan", "{stdout}");
 }
 
+/// CLI-5: a manifest run whose stdout is a pipe writes the answer's bytes as the slot held them,
+/// control characters included, because the program reading the pipe needs them. This test pins the
+/// pipe side only: it passes with or without the drawing of a terminal's answer, since stdout is a
+/// pipe here. The terminal side is held by the unit tests in `main.rs` (`draws_the_reply` and
+/// `report`), because a test cannot get a terminal. A run that drew the answer for every stream
+/// would fail this test.
+#[test]
+fn a_manifest_answer_piped_onward_keeps_the_bytes_the_slot_held() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = count.clone();
+    let plan = r#"{"steps":[
+        {"capability":"FILE_READ","args":{"path":"page.txt","out_slot":"raw"}},
+        {"capability":"ANSWER","args":{"from_slot":"raw"}}]}"#;
+    let gateway = a_gateway("[]", move |_| {
+        match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => usage_reply(None, "Read page.txt", 12, 5),
+            1 => usage_reply(None, plan, 20, 9),
+            _ => http(401, r#"{"error":{"message":"denied"}}"#),
+        }
+    });
+    let scratch = Scratch::new("cli-running-manifest-answer-piped")
+        .with_settings(&settings_for(&gateway))
+        .with_file("page.txt", "notes\u{1b}]0;owned\u{7}\u{1b}[8m");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "--mode",
+            "manifest",
+            "--dangerously-skip-permissions",
+            "-p",
+            "show what page.txt says",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        output.stdout, b"notes\x1b]0;owned\x07\x1b[8m\n",
+        "{stdout}{stderr}"
+    );
+}
+
 /// CLI-6, CHATGPT-8: a manifest run whose planner is the ChatGPT account with nobody signed in
 /// ends on the status for a credential nobody holds and says why in the account's sentence, in the
 /// language the person chose, as the turn of a one-shot run does. The run plans before it reads

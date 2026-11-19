@@ -892,6 +892,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                     said.not_served.is_some(),
                 ),
                 not_served: said.not_served.as_deref(),
+                draw_the_reply: false,
             },
         );
     }
