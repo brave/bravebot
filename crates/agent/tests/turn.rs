@@ -11770,6 +11770,7 @@ fn an_edit_is_made_when_no_run_started_while_it_was_being_asked() {
 
 /// What the planner is told when a write is refused because its destination leads to a different
 /// file than it did when the person was asked (TRUST-10).
+#[cfg(unix)]
 const REDIRECTED: &str = "leads to a different file than it did when the user was asked about it";
 
 /// TRUST-10 (#4387) for a picture written by reference: the name the person was asked about is
