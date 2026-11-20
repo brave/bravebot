@@ -31,6 +31,8 @@ mod write;
 #[cfg(test)]
 use chrome::centred;
 pub(crate) use chrome::scroll_hint;
+#[cfg(test)]
+pub(crate) use grants::ask_fetch_reading;
 pub use grants::{
     ask_apply, ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout,
 };
@@ -46,7 +48,7 @@ pub use note::Noted;
 use pinned::{Drawn, Seen};
 #[cfg(test)]
 pub(crate) use plugin::ask_install_reading;
-pub use plugin::{DefinitionRow, InstallRequest, SkillRow, ask_install};
+pub use plugin::{DefinitionRow, GitRows, InstallRequest, SkillRow, ask_install};
 pub(crate) use run::scope_name;
 #[cfg(test)]
 use run::{RowsShown, RunDrawn, RunResponse, draw_run, run_answer_for};

@@ -9,6 +9,7 @@
 //! Nothing is installed unless [`confirm_install`] answers yes. It is the one place the install
 //! question is put, and no permission mode, allow rule or `skip_permissions` answers it.
 
+use bravebot_agent::plugin_source::NotASource;
 use bravebot_agent::plugins::{self, Asker, Installed, ManageRefusal, Refusal, Staged};
 use bravebot_agent::skills::Catalogue;
 use bravebot_config::plugin as manifest;
@@ -90,6 +91,13 @@ impl<B: Backend> Asker for TerminalAsker<'_, B> {
         true
     }
 
+    fn confirm_fetch_host(&mut self, request: &bravebot_agent::confirm::FetchRequest) -> bool {
+        matches!(
+            crate::confirm::ask_fetch(self.terminal, request),
+            crate::confirm::Answer::Approve
+        )
+    }
+
     fn confirm_install(&mut self, staged: &Staged) -> bool {
         confirm_install(self.terminal, staged, self.catalogue, self.definitions)
     }
@@ -145,9 +153,8 @@ fn add<A: Asker + ?Sized>(
     path: &str,
     asker: &mut A,
 ) {
-    let source = root.join(path);
     let shown = printable(path);
-    match plugins::install_asked(&source, home, asker) {
+    match plugins::install_typed(path, root, home, asker) {
         Ok(name) => session.note(t!(plugin_added, name = printable(&name), path = shown)),
         Err(refusal) => session.note(t!(
             plugin_add_refused,
@@ -173,6 +180,17 @@ fn refused(refusal: &Refusal) -> String {
             key = manifest::Field::Part(*part).key()
         )
         .to_string(),
+        Refusal::NotASource(why) => match why {
+            NotASource::Archive => t!(plugin_refused_archive).to_string(),
+            NotASource::NpmPackage => t!(plugin_refused_npm_package).to_string(),
+            NotASource::PlainUrl => t!(plugin_refused_plain_url).to_string(),
+            NotASource::FileUrl => t!(plugin_refused_file_url).to_string(),
+            NotASource::UnsupportedScheme => t!(plugin_refused_unsupported_scheme).to_string(),
+            NotASource::BadUrl => t!(plugin_refused_bad_url).to_string(),
+            NotASource::BadRef => t!(plugin_refused_bad_ref).to_string(),
+        },
+        Refusal::GitNotInstalled => t!(plugin_refused_git_not_installed).to_string(),
+        Refusal::CloneFailed => t!(plugin_refused_clone_failed).to_string(),
         Refusal::Source(_) | Refusal::SourceNotText | Refusal::Io(_) => {
             t!(plugin_refused_unreadable).to_string()
         }
@@ -208,22 +226,35 @@ fn list(session: &mut Session, home: &Path) {
     }
 }
 
-/// One installed plugin as a row: name, version, source, digest and whether it is enabled (R44).
-/// Every field but the digest is text the plugin or the person wrote, so each is drawn through
-/// [`printable`].
+/// One installed plugin as a row: name, version, source, the resolved commit of a git source,
+/// digest and whether it is enabled (R44, PLUGIN-9). Every field but the digest is text the plugin
+/// or the person wrote, so each is drawn through [`printable`].
 pub(crate) fn row(plugin: &Installed) -> String {
-    t!(
-        plugin_list_row,
-        name = printable(&plugin.name),
-        version = printable(&plugin.version),
-        source = printable(&plugin.source.to_string()),
-        digest = printable(&plugin.digest),
-        state = match plugin.enabled {
-            true => t!(plugin_list_enabled),
-            false => t!(plugin_list_disabled),
-        }
-    )
-    .to_string()
+    let state = match plugin.enabled {
+        true => t!(plugin_list_enabled),
+        false => t!(plugin_list_disabled),
+    };
+    match plugin.source.commit() {
+        Some(commit) => t!(
+            plugin_list_row_git,
+            name = printable(&plugin.name),
+            version = printable(&plugin.version),
+            source = printable(&plugin.source.to_string()),
+            commit = printable(commit.as_str()),
+            digest = printable(&plugin.digest),
+            state = state
+        )
+        .to_string(),
+        None => t!(
+            plugin_list_row,
+            name = printable(&plugin.name),
+            version = printable(&plugin.version),
+            source = printable(&plugin.source.to_string()),
+            digest = printable(&plugin.digest),
+            state = state
+        )
+        .to_string(),
+    }
 }
 
 fn managed(
@@ -256,6 +287,7 @@ mod tests {
         keys: std::collections::VecDeque<KeyCode>,
         terminal: Terminal<TestBackend>,
         asked: usize,
+        hosts_asked: usize,
         screen: String,
         with: Option<(Catalogue, Definitions)>,
     }
@@ -266,6 +298,7 @@ mod tests {
                 keys: keys.iter().copied().collect(),
                 terminal: Terminal::new(TestBackend::new(100, 60)).unwrap(),
                 asked: 0,
+                hosts_asked: 0,
                 screen: String::new(),
                 with: None,
             }
@@ -275,6 +308,29 @@ mod tests {
     impl Asker for Scripted {
         fn anybody_there(&self) -> bool {
             true
+        }
+
+        fn confirm_fetch_host(&mut self, request: &bravebot_agent::confirm::FetchRequest) -> bool {
+            self.hosts_asked += 1;
+            let keys = &mut self.keys;
+            let answer = crate::confirm::ask_fetch_reading(&mut self.terminal, request, || {
+                match keys.pop_front() {
+                    Some(code) => {
+                        crate::confirm::Next::Press(KeyEvent::new(code, KeyModifiers::NONE))
+                    }
+                    None => crate::confirm::Next::Lost,
+                }
+            });
+            let buffer = self.terminal.backend().buffer().clone();
+            self.screen = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            matches!(answer, crate::confirm::Answer::Approve)
         }
 
         fn confirm_install(&mut self, staged: &Staged) -> bool {
@@ -313,6 +369,10 @@ mod tests {
     impl Asker for Answering {
         fn anybody_there(&self) -> bool {
             true
+        }
+
+        fn confirm_fetch_host(&mut self, _request: &bravebot_agent::confirm::FetchRequest) -> bool {
+            false
         }
 
         fn confirm_install(&mut self, _staged: &Staged) -> bool {
@@ -644,6 +704,150 @@ mod tests {
             &mut Nobody,
         );
         assert!(said(&session).pop().unwrap().contains("disabled"));
+    }
+
+    /// PLUGIN-9: a git source's row prints the full resolved commit beside the URL, and a local
+    /// path's row prints no commit.
+    ///
+    /// Rejects: a row that leaves the commit out, one that cuts it short, and a commit label on a
+    /// local row.
+    #[test]
+    fn list_prints_the_resolved_commit_of_a_git_source_and_none_for_a_path() {
+        use bravebot_agent::plugin_source::{Commit, Source};
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let mut plugin = Installed {
+            name: "demo".into(),
+            source: Source::Git {
+                url: "https://example.com/demo.git".into(),
+                requested_ref: Some("main".into()),
+                commit: Commit::parse(commit).unwrap(),
+            },
+            version: "1.0.0".into(),
+            enabled: true,
+            digest: "d1".into(),
+        };
+        let git = row(&plugin);
+        for part in ["https://example.com/demo.git", commit, "d1", "enabled"] {
+            assert!(git.contains(part), "{part} missing from {git}");
+        }
+        plugin.source = Source::Local("/a/b".into());
+        let local = row(&plugin);
+        assert!(
+            local.contains("/a/b") && !local.contains("commit"),
+            "{local}"
+        );
+    }
+
+    /// PLUGIN-3: text that is not a source is refused in words, naming the kind, before any
+    /// question.
+    ///
+    /// Rejects: a refusal that is silent or says only that a directory was unreadable, and an
+    /// asker reached for a refused source.
+    #[test]
+    fn add_refuses_an_archive_an_npm_name_and_a_plain_url_in_words_without_asking() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let mut session = Session::new("none");
+        let mut asker = Answering {
+            yes: true,
+            asked: 0,
+        };
+        for typed in [
+            "add https://example.com/x.tar.gz",
+            "add @scope/pkg",
+            "add https://example.com/docs",
+            "add file:///tmp/p",
+            "add https://example.com/x.git#-x",
+        ] {
+            run(&mut session, Some(&home), scratch.path(), typed, &mut asker);
+        }
+        let said = said(&session);
+        for (note, expected) in said.iter().zip([
+            "an archive",
+            "an npm package",
+            "not a git url",
+            "file://",
+            "starts with -",
+        ]) {
+            assert!(note.contains(expected), "{expected} missing from {note}");
+        }
+        assert_eq!(said.len(), 5, "{said:?}");
+        assert_eq!(asker.asked, 0);
+        assert!(state_is_untouched(&home));
+    }
+
+    /// PLUGIN-3, FETCH-2: a git url is put to the person in the prompt a fetch uses, with the host
+    /// the parser read on its own row above the url, and a no installs nothing, starts nothing and
+    /// says the install was declined. The install question is never put.
+    ///
+    /// Rejects: a host question that draws the host from the text before the first slash (the
+    /// userinfo `example.com` of the url below is not the host), a url missing from the prompt, and
+    /// a no that goes on to fetch or to ask the install question.
+    #[test]
+    fn a_git_url_is_put_in_the_fetch_prompt_with_its_host_apart_and_a_no_ends_it() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let mut session = Session::new("none");
+        let mut asker = Scripted::new(&[KeyCode::Char('n')]);
+        run(
+            &mut session,
+            Some(&home),
+            scratch.path(),
+            "add ssh://example.com@evil.test/x.git#main",
+            &mut asker,
+        );
+        let lines: Vec<&str> = asker.screen.lines().map(str::trim_end).collect();
+        let host_row = lines
+            .iter()
+            .position(|line| line.contains("talking to evil.test"))
+            .unwrap_or_else(|| panic!("no host row in {}", asker.screen));
+        let url_row = lines
+            .iter()
+            .position(|line| line.contains("Fetch ssh://example.com@evil.test/x.git"))
+            .unwrap_or_else(|| panic!("no url row in {}", asker.screen));
+        assert!(host_row < url_row, "{}", asker.screen);
+        assert!(!lines[host_row].contains("example.com"), "{}", asker.screen);
+        assert_eq!((asker.hosts_asked, asker.asked), (1, 0));
+        assert!(state_is_untouched(&home));
+        assert!(
+            said(&session)[0].contains("declined"),
+            "{:?}",
+            said(&session)
+        );
+    }
+
+    /// PLUGIN-3, PLUGIN-4: every permission mode, the bypass among them, still puts the host
+    /// question to the person, and a question nobody answers lets nothing leave.
+    ///
+    /// Rejects: a mode that answers the host question (`asked` would stay at zero and the state
+    /// directory would be written), and a lost terminal that counts as a yes.
+    #[test]
+    fn every_permission_mode_still_puts_the_host_question_and_a_lost_terminal_is_a_no() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let mut session = Session::new("none");
+        for _ in 0..5 {
+            let mut asker = Scripted::new(&[KeyCode::Char('n')]);
+            run(
+                &mut session,
+                Some(&home),
+                scratch.path(),
+                "add https://example.com/x.git",
+                &mut asker,
+            );
+            assert_eq!(asker.hosts_asked, 1, "{:?}", session.permission_mode());
+            let mut lost = Scripted::new(&[]);
+            run(
+                &mut session,
+                Some(&home),
+                scratch.path(),
+                "add https://example.com/x.git",
+                &mut lost,
+            );
+            assert_eq!(lost.hosts_asked, 1);
+            assert!(state_is_untouched(&home), "{:?}", session.permission_mode());
+            session.cycle_permission_mode();
+        }
     }
 
     /// R14 to R16: remove, enable and disable act on the installed plugin without any question,

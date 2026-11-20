@@ -1,16 +1,17 @@
 ---
 sidebar_position: 9
 title: Plugins
-description: Install a bundle of skills and agent definitions from a folder on this machine with /plugin add, see what it shows you first, list, turn off and remove plugins, and what a plugin can never carry.
+description: Install a bundle of skills and agent definitions from a folder on this machine or a git URL with /plugin add, see what it shows you first, list, turn off and remove plugins, and what a plugin can never carry.
 ---
 
 # Plugins
 
 A plugin is a folder with a `plugin.toml` at its root that bundles skills and agent definitions
-under one name. `/plugin add <path>` installs one from a folder on this machine. You type the
-command, and you are shown every skill and definition in the plugin before anything is copied.
+under one name. `/plugin add <path>` installs one from a folder on this machine, and
+`/plugin add <git url>` or `/plugin add <git url>#<ref>` installs one from a git repository. You type
+the command, and you are shown every skill and definition in the plugin before anything is copied.
 
-Cloning a git source, `/plugin update`, hooks, servers and the `${PLUGIN_ROOT}` variable are not
+`/plugin update`, hooks, servers and the `${PLUGIN_ROOT}` variable are not
 built. A `hooks` or `servers` path in a manifest installs nothing.
 
 ## The commands
@@ -18,7 +19,8 @@ built. A `hooks` or `servers` path in a manifest installs nothing.
 | Command | What it does |
 |---|---|
 | `/plugin add <path>` | Reads the folder at `<path>`, shows what it holds and installs it if you say yes |
-| `/plugin list` | Prints each installed plugin's name, version, source, digest and whether it is enabled |
+| `/plugin add <git url>[#<ref>]` | Asks about the host, fetches the repository, shows what it holds and installs it if you say yes |
+| `/plugin list` | Prints each installed plugin's name, version, source, resolved commit, digest and whether it is enabled |
 | `/plugin remove <name>` | Deletes the plugin's folder and its record |
 | `/plugin disable <name>` | Keeps the plugin installed and stops it offering anything |
 | `/plugin enable <name>` | Turns a disabled plugin back on, and asks nothing new |
@@ -30,6 +32,37 @@ asked there. See [`/plugin`](../reference/commands.md) for the forms.
 
 A relative `<path>` is read from the session's workspace folder. An installed plugin is yours and
 is offered in every project.
+
+## Installing from a git URL
+
+A git source is an `https` URL whose path ends in `.git`, an `ssh://host/path` URL, or the
+`user@host:path` form. Add `#<ref>` to name a branch, a tag or a full commit, as in
+`/plugin add https://example.com/team/review-kit.git#v1.2`. Without a ref the repository's default
+branch is used.
+
+Before anything is fetched you are asked about the host, in the same box a fetch of a web page
+uses, with the host on its own row above the URL. No connection is made to it until you answer `y`,
+and `n` installs nothing. No permission mode and no allow rule answers this question for you. The
+host is the one in the URL, and a source that redirects to another host is not followed.
+
+The repository is fetched one commit deep by the `git` program, which bravebot starts itself, from a
+folder on its `PATH` that a sandboxed command could not have written. If the only `git` is in such a
+folder, bravebot says git is not installed and asks nothing. The variables that make `git` or `ssh`
+run a program of their own choosing, such as `GIT_SSH_COMMAND` and `GIT_ASKPASS`, are removed from its
+environment, so put such settings in your git or ssh configuration, which is read. No submodule is
+fetched and no hook or file system monitor from the repository runs. The fetch is made in a private
+folder in your system's temporary directory, which is removed when the install ends.
+
+These are refused with a notice, and no question is asked and no program is started:
+
+- an archive, such as a URL ending in `.zip`, `.tar.gz` or `.tgz`
+- an npm package, such as `@scope/pkg` or `npm:pkg`
+- a plain URL, which is any `http` or `https` URL whose path does not end in `.git`
+- a `file://` URL, `git://`, `ftp://` and `git+https://` (type a local folder as a path)
+- a ref that starts with `-` or holds a control character
+
+The box that lists the plugin then shows the ref you asked for, or says none was given, and the full
+40-character commit it resolved to.
 
 ## The manifest
 
@@ -54,7 +87,8 @@ A key this build does not read is reported and ignored.
 `/plugin add` copies the folder to a staging directory first and reads it there as data. Nothing in
 it is run. It then asks once, in a box that shows:
 
-- the plugin's name, version and source path
+- the plugin's name, version and source (a path, or the git URL)
+- for a git source, the ref you asked for and the full commit it resolved to
 - each skill's name and description
 - each definition's name and kind
 - a mark on any skill or definition that another source already offers under the same name, saying
@@ -71,14 +105,15 @@ installs. `n` or `Esc` installs nothing and copies nothing. The box is the same 
 ## What an install does
 
 A yes copies the plugin to `~/.bravebot/plugins/<name>/` and writes a record beside it, at
-`~/.bravebot/plugins/<name>.record`. The record holds the source path, the version, whether the
-plugin is enabled and the SHA-256 of the copied tree. `/plugin list` reads that record and starts
-no program. A new plugin is enabled.
+`~/.bravebot/plugins/<name>.record`. The record holds the source, for a git source the ref you asked
+for and the commit it resolved to, the version, whether the
+plugin is enabled and the SHA-256 of the copied tree. `/plugin list` reads that record, prints the
+commit of a git source, and starts no program. A new plugin is enabled.
 
 An install is refused, and nothing is copied, when:
 
-- a plugin of that name is already installed from another source, or from the same one, since
-  updating is not built
+- a plugin of that name is already installed from another source, or from the same one (the same
+  URL and ref for a git source), since updating is not built
 - the manifest has a key that names a decision: a permission rule, an allow list, a grant, a trusted
   path, a mode, a model, an endpoint or a setting. The refusal names the key, and the manifest is
   refused whole

@@ -7,6 +7,8 @@ governs:
   - crates/config/src/mcp.rs
   - crates/config/src/plugin.rs
   - crates/agent/src/plugins.rs
+  - crates/agent/src/plugin_source.rs
+  - crates/agent/src/plugin_git.rs
   - crates/tui/src/plugin_command.rs
   - crates/tui/src/confirm/plugin.rs
 documented-by:
@@ -19,11 +21,11 @@ One person-run command that installs a bundle of skills, delegate definitions, h
 declarations from one source, what the person is shown before it does, where each part lands, what a
 plugin can never carry, and how an installed plugin is updated, turned off and removed.
 
-What is built is the install of a plugin from a local path with `/plugin add`, and `/plugin list`,
-`/plugin remove`, `/plugin enable` and `/plugin disable`, for the skills and definitions a plugin
-carries. Not built are cloning a git source and a ref ([PLUGIN-3](#PLUGIN-3),
-[PLUGIN-14](#PLUGIN-14)), `/plugin update` ([PLUGIN-9](#PLUGIN-9)), the hooks and servers parts and
-their first-use questions ([PLUGIN-7](#PLUGIN-7)), and `${PLUGIN_ROOT}` ([PLUGIN-13](#PLUGIN-13)). A
+What is built is the install of a plugin from a local path or from a git URL and ref with
+`/plugin add`, and `/plugin list`, `/plugin remove`, `/plugin enable` and `/plugin disable`, for the
+skills and definitions a plugin carries. Not built are `/plugin update` ([PLUGIN-9](#PLUGIN-9),
+[PLUGIN-14](#PLUGIN-14)), the hooks and servers parts and their first-use questions
+([PLUGIN-7](#PLUGIN-7)), and `${PLUGIN_ROOT}` ([PLUGIN-13](#PLUGIN-13)). A
 clause reads `verified-by: none` where none of it is built, and a clause only partly built has a
 **Not built** paragraph naming what is missing. The specs this one changes are named in
 [What this changes elsewhere](#what-this-changes-elsewhere). The skills, definitions, instructions
@@ -112,16 +114,33 @@ would be shown the translation rather than the file.
 <a id="PLUGIN-3"></a>
 ### PLUGIN-3: fetching a source is a network effect, and the host is put to the person before it happens
 
-A git URL is cloned shallow into a staging directory outside `~/.bravebot` and outside every workspace.
+A git URL is cloned shallow into a directory outside `~/.bravebot` and outside every workspace.
 The host is shown and asked about through the same prompt a fetch uses, and no request leaves before
 the yes. Only `https` and `ssh`-style git URLs and local paths are sources. A redirect to another host
 is not followed. A source that is an archive, an npm package or a plain URL is refused.
 
+What a source is is decided from the typed text alone. An `https` URL is a git source when its path
+ends in `.git`, and any other `http` or `https` URL is a plain URL. An `ssh://host/path` URL and the
+`user@host:path` form are git sources. A `file://` URL, `git://`, `ftp://` and `git+https://` are
+refused, and a local directory is typed as a path. A ref starting with `-` or holding a control
+character is refused. The host in the question is the one the URL parser reads, with no user
+information and no port, and no request is made for a source that is refused.
+
 The clone is made by the `git` program, started the way [SANDBOX-30](sandboxing.md#SANDBOX-30)
 requires, with the variables that select code removed from its environment, no submodule fetched and no
-hook from the cloned repository run. A local path is read in place, copied into staging and never
-executed there. As built, the staging directory for a local path is a `.plugin-staging-*` directory
-inside `~/.bravebot`, removed when the install ends, is refused or is declined.
+hook from the cloned repository run. The program is told on its command line, where no file outranks
+it, not to follow a redirect, to use only the `https` and `ssh` protocols and to ignore a hooks
+path and a file system monitor. No step runs inside the cloned tree, which holds no `.git`. A `git`
+found only in a directory a confined stage may write reads as not installed, and the install is
+refused before the host is asked about. A local path is read in place, copied into staging and never
+executed there.
+
+The clone is made in a fresh directory, private to the account and named at random, under the system
+temporary directory, which is outside `~/.bravebot` and outside every workspace unless a workspace is
+opened on the temporary directory itself. It is removed when the install ends, is refused or is
+declined. The tree is copied from it to a `.plugin-staging-*` directory in `~/.bravebot` before the
+listing is built, so what is listed and installed is the copy. A local path is copied to the same
+kind of directory without a clone.
 
 The staged bytes are untrusted content. Nothing in them is read by the driver or the planner before the
 person has seen what [PLUGIN-4](#PLUGIN-4) lists, and the listing is built by a reader that parses the
@@ -132,10 +151,34 @@ is listed.
 the same decision a fetch of a page asks. A staged tree that something already ran would have decided
 for the person.
 
-**Not built:** the clone of a git URL, the host question, the redirect rule and the environment of the
-`git` program. A local path is the only source, and it is copied into staging without being executed.
-
-`verified-by: none`
+`verified-by: bravebot_agent::plugin_source::an_archive_an_npm_name_and_a_plain_url_are_refused_each_for_its_own_reason`
+`verified-by: bravebot_agent::plugin_source::the_host_is_the_one_connected_to_and_an_option_like_authority_is_refused`
+`verified-by: bravebot_agent::plugin_source::one_trailing_slash_after_dot_git_is_a_git_source`
+`verified-by: bravebot_agent::plugin_source::a_local_path_is_a_source_taken_whole`
+`verified-by: bravebot_agent::plugins::typed_text_that_is_not_a_source_asks_and_writes_nothing_and_a_path_still_installs`
+`verified-by: bravebot_agent::plugins::no_connection_is_made_to_the_host_before_a_yes_and_a_no_makes_none`
+`verified-by: bravebot_agent::plugins::the_host_question_carries_the_parsed_host_and_the_url_and_is_put_once`
+`verified-by: bravebot_agent::plugins::no_git_or_nobody_to_ask_puts_no_question`
+`verified-by: bravebot_agent::plugins::a_yes_to_the_host_and_to_the_listing_installs_the_commit_the_branch_pointed_to`
+`verified-by: bravebot_agent::plugin_git::every_step_pins_the_redirect_hook_fsmonitor_and_protocol_settings_on_its_argv`
+`verified-by: bravebot_agent::plugin_git::a_git_found_only_where_a_stage_may_write_reads_as_not_installed`
+`verified-by: bravebot_agent::plugin_git::the_installed_tree_holds_no_git_directory_and_a_failed_fetch_leaves_nothing`
+`verified-by: bravebot_agent::plugin_git::the_fetch_directory_is_private_and_never_one_that_was_already_there`
+`verified-by: bravebot_agent::plugin_git::the_variables_that_name_a_program_for_git_or_ssh_are_removed`
+`verified-by: bravebot_agent::plugin_git::this_agents_credentials_and_the_repository_variables_are_not_passed`
+`verified-by: bravebot_agent::plugin_git::safety_tests::an_archive_an_npm_name_and_a_plain_url_start_no_program_and_ask_nothing`
+`verified-by: bravebot_agent::plugin_git::safety_tests::a_protocol_that_is_not_on_the_list_is_refused_by_git`
+`verified-by: bravebot_agent::plugin_git::safety_tests::a_redirect_to_another_host_is_not_followed_and_the_install_is_refused`
+`verified-by: bravebot_agent::plugin_git::safety_tests::planted_source_tests::a_submodule_the_repository_names_is_not_fetched`
+`verified-by: bravebot_agent::plugin_git::safety_tests::planted_source_tests::no_hook_and_no_file_system_monitor_runs_and_the_clone_holds_no_hook`
+`verified-by: bravebot_agent::plugin_git::safety_tests::planted_source_tests::git_is_never_run_inside_the_tree_and_the_tree_holds_no_git_directory`
+`verified-by: bravebot_agent::plugin_git::safety_tests::planted_source_tests::nothing_in_the_cloned_tree_runs_before_the_listing_and_a_link_is_not_copied`
+`verified-by: bravebot_agent::plugin_git::safety_tests::planted_source_tests::a_cloned_link_in_a_part_leaving_the_plugin_is_refused_and_leaves_nothing`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::variables_that_select_code_set_in_the_persons_environment_do_not_reach_the_clone`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::a_template_directory_in_the_persons_environment_is_not_used_by_the_clone`
+`verified-by: bravebot_tui::plugin_command::a_git_url_is_put_in_the_fetch_prompt_with_its_host_apart_and_a_no_ends_it`
+`verified-by: bravebot_tui::plugin_command::every_permission_mode_still_puts_the_host_question_and_a_lost_terminal_is_a_no`
+`verified-by: bravebot_tui::plugin_command::add_refuses_an_archive_an_npm_name_and_a_plain_url_in_words_without_asking`
 
 <a id="PLUGIN-4"></a>
 ### PLUGIN-4: the install lists every part in full and asks once
@@ -160,10 +203,12 @@ nobody can be asked, such as a one-shot run, nothing is installed.
 summary of itself would let the plugin choose what the person reads. The prompt is built from the
 parts, not from a field the manifest wrote.
 
-**Not built:** the hook and server rows, since neither is installed, the host, command and path rows
-that only a hook or a server reaches, and the resolved commit, which a local path has none of.
+**Not built:** the hook and server rows, since neither is installed, and the host, command and path
+rows that only a hook or a server reaches. The resolved commit row is built for a git source, and a
+local path has none.
 
 `verified-by: bravebot_tui::confirm::plugin::the_prompt_lists_every_part_and_says_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::plugin::a_git_source_shows_the_requested_ref_and_the_full_commit`
 `verified-by: bravebot_tui::confirm::plugin::text_from_the_plugin_is_drawn_as_untrusted_content`
 `verified-by: bravebot_tui::confirm::plugin::a_long_description_is_cut_and_shown_on_request_and_a_yes_waits_for_it`
 `verified-by: bravebot_tui::confirm::plugin::a_shadowed_skill_and_definition_are_marked`
@@ -193,13 +238,16 @@ There is no project scope and no setting that makes a plugin required for a team
 single-file spec of the declarations depends on. A project scope would put plugin parts where a checkout
 authors them.
 
-**Not built:** the resolved ref, which only a git source has ([PLUGIN-14](#PLUGIN-14)), and the update
-that an install of the same source would be. Adding the same source again is refused and says update
-is not built.
+**Not built:** the update that an install of the same source would be. A git source is the same source
+when its URL and requested ref are the same, whatever commit the ref resolves to now. Adding the same
+source again is refused and says update is not built.
 
 `verified-by: bravebot_agent::plugins::an_install_puts_the_tree_and_a_record_under_the_plugins_directory`
 `verified-by: bravebot_agent::plugins::a_name_installed_from_another_source_is_refused_naming_both_and_changes_nothing`
 `verified-by: bravebot_agent::plugins::adding_the_same_source_again_is_refused_because_update_is_not_built`
+`verified-by: bravebot_agent::plugins::a_git_record_holds_the_url_ref_and_commit_and_the_same_url_and_ref_is_an_update`
+`verified-by: bravebot_agent::plugins::an_old_record_still_reads_and_a_damaged_git_record_does_not`
+`verified-by: bravebot_agent::plugin_source::the_same_url_and_ref_is_one_source_whatever_commit_it_resolved_to`
 `verified-by: bravebot_agent::plugins::a_name_that_could_leave_the_plugins_directory_is_refused_before_a_path_is_made`
 `verified-by: bravebot_agent::plugins::an_install_leaves_the_rules_the_trust_map_and_the_state_beside_it_untouched`
 `verified-by: bravebot_agent::plugin_sources::an_enabled_plugin_offers_its_skill_and_definition_and_a_disabled_one_offers_nothing`
@@ -298,6 +346,7 @@ a server, so remove has nothing of those to withdraw.
 `verified-by: bravebot_agent::plugins::list_shows_what_was_installed_from_the_records_alone`
 `verified-by: bravebot_agent::plugins::remove_deletes_the_directory_and_the_record_and_nothing_else`
 `verified-by: bravebot_tui::plugin_command::list_prints_name_version_source_digest_and_enabled`
+`verified-by: bravebot_tui::plugin_command::list_prints_the_resolved_commit_of_a_git_source_and_none_for_a_path`
 `verified-by: bravebot_tui::plugin_command::remove_enable_and_disable_act_without_a_question_and_miss_in_words`
 `verified-by: none`
 
@@ -386,10 +435,17 @@ recorded with its digest.
 **Why.** Without an index to pin a source, the commit the person was shown is the pin, and an update is
 a different commit the person is shown again.
 
-**Not built:** a git source, a ref, the resolved commit and the update. A local path is recorded with
-its digest ([PLUGIN-5](#PLUGIN-5)).
+**Not built:** the update. `/plugin update` is refused ([PLUGIN-1](#PLUGIN-1)), and a git source added
+again with the same URL and ref is refused and says update is not built.
 
-`verified-by: none`
+`verified-by: bravebot_agent::plugin_source::a_git_url_is_split_from_its_ref_at_the_first_hash`
+`verified-by: bravebot_agent::plugin_source::a_ref_that_git_could_read_as_an_option_or_that_holds_a_control_character_is_refused`
+`verified-by: bravebot_agent::plugin_source::a_url_with_a_control_character_is_refused_and_a_commit_is_forty_lowercase_hex_digits`
+`verified-by: bravebot_agent::plugin_git::a_branch_a_tag_a_full_commit_and_no_ref_each_record_the_commit_they_resolve_to`
+`verified-by: bravebot_agent::plugins::a_yes_to_the_host_and_to_the_listing_installs_the_commit_the_branch_pointed_to`
+`verified-by: bravebot_agent::plugins::a_git_record_holds_the_url_ref_and_commit_and_the_same_url_and_ref_is_an_update`
+`verified-by: bravebot_tui::confirm::plugin::a_git_source_shows_the_requested_ref_and_the_full_commit`
+`verified-by: bravebot_tui::plugin_command::list_prints_the_resolved_commit_of_a_git_source_and_none_for_a_path`
 
 ## What this changes elsewhere
 
@@ -410,7 +466,7 @@ work lands, in the same commit as the code.
 - **The trust map.** It does not govern the plugin directory, for the reason it does not govern the rest
   of `~/.bravebot`. Done: [TRUST-11](trust-map.md#TRUST-11) says so.
 - **Programs bravebot starts.** The `git` that clones a source is added to the programs
-  [SANDBOX-30](sandboxing.md#SANDBOX-30) lists.
+  [SANDBOX-30](sandboxing.md#SANDBOX-30) lists. Done: that clause lists it, with its variable table.
 - **Import.** A conversion of another tool's plugin layout would belong to [import.md](import.md). Nothing
   in this spec reads one.
 
@@ -425,6 +481,22 @@ work lands, in the same commit as the code.
 - Nothing lists plugins to choose from. A person finds a source elsewhere, and a pin says the bytes are
   the ones shown, not that they are good.
 - A plugin's own programs have no directory for data and no per-plugin settings.
+- A confined stage may write the system temporary directory ([SANDBOX-30](sandboxing.md#SANDBOX-30)),
+  so a stage running at the same time as a clone can write in the clone's directory. The clone's own
+  settings that matter for what runs are on its command line, which a file there does not outrank, and
+  the copy that is listed and installed is made after the clone ends. Settings only a file could carry
+  (for example `core.sshCommand` in the clone's git directory) are not protected during the fetch. A
+  person who needs that closed runs the install with no other stage running. Moving the clone outside
+  every directory a stage may write would need a directory under the state directory, which
+  [PLUGIN-3](#PLUGIN-3) excludes.
+- An `https` URL is a git source only when its path ends in `.git`, because deciding otherwise would
+  take a request before the host question. A host that serves git at another path is reached with an
+  `ssh` URL or with `.git` added.
+- The clone does not use `GIT_SSH_COMMAND`, `GIT_ASKPASS` and the other variables that name a
+  program ([SANDBOX-30](sandboxing.md#SANDBOX-30)). A person whose `ssh` needs one sets it in their
+  own git or ssh configuration, which is read.
+- The `https` and `ssh` clone paths are tested against `file` and `http` stand-ins, not against a real
+  TLS or ssh server.
 - A plugin written for another tool does not install here, because only `plugin.toml` is read.
 - The install decides from a plugin's bytes in three places, and each only refuses or marks: the manifest
   reader refuses a decision key, a part path that leaves the root and a bad name; the shadow marking

@@ -650,7 +650,7 @@ does not read:
   person and takes the terminal, and `disable` and `remove` change the tools the turn offers, so
   those and any other word after `/mcp` wait. The line says so under the turn, naming `/mcp`, as for
   every command that waits for the turn to end.
-- **`/plugin`, in every form.** `add <path>` installs after a question put to the person and takes
+- **`/plugin`, in every form.** `add <path or git url[#ref]>` installs after a question put to the person and takes
   the terminal, and `list`, `remove`, `enable` and `disable` change what the next turn is offered
   ([PLUGIN-1](plugins.md#PLUGIN-1)), so every form waits. The line says so under the turn, naming
   `/plugin`. The command is typed: no tool installs a plugin, and a line that arrives by paste is

@@ -12,6 +12,7 @@
 //! plugin said is left unread by a yes. The body scrolls, and no yes is taken before every row of
 //! it has been drawn.
 
+use bravebot_agent::plugin_source::Source;
 use bravebot_agent::plugins::{self, Offered, Staged};
 use bravebot_agent::skills::Catalogue;
 use bravebot_core::delegate::Definitions;
@@ -50,6 +51,15 @@ pub struct DefinitionRow {
     pub shadowed_by: Option<String>,
 }
 
+/// The rows only a git source has (PLUGIN-4, PLUGIN-14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRows {
+    /// The ref the person typed after `#`, or `None` where they named none.
+    pub requested_ref: Option<String>,
+    /// The full 40-digit commit the clone resolved to.
+    pub commit: String,
+}
+
 /// What the install prompt shows. Built from the parts of the staged tree, not from a field the
 /// manifest wrote about itself (PLUGIN-4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +68,9 @@ pub struct InstallRequest {
     pub version: String,
     /// The source directory. A local path has no commit, so none is shown.
     pub source: String,
+    /// What a git source adds to the listing. `None` for a local path, which has no commit, so
+    /// neither row is drawn for it.
+    pub git: Option<GitRows>,
     pub skills: Vec<SkillRow>,
     pub definitions: Vec<DefinitionRow>,
 }
@@ -87,6 +100,17 @@ impl InstallRequest {
             name: staged.manifest.name.clone(),
             version: staged.manifest.version.clone(),
             source: staged.source.to_string(),
+            git: match &staged.source {
+                Source::Local(_) => None,
+                Source::Git {
+                    requested_ref,
+                    commit,
+                    ..
+                } => Some(GitRows {
+                    requested_ref: requested_ref.clone(),
+                    commit: commit.to_string(),
+                }),
+            },
             skills,
             definitions: kinds,
         }
@@ -233,13 +257,27 @@ pub(super) fn draw_install(
     let mut any_cut = false;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for (label, value) in [
-        (t!(plugin_install_name), request.name.as_str()),
-        (t!(plugin_install_version), request.version.as_str()),
-        (t!(plugin_install_source), request.source.as_str()),
-    ] {
+    let source_label = match request.git {
+        Some(_) => t!(plugin_install_source_git),
+        None => t!(plugin_install_source),
+    };
+    let mut facts = vec![
+        (t!(plugin_install_name), request.name.clone()),
+        (t!(plugin_install_version), request.version.clone()),
+        (source_label, request.source.clone()),
+    ];
+    if let Some(git) = &request.git {
+        facts.push((
+            t!(plugin_install_requested_ref),
+            git.requested_ref
+                .clone()
+                .unwrap_or_else(|| t!(plugin_install_no_ref).to_string()),
+        ));
+        facts.push((t!(plugin_install_commit), git.commit.clone()));
+    }
+    for (label, value) in facts {
         lines.extend(indented(label, muted, width));
-        let (rows, _) = untrusted(value, bold, &margin, width, None, expanded);
+        let (rows, _) = untrusted(&value, bold, &margin, width, None, expanded);
         lines.extend(rows);
     }
 
@@ -281,21 +319,7 @@ pub(super) fn draw_install(
             width,
         ),
     });
-    for definition in &request.definitions {
-        lines.push(Line::raw(""));
-        let (rows, _) = untrusted(&definition.name, bold, &margin, width, None, expanded);
-        lines.extend(rows);
-        let (rows, _) = untrusted(
-            &t!(plugin_install_kind, kind = definition.kind.as_str()),
-            Style::default(),
-            &margin,
-            width,
-            None,
-            expanded,
-        );
-        lines.extend(rows);
-        shadow_rows(&mut lines, definition.shadowed_by.as_deref(), width);
-    }
+    definition_rows(&mut lines, request, &margin, bold, width, expanded);
 
     if any_cut {
         lines.push(Line::raw(""));
@@ -331,6 +355,32 @@ pub(super) fn draw_install(
     pinned::draw(frame, inside, question, scroll, seen)
 }
 
+/// The rows for each definition: its name, its kind and the mark of a source that shadows it.
+fn definition_rows(
+    lines: &mut Vec<Line<'static>>,
+    request: &InstallRequest,
+    margin: &Span<'static>,
+    bold: Style,
+    width: usize,
+    expanded: bool,
+) {
+    for definition in &request.definitions {
+        lines.push(Line::raw(""));
+        let (rows, _) = untrusted(&definition.name, bold, margin, width, None, expanded);
+        lines.extend(rows);
+        let (rows, _) = untrusted(
+            &t!(plugin_install_kind, kind = definition.kind.as_str()),
+            Style::default(),
+            margin,
+            width,
+            None,
+            expanded,
+        );
+        lines.extend(rows);
+        shadow_rows(lines, definition.shadowed_by.as_deref(), width);
+    }
+}
+
 /// The mark under a name that a higher-ranked source takes. Its origin is a path, so it is drawn
 /// behind the margin as well.
 fn shadow_rows(lines: &mut Vec<Line<'static>>, by: Option<&str>, width: usize) {
@@ -358,6 +408,7 @@ mod tests {
             name: "demo".into(),
             version: "2.3.4".into(),
             source: "/work/src-demo".into(),
+            git: None,
             skills: vec![SkillRow {
                 name: "hello".into(),
                 description: "Says hello.".into(),
@@ -422,6 +473,50 @@ mod tests {
             assert!(screen.contains(shown), "{shown}\n{screen}");
         }
         assert!(!screen.to_lowercase().contains("commit"), "{screen}");
+    }
+
+    /// PLUGIN-4, PLUGIN-14: a git source's prompt shows the requested ref and the full commit,
+    /// each behind the margin, and says plainly when no ref was named.
+    ///
+    /// Rejects: a commit cut to a short id, a requested ref that is not drawn, a commit drawn
+    /// unmarked, a ref shown where none was typed, and rows drawn for a local path.
+    #[test]
+    fn a_git_source_shows_the_requested_ref_and_the_full_commit() {
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let mut shown = request();
+        shown.source = "https://example.com/demo.git".into();
+        shown.git = Some(GitRows {
+            requested_ref: Some("release-2".into()),
+            commit: commit.into(),
+        });
+        let (_, _, screen) = answered(&shown, &[KeyCode::Char('n')]);
+        for expected in [
+            "https://example.com/demo.git",
+            "Requested ref",
+            "release-2",
+            "Commit it resolved to",
+            commit,
+        ] {
+            assert!(screen.contains(expected), "{expected}\n{screen}");
+        }
+        let row = screen
+            .lines()
+            .find(|row| row.contains(commit))
+            .expect("the commit is drawn");
+        assert!(row.contains('\u{2503}'), "{row}");
+        assert!(!screen.contains("none given"), "{screen}");
+
+        shown.git = Some(GitRows {
+            requested_ref: None,
+            commit: commit.into(),
+        });
+        let (_, _, unnamed) = answered(&shown, &[KeyCode::Char('n')]);
+        assert!(unnamed.contains("none given"), "{unnamed}");
+        assert!(unnamed.contains(commit), "{unnamed}");
+
+        let (_, _, local) = answered(&request(), &[KeyCode::Char('n')]);
+        assert!(!local.contains("Requested ref"), "{local}");
+        assert!(!local.contains("Commit it resolved to"), "{local}");
     }
 
     /// R26: what the plugin wrote is drawn behind the margin, with control and invisible characters
