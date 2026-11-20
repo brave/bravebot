@@ -279,8 +279,9 @@ pub uninterp spec fn spec_slot_name(slot: SlotId) -> Seq<char>;
 }
 
 // What a contract may say about a policy: the integrity of the context the planner writes from,
-// which is the integrity of what it writes. `Policy` is opaque to Verus, so this is uninterpreted
-// and `Policy::context_integrity` is assumed to return it.
+// which is the integrity of what it writes. `Policy` is opaque to Verus, so this is uninterpreted:
+// `Policy::context_integrity` is assumed to return it, and `Policy::absorb` to meet it, each by
+// handing the call to its `Context`, whose functions Verus proves.
 #[cfg(verus_keep_ghost)]
 verus! {
 pub uninterp spec fn spec_context<'sink, S: Sink>(policy: Policy<'sink, S>) -> Integrity;
@@ -598,13 +599,20 @@ pub enum Containment {
 /// [`Context::absorb`] and [`Context::hold`] are the only ways to change either, and each only
 /// degrades, so nothing shown later restores what was already lost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 struct Context {
     integrity: Integrity,
     confidentiality: Confidentiality,
 }
 
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl Context {
     /// A turn's start: the task is the person's own words, and nothing private has been shown.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r.integrity == Integrity::Trusted,
+            r.confidentiality == Confidentiality::Public,
+    ))]
     fn fresh() -> Self {
         Self {
             integrity: Integrity::Trusted,
@@ -612,19 +620,38 @@ impl Context {
         }
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.integrity,
+    ))]
     fn integrity(&self) -> Integrity {
         self.integrity
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.confidentiality,
+    ))]
     fn confidentiality(&self) -> Confidentiality {
         self.confidentiality
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r.integrity == self.integrity,
+            r.confidentiality == self.confidentiality,
+    ))]
     fn label(&self) -> Label {
         Label::new(self.integrity, self.confidentiality)
     }
 
     /// Meet what the context has met with `observed`, and say whether that lowered it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(lowered =>
+        ensures
+            final(self).integrity == crate::spec::meet(old(self).integrity, observed),
+            final(self).confidentiality == old(self).confidentiality,
+            lowered == (final(self).integrity != old(self).integrity),
+    ))]
     fn absorb(&mut self, observed: Integrity) -> bool {
         let met = self.integrity.meet(observed);
         let lowered = met != self.integrity;
@@ -633,12 +660,32 @@ impl Context {
     }
 
     /// Join what the context holds with `shown`, and say whether that raised it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(raised =>
+        ensures
+            final(self).confidentiality == crate::spec::join(old(self).confidentiality, shown),
+            final(self).integrity == old(self).integrity,
+            raised == (final(self).confidentiality != old(self).confidentiality),
+    ))]
     fn hold(&mut self, shown: Confidentiality) -> bool {
         let joined = self.confidentiality.join(shown);
         let raised = joined != self.confidentiality;
         self.confidentiality = joined;
         raised
     }
+}
+
+/// Whether [`Policy::present`] puts content in front of the planner rather than a reference to it.
+///
+/// Decided from the label alone, and only trusted content is shown (LABEL-3). A picture is never
+/// shown however it is labelled, because the planner is never shown a picture it did not receive
+/// from a person (VET-4).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::shown_to_the_planner(label, picture),
+))]
+fn shown_to_the_planner(label: Label, picture: bool) -> bool {
+    let trusted = label.integrity == Integrity::Trusted;
+    trusted && !picture
 }
 
 /// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
@@ -3022,6 +3069,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// One-way: [`Integrity::meet`] cannot raise it, so nothing shown later restores integrity
     /// already lost.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_context(*final(self)) == crate::spec::meet(spec_context(*old(self)), observed),
+    ))]
     fn absorb(&mut self, observed: Integrity) {
         if self.context.absorb(observed) {
             self.allow(
@@ -4835,6 +4886,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         picture: Option<&str>,
     ) -> Gated<crate::reference::Presentation> {
         let label = content.label();
+        let shown = shown_to_the_planner(label, picture.is_some());
 
         if picture.is_some() {
             self.allow(
@@ -4846,7 +4898,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
         }
 
-        if label.is_trusted() && picture.is_none() {
+        if shown {
             self.allow(
                 "present",
                 format!("{tool}: {origin} is {label}, so the planner may read it"),

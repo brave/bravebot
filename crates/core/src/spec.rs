@@ -689,4 +689,10 @@ pub(crate) open spec fn write_reason_is_sound(facts: WriteFacts, reason: WriteRe
         })
 }
 
+/// The planner is shown content only where it is trusted and is not a picture (LABEL-3, VET-4).
+/// Everything else reaches it as a reference, which names the content and holds none of it.
+pub open spec fn shown_to_the_planner(label: Label, picture: bool) -> bool {
+    label.integrity == Integrity::Trusted && !picture
+}
+
 } // verus!
