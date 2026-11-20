@@ -459,6 +459,42 @@ struct Grant {
     value: String,
 }
 
+/// The endorsements a person's answers issued this turn and no action has spent yet.
+///
+/// [`Grants::issue`] adds one and [`Grants::spend`] takes one out, and those are the only ways to
+/// change the list. An endorsement is for one tool's field at one exact value, so spending one for
+/// any other value finds nothing, and one spent is gone, so a second action finds nothing either.
+#[derive(Debug, Clone, Default)]
+struct Grants {
+    pending: Vec<Grant>,
+}
+
+impl Grants {
+    fn issue(&mut self, grant: Grant) {
+        self.pending.push(grant);
+    }
+
+    /// Take out an endorsement for exactly this tool, field and value, and say whether one was
+    /// there.
+    fn spend(&mut self, tool: &str, field: &str, value: &str) -> bool {
+        let found = self
+            .pending
+            .iter()
+            .position(|g| g.tool == tool && g.field == field && g.value == value);
+        match found {
+            Some(index) => {
+                self.pending.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
+}
+
 /// What a turn is allowed to release, fixed before any untrusted content is observed.
 #[derive(Debug, Default, Clone)]
 pub struct ReleasePlan {
@@ -997,7 +1033,7 @@ pub struct Policy<'sink, S: Sink> {
     routing: Routing,
     release: ReleasePlan,
     capabilities: CapabilitySet,
-    grants: Vec<Grant>,
+    grants: Grants,
     sink: &'sink mut S,
     /// Every refusal this turn, in order, each as `gate: reason`.
     refusals: Vec<String>,
@@ -1245,7 +1281,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             routing,
             release,
             capabilities,
-            grants: Vec::new(),
+            grants: Grants::default(),
             sink,
             refusals: Vec::new(),
             call_began_at: 0,
@@ -9650,7 +9686,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "grant",
             format!("endorsed {}.{} at an exact value", grant.tool, grant.field),
         );
-        self.grants.push(grant);
+        self.grants.issue(grant);
     }
 
     /// Authorise reading a slot's untrusted content.
@@ -10309,18 +10345,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             r is Ok <==> spec_granted(*old(self), tool@, field@, concrete@),
     ))]
     fn consume_grant(&mut self, tool: &str, field: &str, concrete: &str) -> Gated<()> {
-        let found = self
-            .grants
-            .iter()
-            .position(|g| g.tool == tool && g.field == field && g.value == concrete);
-
-        match found {
-            Some(index) => {
-                self.grants.remove(index);
+        match self.grants.spend(tool, field, concrete) {
+            true => {
                 self.allow("grant", format!("consumed endorsement for {tool}.{field}"));
                 Ok(())
             }
-            None => Err(self.deny(
+            false => Err(self.deny(
                 "grant",
                 Principle::IntegrityGate,
                 format!(
