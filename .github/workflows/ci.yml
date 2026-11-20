@@ -620,7 +620,7 @@ jobs:
       # already had. A crash, a timeout and an out-of-memory stop each leave a file here.
       - name: Keep what a target stopped on
         if: ${{ failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-artifacts-${{ github.run_attempt }}
           path: fuzz/artifacts/
@@ -752,7 +752,7 @@ jobs:
           make strip
 
       - if: startsWith(matrix.name, 'windows-')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-helpers-${{ matrix.name }}
           path: |
@@ -1296,7 +1296,7 @@ jobs:
             --arch=${{ matrix.arch }} --out=dist/previous
           git checkout -- ui/package.json
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-installer-${{ matrix.arch }}
           path: |
