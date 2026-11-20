@@ -1923,7 +1923,9 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     Err(_) => None,
                 };
                 if let Some(usage) = usage {
-                    accounting.spent.add_request(usage);
+                    // A processor's usage is the run's spend and no part of the figure a
+                    // delegate's budget counts (DELEGATE-29).
+                    accounting.spent.add_unbudgeted_call(usage, true);
                 }
                 accounting.publish(reporter);
                 let mut processed = match processed {
@@ -2030,7 +2032,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             );
             accounting.elapsed.inference += began.elapsed();
             let (note, usage) = applied?;
-            accounting.spent.add_usage(usage);
+            accounting.spent.add_unbudgeted(usage);
             accounting.publish(reporter);
             Ok(Done {
                 note,

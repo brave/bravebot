@@ -214,7 +214,8 @@ left under its own, so a call without the field leaves the definition's in force
 the definition's changes nothing. In a fan-out the figure applies to each delegate separately, and
 one delegate's spend is not another's. A delegate that spends it loses its tools and answers with
 what it has, and the planner is told so beside the report. What the delegate spent on checks of
-content nobody vouched for is not counted toward it ([DELEGATE-29](../delegation.md#DELEGATE-29)).
+content nobody vouched for and on processors is not counted toward it
+([DELEGATE-29](../delegation.md#DELEGATE-29)).
 Every request counts the whole conversation so far, so a figure buys a few dozen requests and not a
 few dozen thousand tokens of reading, and the field's description says so.
 

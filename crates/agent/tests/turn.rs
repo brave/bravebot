@@ -79971,6 +79971,274 @@ mod usage {
         run.finish().expect("the turn ends");
     }
 
+    /// A processor's reply that marks a document, stating that it wrote `completion` tokens.
+    fn a_processor_that_wrote_a_document(completion: u64) -> String {
+        reply_with_usage(
+            &format!(
+                "{}\\nthe document",
+                bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+            ),
+            0,
+            completion,
+        )
+    }
+
+    /// A processor's reply that marks no document, stating that it wrote `completion` tokens.
+    fn a_processor_that_wrote_no_document(completion: u64) -> String {
+        reply_with_usage("nothing to change", 0, completion)
+    }
+
+    /// A processor's reply that names an entry, stating that it wrote `completion` tokens.
+    fn a_processor_that_chose(completion: u64) -> String {
+        reply_with_usage("3", 0, completion)
+    }
+
+    const READ_THEN_PROCESS: &str = r#"{"reads":["ref:1"],"instruction":"summarise this"}"#;
+    const READ_THEN_CHOOSE: &str =
+        r#"{"reads":["ref:1"],"instruction":"choose one","choose_upto":5}"#;
+
+    /// Start a delegate of kind `reader` bounded to `budget` tokens, have it make `calls` (tool,
+    /// arguments, prompt tokens and completion tokens its round reported) and answer the
+    /// processor request the last of them makes with `reply`. Returns the delegate's request that
+    /// follows the processor, still unanswered.
+    fn after_a_processor_call(
+        run: &Run,
+        budget: u64,
+        calls: &[(&str, &str, u64, u64)],
+        reply: &str,
+    ) -> Pending {
+        run.request().answer(&silent_call(
+            "spawn_agent",
+            &format!(r#"{{"kind":"reader","task":"CHILD-TASK","budget":{budget}}}"#),
+        ));
+        let (parent, mut child) = parent_and_child(run);
+        parent.answer(&silent("waiting"));
+        for (tool, arguments, prompt, completion) in calls {
+            child.answer(&tool_request_with_usage(
+                tool,
+                arguments,
+                *prompt,
+                *completion,
+            ));
+            child = run.request();
+        }
+        assert!(
+            child.body.contains("private input") && !child.body.contains("CHILD-TASK"),
+            "expected the processor's request, got: {}",
+            child.body
+        );
+        child.answer(reply);
+        run.request()
+    }
+
+    /// End the delegate and the turn after `next`, which the delegate answers with no more usage.
+    fn end_the_turn(run: &Run, next: Pending) -> turn::Outcome {
+        next.answer(&silent("child done"));
+        run.request().answer(&silent("done"));
+        run.finish().expect("the turn ends")
+    }
+
+    /// The delegate's request after a processor wrote `completion` tokens, with the turn's outcome.
+    /// The delegate's own rounds report 200 tokens each against a budget of 1000, so a processor
+    /// counted against the budget would bring the warning or remove the tools.
+    fn after_a_processor(name: &str, arguments: &str, reply: &str) -> (String, turn::Outcome) {
+        let run = Run::with_confirmer(
+            name,
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        let next = after_a_processor_call(
+            &run,
+            1_000,
+            &[
+                ("read_file", r#"{"path":"input.txt"}"#, 100, 100),
+                ("spawn_processor", arguments, 100, 100),
+            ],
+            reply,
+        );
+        let body = next.body.clone();
+        (body.clone(), end_the_turn(&run, next))
+    }
+
+    /// Run the same delegate twice, with a processor that wrote 100 tokens and one that wrote
+    /// 15000, and return the delegate's request after the processor and the outcome for each.
+    fn the_same_delegate_for_two_processors(
+        name: &str,
+        arguments: &str,
+        answer: fn(u64) -> String,
+    ) -> [(String, turn::Outcome); 2] {
+        [100, 15_000].map(|completion| after_a_processor(name, arguments, &answer(completion)))
+    }
+
+    /// DELEGATE-29, PROC-16: what a delegate is told after a processor wrote a document is the
+    /// same whatever the size of the answer. The processor read content nobody vouched for, so
+    /// how much it wrote must not decide the warning, its figure or the tools.
+    ///
+    /// Rejects: a processor's tokens counted in the figure the delegate's budget is compared
+    /// with, which here is 15400 of 1000 against 500 of 1000 and changes the request.
+    #[test]
+    fn a_processors_document_size_does_not_change_what_a_delegate_is_told() {
+        let [(few, _), (many, many_outcome)] = the_same_delegate_for_two_processors(
+            "delegate-processor-document",
+            READ_THEN_PROCESS,
+            a_processor_that_wrote_a_document,
+        );
+        assert!(
+            !few.contains("You have spent") && carried_tools(&few),
+            "a delegate that spent 400 of 1000 was warned or lost its tools: {few}"
+        );
+        assert_eq!(few, many, "the request depends on what the processor wrote");
+        assert_eq!(many_outcome.tokens, 15_400);
+    }
+
+    /// DELEGATE-29, PROC-16: a processor that marked no document does not change what a delegate
+    /// is told by the number of tokens it wrote.
+    ///
+    /// Rejects: the call that reports that no document was marked counting its tokens in the
+    /// figure the budget is compared with, while the call that wrote a document does not.
+    #[test]
+    fn the_tokens_of_a_processor_that_marked_no_document_do_not_change_what_a_delegate_is_told() {
+        let [(few, _), (many, many_outcome)] = the_same_delegate_for_two_processors(
+            "delegate-processor-no-document",
+            READ_THEN_PROCESS,
+            a_processor_that_wrote_no_document,
+        );
+        assert!(
+            few.contains("marked no document"),
+            "the processor's answer was not the one that marks no document: {few}"
+        );
+        assert!(
+            !few.contains("You have spent") && carried_tools(&few),
+            "a delegate that spent 400 of 1000 was warned or lost its tools: {few}"
+        );
+        assert_eq!(few, many, "the request depends on what the processor wrote");
+        assert_eq!(many_outcome.tokens, 15_400);
+    }
+
+    /// DELEGATE-29, PROC-16: a processor asked to choose an entry does not change what a delegate
+    /// is told by the number of tokens it wrote.
+    ///
+    /// Rejects: the call that asks for a number counting its tokens in the figure the budget is
+    /// compared with, while the calls that ask for a document do not.
+    #[test]
+    fn the_tokens_of_a_processor_that_chose_do_not_change_what_a_delegate_is_told() {
+        let [(few, _), (many, many_outcome)] = the_same_delegate_for_two_processors(
+            "delegate-processor-choice",
+            READ_THEN_CHOOSE,
+            a_processor_that_chose,
+        );
+        assert!(
+            !few.contains("You have spent") && carried_tools(&few),
+            "a delegate that spent 400 of 1000 was warned or lost its tools: {few}"
+        );
+        assert_eq!(few, many, "the request depends on what the processor wrote");
+        assert_eq!(many_outcome.tokens, 15_400);
+    }
+
+    /// A processor's reply that says nothing, which the processor reports as a failed request,
+    /// stating that it wrote `completion` tokens.
+    fn a_processor_that_failed(completion: u64) -> String {
+        reply_with_usage("", 0, completion)
+    }
+
+    /// DELEGATE-29, PROC-16: a processor request that fails after the service reported usage does
+    /// not change what a delegate is told by the number of tokens it reported, and the turn's
+    /// spend still includes them.
+    ///
+    /// Rejects: the failure path of the processor tool counting the usage of the failed request in
+    /// the figure the budget is compared with, while the paths that answer do not.
+    #[test]
+    fn the_tokens_of_a_processor_request_that_failed_do_not_change_what_a_delegate_is_told() {
+        let [(few, few_outcome), (many, many_outcome)] = the_same_delegate_for_two_processors(
+            "delegate-processor-failed",
+            READ_THEN_PROCESS,
+            a_processor_that_failed,
+        );
+        assert!(
+            few.contains("error: processor request"),
+            "the processor request did not fail: {few}"
+        );
+        assert!(
+            !few.contains("You have spent") && carried_tools(&few),
+            "a delegate that spent 400 of 1000 was warned or lost its tools: {few}"
+        );
+        assert_eq!(few, many, "the request depends on what the processor wrote");
+        assert_eq!(few_outcome.budgeted_tokens, many_outcome.budgeted_tokens);
+        assert_eq!(many_outcome.tokens, few_outcome.tokens + 14_900);
+    }
+
+    /// DELEGATE-29: a processor that wrote more than the whole budget does not take a delegate's
+    /// tools away, and the turn's spend still includes it.
+    ///
+    /// Rejects: a processor counted against the budget, here 15400 of 1000, which removes the
+    /// tools and says the budget is spent, and a split that leaves the processor out of the
+    /// turn's spend as well.
+    #[test]
+    fn a_processors_tokens_do_not_end_a_delegate_that_called_it() {
+        let (next, outcome) = after_a_processor(
+            "delegate-processor-ends-nothing",
+            READ_THEN_PROCESS,
+            &a_processor_that_wrote_a_document(15_000),
+        );
+        assert!(
+            !next.contains("You have spent your budget of 1000"),
+            "a processor's tokens ended the delegate's budget: {next}"
+        );
+        assert!(
+            carried_tools(&next),
+            "a processor removed the delegate's tools"
+        );
+        assert_eq!(
+            outcome.tokens, 15_400,
+            "the turn's spend lost the processor"
+        );
+        assert_eq!(
+            outcome.budgeted_tokens, 400,
+            "the processor's tokens reached a figure a budget is compared with"
+        );
+    }
+
+    /// DELEGATE-29: a delegate's own requests still count against its budget when a processor is
+    /// called as well, and what the processor wrote does not add to them.
+    ///
+    /// Rejects: a split that stops counting the delegate's rounds, and one that counts a
+    /// processor once more in the figure that removes the tools.
+    #[test]
+    fn a_delegates_own_rounds_still_spend_its_budget_beside_a_processor() {
+        let run = Run::with_confirmer(
+            "delegate-processor-and-rounds",
+            bravebot_agent::Conversation::new(),
+            false,
+            ReadsWhatItRan::new(false),
+        );
+        let next = after_a_processor_call(
+            &run,
+            1_000,
+            &[
+                ("read_file", r#"{"path":"input.txt"}"#, 400, 100),
+                ("spawn_processor", READ_THEN_PROCESS, 0, 0),
+            ],
+            &a_processor_that_wrote_a_document(5_000),
+        );
+        assert!(carried_tools(&next.body), "500 of 1000 removed the tools");
+        next.answer(&tool_request_with_usage(
+            "list_files",
+            r#"{"directory":"."}"#,
+            400,
+            100,
+        ));
+        let last = run.request();
+        assert!(
+            !carried_tools(&last.body) && last.body.contains("You have spent your budget of 1000"),
+            "the delegate's own 1000 tokens did not spend its budget: {}",
+            last.body
+        );
+        let outcome = end_the_turn(&run, last);
+        assert_eq!(outcome.tokens, 6_000);
+        assert_eq!(outcome.budgeted_tokens, 1_000);
+    }
+
     /// Cancellation cleanup must not charge a child request that ended before the parent stopped.
     #[test]
     fn cancellation_cleanup_does_not_charge_completed_delegate_requests() {

@@ -447,6 +447,11 @@ and not which. The person asked about the call it fills is shown the number
 ([ROUTE-10](routing.md#ROUTE-10)). An answer with no bytes at all is refused by the transport for
 every processor, and is not read.
 
+A processor's token usage, that of a request that failed included, is in the turn's spend and is
+never added to the figure a delegate's token budget is compared with. The figure a budgeted
+delegate is told, the round of its warning and the round at which it loses its tools are the same
+whatever the processor answered ([DELEGATE-29](delegation.md#DELEGATE-29)).
+
 **Why.** The decision is taken by a crate that holds no witness and no constructor, from text this
 process does not read. What this process does afterwards depends on no value of the number, so a page
 that talks the processor round buys one of at most a hundred numbers, or a failed request and the
@@ -473,6 +478,8 @@ word for it. The read is the ninth of the
 `verified-by: bravebot_agent::processor::a_processor_not_asked_to_choose_is_refused_before_anything_is_sent`
 `verified-by: bravebot_agent::turn::a_choice_reaches_the_planner_as_a_reference_to_a_choice_and_nothing_else`
 `verified-by: bravebot_agent::turn::the_planner_is_told_the_same_words_whatever_the_processor_answered`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_that_chose_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::a_processors_document_size_does_not_change_what_a_delegate_is_told`
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 `verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
 `verified-by: bravebot_agent::turn::a_call_asking_for_a_number_is_refused_unless_it_asks_in_the_planners_own_terms`

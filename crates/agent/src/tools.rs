@@ -263,12 +263,13 @@ pub struct Output {
     /// vouched for. A turn that reported only its own rounds would understate what it cost by
     /// however much those wrote.
     pub usage: Usage,
-    /// Whether [`Output::usage`] is what a check over content nobody vouched for cost.
+    /// Whether [`Output::usage`] is what a check over content nobody vouched for cost, or what a
+    /// processor cost.
     ///
-    /// Set by the tool that made the check, whether or not the check was made, so it is never
-    /// decided from what the check said. The turn counts such usage in what it spent and leaves it
-    /// out of what a delegate's budget counts (DELEGATE-29).
-    pub usage_is_a_check: bool,
+    /// Set by the tool that made the check or ran the processor, whether or not it was made, so it
+    /// is never decided from what the check or the processor said. The turn counts such usage in
+    /// what it spent and leaves it out of what a delegate's budget counts (DELEGATE-29).
+    pub usage_is_unbudgeted: bool,
     /// When the call waited on the model, where it called one.
     ///
     /// Travels beside [`Output::usage`] and for the same reason. A processor is a request like any
@@ -1928,8 +1929,9 @@ struct Produced {
     /// What the tool spent at the model. Only a processor, an advisor, a delegate and a check spend
     /// anything.
     usage: Usage,
-    /// Whether `usage` is a check's, which a delegate's token budget does not count.
-    usage_is_a_check: bool,
+    /// Whether `usage` is a check's or a processor's, which a delegate's token budget does not
+    /// count.
+    usage_is_unbudgeted: bool,
     /// Retained so a parent can clip delegate requests to its own waits.
     inference_interval: Option<crate::timing::Interval>,
     /// Set where the check waited on could not be made, so no request completed.
@@ -2037,7 +2039,7 @@ impl Produced {
             task_list: None,
             content: false,
             usage: Usage::default(),
-            usage_is_a_check: false,
+            usage_is_unbudgeted: false,
             inference_interval: None,
             unanswered: false,
             printed_by: None,
@@ -2297,7 +2299,17 @@ impl Produced {
     /// budget counts (DELEGATE-29).
     fn checking(mut self, usage: Usage) -> Self {
         self.usage = usage;
-        self.usage_is_a_check = true;
+        self.usage_is_unbudgeted = true;
+        self
+    }
+
+    /// Say what a processor cost. Set by the tool whether or not the processor answered, so the
+    /// turn adds it to what it spent and never to what a delegate's token budget counts: the
+    /// processor read content nobody vouched for, and how much it wrote depends on that content
+    /// (DELEGATE-29, PROC-16).
+    fn processing(mut self, usage: Usage) -> Self {
+        self.usage = usage;
+        self.usage_is_unbudgeted = true;
         self
     }
 
@@ -3579,7 +3591,7 @@ fn output_of(
         run_may_change_files: produced.run_may_change_files,
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
-        usage_is_a_check: produced.usage_is_a_check,
+        usage_is_unbudgeted: produced.usage_is_unbudgeted,
         inference_interval: produced.inference_interval,
         unanswered: produced.unanswered,
         printed_by: produced.printed_by,
@@ -14151,7 +14163,7 @@ fn spawn_processor<S: Sink>(
                     origin,
                     format!("an isolated processor chose one entry of {over}"),
                 )
-                .costing(done.usage)
+                .processing(done.usage)
                 .waiting(waited);
                 produced.substituted = done.substituted;
                 produced
@@ -14192,7 +14204,7 @@ fn spawn_processor<S: Sink>(
                     ),
                     "produced no document",
                 )
-                .costing(done.usage)
+                .processing(done.usage)
                 .waiting(waited);
                 produced.said = done.note;
                 produced.substituted = substituted;
@@ -14214,7 +14226,7 @@ fn spawn_processor<S: Sink>(
                 )
             };
             let mut produced = Produced::new(document, origin, note)
-                .costing(done.usage)
+                .processing(done.usage)
                 .waiting(waited)
                 .of_content();
             produced.answers_for = Some(spec.clone());
@@ -14243,7 +14255,11 @@ fn processor_failed(
             produced
         }
         crate::processor::ProcessorError::Chat(error) => {
-            model_request_failed("processor", &error, waited)
+            // What a failed request completed is a processor's usage as well, and is kept out of
+            // the figure a delegate's budget counts for the same reason.
+            let mut produced = model_request_failed("processor", &error, waited);
+            produced.usage_is_unbudgeted = true;
+            produced
         }
         crate::processor::ProcessorError::Denied(error) => request_denied(&error, waited),
     }

@@ -1996,8 +1996,8 @@ delegate's requests, which the turn was charged for. A reply that stated no usag
 a tool that made none is not counted. A request made beside the work (`/compact` outside a turn, a
 question, a commit message, a handoff) and the check on a server's tool list are not counted, though
 their tokens are in the turn's spend, so the counts can come to less than the spend does. The
-tokens of a check are in a delegate's spend and not in the figure its token budget counts
-([DELEGATE-29](delegation.md#DELEGATE-29)); the request is counted either way. A
+tokens of a check or a processor are in a delegate's spend and not in the figure its token budget
+counts ([DELEGATE-29](delegation.md#DELEGATE-29)); the request is counted either way. A
 delegate's summaries are the delegate's own and are not added to the turn's.
 
 The counts are charged and kept exactly as the time beside them is. A failed or stopped turn is
