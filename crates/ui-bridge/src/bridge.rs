@@ -676,6 +676,7 @@ impl Bridge {
             Err(held) => return Ok(Stored::Refused(held)),
         };
         state.account = self.account_session(&directory);
+        state.spend_limit = self.spend_limit(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(
@@ -940,6 +941,14 @@ impl Bridge {
         bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
+    /// The spend limit a session opened in `project` starts with: the `limit` setting, where a
+    /// project's file may only narrow the person's (TURN-8). The terminal seeds its session the
+    /// same way in `Session::adopt_limit`.
+    fn spend_limit(&self, project: &std::path::Path) -> bravebot_agent::SpendLimit {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_agent::SpendLimit::new(settings.limit())
+    }
+
     /// The mode a session opened in `project` starts in: auto where the person's own settings say
     /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1), and asking always for a
     /// bridge built with [`Bridge::opening_in_ask`]. A checkout's file and the managed file are not
@@ -1113,6 +1122,7 @@ impl Bridge {
         let reported = opening.json(&directory);
         let mut state = State::fresh(opening.trust);
         state.account = self.account_session(&directory);
+        state.spend_limit = self.spend_limit(&directory);
         state.directories = additional;
         let handle = self.mint(
             Open::opened(
@@ -1305,6 +1315,7 @@ impl Bridge {
                     // The map is the parent's, so what the mode answered in it is still the mode's.
                     forked.answered_by_mode = by_mode;
                     forked.account = self.account_session(&project);
+                    forked.spend_limit = self.spend_limit(&project);
                     forked
                 },
                 // Inherited along with the map itself: the same person, in the same directory, in
@@ -3892,6 +3903,10 @@ fn work(work: Work) {
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
         // number would only interrupt work that was going fine (TURN-2).
         .with_rounds(None)
+        // The session's spend limit, which asks the person before a request past it (TURN-8). It
+        // is the only budget a turn here carries: the run limits of TURN-14 end a run without
+        // asking, and a person is in front of this window.
+        .with_spend_limit(state.spend_limit.clone(), state.tokens)
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
         .in_front_end(front_end)
@@ -4320,8 +4335,10 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         _ => diagnosis.and_then(|d| d.attempts),
     };
     let kind = match error {
-        // Only a one-shot run gives a turn a limit of its own (TURN-14), so the bridge never sees
-        // this one, and a stop is what it would be: the ending says `Stopped`.
+        // A person who answers stop at the spend-limit question (TURN-8) ends the turn as
+        // `Cancelled`, the way any stop does. `LimitReached` comes only from the run limits a
+        // one-shot run sets (TURN-14), which the bridge never sets, and a stop is what it would be:
+        // the ending says `Stopped`.
         TurnError::Cancelled { .. } | TurnError::LimitReached(_) => "cancelled",
         TurnError::Precommit(_) => "precommit",
         TurnError::Workspace(_) | TurnError::Named { .. } => "workspace",
