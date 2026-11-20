@@ -285,6 +285,31 @@ impl Held {
         );
     }
 
+    /// Answer the limit question with a figure typed in place of a row.
+    fn type_figure(&mut self, id: u64, figure: &str) {
+        let request = self.question["data"]["request"].clone();
+        send(
+            &mut self.child,
+            id,
+            "ask.reply",
+            json!({"session": self.session, "request": request,
+                   "answers": [{"typed": figure}]}),
+        );
+    }
+
+    /// Wait for the next question or the end of the turn, keeping a question as the one to answer.
+    fn next(&mut self) -> Value {
+        let said = until(&self.said, |message| {
+            message["event"] == "ask.request"
+                || message["event"] == "turn.done"
+                || message["event"] == "turn.error"
+        });
+        if said["event"] == "ask.request" {
+            self.question = said.clone();
+        }
+        said
+    }
+
     fn ended(&self) -> Value {
         until(&self.said, |message| {
             message["event"] == "turn.done" || message["event"] == "turn.error"
@@ -359,4 +384,87 @@ fn going_on_without_a_limit_sends_the_request() {
     let ended = held.ended();
     assert_eq!(ended["event"], "turn.done", "{ended}");
     assert_eq!(ended["data"]["reply"], "done", "{ended}");
+}
+
+fn question_text(asked: &Value) -> String {
+    asked["data"]["prompts"][0]["question"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// TURN-8: a figure typed at the question, above what is spent, lets the held request go and is
+/// the session's limit from then on, so the session's next turn is held to it.
+///
+/// 151 is typed with 150 spent. The held request reports 2 more, so the next turn starts at 152
+/// and is asked about 152 against 151 before its first request.
+///
+/// Rejects: a bridge that drops a typed answer (the turn would stop or go on with no limit, and
+/// the next turn would not be asked), one that keeps the typed figure for that turn only (the next
+/// turn would be asked against 100), and one that reads the setting again for each turn.
+#[test]
+fn a_new_limit_typed_at_the_question_is_the_sessions_afterwards() {
+    let mut held = Held::at_the_limit("bridge-spend-limit-new-limit");
+    held.type_figure(10, "151");
+
+    held.requests
+        .recv_timeout(PATIENCE)
+        .expect("the held request was sent under the new limit");
+    let ended = held.next();
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    assert_eq!(ended["data"]["reply"], "done", "{ended}");
+
+    send(
+        &mut held.child,
+        20,
+        "turn.send",
+        message_ids::with_fresh(json!({"session": held.session, "prompt": "again"})),
+    );
+    let asked = held.next();
+    assert_eq!(
+        asked["event"], "ask.request",
+        "the next turn was not held to the typed limit: {asked}"
+    );
+    let question = question_text(&asked);
+    assert!(
+        question.contains("152") && question.contains("151") && !question.contains("100"),
+        "the next turn was not asked against the typed limit: {question}"
+    );
+    assert!(
+        held.requests.recv_timeout(QUIET).is_err(),
+        "the next turn sent a request past the typed limit"
+    );
+}
+
+/// TURN-8: a typed figure that is not a limit above what is spent is refused and the question is
+/// put again naming it. The third such answer stops the turn as a stop, and nothing is sent.
+///
+/// Rejects: a bridge that takes any typed answer as going on, one that stops at the first
+/// unusable figure, and one that keeps asking after the third.
+#[test]
+fn a_figure_below_what_is_spent_is_asked_again_and_the_third_stops() {
+    let mut held = Held::at_the_limit("bridge-spend-limit-three-figures");
+
+    for (id, figure) in [(10, "120"), (11, "not a figure")] {
+        held.type_figure(id, figure);
+        let again = held.next();
+        assert_eq!(
+            again["event"], "ask.request",
+            "the question was not put again after {figure:?}: {again}"
+        );
+        let question = question_text(&again);
+        assert!(
+            question.contains(figure),
+            "the question put again does not name {figure:?}: {question}"
+        );
+    }
+    held.type_figure(12, "150");
+    let ended = held.next();
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["kind"], "cancelled", "{ended}");
+    assert!(
+        held.requests.recv_timeout(QUIET).is_err(),
+        "a request was sent after three unusable figures"
+    );
 }
