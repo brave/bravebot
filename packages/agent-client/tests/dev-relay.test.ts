@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -9,10 +10,12 @@ import { connectDevRelay, RelayRefusedError, type DevRelay, type RelaySocket } f
 import { StaleActionError, UnknownSendError, type AgentClient, type AgentSession, type InstanceInfo, type Pending } from '../src/common/index.js'
 import { ModelStub, type PlannerStep } from './support/model-stub.js'
 import { hostBinary, isolatedEnvironment, until } from './support/rig.js'
+import { Typed } from './support/typed-client.js'
 import { within } from './support/wait.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const relay = join(here, '../scripts/dev-relay.js')
+const hostClient = join(here, '../scripts/host-client.js')
 
 interface Launch {
   port: number
@@ -26,6 +29,10 @@ interface Host {
   stderr(): string
   /** The port and code of the next relay the host starts, in the order they start. */
   launch(): Promise<Launch>
+  /** The host test client, which may answer trust where the relay may not. */
+  desk: Typed
+  /** Have the host test client join `session` and answer its startup trust question no, which the app sees as the session becoming idle. */
+  answerTrust(session: string): Promise<void>
   /** Answer no to the host's question about its workspace at startup, or wait for it to say it does not ask. */
   startup(): Promise<void>
   /** Type `launch relay` once the host says the last relay ended, which is when it accepts one. */
@@ -52,23 +59,26 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
   mkdirSync(project)
   mkdirSync(join(home, '.bravebot'), { recursive: true })
   const stub = await ModelStub.start(plans)
+  const input = join(scratch, 'desk.input')
+  execFileSync('mkfifo', [input])
   const child = spawn(
     hostBinary(),
     [
       '--sessions-root', join(scratch, 'sessions'), '--workspace', project,
-      // The relay answers trust in this scratch workspace until a host test client can.
-      '--client', 'relay', '--answers', 'confirm,run,fetch,ask,trust', '--program', process.execPath,
+      // The relay may not answer trust: the host test client answers it, as the person at the computer would.
+      '--client', 'relay', '--answers', 'confirm,run,fetch,ask', '--program', process.execPath,
       '--arg', relay, '--arg', '--workspace', '--arg', project,
+      '--client', 'desk', '--answers', 'confirm,run,fetch,ask,trust', '--program', process.execPath,
+      '--arg', hostClient, '--arg', '--name', '--arg', 'desk', '--arg', '--workspace', '--arg', project, '--arg', '--input', '--arg', input,
     ],
     { env: isolatedEnvironment(home, stub.endpoint), cwd: scratch },
   )
   let text = ''
-  let waiters: (() => void)[] = []
+  const waiters: (() => void)[] = []
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk: string) => {
     text += chunk
-    const woken = waiters
-    waiters = []
+    const woken = waiters.splice(0)
     for (const wake of woken) wake()
   })
   let taken = 0
@@ -78,6 +88,13 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
     stub,
     project,
     stderr: () => text,
+    desk: undefined as unknown as Typed,
+    async answerTrust(session) {
+      made.desk.type(`attach ${session}`)
+      await made.desk.next(/^trust question: /)
+      made.desk.type('no')
+      await made.desk.next(/^trust answered no/)
+    },
     launch: () =>
       within(
         new Promise<Launch>((resolve) => {
@@ -120,6 +137,11 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
         'the host to say the relay ended',
       ),
     async stop() {
+      try {
+        made.desk.leave()
+      } catch {
+        // Closed already.
+      }
       if (child.exitCode === null) {
         child.stdin.end('quit\n')
         await within(exited, 'the host to stop', 15_000).catch(() => child.kill('SIGKILL'))
@@ -130,6 +152,7 @@ async function startHost(plans: Record<string, PlannerStep[]>): Promise<Host> {
   }
   hosts.push(made)
   await made.startup()
+  made.desk = new Typed('desk', { waiters, lines: (name) => text.split('\n').slice(0, -1).filter((line) => line.startsWith(`host-client ${name}: `)).map((line) => line.slice(`host-client ${name}: `.length)) }, input)
   return made
 }
 
@@ -188,7 +211,8 @@ test('an app that gives the code drives the host through the relay: the workspac
 
   const session = await relayed.client.createSession({ workspace: host.project })
   assert.equal(session.view.status, 'awaiting_trust')
-  await session.answerTrust(false)
+  assert.equal(session.startupTrust, null, 'the relay may not answer trust, so the host does not send it the question')
+  await host.answerTrust(session.id)
   await until(session, 'trust to be recorded', (view) => view.status === 'idle')
   await session.send('plan:write')
   await until(session, 'the write question', (view) => view.status === 'waiting')
@@ -224,7 +248,7 @@ test('an app whose connection ended takes its session over through the next rela
   const made = sockets()
   const first = await connect(await host.launch(), made.open)
   const session = await first.client.createSession({ workspace: host.project })
-  await session.answerTrust(false)
+  await host.answerTrust(session.id)
   await until(session, 'trust to be recorded', (view) => view.status === 'idle')
   await session.send('plan:first')
   await until(session, 'the first turn to end', (view) => view.status === 'completed')
@@ -239,7 +263,7 @@ test('an app whose connection ended takes its session over through the next rela
   const second = await connect(await host.launch(), made.open)
   const after = await second.client.instance()
   assert.equal(after.instance, before.instance, 'the host did not restart')
-  assert.deepEqual(after.answers, ['confirm', 'run', 'fetch', 'ask', 'trust'], 'the answers the command line gave the relay')
+  assert.deepEqual(after.answers, ['confirm', 'run', 'fetch', 'ask'], 'the answers the command line gave the relay')
   assert.deepEqual(after.sessions, [{ session: session.id, state: 'open', working: false, attached: false }])
 
   const taken = await second.client.attach(session.id)
@@ -267,7 +291,7 @@ test('a send whose answer was lost with the connection is looked up after taking
     return socket
   })
   const session = await first.client.createSession({ workspace: host.project })
-  await session.answerTrust(false)
+  await host.answerTrust(session.id)
   await until(session, 'trust to be recorded', (view) => view.status === 'idle')
   const instance = (await first.client.instance()).instance
   const lost = await session.send('plan:once').then(() => assert.fail('the send was answered'), (error: unknown) => error)

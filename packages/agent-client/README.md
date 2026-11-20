@@ -81,11 +81,11 @@ The relay lets an app on a phone or emulator drive `bravebot-host` for the stage
 
 ```sh
 bravebot-host --sessions-root <root> --workspace <dir> \
-  --client relay --answers confirm,run,fetch,ask,trust --program "$(command -v node)" \
+  --client relay --answers confirm,run,fetch,ask --program "$(command -v node)" \
   --arg dist/scripts/dev-relay.js --arg --workspace --arg <dir>
 ```
 
-The host runs `dist/scripts/dev-relay.js` as its client. The relay listens on 127.0.0.1 on a port the system picks and prints the port and a six-digit code for this launch on standard error. Nothing else records the code, and it is not part of the address. It takes one WebSocket connection, and the first message must be the code. A wrong code, or none within a minute, ends the relay. After the code it sends the host's workspaces and then passes the channel through unchanged. `--answers` lists the questions the phone may answer. With `trust` the phone answers the folder's trust question, so any program that has the port and code can answer it, and a kept yes covers later sessions in that folder. Use a scratch folder. When either end closes the relay exits, and typing `launch relay` to the host starts a new one with a new port and code. Any program on the computer that can reach 127.0.0.1 can reach the port, and only the code keeps it out.
+The host runs `dist/scripts/dev-relay.js` as its client. The relay listens on 127.0.0.1 on a port the system picks and prints the port and a six-digit code for this launch on standard error. Nothing else records the code, and it is not part of the address. It takes one WebSocket connection, and the first message must be the code. A wrong code, or none within a minute, ends the relay. After the code it sends the host's workspaces and then passes the channel through unchanged. `--answers` lists the questions the phone may answer. The relay is given no `trust`, so the folder's trust question is answered by a client the person runs on the computer, such as the host test client below, and not by any program that has the port and code. A phone that is not asked sees the session wait for trust. Use a scratch folder. When either end closes the relay exits, and typing `launch relay` to the host starts a new one with a new port and code. Any program on the computer that can reach 127.0.0.1 can reach the port, and only the code keeps it out.
 
 `@brave/agent-client/dev-relay` is the app's end. `connectDevRelay({ port, code, open })` takes the WebSocket constructor from the caller and resolves with a client and an `ended` promise. It is a separate export so a release build need not import it.
 
@@ -97,6 +97,18 @@ node packages/agent-client/dist/scripts/dev-relay-demo.js --host "$PWD/target/de
 ```
 
 The demo makes a scratch home, workspace and sessions root, starts a stub model, and removes the scratch directory when the host stops. The prompts `plan:hello` and `plan:write` give a reply and a write to approve. [mobile/README.md](../../mobile/README.md#connect-to-a-host) covers the tunnel and the app.
+
+## The host test client
+
+`dist/scripts/host-client.js` is a second kind of client for `bravebot-host`, which a person or a test types into. The host starts it like the relay, and its standard input and output are the host's channel, so it reads its commands from `--input` (the terminal by default) and writes what it sees to standard error, each line starting with `host-client NAME:`.
+
+```sh
+bravebot-host --sessions-root <root> --workspace <dir> \
+  --client desk --answers confirm,run,fetch,ask,trust --program "$(command -v node)" \
+  --arg dist/scripts/host-client.js --arg --name --arg desk --arg --workspace --arg <dir>
+```
+
+Commands, one per line: `list`, `new`, `attach ID`, `send TEXT`, `cancel`, `trust yes|no`, `decide N approve|reject`, `close` and `quit`. The startup trust question is shown as a typed yes or no only when the host let the client answer trust, and the next line `yes` or `no` answers it. A question a turn asks is answered with `approve` or `reject` where the client may answer its kind, and is marked `answer on another device` where it may not. Every view line names the client that acted last. Use it with synthetic data, as with the relay.
 
 ## Check
 

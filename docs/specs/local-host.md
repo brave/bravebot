@@ -10,6 +10,7 @@ governs:
   - crates/ui-bridge/src/workers.rs
   - crates/ui-bridge/src/bin/bravebot-host.rs
   - packages/agent-client/scripts/dev-relay.ts
+  - packages/agent-client/scripts/host-client.ts
   - packages/agent-client/scripts/websocket.ts
   - packages/agent-client/src/dev-relay/index.ts
 documented-by: none (internal: the host is started by a person from a command line and driven by a program they chose; nothing in the product launches it yet)
@@ -275,3 +276,11 @@ The TypeScript client reaches the relay only through its `./dev-relay` export, w
 The host listens on no TCP port, binds no UDP port, and binds no Unix socket to a path or, on Linux, to an abstract name. A program the host did not start therefore has no address to reach it by. The development relay of [HOST-12](#HOST-12) listens on loopback in a client process the host starts, not in the host. The test lists the sockets the host holds after it has served a turn, so a socket it opened and closed before then, or opens only on a later request, is not seen. On Linux the test does not count a Unix socket that is connected, since its peer is the only program that can reach it.
 
 `verified-by: bravebot_ui_bridge::host_process::a_host_serving_a_turn_has_no_socket_another_program_can_find`
+
+<a id="HOST-14"></a>
+### HOST-14: the host test client is a client the person types into
+
+The host test client is a client program for the host, named on its command line as one client (`--client NAME --answers KINDS --program PATH`) with its script, its own name, the one workspace it may open and, where it is not to read the terminal, the file it takes its commands from passed as `--arg` values. It lists the sessions the host holds and whether it is attached to each, opens a session in its workspace, joins a session another client opened, sends, cancels, closes, and answers what it is shown. It shows the startup trust question as a typed yes or no only when the host let it answer trust, and says where it may not that the question is answered on the computer the host runs on. It shows a question a turn asks and takes `approve` or `reject` only for a kind it may answer, and marks any other as one to answer on another device. A command that the host refuses is reported with the host's code and does not end the client. It writes what it sees to standard error, prefixed with its name, with every control and invisible character escaped, and holds no credential or setting. It is for tests and development with synthetic data. It is a client like any other: every rule above applies to what it sends.
+
+`verified-by: by-construction (packages/agent-client/tests/host-clients.test.ts starts a built bravebot-host with two of these clients and a model service of its own, and checks that a client given trust is shown the startup question and answers it while a client without trust is not shown it and has its answer refused, that a question is shown to both clients and the first answer lands while a later answer from the other is refused, that a client leaving keeps the question for the one that stays and a question a client may not answer is marked for another device, and that a second send while a turn runs is refused as busy; tests/dev-relay.test.ts answers the startup question of a relay's session from this client)`
+
