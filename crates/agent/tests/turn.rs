@@ -99091,6 +99091,47 @@ fn a_run_result_names_the_directory_as_typed_and_not_where_a_link_led() {
     );
 }
 
+/// A program named by a relative path and found under a directory the planner named through a
+/// link is told as that directory, as typed, followed by the rest of the path. Where the link led
+/// is a name the clone chose, and it would reach the planner under the driver's attribution the
+/// same way a redirection's target already does not (LABEL-3, CMDLINE-12, TOOL-4, RUN-2).
+#[cfg(unix)]
+#[test]
+fn a_run_result_names_a_relative_program_by_the_directory_as_typed_and_not_where_a_link_led() {
+    let scratch =
+        a_workspace_nobody_vouched_for_with_a_linked_directory("linked-directory-run-program");
+    std::fs::write(
+        scratch.path.join(LINKED_TARGET).join("build.sh"),
+        "#!/bin/sh\necho built\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            scratch.path.join(LINKED_TARGET).join("build.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./build.sh","directory":"docs"}"#),
+        reply_with("done"),
+    ]);
+
+    let bodies = bodies_of_a_turn_approving_runs_once(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the run");
+    assert!(
+        last.contains("build.sh (in docs)` printed"),
+        "the planner was not told the program by the directory as it typed it: {last}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains(LINKED_TARGET)),
+        "where a link led reached the planner: {bodies:?}"
+    );
+}
+
 /// The same for a line whose directory was removed while the person was asked: the refusal says
 /// the directory is gone, names it as typed, and does not carry the path the exec layer checked.
 #[cfg(unix)]

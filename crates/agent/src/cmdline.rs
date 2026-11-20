@@ -2361,12 +2361,15 @@ pub fn compile_with(
 /// A pattern in the line is replaced by the names it matched when the line is compiled, and those
 /// names come out of a directory nobody may have vouched for, so a sentence addressed to the planner
 /// cannot spell them ([CMDLINE-4]). The program is named by the path the planner typed and not the
-/// file a link leads to, for the same reason (RUN-2).
+/// file a link leads to, for the same reason (RUN-2): where the name the line used is a relative
+/// path, [`Plan::directory`] is where it landed and `told_directory` is the planner's own spelling
+/// of that directory, `None` at the root, so the program word is respelled under `told_directory`
+/// and not under the landing, exactly as a redirection's target already is.
 /// A plan whose steps this walk cannot pair with the line's commands is told as the line itself,
 /// which is the planner's own text.
 ///
 /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
-pub fn display_as_written(plan: &Plan) -> String {
+pub fn display_as_written(plan: &Plan, told_directory: Option<&str>) -> String {
     // The plan was compiled from this line, so a value worked out at spawn is there to be read
     // past, whichever mode compiled it. Nothing here runs it.
     let Ok(node) = parse_with(&plan.line, Expansions::Assignments) else {
@@ -2376,7 +2379,7 @@ pub fn display_as_written(plan: &Plan) -> String {
     let mut targets = Vec::new();
     operands_as_written(&node, &mut written, &mut targets);
     plan.steps
-        .display_with_operands(&written, &targets)
+        .display_with_operands(&written, &targets, &plan.directory, told_directory)
         .unwrap_or_else(|| plan.line.clone())
 }
 
@@ -4243,7 +4246,7 @@ mod tests {
         let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
 
         let shown = plan.display();
-        let told = display_as_written(&plan);
+        let told = display_as_written(&plan, None);
 
         assert!(
             shown.contains("one-HOSTILE.rs"),
@@ -4272,7 +4275,7 @@ mod tests {
         let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
 
         let shown = plan.display();
-        let told = display_as_written(&plan);
+        let told = display_as_written(&plan, None);
 
         let root = tree.root.display().to_string();
         assert!(
@@ -4741,7 +4744,7 @@ mod tests {
                 expected.matches(&bin).count() + 1,
                 "{line}"
             );
-            assert_eq!(display_as_written(&plan), expected, "{line}");
+            assert_eq!(display_as_written(&plan, None), expected, "{line}");
             let written = plan_as_written(&plan, None).unwrap_or_else(|| panic!("{line}"));
             assert_eq!(
                 written.steps.steps().len(),
