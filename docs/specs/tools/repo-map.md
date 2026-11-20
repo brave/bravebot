@@ -118,8 +118,8 @@ exist when the map was cut off.
   ([MAP-5](#MAP-5)), so a distrusted directory of a million files is walked to its end. What stops
   the walk is the end of the tree and the cap on the files it may open. The directories it does not
   walk ([MAP-4](#MAP-4)) and the links it does not enter ([LIST-6](list-files.md#LIST-6)) are left
-  alone as before. There is no second cap on the files set aside, since a second cap would again
-  let a distrusted directory decide which vouched files a map reaches.
+  out of the walk. There is no second cap on the files set aside, since a second cap would let a
+  distrusted directory decide which vouched files a map reaches.
 
 ## Not covered
 
