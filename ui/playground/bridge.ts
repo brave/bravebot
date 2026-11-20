@@ -469,7 +469,7 @@ const bridge: BravebotApi = {
   writeBotServers: async () => ({ servers: null, tools: true, inline: false, kind: 'default', editable: true, every: true, everyPossible: true }),
   writeBot: async (form) => {
     const slug = form.slug ?? (form.name ?? 'bot').toLowerCase().replace(/[^a-z0-9]+/g, '-')
-    const bot: Bot = { ...(bots.find((each) => each.slug === slug) ?? { slug, avatar: form.avatar ?? slug, home: `${BOT_HOME}-${slug}`, definition: slug, session: null, conversations: [], lastHome: null, archived: 0, remembered: 0, quiet: 0, retired: 0, created: Date.now(), name: '', purpose: '', model: null, updated: 0 }), ...(form.name ? { name: form.name } : {}), ...(form.purpose ? { purpose: form.purpose } : {}), ...(form.model !== undefined ? { model: form.model } : {}), updated: Date.now() }
+    const bot: Bot = { ...(bots.find((each) => each.slug === slug) ?? { slug, avatar: form.avatar ?? slug, home: `${BOT_HOME}-${slug}`, definition: slug, session: null, conversations: [], lastHome: null, archived: 0, retired: 0, created: Date.now(), name: '', purpose: '', model: null, updated: 0 }), ...(form.name ? { name: form.name } : {}), ...(form.purpose ? { purpose: form.purpose } : {}), ...(form.model !== undefined ? { model: form.model } : {}), updated: Date.now() }
     bots = [...bots.filter((each) => each.slug !== slug), bot]
     return bot
   },

@@ -191,10 +191,10 @@ test('a file the bridge says is too large is left out with the bridge’s note, 
   assert.equal((await main.stageDrops('s1', [big], classify))[0].kind, 'staged', 'one the bridge takes is')
 })
 
-test('a bot’s briefing stays first in dropped, with what the person dropped after it', async () => {
+test('a path already in dropped stays ahead of the text files the person dropped', async () => {
   const ids = [await grant('s1', md), await grant('s1', png)]
-  const carried = main.withDrops('s1', ids, { session: 's1', prompt: 'p', dropped: ['/app/briefing.md'], files: [] })
-  assert.deepEqual(carried.dropped, ['/app/briefing.md', md])
+  const carried = main.withDrops('s1', ids, { session: 's1', prompt: 'p', dropped: ['/app/already.md'], files: [] })
+  assert.deepEqual(carried.dropped, ['/app/already.md', md])
   assert.deepEqual(carried.attachments, [png])
 })
 

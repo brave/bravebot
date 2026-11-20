@@ -159,7 +159,7 @@ export function App(): React.JSX.Element {
     if (live?.summary.id) rememberPickedModel(live.summary.directory, live.summary.id, live)
   }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
-  const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
+  const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ setLive, setProblem })
   const { answerTrust, answerRules, answerFolder, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
@@ -225,8 +225,8 @@ export function App(): React.JSX.Element {
     // anything else ever sends a turn.
     //
     // `turn.started` already sets `running`, so the composer locks itself and nothing here needs
-    // to. What is added is the line above the reply, and the note that the briefing has been said.
-    const stopConsolidation = window.bravebot.onBotConsolidation(({ session, running, delivered }) => {
+    // to. What is added is the line above the reply.
+    const stopConsolidation = window.bravebot.onBotConsolidation(({ session, running }) => {
       updateSession(session, (old) =>
         old
           ? {
@@ -234,11 +234,6 @@ export function App(): React.JSX.Element {
               entries: running ? [...old.entries, t.consolidating()] : old.entries,
               running,
               consolidating: running,
-              // Only when it actually ran. Such a turn carries the briefing, so the session is
-              // grounded again and the next prompt must not carry it twice — but one that never
-              // left delivered nothing, and marking it said would cost the bot the briefing over
-              // a turn that did not happen.
-              bot: old.bot && !running && delivered ? { ...old.bot, grounded: true } : old.bot,
             }
           : old,
       )
@@ -321,11 +316,7 @@ export function App(): React.JSX.Element {
         // entirely, and the file the main process keeps is where that is written down.
         forkedFrom: cameFrom(forksRef.current, summary.directory, summary.id, sessionsRef.current),
         focus: focus ?? null,
-        // Ungrounded on purpose, even though this session has said the briefing before. What was
-        // said before is in the conversation only until compaction takes it, and a resumed session
-        // is exactly the case where nothing on screen can tell whether that has happened. One
-        // extra reading of a short file is cheaper than a bot that has quietly forgotten itself.
-        bot: bot ? { slug: bot.slug, grounded: false } : null,
+        bot: bot ? { slug: bot.slug } : null,
         archived: opened.archived,
         context: opened.context,
         rewind: opened.rewind ?? [],
@@ -375,7 +366,7 @@ export function App(): React.JSX.Element {
         ...settledBy(made),
         forkedFrom: null,
         focus: null,
-        bot: bot ? { slug: bot.slug, grounded: false } : null,
+        bot: bot ? { slug: bot.slug } : null,
         archived: 0,
       }))
       setProblem(null)
@@ -752,10 +743,7 @@ export function App(): React.JSX.Element {
           // conversation resumed forever; a second one carrying its name would be a second bot
           // wearing it, with the same memory file and no way to tell them apart in the list.
           bot: null,
-          // A child begins with the archive its parent had at the cut, which the fork answer does
-          // not carry. Zero is the safe way to be wrong: it can only ask for a briefing that is not
-          // needed, where too high a figure would miss the one that is — and a fork is not a bot, so
-          // in this build it asks for nothing at all.
+          // The fork answer does not carry the archive length. A fork is not a bot.
           archived: 0,
           // The parent's backups stay the parent's: nothing in the child has written anything yet.
           rewind: [],

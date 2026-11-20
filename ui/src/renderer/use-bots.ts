@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject, type SetStateAction } from 'react'
+import { useCallback, useRef, useState, type SetStateAction } from 'react'
 import type { Bot } from '../shared/bots'
 import type { BotFormValue } from './components/Bots'
 import type { Live } from './live'
@@ -6,14 +6,12 @@ import { problemToShow } from './bots-problem'
 
 /** What `useBots` takes from the component that owns the sessions. */
 export interface BotsInputs {
-  openedLives: MutableRefObject<Map<string, Live>>
-  updateSession: (handle: string, action: SetStateAction<Live | null>) => void
   setLive: (action: SetStateAction<Live | null>) => void
   setProblem: (problem: string | null) => void
 }
 
 /** The bot list on screen, and the edits that change it that need no session to be closed. */
-export function useBots({ openedLives, updateSession, setLive, setProblem }: BotsInputs) {
+export function useBots({ setLive, setProblem }: BotsInputs) {
   const [bots, setBots] = useState<Bot[]>([])
   const shownProblem = useRef<string | null>(null)
 
@@ -40,17 +38,6 @@ export function useBots({ openedLives, updateSession, setLive, setProblem }: Bot
   // close over a list that changes under them.
   const botsRef = useRef<Bot[]>(bots)
   botsRef.current = bots
-
-  useEffect(() => {
-    const edited = (event: Event) => {
-      const slug = (event as CustomEvent<string>).detail
-      for (const session of openedLives.current.values()) {
-        if (session.bot?.slug === slug) updateSession(session.handle, (old) => old?.bot ? { ...old, bot: { ...old.bot, grounded: false } } : old)
-      }
-    }
-    document.addEventListener('bravebot:memory-edited', edited)
-    return () => document.removeEventListener('bravebot:memory-edited', edited)
-  }, [openedLives, updateSession])
 
   const saveBot = useCallback(
     async (bot: BotFormValue) => {

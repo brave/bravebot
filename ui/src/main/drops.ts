@@ -170,8 +170,8 @@ export function dropsFor(session: string, ids: unknown): { dropped: string[]; at
 }
 
 /**
- * `params` carrying what `ids` grant: text files after any `dropped` already there, which is where a
- * bot's briefing is, and pictures and PDFs as `attachments`. A list with nothing in it is left off.
+ * `params` carrying what `ids` grant: text files in `dropped`, and pictures and PDFs as
+ * `attachments`. A list with nothing in it is left off.
  */
 export function withDrops(session: string, ids: unknown, params: Record<string, unknown>): Record<string, unknown> {
   const { dropped, attachments } = dropsFor(session, ids)

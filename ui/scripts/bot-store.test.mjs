@@ -177,7 +177,7 @@ test('a save answers with the row the agent wrote, not the one it was sent', asy
     assert.match(made.home, /bot-homes[\\/]form-bot$/)
     assert.ok(made.created > 0 && made.updated > 0)
     assert.equal(made.avatar, sent.avatar, 'the seed the window sent is the avatar the agent kept')
-    assert.deepEqual(made, main.withoutFigures(file.rows.find((each) => each.slug === 'form-bot')))
+    assert.deepEqual(made, file.rows.find((each) => each.slug === 'form-bot'))
 
     const edited = await main.saveForm({ slug: 'plain', purpose: 'New purpose' })
     assert.equal(edited.purpose, 'New purpose')
@@ -186,12 +186,12 @@ test('a save answers with the row the agent wrote, not the one it was sent', asy
     assert.equal(edited.model, 'provider/stored')
     assert.equal(edited.created, 5)
     assert.ok(edited.updated > 5, 'the agent stamped the change')
-    assert.deepEqual(edited, main.withoutFigures(file.rows.find((each) => each.slug === 'plain')))
+    assert.deepEqual(edited, file.rows.find((each) => each.slug === 'plain'))
 
     const picked = await main.saveBotModel('plain', 'provider/other')
     assert.equal(picked.model, 'provider/other')
     assert.equal(picked.purpose, 'New purpose', 'the rest of the stored row comes back with it')
-    assert.deepEqual(picked, main.withoutFigures(file.rows.find((each) => each.slug === 'plain')))
+    assert.deepEqual(picked, file.rows.find((each) => each.slug === 'plain'))
     const cleared = await main.saveBotModel('plain', null)
     assert.equal(cleared.model, null)
   } finally { clean() }

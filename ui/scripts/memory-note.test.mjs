@@ -59,16 +59,6 @@ test('a note the bot or a person has changed is not touched', async () => {
   } finally { clean() }
 })
 
-test('a new memory file carries the note on one line', async () => {
-  const { api, bot, home, file, clean } = await fixture('note-new')
-  try {
-    api.ground(bot, home)
-    const written = readFileSync(file, 'utf8')
-    assert.ok(written.includes(JOINED), 'the note is one line')
-    assert.ok(!written.includes(WRAPPED), 'and not wrapped')
-  } finally { clean() }
-})
-
 test('reading tidies an old file once, keeps the old version in history, and leaves a changed one alone', async () => {
   const { api, bot, home, file, clean } = await fixture('note-tidy')
   try {

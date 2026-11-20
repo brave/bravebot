@@ -382,8 +382,7 @@ At send the page names grants, never paths. The main process takes away every li
 under the bridge's names and then composes `dropped` from the text files and `attachments` from
 the pictures and PDFs, each grant checked again: still there, and still a regular file and not a
 link put in its place. A grant that fails refuses the send with the file's name. A picture or PDF
-that grew past the cap since is refused by `turn.send` ([DROP-10](#DROP-10)) with the same note. A bot's turn keeps its briefing first in `dropped` and the dropped text
-files after it.
+that grew past the cap since is refused by `turn.send` ([DROP-10](#DROP-10)) with the same note. A bot's turn does not put a briefing on `dropped`.
 
 The rest follows the terminal where a window can. Each file gets a marker at the caret, numbered
 from one counter per conversation, with a chip beside the box; the draft is what decides, so

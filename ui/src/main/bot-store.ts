@@ -6,7 +6,7 @@ import { allowStateWrites } from './state'
 export type BotsBridge = (method: string, params: Record<string, unknown>) => Promise<unknown>
 
 interface Listed {
-  bots: Omit<Bot, 'remembered' | 'quiet'>[]
+  bots: Bot[]
   dropped: { index: number; slug: string | null; reason: string }[]
   unreadable: { path: string; reason: string } | null
   oldRowsWaiting?: unknown
@@ -39,8 +39,6 @@ export async function bridgeRequest(method: string, params: Record<string, unkno
 
 export type BotRow = Listed['bots'][number]
 
-export const withoutFigures = (row: BotRow): Bot => ({ ...row, remembered: 0, quiet: 0 })
-
 function report(listed: Listed): string | null {
   if (listed.unreadable) return `The bots could not be read from ${listed.unreadable.path}: ${listed.unreadable.reason}`
   if (listed.dropped.length === 0) return null
@@ -68,12 +66,12 @@ async function list(): Promise<Listed> {
 export async function usableBots(): Promise<Bot[]> {
   const listed = await list()
   if (listed.unreadable) throw new Error(report(listed) ?? 'The bots could not be read.')
-  return listed.bots.map(withoutFigures)
+  return listed.bots
 }
 
 export async function readBots(): Promise<Bot[]> {
   try {
-    return (await list()).bots.map(withoutFigures)
+    return (await list()).bots
   } catch (error) {
     unread = message(error)
     return []
@@ -111,7 +109,7 @@ export function updateBots(change: (bots: Bot[]) => Bot[] | null): Promise<Bot[]
     const next = change(current)
     if (next === null) return current
     const written = (await sendWrite('bot.replace', { bots: next })) as { bots: BotRow[] }
-    return written.bots.map(withoutFigures)
+    return written.bots
   })
 }
 

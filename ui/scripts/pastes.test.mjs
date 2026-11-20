@@ -153,10 +153,10 @@ test('a closed session’s pictures are gone', async () => {
   assert.throws(() => main.sanitised('turn.send', { session: 's2', prompt: 'p', pastes: [id] }), main.SendRefused)
 })
 
-test('a bot’s turn keeps its briefing and carries what was pasted', async () => {
+test('a path already in dropped stays there when a paste is carried', async () => {
   const id = await paste('s1', Buffer.from('shot'))
-  const carried = main.withPastes('s1', [id], main.withDrops('s1', [], { session: 's1', prompt: 'p', dropped: ['/app/briefing.md'] }))
-  assert.deepEqual(carried.dropped, ['/app/briefing.md'], 'a bot’s briefing is left where it was')
+  const carried = main.withPastes('s1', [id], main.withDrops('s1', [], { session: 's1', prompt: 'p', dropped: ['/app/already.md'] }))
+  assert.deepEqual(carried.dropped, ['/app/already.md'], 'the path already in dropped is left there')
   assert.deepEqual(carried.images, [{ media: 'image/x-test', data: Buffer.from('PNG:shot').toString('base64') }])
 })
 

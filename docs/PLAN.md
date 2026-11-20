@@ -7,12 +7,9 @@ evidence, and this file is updated when a change materially moves the status bel
 
 ### Status
 
-The design is merged. Slice 1 is merged. Slice 2a is on `bots/slice-2a-layouts`, rebased onto
-main. Slice 2b is on `bots/slice-2b-layout`, rebased onto slice 2a. Slice 3a is on
-`bots/slice-3-operations`, rebased onto slice 2b. Slice 3b is on `bots/slice-3b-archive`, rebased
-onto slice 3a. Slice 3c is on `bots/slice-3c-record`, rebased onto slice 3b. Slice 4 is on
-`bots/slice-4-form`, rebased onto slice 3c. Slice 5 is on `bots/slice-5-turn`, rebased onto
-slice 4. Slices 6 to 11 are not on this branch. The design is
+The design is merged. Slice 1 is merged. Slices 2a through 6 are on `bots/slices-2a-to-5`, in
+https://github.com/brave/bravebot/pull/4410. The stacked pull requests for slices 2a through 5 are
+closed. Slices 7 to 11 are not on this branch. The design is
 [design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
 which is `proposed`. The clauses and the slices below agree with the design.
 
@@ -30,9 +27,8 @@ still written while the problem is shown.
 Slice 1 does not change what the interface does at the ceiling. Its make still cuts the list to 100
 rows, dropping the slug that sorts last, before it calls `bot.replace`, so the refusal at 100 rows
 that the module makes is reached from the interface in slice 3a. The rows the bridge returns carry no
-`remembered` or `quiet` field, so slice 1 already stops persisting them. `noteBotMemory`,
-`keepingMemoryMark`, `nudgeDue`, `noteBotNudged` and `QUIET_MAX` in `ui/src/main/bots.ts` run on a
-count of zero until slice 6 removes them.
+`remembered` or `quiet` field, so slice 1 already stops persisting them. Slice 6 removes
+`noteBotMemory`, `keepingMemoryMark`, `nudgeDue`, `noteBotNudged` and `QUIET_MAX`.
 
 Slice 2a adds `crates/tui/src/layout.rs`. `Layout` has one value, `default`, and answers what the
 interface draws to the right of the chat (`right_column`) and which keys it claims before the prompt
@@ -258,8 +254,7 @@ tests on that branch. The plan does not repeat them.
 
 What slice 3c inherits. The owner left the row write of `migrateBot` and the counter writes of
 `noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` on `bot.replace`, and left `bot.define`
-and `bot.redefine` in place. Slice 5 still owns the migration's row write. Slice 6 still removes
-the counters.
+and `bot.redefine` in place. Slice 5 owns the migration's row write. Slice 6 removes the counters.
 
 Slice 3c adds `record_conversation`, `record_archived`, `release_session` and `forget_conversation`
 to the module in `crates/agent/src/bots/operations.rs`. Each is one read-modify-write under the lock
@@ -381,12 +376,10 @@ Two shapes were rejected. The GUI still computing the old memory folder and pass
 the row write outside the lock. One bridge method that both checked the folder and sent the turn
 would send from the check, and `sendBotTurn` would no longer be the send.
 
-What this slice does not do. Slice 6 still removes the briefing and the counters.
-`noteBotMemory`, `keepingMemoryMark` and `noteBotNudged` still write through `bot.replace`.
+What this slice does not do. Slice 6 removes the briefing and the counters.
 `bot.replace`, `bot.define` and `bot.redefine` stay. A migration of a legacy row rewrites the row
-without `remembered` or `quiet`, because the module's row has neither field. The nudge is decided
-before that rewrite, and the turn is addressed to the definition, so the dropped fields are not
-what is sent. The terminal does not begin a session as a bot. Enter on a bot still says that
+without `remembered` or `quiet`, because the module's row has neither field. The terminal does not
+begin a session as a bot. Enter on a bot still says that
 starting a session comes in a later release, and begins none. A folder moved to with `/cd` is not
 part of this check, because no terminal session runs as a bot yet. The GUI's refusal line stays
 the one it already used: the bot has not been given this folder.
@@ -400,6 +393,17 @@ turn requested for a folder outside the three refused in the running app before 
 legacy bot's first turn migrated and answered on a live model. The automated tests pin the three
 folders, the migration's row write, and that the source of `sendBotTurn` names the folder
 refusal before `turn.send`. That last check reads the function's text. It does not call it.
+
+Slice 6 is on `bots/slices-2a-to-5`, in https://github.com/brave/bravebot/pull/4410. The briefing,
+the quiet counters, and the `remembered` and `quiet` fields are removed from the GUI, because a bot
+is migrated before it is sent. `tidyMemory` calls `replaceProjectMemory` and
+the recording directly. `bot.replace`, `bot.define` and `bot.redefine` stay. The terminal still
+does not begin a session as a bot. Enter on a bot still says that starting a session comes in a
+later release, and begins none.
+
+The desktop was not launched. These cases were not run there: a turn of a bot shown unchanged, and
+a legacy bot's first turn migrated and answered on a live model. The automated tests pin the source
+of `sendBotTurn` and the migration. The source check does not call `sendBotTurn`.
 
 The order of the remaining work:
 
@@ -688,7 +692,7 @@ for bots, so each terminal function is in the bots layout.
      the three is refused before it is sent, a bot made before definitions is migrated and its first
      turn is addressed to the new definition, and a search of `ui/src` finds no `migrateBot`,
      `owesCarryOver` or `oldMemoryFolder`.
-6. **The GUI's briefing code is removed.** Remove the code that no turn reaches: `ground`,
+6. **The GUI's briefing code is removed.** Built. The Status above describes it. Remove the code that no turn reaches: `ground`,
    `groundText`, `seedProjectMemory`, `keepingMemoryMark` (`tidyMemory` then calls the replace and the
    recording directly), the branch of `sendBotTurn` that attaches the briefing, the `grounded` and
    `nudge` arguments, the counting of quiet turns and the `remembered` and `quiet` fields of the

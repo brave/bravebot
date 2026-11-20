@@ -38,9 +38,9 @@ export interface Bot {
    * The name every file belonging to this bot is named after.
    *
    * Restricted to `[a-z0-9-]` and composed from the name once, at creation. Both matter: this
-   * becomes a path segment in three places (the ground file under `userData`, the home folder
-   * under `userData`, and the memory file inside each folder the bot works in), and a path segment
-   * that arrived as free text is a path segment that can be `..`.
+   * becomes a path segment (the home folder under `userData`, and the memory file a bot made
+   * before definitions keeps in each folder it works in), and a path segment that arrived as free
+   * text is a path segment that can be `..`.
    */
   slug: string
   /** What the bot is called, as somebody wrote it. Free text, and renamable. */
@@ -92,27 +92,9 @@ export interface Bot {
    * How much compaction had taken out of that session, last time anyone looked.
    *
    * The length of the conversation's archive, which the agent reports and which only ever rises.
-   * A bot is re-grounded when this has gone up since the last turn, because that is the moment its
-   * purpose stopped being in the conversation. Main-written.
+   * Main-written.
    */
   archived: number
-  /**
-   * The modification time its memory file had, last time a turn of its finished.
-   *
-   * Not a copy of the memory and not a judgement about it — only the answer to "has it changed
-   * since I last looked", which is the one question `quiet` below needs asked. Zero means nobody
-   * has looked yet. Main-written, and read off the filesystem rather than off anything a model
-   * said: the file's mtime is the only claim here nothing can be talked into.
-   */
-  remembered: number
-  /**
-   * How many of its turns have finished since that mtime last moved.
-   *
-   * The whole of the nudge: a bot keeping its memory current sits at zero forever and is never
-   * reminded, and one that has stopped writing is handed its briefing again once this reaches
-   * `QUIET_MAX` rather than waiting for a compaction. Main-written.
-   */
-  quiet: number
   /**
    * When it was archived, in milliseconds, or `0` for a bot still in use.
    *

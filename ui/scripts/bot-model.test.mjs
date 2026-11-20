@@ -90,7 +90,8 @@ test('a form is made, edited and given a model by the agent, and a refusal saves
     const switched = await storage.saveBotModel('web-dev', 'provider/model-b')
     assert.deepEqual(sent(), [['bot.set_model', { dataFolder: profile, slug: 'web-dev', model: 'provider/model-b' }]])
     assert.equal(switched.model, 'provider/model-b')
-    assert.equal(switched.remembered, 0)
+    assert.equal('remembered' in switched, false)
+    assert.equal('quiet' in switched, false)
     await storage.saveBotModel('web-dev', null)
     assert.equal((await storage.bot('web-dev')).model, null)
     file.refuse = 'refused'
@@ -164,7 +165,10 @@ test('a window cannot name the definition a turn is addressed to', () => {
   assert.equal(sets.length, 1, 'more than one place sets the definition a turn is addressed to')
   const sender = main.slice(main.indexOf('async function sendBotTurn('), main.indexOf('async function consolidate('))
   assert.match(sender, /params\.definition = held\.definition/, 'the definition is not the bot row’s')
-  assert.match(sender, /if \(held\.definition !== null\) \{[\s\S]*?\} else if \(grounded\)/, 'a bot with a definition is also sent a briefing')
+  assert.equal(/\bground\(/.test(sender), false, 'sendBotTurn calls ground')
+  for (const name of ['nudgeDue', 'noteBotNudged', 'noteBotMemory', 'keepingMemoryMark']) {
+    assert.equal(main.includes(name), false, `${name} still counts a quiet turn`)
+  }
   const refusal = sender.indexOf('not_this_bots_folder')
   const send = sender.indexOf("bridge.request('turn.send'")
   assert.ok(refusal !== -1 && send !== -1 && refusal < send, 'a folder outside the three is refused before the turn is sent')
@@ -178,24 +182,13 @@ test('a window cannot name the definition a turn is addressed to', () => {
 test('a bot with a definition keeps its memory where the agent keeps that definition’s', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-memory-path-'))
   const file = fakeBots()
-  const { memoryPath, nudgeDue, noteBotMemory, saveBot } = load(profile, file)
+  const { memoryPath } = load(profile, file)
   try {
-    const defined = botRow({ definition: 'web-dev-2', quiet: 99 })
-    const legacy = botRow({ slug: 'old-bot', quiet: 99 })
+    const defined = botRow({ definition: 'web-dev-2' })
+    const legacy = botRow({ slug: 'old-bot' })
     // The memory is the definition's, named after it and not after the slug the row is known by.
     assert.equal(memoryPath(defined), '.bravebot/memory/web-dev-2.md')
     assert.equal(memoryPath(legacy), '.bravebot-ui/bots/old-bot.md')
-    // The quiet-turn counter decided when the briefing was sent again; a bot that is addressed has
-    // no briefing, so it never asks for one and the turn end never counts.
-    assert.equal(nudgeDue(defined), false)
-    assert.equal(nudgeDue(legacy), true)
-    await saveBot(defined)
-    await saveBot(legacy)
-    const rowBefore = structuredClone(file.rows.find((row) => row.slug === 'web-dev'))
-    const writesBefore = file.calls.filter(([method]) => method === 'bot.replace').length
-    await noteBotMemory('web-dev')
-    assert.equal(file.calls.filter(([method]) => method === 'bot.replace').length, writesBefore, 'a turn end wrote the row of an addressed bot')
-    assert.deepEqual(file.rows.find((row) => row.slug === 'web-dev'), rowBefore, 'a turn end changed the row of an addressed bot')
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
@@ -265,8 +258,12 @@ test('whether a carry-over is owed is the bridge’s answer, and the prompt name
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
-test('ui/src no longer holds the copies of the migration and the old memory folder', () => {
-  const names = ['migrateBot', 'owesCarryOver', 'oldMemoryFolder']
+test('ui/src no longer holds the migration copies, the briefing, or the quiet counters', () => {
+  const names = ['migrateBot', 'owesCarryOver', 'oldMemoryFolder', 'groundText', 'seedProjectMemory', 'nudgeDue', 'noteBotNudged', 'noteBotMemory', 'keepingMemoryMark']
+  const groundCall = /\bground\(/
+  assert.equal(groundCall.test('background('), false)
+  assert.equal(groundCall.test('foreground('), false)
+  assert.equal(groundCall.test('ground('), true)
   const files = []
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
@@ -279,5 +276,6 @@ test('ui/src no longer holds the copies of the migration and the old memory fold
   for (const path of files) {
     const text = readFileSync(path, 'utf8')
     for (const name of names) assert.equal(text.includes(name), false, `${path} names ${name}`)
+    assert.equal(groundCall.test(text), false, `${path} names ground(`)
   }
 })

@@ -138,15 +138,8 @@ export interface Live {
    * that two sessions can both mean.
    */
   focus: number | null
-  /**
-   * The bot whose session this is, and whether it still knows it is one.
-   *
-   * `null` for an ordinary session. For a bot's, `grounded` says whether the conversation
-   * currently carries its briefing: false when the session has just been opened, and false again
-   * once compaction has taken the briefing out of it. The next prompt sent while it is false
-   * carries the briefing with it, which is the whole of what makes a bot persist.
-   */
-  bot: { slug: string; grounded: boolean } | null
+  /** The bot whose session this is, or `null` for an ordinary session. */
+  bot: { slug: string } | null
   /**
    * How many messages compaction has taken out of this conversation, as of the last thing heard
    * about it.
