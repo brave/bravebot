@@ -120,6 +120,9 @@ struct Open {
     /// The stop for the last request for a brief to hand the chat off from (SESSION-34). Left in
     /// place once it has answered, as `enhancing` is.
     handing_off: Option<Cancel>,
+    /// The question asked beside the work, while one may be out (CMD-8, CMD-16). One at a time: a
+    /// second is refused until this one has settled.
+    aside: Option<AsideOut>,
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
@@ -176,6 +179,7 @@ impl Open {
             enhancing: None,
             compacting: None,
             handing_off: None,
+            aside: None,
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
             refused_folders: Vec::new(),
@@ -226,6 +230,21 @@ impl Open {
             ));
         }
         Ok(())
+    }
+}
+
+/// A question asked beside the work, from when it is sent until its worker has settled it.
+struct AsideOut {
+    /// Stops the request.
+    cancel: Cancel,
+    /// Set by the worker once the answer is a row and the event has gone, so the next question
+    /// may be asked.
+    settled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AsideOut {
+    fn is_out(&self) -> bool {
+        !self.settled.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -456,6 +475,8 @@ impl Bridge {
             "session.handoff" => self.handoff_brief(request),
             "session.handoff.cancel" => self.cancel_handoff(request),
             "session.background" => self.background_session(request),
+            "session.recap" => self.recap(request),
+            "session.aside.cancel" => self.cancel_aside(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -1147,6 +1168,8 @@ impl Bridge {
             "todos": todos,
             // SESSION-36: shown beside the conversation, never sent to the model.
             "notes": notes_json(&record.notes),
+            // CMD-8, CMD-16: the questions asked beside the work, never sent to the model.
+            "asides": crate::aside::stored_json(&record.asides),
             "trust": {
                 "known": record.trust.is_some(),
                 "rules": record.trust.as_ref().map(|rules| {
@@ -2639,6 +2662,100 @@ impl Bridge {
             )
         })?;
         Ok(json!({ "handedOver": left.id, "mode": mode.word() }))
+    }
+
+    /// Ask the session's model to recap the exchange, and return before it has answered (CMD-16).
+    ///
+    /// The request is [`bravebot_agent::aside::Question::recap`], the one the terminal's `/recap`
+    /// makes, over the exchange as it stands and with no tools. The conversation is not changed:
+    /// the answer is kept as an aside in the session's record and comes back as an `aside.done`
+    /// event. Refused while a turn runs, since `/recap` waits for the turn (CMD-16).
+    fn recap(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+        if open.aside.as_ref().is_some_and(AsideOut::is_out) {
+            return Err(Failure::bad_request(
+                "a question asked beside the work is still out; wait for its answer or stop it",
+            ));
+        }
+
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let project = open.project.clone();
+        let state = Arc::clone(&open.state);
+        // Taken here, on the thread that holds the state, because a conversation is not `Clone`
+        // and what crosses to the worker is the request and not the exchange.
+        let (asking, account, trust) = {
+            let state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            (
+                bravebot_agent::aside::Question::recap(&state.conversation),
+                state.account.clone(),
+                state.answers.trust.clone(),
+            )
+        };
+        let cancel = Cancel::new();
+        let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.aside = Some(AsideOut {
+                cancel: cancel.clone(),
+                settled: Arc::clone(&settled),
+            });
+        }
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        self.workers_of(&handle).spawn(move || {
+            let egress = Egress::new();
+            let mut sink = bravebot_session::audit::Trail::new();
+            let done = agent_turn::aside(
+                &config,
+                &egress,
+                &account,
+                asking,
+                model.as_deref(),
+                &mut sink,
+                trust,
+                |_written| {},
+                &cancel,
+            );
+            let (event, aside, tokens) = crate::aside::settle(
+                done,
+                cancel.is_cancelled(),
+                crate::aside::RECAP_LABEL.to_string(),
+                true,
+            );
+            keep_aside(&project, &state, aside, tokens);
+            settled.store(true, std::sync::atomic::Ordering::Release);
+            emitter.send(Event::new("aside.done", &session, event));
+        });
+        Ok(json!({ "started": true }))
+    }
+
+    /// Stop the question asked beside the work, if one is out. Nothing out is not an error: the
+    /// answer may have arrived first.
+    fn cancel_aside(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(out) = &open.aside {
+            out.cancel.cancel();
+        }
+        Ok(json!({}))
     }
 
     /// Start a manifest run, and return before it finishes (MANIFEST-11).
@@ -5102,6 +5219,40 @@ pub(crate) fn save(
     );
     handle.append_audit(turn, trail.events());
     archived
+}
+
+/// Keep what a question asked beside the work came to: its row, if it was answered, and its cost.
+///
+/// Waits for the session's state, which a turn holds while it runs, so an answer that arrives
+/// during a turn becomes a row once the turn has ended. The record is written again for the row,
+/// where the session has one; a session with none writes its asides with its first turn.
+fn keep_aside(
+    project: &std::path::Path,
+    state: &Mutex<State>,
+    aside: Option<bravebot_session::sessions::Aside>,
+    tokens: u64,
+) {
+    if aside.is_none() && tokens == 0 {
+        return;
+    }
+    let Ok(mut state) = state.lock() else {
+        return;
+    };
+    // Charged to the session as an aside is in the terminal: the request was made and spent what
+    // it spent.
+    state.tokens += tokens;
+    if let Some(aside) = aside {
+        state.asides.push(aside);
+    }
+    if state.handle.is_some() {
+        let turn = state.turns;
+        save(
+            project,
+            &mut state,
+            turn,
+            &bravebot_session::audit::Trail::default(),
+        );
+    }
 }
 
 /// The task lists, keyed by turn as a string, because JSON object keys are.
