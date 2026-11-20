@@ -245,6 +245,7 @@ pub const DENIED: &[&str] = &[
     // Change how the host's own sessions behave, which a person at the host decides.
     "session.mode",
     "session.sandbox",
+    "session.limit",
     "settings.inspect",
     "settings.select",
     "permissions.list",

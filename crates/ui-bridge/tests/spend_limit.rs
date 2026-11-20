@@ -74,18 +74,30 @@ impl Drop for Scratch {
 /// The first answer asks for a tool so that the turn needs a second request, which is the one the
 /// limit holds.
 fn stub_service(record: mpsc::Sender<Value>) -> String {
+    stub_service_gated(record, None)
+}
+
+/// As [`stub_service`], except that where `gate` is given, the first answer waits for a message on
+/// it, so a test can act while the turn's first request is in flight.
+fn stub_service_gated(record: mpsc::Sender<Value>, gate: Option<mpsc::Receiver<()>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
     let endpoint = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(gate));
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let record = record.clone();
-            std::thread::spawn(move || answer(stream, record));
+            let gate = std::sync::Arc::clone(&gate);
+            std::thread::spawn(move || answer(stream, record, &gate));
         }
     });
     endpoint
 }
 
-fn answer(mut stream: std::net::TcpStream, record: mpsc::Sender<Value>) {
+fn answer(
+    mut stream: std::net::TcpStream,
+    record: mpsc::Sender<Value>,
+    gate: &std::sync::Mutex<Option<mpsc::Receiver<()>>>,
+) {
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
     let mut start = String::new();
     if reader.read_line(&mut start).unwrap_or(0) == 0 {
@@ -121,6 +133,9 @@ fn answer(mut stream: std::net::TcpStream, record: mpsc::Sender<Value>) {
         let listed = asked["messages"]
             .as_array()
             .is_some_and(|messages| messages.iter().any(|m| m["role"] == "tool"));
+        if !listed && let Some(gate) = gate.lock().unwrap().take() {
+            let _ = gate.recv_timeout(PATIENCE);
+        }
         let (delta, finish, usage) = if listed {
             (
                 json!({"role": "assistant", "content": "done"}),
@@ -384,6 +399,171 @@ fn going_on_without_a_limit_sends_the_request() {
     let ended = held.ended();
     assert_eq!(ended["event"], "turn.done", "{ended}");
     assert_eq!(ended["data"]["reply"], "done", "{ended}");
+}
+
+/// A front end with a trusted session open in a project whose person's settings are `settings`.
+fn opened(
+    name: &str,
+    settings: &Value,
+    gate: Option<mpsc::Receiver<()>>,
+) -> (
+    Scratch,
+    Child,
+    mpsc::Receiver<Value>,
+    mpsc::Receiver<Value>,
+    String,
+) {
+    let scratch = Scratch::new(name);
+    scratch.settings(settings);
+    let (sender, requests) = mpsc::channel();
+    let endpoint = stub_service_gated(sender, gate);
+    let mut child = front_end(&scratch.home(), &endpoint);
+    let said = lines(child.stdout.take().expect("the front end answers"));
+    send(
+        &mut child,
+        1,
+        "session.new",
+        json!({"directory": scratch.project().display().to_string()}),
+    );
+    let opened = until(&said, |message| message["id"] == 1);
+    let session = opened["ok"]["session"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no session was opened: {opened}"))
+        .to_string();
+    send(
+        &mut child,
+        2,
+        "trust.reply",
+        json!({"session": session, "trusted": true}),
+    );
+    until(&said, |message| message["id"] == 2);
+    (scratch, child, said, requests, session)
+}
+
+/// Call `session.limit` with `params` and return its whole answer.
+fn limit_call(child: &mut Child, said: &mpsc::Receiver<Value>, id: u64, params: Value) -> Value {
+    send(child, id, "session.limit", params);
+    until(said, |message| message["id"] == id)
+}
+
+/// HOST-3, TURN-8: `session.limit` reads the limit the settings gave the session, sets one from a
+/// figure read as the `limit` setting is, clears it with `null`, and refuses a figure that is not a
+/// limit or a value that is not a string without changing the limit.
+///
+/// Rejects: a bridge without the method, one that reads the figure some other way (`2k credits`
+/// would not be 2000 credits), one that changes the limit on a refused figure, and one that treats
+/// an absent `limit` as clearing it.
+#[test]
+fn session_limit_sets_clears_and_reads() {
+    let (_scratch, mut child, said, _requests, session) =
+        opened("bridge-spend-limit-method", &json!({"limit": "100"}), None);
+
+    let read = limit_call(&mut child, &said, 3, json!({"session": session}));
+    assert_eq!(
+        read["ok"],
+        json!({"limit": {"unit": "tokens", "count": 100}, "spent": 0}),
+        "{read}"
+    );
+
+    let set = limit_call(
+        &mut child,
+        &said,
+        4,
+        json!({"session": session, "limit": "2k credits"}),
+    );
+    assert_eq!(
+        set["ok"],
+        json!({"limit": {"unit": "credits", "count": 2000}, "spent": 0}),
+        "{set}"
+    );
+
+    for (id, refused) in [(5, json!("not a figure")), (6, json!(0)), (7, json!(500))] {
+        let answer = limit_call(
+            &mut child,
+            &said,
+            id,
+            json!({"session": session, "limit": refused}),
+        );
+        assert_eq!(answer["error"]["code"], "bad_request", "{answer}");
+    }
+    let read = limit_call(&mut child, &said, 8, json!({"session": session}));
+    assert_eq!(
+        read["ok"]["limit"],
+        json!({"unit": "credits", "count": 2000}),
+        "a refused figure changed the limit: {read}"
+    );
+
+    let cleared = limit_call(
+        &mut child,
+        &said,
+        9,
+        json!({"session": session, "limit": null}),
+    );
+    assert_eq!(
+        cleared["ok"],
+        json!({"limit": null, "spent": 0}),
+        "{cleared}"
+    );
+    let read = limit_call(&mut child, &said, 10, json!({"session": session}));
+    assert_eq!(read["ok"], json!({"limit": null, "spent": 0}), "{read}");
+
+    let unknown = limit_call(&mut child, &said, 11, json!({"session": "s999"}));
+    assert_eq!(unknown["error"]["code"], "no_such_session", "{unknown}");
+    let _ = child.kill();
+}
+
+/// TURN-8: a limit set with `session.limit` while a turn's first request is in flight holds that
+/// turn's next request, and the question is put against the figure just set.
+///
+/// Rejects: a bridge whose method sets a copy of the limit that the running turn does not hold,
+/// and one that waits for the turn to end before the limit applies.
+#[test]
+fn a_limit_set_while_a_turn_runs_holds_its_next_request() {
+    let (gate_open, gate) = mpsc::channel();
+    let (_scratch, mut child, said, requests, session) =
+        opened("bridge-spend-limit-mid-turn", &json!({}), Some(gate));
+
+    send(
+        &mut child,
+        3,
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "look"})),
+    );
+    requests
+        .recv_timeout(PATIENCE)
+        .expect("the turn made its first request");
+    let set = limit_call(
+        &mut child,
+        &said,
+        4,
+        json!({"session": session, "limit": "100"}),
+    );
+    assert_eq!(
+        set["ok"]["limit"],
+        json!({"unit": "tokens", "count": 100}),
+        "{set}"
+    );
+    gate_open.send(()).unwrap();
+
+    let asked = until(&said, |message| {
+        message["event"] == "ask.request"
+            || message["event"] == "turn.done"
+            || message["event"] == "turn.error"
+    });
+    assert_eq!(
+        asked["event"], "ask.request",
+        "the running turn was not held to the limit set during it: {asked}"
+    );
+    let question = question_text(&asked);
+    assert!(
+        question.contains("150") && question.contains("100"),
+        "the question does not say what was spent against the new limit: {question}"
+    );
+    assert!(
+        requests.recv_timeout(QUIET).is_err(),
+        "a request was sent past the limit set during the turn"
+    );
+    let _ = child.kill();
 }
 
 fn question_text(asked: &Value) -> String {
