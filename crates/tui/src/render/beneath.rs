@@ -277,9 +277,20 @@ pub(super) fn queue_words(width: u16, place: usize, count: usize) -> Option<Queu
 ///
 /// Each waiting prompt takes two rows, its words and its mark, one after the other from here
 /// (MOUSE-28). They come after what is attached to the line and what is put away.
-pub(super) fn first_waiting_row(session: &Session, width: u16) -> Option<usize> {
-    (!session.queued.is_empty())
-        .then(|| attached_lines(session, width).len() + stashed_lines(session, width).len())
+pub(super) fn first_waiting_row(session: &Session, width: u16, columns: u16) -> Option<usize> {
+    (!session.queued.is_empty()).then(|| {
+        width_note(session, columns) as usize
+            + attached_lines(session, width).len()
+            + stashed_lines(session, width).len()
+    })
+}
+
+fn width_note(session: &Session, columns: u16) -> u16 {
+    u16::from(
+        session.interface_layout() == crate::layout::Layout::Bots
+            && !session.without_a_session()
+            && !crate::bots_pane::drawn(columns),
+    )
 }
 
 /// Everything drawn between the box and the hint line, one per row.
@@ -297,11 +308,19 @@ pub(super) fn lines_beneath_the_box(
     session: &Session,
     width: u16,
     offered: &crate::state::Offered,
+    columns: u16,
 ) -> Vec<Line<'static>> {
     // Attachments first, nearest the box, because they belong to the line still in it: they are
     // what the next Enter will carry, and a file staged mid-turn appeared below the queue, which
     // reads as belonging to a prompt already gone.
-    let mut lines = attached_lines(session, width);
+    let mut lines = Vec::new();
+    if width_note(session, columns) == 1 {
+        lines.push(Line::styled(
+            crate::bots_pane::line_about_width(),
+            Style::default().fg(theme::note()),
+        ));
+    }
+    lines.extend(attached_lines(session, width));
     // Then the line put away, which is about the box and nothing else: it is what the next press of
     // one key puts back into it. Above the queue because those prompts have gone and this one has
     // not, and below the attachments because they belong to the line in the box now.
@@ -333,6 +352,7 @@ pub(super) fn lines_beneath_the_box(
 fn offered_lines(
     session: &Session,
     width: u16,
+    columns: u16,
     offered: &crate::state::Offered,
 ) -> Option<std::ops::Range<usize>> {
     let items = match offered {
@@ -340,7 +360,8 @@ fn offered_lines(
         crate::state::Offered::Files(entries) => entries.len(),
         crate::state::Offered::Nothing | crate::state::Offered::Shortcuts => return None,
     };
-    let before = attached_lines(session, width).len()
+    let before = width_note(session, columns) as usize
+        + attached_lines(session, width).len()
         + stashed_lines(session, width).len()
         + queued_lines(session, width).len();
     Some(before..before + items)
@@ -356,11 +377,12 @@ fn offered_lines(
 pub(super) fn fit_to_room(
     session: &Session,
     width: u16,
+    columns: u16,
     offered: &crate::state::Offered,
     mut lines: Vec<Line<'static>>,
     room: usize,
 ) -> (Vec<Line<'static>>, usize) {
-    let Some(rows) = offered_lines(session, width, offered) else {
+    let Some(rows) = offered_lines(session, width, columns, offered) else {
         lines.truncate(room);
         return (lines, 0);
     };
@@ -390,11 +412,12 @@ pub(super) fn fit_to_room(
 pub(super) fn offered_picks(
     session: &Session,
     width: u16,
+    columns: u16,
     offered: &crate::state::Offered,
     first: usize,
     pane: ratatui::layout::Rect,
 ) -> Vec<crate::state::Target> {
-    let Some(lines) = offered_lines(session, width, offered) else {
+    let Some(lines) = offered_lines(session, width, columns, offered) else {
         return Vec::new();
     };
     let before = lines.start;

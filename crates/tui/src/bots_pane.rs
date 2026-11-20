@@ -44,7 +44,7 @@ enum Field {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FormKind {
     Make,
-    Edit { slug: String },
+    Edit { slug: String, show_model: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,12 +83,27 @@ pub struct State {
     form: Option<Form>,
     confirm: Option<Confirm>,
     frame_was: Option<u16>,
+    list: WhichList,
+    conversation_at: usize,
+    turn_running_for: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum WhichList {
+    #[default]
+    Bots,
+    Conversations,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pressed {
     Handled,
     ReturnToPrompt,
+    Begin {
+        slug: String,
+        conversation: Option<String>,
+    },
+    Archived(String),
 }
 
 impl State {
@@ -171,8 +186,13 @@ impl State {
 
     pub fn form_model(&self) -> Option<&str> {
         self.form.as_ref().and_then(|form| match form.kind {
-            FormKind::Edit { .. } => Some(form.model.as_str()),
-            FormKind::Make => None,
+            FormKind::Edit {
+                show_model: true, ..
+            } => Some(form.model.as_str()),
+            FormKind::Edit {
+                show_model: false, ..
+            }
+            | FormKind::Make => None,
         })
     }
 
@@ -224,13 +244,16 @@ impl State {
             return Pressed::Handled;
         }
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.selected = (self.selected + 1).min(self.row_count().saturating_sub(1));
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Enter if self.row_count() > 0 => {
-                self.message = Some(t!(bots_pick_later).to_string());
+                if bravebot_core::incognito::engaged() {
+                    self.message = Some(t!(bots_incognito).to_string());
+                } else if let Some(begun) = self.begin_selection() {
+                    return begun;
+                }
             }
+            KeyCode::Tab => self.switch_list(),
             KeyCode::Esc => return Pressed::ReturnToPrompt,
             KeyCode::Char('n') => self.open_make(),
             KeyCode::Char('e') => self.open_edit(),
@@ -255,7 +278,12 @@ impl State {
         };
         if agreed {
             match confirm.kind {
-                ConfirmKind::Archive => self.archive(&confirm.slug),
+                ConfirmKind::Archive => {
+                    let slug = confirm.slug.clone();
+                    if self.archive(&slug) {
+                        return Pressed::Archived(slug);
+                    }
+                }
                 ConfirmKind::Delete => self.delete(&confirm.slug),
             }
         }
@@ -316,7 +344,8 @@ impl State {
             .get(self.selected)
             .and_then(|row| row.model.clone())
             .unwrap_or_default();
-        self.form = Some(Form::for_a_row(slug, name, purpose, model));
+        let show_model = self.turn_running_for.as_deref() != Some(slug.as_str());
+        self.form = Some(Form::for_a_row(slug, name, purpose, model, show_model));
     }
 
     fn offer_archive(&mut self) {
@@ -339,6 +368,10 @@ impl State {
         };
         if retired == 0.0 {
             self.message = Some(t!(bots_delete_only_archived).to_string());
+            return;
+        }
+        if self.turn_running_for.as_deref() == Some(slug.as_str()) {
+            self.message = Some(t!(bots_delete_while_running).to_string());
             return;
         }
         self.confirm = Some(Confirm {
@@ -392,7 +425,7 @@ impl State {
         };
         let editing = match &form.kind {
             FormKind::Make => None,
-            FormKind::Edit { slug } => Some(slug.clone()),
+            FormKind::Edit { slug, .. } => Some(slug.clone()),
         };
         let name = form.name.clone();
         let purpose = form.purpose.clone();
@@ -418,7 +451,11 @@ impl State {
                 Changes {
                     name: Some(name),
                     purpose: Some(purpose),
-                    model: model_change(&model),
+                    model: self
+                        .form
+                        .as_ref()
+                        .and_then(|form| form.shows_model().then(|| model_change(&model)))
+                        .flatten(),
                     avatar: None,
                 },
             )
@@ -436,12 +473,81 @@ impl State {
         }
     }
 
-    fn archive(&mut self, slug: &str) {
+    fn begin_selection(&self) -> Option<Pressed> {
+        let (slug, _, _) = self.selected_row()?;
+        let conversation = match self.list {
+            WhichList::Bots => None,
+            WhichList::Conversations => Some(self.selected_conversation()?.id.clone()),
+        };
+        Some(Pressed::Begin { slug, conversation })
+    }
+
+    fn selected_conversation(&self) -> Option<&bravebot_agent::bots::Conversation> {
+        self.listing
+            .rows
+            .get(self.selected)?
+            .conversations
+            .get(self.conversation_at)
+    }
+
+    fn switch_list(&mut self) {
+        self.list = match self.list {
+            WhichList::Bots => WhichList::Conversations,
+            WhichList::Conversations => WhichList::Bots,
+        };
+        self.conversation_at = 0;
+    }
+
+    fn move_selection(&mut self, step: isize) {
+        match self.list {
+            WhichList::Bots => {
+                let count = self.row_count();
+                if count == 0 {
+                    return;
+                }
+                self.selected =
+                    (self.selected as isize + step).clamp(0, count as isize - 1) as usize;
+                self.conversation_at = 0;
+            }
+            WhichList::Conversations => {
+                let count = self
+                    .listing
+                    .rows
+                    .get(self.selected)
+                    .map(|row| row.conversations.len())
+                    .unwrap_or(0);
+                if count == 0 {
+                    return;
+                }
+                self.conversation_at =
+                    (self.conversation_at as isize + step).clamp(0, count as isize - 1) as usize;
+            }
+        }
+    }
+
+    pub fn set_turn_running_for(&mut self, slug: Option<String>) {
+        self.turn_running_for = slug;
+    }
+
+    pub fn list_is_conversations(&self) -> bool {
+        self.list == WhichList::Conversations
+    }
+
+    fn archive(&mut self, slug: &str) -> bool {
         let Some(folder) = self.data_folder.clone() else {
             self.message = Some(Refused::NoFolder.to_string());
-            return;
+            return false;
         };
-        self.finish(bravebot_agent::bots::archive(&folder, slug).map(|_| ()));
+        match bravebot_agent::bots::archive(&folder, slug) {
+            Ok(_) => {
+                self.reread();
+                true
+            }
+            Err(refused) => {
+                self.message = Some(refused.to_string());
+                false
+            }
+        }
     }
 
     fn restore(&mut self, slug: &str) {
@@ -615,8 +721,44 @@ pub fn line_about_width() -> String {
     t!(bots_need_width, columns = NARROWEST).to_string()
 }
 
+fn draw_conversations(buffer: &mut Buffer, area: Rect, state: &State, focused: bool) {
+    let mut lines = vec![Line::from(Span::styled(
+        t!(bots_conversations).to_string(),
+        Style::default()
+            .fg(theme::brand_primary())
+            .add_modifier(Modifier::BOLD),
+    ))];
+    let conversations = state
+        .listing
+        .rows
+        .get(state.selected)
+        .map(|row| row.conversations.as_slice())
+        .unwrap_or(&[]);
+    if conversations.is_empty() {
+        lines.push(Line::from(Span::styled(
+            t!(bots_no_conversations).to_string(),
+            Style::default().fg(theme::muted()),
+        )));
+    } else {
+        for (index, conversation) in conversations.iter().enumerate() {
+            let mark = if focused && index == state.conversation_at {
+                MARKER
+            } else {
+                NO_MARKER
+            };
+            let folder = crate::render::printable(&conversation.directory);
+            lines.push(Line::from(Span::raw(format!("{mark}{folder}"))));
+        }
+    }
+    Paragraph::new(lines).render(area, buffer);
+}
+
 pub fn draw(buffer: &mut Buffer, area: Rect, state: &State, focused: bool) {
     if area.is_empty() {
+        return;
+    }
+    if state.list == WhichList::Conversations && state.form.is_none() && state.confirm.is_none() {
+        draw_conversations(buffer, area, state, focused);
         return;
     }
     if state.form.is_some() {
@@ -775,6 +917,7 @@ enum Edit {
 
 const MAKE_FIELDS: [Field; 2] = [Field::Name, Field::Purpose];
 const EDIT_FIELDS: [Field; 3] = [Field::Name, Field::Purpose, Field::Model];
+const EDIT_WITHOUT_MODEL: [Field; 2] = [Field::Name, Field::Purpose];
 
 impl Form {
     fn make() -> Self {
@@ -788,16 +931,32 @@ impl Form {
         }
     }
 
-    fn for_a_row(slug: String, name: String, purpose: String, model: String) -> Self {
+    fn for_a_row(
+        slug: String,
+        name: String,
+        purpose: String,
+        model: String,
+        show_model: bool,
+    ) -> Self {
         let cursor = name.len();
         Self {
-            kind: FormKind::Edit { slug },
+            kind: FormKind::Edit { slug, show_model },
             name,
             purpose,
             model,
             active: Field::Name,
             cursor,
         }
+    }
+
+    fn shows_model(&self) -> bool {
+        matches!(
+            self.kind,
+            FormKind::Edit {
+                show_model: true,
+                ..
+            }
+        )
     }
 
     fn holds_text(&self) -> bool {
@@ -807,6 +966,9 @@ impl Form {
     fn fields(&self) -> &'static [Field] {
         match self.kind {
             FormKind::Make => &MAKE_FIELDS,
+            FormKind::Edit {
+                show_model: false, ..
+            } => &EDIT_WITHOUT_MODEL,
             FormKind::Edit { .. } => &EDIT_FIELDS,
         }
     }
@@ -1275,8 +1437,20 @@ pub fn claim(session: &mut Session, key: KeyEvent) -> Option<Action> {
     }
 
     session.offered_to_leave = false;
-    if session.bots_mut().press(key) == Pressed::ReturnToPrompt {
-        session.bots_mut().set_focus(Focus::Prompt);
+    let running = session
+        .bot_slug()
+        .filter(|_| session.a_turn_is_running())
+        .map(str::to_string);
+    session.bots_mut().set_turn_running_for(running);
+    match session.bots_mut().press(key) {
+        Pressed::ReturnToPrompt => session.bots_mut().set_focus(Focus::Prompt),
+        Pressed::Begin { slug, conversation } => session.request_bot(slug, conversation),
+        Pressed::Archived(slug) => {
+            if session.bot_slug() == Some(slug.as_str()) {
+                session.return_to_the_list();
+            }
+        }
+        Pressed::Handled => {}
     }
     Some(Action::Redraw)
 }

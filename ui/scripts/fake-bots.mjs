@@ -225,7 +225,10 @@ export function fakeBots(initial = []) {
             throw coded('bad_request', 'the conversation was not recorded: the session is not an identifier, or the directory is not an absolute path')
           }
           const known = held.conversations.some((each) => each.id === id && each.directory === directory)
-          return { bot: stampRow({ ...held, session: id, conversations: known ? held.conversations : [...held.conversations, { id, directory }] }), wrote: true }
+          const prompt = params.prompt
+          const numbered = typeof prompt === 'number' && Number.isInteger(prompt) && prompt >= 0 && prompt <= Number.MAX_SAFE_INTEGER
+          const lastHome = numbered && directory === held.home ? { id, prompt } : held.lastHome ?? null
+          return { bot: stampRow({ ...held, session: id, conversations: known ? held.conversations : [...held.conversations, { id, directory }], lastHome }), wrote: true }
         }
         if (method === 'bot.record_archived') {
           const archived = params.archived

@@ -8,6 +8,7 @@ pub(super) enum Screen {
     Bots {
         left: Option<Resumable>,
         carrying: Option<Box<Carrying>>,
+        notice: Option<String>,
     },
 }
 
@@ -20,6 +21,7 @@ pub(super) enum Phase {
     NoSession(Screen),
     Session {
         start: Start,
+        layout: Layout,
         carrying: Option<Box<Carrying>>,
     },
     Over(io::Result<Ended>),
@@ -33,6 +35,7 @@ impl Phase {
             Start::Layout(Layout::Bots) => Self::NoSession(Screen::Bots {
                 left: None,
                 carrying: None,
+                notice: None,
             }),
             Start::Layout(Layout::Default) => Self::beginning_unless_a_manifest_run(Start::Fresh),
             chosen => Self::beginning_unless_a_manifest_run(chosen),
@@ -43,6 +46,7 @@ impl Phase {
         match (ended, switch) {
             (Ok(_), Some(next)) => Self::Session {
                 start: Start::Resuming(next.record),
+                layout: Layout::Default,
                 carrying: Some(Box::new(Carrying {
                     workspace: next.workspace,
                     sandbox: next.sandbox,
@@ -57,11 +61,18 @@ impl Phase {
             bots_screen::Exit::Quit => Self::Over(Ok(Ended::Left(left))),
             bots_screen::Exit::Layout(Layout::Default) => Self::Session {
                 start: Start::Fresh,
+                layout: Layout::Default,
+                carrying: None,
+            },
+            bots_screen::Exit::Bot { slug, conversation } => Self::Session {
+                start: Start::Bot { slug, conversation },
+                layout: Layout::Bots,
                 carrying: None,
             },
             bots_screen::Exit::Layout(Layout::Bots) => Self::NoSession(Screen::Bots {
                 left,
                 carrying: None,
+                notice: None,
             }),
             bots_screen::Exit::Failed(failure) => Self::Over(Err(failure)),
         }
@@ -76,11 +87,14 @@ impl Phase {
             sandbox: change.sandbox,
         }));
         match (ended, change.layout) {
-            (Ok(Ended::Left(left)), Layout::Bots) => {
-                Self::NoSession(Screen::Bots { left, carrying })
-            }
+            (Ok(Ended::Left(left)), Layout::Bots) => Self::NoSession(Screen::Bots {
+                left,
+                carrying,
+                notice: None,
+            }),
             (Ok(Ended::Left(_)), Layout::Default) => Self::Session {
                 start: Start::Fresh,
+                layout: Layout::Default,
                 carrying,
             },
             (ended, _) => Self::Over(ended),
@@ -96,6 +110,7 @@ impl Phase {
             }
             start => Self::Session {
                 start,
+                layout: Layout::Default,
                 carrying: None,
             },
         }
@@ -138,6 +153,7 @@ mod tests {
             phase,
             Phase::Session {
                 start: Start::Fresh,
+                layout: Layout::Default,
                 carrying: None
             }
         )
@@ -153,6 +169,7 @@ mod tests {
             Phase::starting_with(Start::Choose),
             Phase::Session {
                 start: Start::Choose,
+                layout: Layout::Default,
                 carrying: None
             }
         ));
@@ -160,6 +177,7 @@ mod tests {
             Phase::starting_with(Start::ChooseFromPr("12".into())),
             Phase::Session {
                 start: Start::ChooseFromPr(from_pr),
+                layout: Layout::Default,
                 carrying: None
             } if from_pr == "12"
         ));
@@ -168,6 +186,7 @@ mod tests {
             Phase::starting_with(Start::Sending("hello".into(), AskedFor::default())),
             Phase::Session {
                 start: Start::Sending(..),
+                layout: Layout::Default,
                 carrying: None
             }
         ));

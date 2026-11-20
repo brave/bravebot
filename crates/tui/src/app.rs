@@ -87,6 +87,8 @@ use records::*;
 
 mod bots_screen;
 
+mod bot;
+
 mod phase;
 use phase::{Phase, Screen};
 
@@ -1973,6 +1975,11 @@ pub enum Start {
     /// A new session with the Sessions screen open over it, to pick one up (`--resume`).
     Choose,
     Layout(crate::layout::Layout),
+    /// A session started as the bot `slug`, continuing `conversation` when one was chosen.
+    Bot {
+        slug: String,
+        conversation: Option<String>,
+    },
     /// The same, opened for the sessions linked to one pull request, given by number or address.
     ChooseFromPr(String),
     /// A session read back off disk, continuing where it left off.
@@ -1984,6 +1991,9 @@ pub enum Start {
 pub enum Ended {
     /// The person left, with the session left behind where there is one to pick up again.
     Left(Option<bravebot_session::sessions::Resumable>),
+    /// A bot's startup question was left, the open bot was archived, or the bot could not be
+    /// opened. The bots list is shown again. `notice` is a line under that list.
+    ToTheList { notice: Option<String> },
     /// The person handed the session to a background process (BG-2). Its record is written, and
     /// the caller starts the process in `mode` once the terminal is handed back.
     Background {
@@ -2046,6 +2056,7 @@ struct Startup {
     /// Whether the command line asked for auto with `--auto` (AUTO-1).
     asked_for_auto: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
+    confirmed_cd: std::rc::Rc<std::cell::RefCell<Vec<std::path::PathBuf>>>,
 }
 
 struct LayoutChange {
@@ -2116,7 +2127,7 @@ pub fn run(
     let mut named = agent;
     // Likewise: a link the command line gave belongs to the session it opened.
     let mut links = links;
-    let layout = crate::layout::Layout::default();
+    let confirmed_cd = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
     // `--resume` and `--from-pr` begin a session. The Sessions screen opens over it once it has
     // begun, so leaving the screen is that session rather than nothing. A manifest record begins
@@ -2124,7 +2135,11 @@ pub fn run(
     let mut phase = Phase::starting_with(start);
     let result = loop {
         phase = match phase {
-            Phase::NoSession(Screen::Bots { left, carrying }) => {
+            Phase::NoSession(Screen::Bots {
+                left,
+                carrying,
+                notice,
+            }) => {
                 if let Some(carried) = carrying {
                     workspace = carried.workspace;
                     sandbox = carried.sandbox;
@@ -2134,16 +2149,32 @@ pub fn run(
                     confinement.clone(),
                     sockets_with_a_path_reachable,
                     sandbox.clone(),
+                    notice,
                 );
-                Phase::after_the_bots_screen(exit, left)
+                match exit {
+                    bots_screen::Exit::Bot { slug, conversation } => Phase::Session {
+                        start: Start::Bot { slug, conversation },
+                        layout: crate::layout::Layout::Bots,
+                        carrying: Some(Box::new(phase::Carrying {
+                            workspace: workspace.clone(),
+                            sandbox: sandbox.clone(),
+                        })),
+                    },
+                    other => Phase::after_the_bots_screen(other, left),
+                }
             }
-            Phase::Session { start, carrying } => {
+            Phase::Session {
+                start,
+                layout,
+                carrying,
+            } => {
                 if let Some(carried) = carrying {
                     workspace = carried.workspace;
                     sandbox = carried.sandbox;
                 }
                 let mut switch = None;
                 let mut layout_change = None;
+                let mut departure = None;
                 let ended = event_loop(
                     &mut terminal,
                     config,
@@ -2160,14 +2191,54 @@ pub fn run(
                         skip_permissions,
                         asked_for_auto,
                         prompts: prompts.clone(),
+                        confirmed_cd: std::rc::Rc::clone(&confirmed_cd),
                     },
                     moments,
                     &mut switch,
                     &mut layout_change,
+                    &mut departure,
                 );
-                match layout_change {
-                    Some(change) => Phase::after_a_session_chose_a_layout(ended, change),
-                    None => Phase::after_a_session(ended, switch),
+                if let Some(left) = departure {
+                    match left {
+                        bot::Departure::Bot {
+                            slug,
+                            conversation,
+                            workspace: next_workspace,
+                            sandbox: next_sandbox,
+                        } => {
+                            workspace = next_workspace;
+                            sandbox = next_sandbox;
+                            Phase::Session {
+                                start: Start::Bot { slug, conversation },
+                                layout: crate::layout::Layout::Bots,
+                                carrying: Some(Box::new(phase::Carrying {
+                                    workspace: workspace.clone(),
+                                    sandbox: sandbox.clone(),
+                                })),
+                            }
+                        }
+                        bot::Departure::List {
+                            workspace: next_workspace,
+                            sandbox: next_sandbox,
+                            notice,
+                        } => {
+                            workspace = next_workspace;
+                            sandbox = next_sandbox;
+                            Phase::NoSession(Screen::Bots {
+                                left: None,
+                                carrying: Some(Box::new(phase::Carrying {
+                                    workspace: workspace.clone(),
+                                    sandbox: sandbox.clone(),
+                                })),
+                                notice,
+                            })
+                        }
+                    }
+                } else {
+                    match layout_change {
+                        Some(change) => Phase::after_a_session_chose_a_layout(ended, change),
+                        None => Phase::after_a_session(ended, switch),
+                    }
                 }
             }
             Phase::Over(ended) => break ended,
@@ -2319,6 +2390,9 @@ fn handed_to_the_background(
             mode = session.sandbox_mode().name(),
             settled = settled.name()
         ));
+    }
+    if session.bot_slug().is_some() {
+        return Err(t!(bots_bg_refused).to_string());
     }
     if session.looping().is_some() || session.goal().is_some() || !session.watches().is_empty() {
         return Err(t!(session_bg_keeps_nothing_running).to_string());
@@ -2739,6 +2813,7 @@ struct SessionBasis {
     /// `permissions.startInAuto` (LINK-2).
     from_link: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
+    confirmed_cd: std::rc::Rc<std::cell::RefCell<Vec<std::path::PathBuf>>>,
 }
 
 /// Settle the mode a new session opens in and where the key can reach from there (MODE-1, MODE-5,
@@ -2797,6 +2872,7 @@ fn new_session(
         asked_for_auto,
         from_link,
         prompts,
+        confirmed_cd,
     } = basis;
     // The one place persistence is turned on: history in ~/.bravebot outlives the session.
     let mut session = Session::new(confinement)
@@ -2831,6 +2907,7 @@ fn new_session(
     // Before the first turn, and kept until the session ends: a resumed record stores none, so
     // these are the words of the turns this process sends (CLI-19).
     session = session.with_system_prompts(prompts);
+    session.use_confirmed_directories(confirmed_cd);
 
     // The model outlived the session that chose it, so the window that came with it has to be asked
     // for again: it is reported by the listing and nowhere else, and nothing on disk remembers it.
@@ -2970,13 +3047,34 @@ fn begin_session(
         sockets_with_a_path_reachable,
         sandbox,
         layout,
-        start,
+        mut start,
         named,
         links,
         skip_permissions,
         asked_for_auto,
         prompts,
+        confirmed_cd,
     } = startup;
+    // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
+    // the turns after it must see one. The primary root never changes, so nothing keyed on it
+    // (the session record, where AGENTS.md is looked for) moves underneath.
+    let mut workspace = workspace.clone();
+    let mut opened_bot = None;
+    if let Start::Bot { slug, conversation } = std::mem::replace(&mut start, Start::Fresh) {
+        let mut opened = match bot::open(&mut workspace, &slug, conversation.as_deref()) {
+            Ok(opened) => opened,
+            Err(notice) => {
+                return Err(Ended::ToTheList {
+                    notice: Some(notice),
+                });
+            }
+        };
+        start = match opened.resume.take() {
+            Some(record) => Start::Resuming(record),
+            None => Start::Fresh,
+        };
+        opened_bot = Some(opened);
+    }
     let basis = SessionBasis {
         confinement,
         sockets_with_a_path_reachable,
@@ -2986,11 +3084,8 @@ fn begin_session(
         asked_for_auto,
         from_link: matches!(start, Start::Prefilling(..)),
         prompts,
+        confirmed_cd,
     };
-    // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
-    // the turns after it must see one. The primary root never changes, so nothing keyed on it
-    // (the session record, where AGENTS.md is looked for) moves underneath.
-    let mut workspace = workspace.clone();
 
     // The rules the user wrote in advance, read once for the workspace: a person editing the file
     // mid-session is describing the next one, and rules that changed halfway through a turn would
@@ -3008,13 +3103,28 @@ fn begin_session(
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
     let mut session = new_session(config, &settings, &workspace, &asked, mcp_servers, basis);
+    if let Some(opened) = &opened_bot {
+        session.as_bot(opened.slug.clone());
+        if let Some(before) = opened.before_move.clone() {
+            session.remember_workspace_before_the_bot(before);
+        }
+        if opened.moved {
+            session.note(t!(bots_working_in, directory = opened.folder.as_str()));
+        }
+    }
     // The same answer decides whether a chord on Escape can arrive at all, and the session is given
     // it here because the chords are read further down, out of the settings (INPUT-32).
     session.adopt_keys_disambiguated(session.ctrl_enter_arrives);
 
     // What the session begins holding, which is what decides whether the startup question is put
     // to its user at all. Read off `start` before the match below consumes it.
-    let beginning = beginning_of(&start, workspace.root());
+    let beginning = match &opened_bot {
+        Some(opened) => match &opened.map {
+            Some(map) => Beginning::Resumed(Some(map.clone())),
+            None => Beginning::New,
+        },
+        None => beginning_of(&start, workspace.root()),
+    };
     // Read off `start` for the same reason, and matched only after the question below is answered,
     // because the set includes the checkout's definitions only when the person vouched for them.
     // The name the record carries is the person's own earlier `--agent`; `named` is the one typed
@@ -3037,7 +3147,8 @@ fn begin_session(
         | Start::Prefilling(..)
         | Start::Choose
         | Start::ChooseFromPr(_)
-        | Start::Layout(_) => (
+        | Start::Layout(_)
+        | Start::Bot { .. } => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -3064,6 +3175,9 @@ fn begin_session(
         beginning,
         stored.id(),
     ) else {
+        if opened_bot.is_some() {
+            return Err(Ended::ToTheList { notice: None });
+        }
         return Err(left_behind(&stored));
     };
 
@@ -3144,7 +3258,39 @@ fn begin_session(
     // Matched after every startup question, because the set holds the checkout's definitions only
     // when the answer vouched for them. A name matching nothing starts no session, because a
     // planner's session in its place would look the same on screen and have more tools (CLI-17).
-    if let Err(refused) = settle_under(
+    if let Some(opened) = opened_bot.as_mut() {
+        if opened.needs_migration {
+            match bot::migrate_now(&opened.slug) {
+                Ok(definition) => opened.definition = definition,
+                Err(notice) => {
+                    return Err(Ended::ToTheList {
+                        notice: Some(notice),
+                    });
+                }
+            }
+        }
+        stored.set_agent(None);
+        match &opened.definition {
+            Some(name) => {
+                if let Err(why) = bot::address_the_row(
+                    &mut session,
+                    config,
+                    &workspace,
+                    &answers.trust,
+                    &answers.rules.permissions,
+                    name,
+                ) {
+                    session.note(why);
+                }
+            }
+            None => {
+                session.note(t!(
+                    bots_definition_missing,
+                    definition = opened.slug.as_str()
+                ));
+            }
+        }
+    } else if let Err(refused) = settle_under(
         &mut session,
         config,
         &workspace,
@@ -3222,8 +3368,11 @@ fn event_loop(
     moments: &mut bravebot_agent::hooks::SessionMoments,
     switch: &mut Option<Switch>,
     layout_change: &mut Option<LayoutChange>,
+    departure: &mut Option<bot::Departure>,
 ) -> io::Result<Ended> {
     let skip_permissions = startup.skip_permissions;
+    let startup_sandbox = startup.sandbox.clone();
+    let list_workspace = workspace.clone();
     let Begun {
         mut workspace,
         settings,
@@ -3235,6 +3384,14 @@ fn event_loop(
         mut answers,
     } = match begin_session(terminal, config, workspace, servers, startup) {
         Ok(begun) => begun,
+        Err(Ended::ToTheList { notice }) => {
+            *departure = Some(bot::Departure::List {
+                workspace: list_workspace,
+                sandbox: startup_sandbox,
+                notice,
+            });
+            return Ok(Ended::ToTheList { notice: None });
+        }
         Err(ended) => return Ok(ended),
     };
 
@@ -3315,6 +3472,23 @@ fn event_loop(
         else {
             continue;
         };
+        if let Some(open) = session.take_bot_open() {
+            *departure = Some(bot::Departure::Bot {
+                slug: open.slug,
+                conversation: open.conversation,
+                workspace: session.workspace_to_leave_with(workspace.clone()),
+                sandbox: session.sandbox().clone(),
+            });
+            return Ok(left_behind(&stored));
+        }
+        if session.take_return_to_the_list() {
+            *departure = Some(bot::Departure::List {
+                workspace: session.workspace_to_leave_with(workspace.clone()),
+                sandbox: session.sandbox().clone(),
+                notice: None,
+            });
+            return Ok(Ended::ToTheList { notice: None });
+        }
 
         needs_draw |= !matches!(action, Action::None);
 

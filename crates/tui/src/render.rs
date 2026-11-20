@@ -1013,9 +1013,15 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .saturating_sub(status_height)
         .saturating_sub(input_height + 1)
         .saturating_sub(1);
-    let beneath = lines_beneath_the_box(session, width, &offered);
-    let (beneath, offered_first) =
-        fit_to_room(session, width, &offered, beneath, usize::from(room));
+    let beneath = lines_beneath_the_box(session, width, &offered, frame.area().width);
+    let (beneath, offered_first) = fit_to_room(
+        session,
+        width,
+        frame.area().width,
+        &offered,
+        beneath,
+        usize::from(room),
+    );
     let offered_height = (beneath.len() as u16).min(room);
 
     // Thumbnails of the pictures the line carries, between the box and the rows that describe
@@ -1062,8 +1068,13 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     laid.targets.extend(draw_input(frame, areas[2], session));
     draw_previews(frame, areas[3], &thumbs);
     frame.render_widget(Paragraph::new(beneath), areas[4]);
-    laid.targets
-        .extend(queued_prompts(session, width, offered_height, areas[4]));
+    laid.targets.extend(queued_prompts(
+        session,
+        width,
+        frame.area().width,
+        offered_height,
+        areas[4],
+    ));
     // Where the frame drew the button that returns to the tail it took a row from the transcript, which
     // is a row more below the view than the session counted before the frame, so the line says the
     // count the button does and the two never differ (VIEW-27, VIEW-45).
@@ -1080,6 +1091,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     laid.targets.extend(offered_picks(
         session,
         width,
+        frame.area().width,
         &offered,
         offered_first,
         areas[4],
@@ -1116,10 +1128,11 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 fn queued_prompts(
     session: &Session,
     width: u16,
+    columns: u16,
     offered_height: u16,
     area: Rect,
 ) -> Vec<crate::state::Target> {
-    let Some(first) = first_waiting_row(session, width) else {
+    let Some(first) = first_waiting_row(session, width, columns) else {
         return Vec::new();
     };
     let mut recorded = Vec::new();
@@ -1168,7 +1181,7 @@ fn draw_without_a_session(frame: &mut Frame, session: &Session) -> Laid {
     let input_height = input_height(session, body.width, body.height);
     let offered = session.offered();
     let room = body.height.saturating_sub(input_height + 1);
-    let beneath = lines_beneath_the_box(session, body.width, &offered);
+    let beneath = lines_beneath_the_box(session, body.width, &offered, columns);
     let offered_height = u16::try_from(beneath.len()).unwrap_or(room).min(room);
     let [list, input, offered_area] = Layout::default()
         .direction(Direction::Vertical)
@@ -8601,7 +8614,7 @@ mod tests {
         });
 
         let width = 120;
-        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered(), width)
             .iter()
             .map(|line| {
                 line.spans
@@ -8647,7 +8660,7 @@ mod tests {
             }]
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered(), 120)
             .iter()
             .map(|line| {
                 line.spans
@@ -8676,7 +8689,7 @@ mod tests {
     #[test]
     fn a_servers_prompt_row_names_its_server_and_what_it_takes() {
         let session = typed_with_prompts("/mcp__w");
-        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered(), 100)
             .iter()
             .map(|line| {
                 line.spans
@@ -8751,7 +8764,7 @@ mod tests {
                 .to_vec()
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered(), 120)
             .iter()
             .map(|line| {
                 line.spans

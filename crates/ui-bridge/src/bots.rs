@@ -115,12 +115,24 @@ pub fn delete(request: &Request) -> Result<Value, Failure> {
     }
 }
 
+fn numbered_prompt(value: Option<&Value>) -> Option<u64> {
+    let value = value.filter(|value| !value.is_null())?;
+    let number = value.as_u64().or_else(|| {
+        value.as_f64().and_then(|number| {
+            (number.fract() == 0.0 && number >= 0.0 && number <= u64::MAX as f64)
+                .then_some(number as u64)
+        })
+    })?;
+    Some(number)
+}
+
 pub fn record_conversation(request: &Request) -> Result<Value, Failure> {
     let data_folder = data_folder(request)?;
     let slug = request.string("slug")?;
     let id = request.string("id")?;
     let directory = request.string("directory")?;
-    match bots::record_conversation(&data_folder, &slug, &id, &directory) {
+    let prompt = numbered_prompt(request.params.get("prompt"));
+    match bots::record_conversation(&data_folder, &slug, &id, &directory, prompt) {
         Ok(noted) => Ok(noted_answer(&noted)),
         Err(refused) => Err(failure(&refused)),
     }

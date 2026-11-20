@@ -7,9 +7,10 @@ evidence, and this file is updated when a change materially moves the status bel
 
 ### Status
 
-The design is merged. Slice 1 is merged. Slices 2a through 6 are on `bots/slices-2a-to-5`, in
+The design is merged. Slice 1 is merged. Slices 2a through 7 are on `bots/slices-2a-to-5`, in
 https://github.com/brave/bravebot/pull/4410. The stacked pull requests for slices 2a through 5 are
-closed. Slices 7 to 11 are not on this branch. The design is
+closed. Slices 8 to 11 are not built.
+The design is
 [design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
 which is `proposed`. The clauses and the slices below agree with the design.
 
@@ -405,6 +406,44 @@ The desktop was not launched. These cases were not run there: a turn of a bot sh
 a legacy bot's first turn migrated and answered on a live model. The automated tests pin the source
 of `sendBotTurn` and the migration. The source check does not call `sendBotTurn`.
 
+Slice 7 is built on `a32ceda06b57adc89a692b038f88bfaaceaa8ae3`. Enter on a bot begins
+`Start::Bot` in `Phase::Session` with the bots layout. The session holds the slug. Every turn is
+addressed by `address_the_row`, which calls `Session::work_under` and does not call
+`Handle::set_agent`. Reusing the `--agent` path was rejected because that writes the definition
+into the record. A typed `/cd` that the agent confirms is remembered for the run and passed to
+`works_in`. `record_conversation` takes an optional prompt ordinal and sets `lastHome` only when
+the directory is the home. The desktop's `noteBotSession` passes that ordinal and no longer writes
+`lastHome` through `bot.replace`. `bot.replace` stays.
+
+The layout lists the selected bot's conversations and continues one. Below 100 columns a session
+draws the chat and the line about width, and no panes. The edit form omits the model field while
+that bot's turn runs. Delete is refused while that turn runs. Archiving the open bot returns to
+the list. `/bg` is refused. A cleared bot session writes no definition name. A folder that holds
+the home directory, and the home directory opened beside the session, blocks the turn. The home
+directory itself does not. A home whose spelling is not the canonical root is still the spelling
+`works_in` sees and the spelling a finished turn records, when that spelling is the same directory
+and has no trailing slash or dot segment. A workspace root that is a `\\?\` drive path is given
+and remembered in the ordinary spelling, because that prefix is not an absolute path to the module.
+A `\\?\UNC` path, and a drive path too long for the ordinary spelling, are not rewritten.
+A failed open returns to the list with the refusal, and the process stays up. `migrate` runs after
+the startup question is accepted. `ensure_home` still runs before that question, because the session
+has to move into a directory. `Handle::begin` writes no record. The prompt ordinal is the last
+recounted user message whose text is the prompt that was sent. A definition model replaces the session model, and is put back once when the definition no longer
+names one. A definition that names no model leaves a later `/model` pick in place. The budget is
+asked when the session model changes. A refused turn leaves the standing
+definition in place. Leaving the session puts back the workspace from before the move into the bot's
+folder, unless a typed `/cd` confirmed the current root.
+
+These cases were not run. A live model did not answer under the definition. A conversation was not
+opened in the desktop after the terminal, or the other way. A model set in the form was not shown
+in the desktop's picker. A legacy bot's first turn was not run on a live model in either program.
+`/cd` was not typed in a real terminal. The startup question was not left or answered in a real
+terminal. The width line was drawn by the test backend, not by a terminal emulator. Incognito was
+not engaged in the shared test process, because that flag is one-way for the process. The refusal
+is the Enter path and `bot::open`. A successful archive was not run against a bots file. The close
+is what the key does after `archive` returns. Windows was not run. The `\\?\` case is the string
+`without_verbatim_prefix` returns and the module's rejection of that prefix.
+
 The order of the remaining work:
 
 1. Review the design against the overriding rule of `.claude/CLAUDE.md`, using
@@ -705,7 +744,8 @@ for bots, so each terminal function is in the bots layout.
    with the code, since a live turn no longer reaches it. Three checks of `drive-bot-turn.mjs` fail in a live
    run today, and `drive-bot-memory.mjs` stops at its first check of the briefing file, so its later checks
    do not run.
-7. **The terminal talks to a bot.**
+7. **The terminal talks to a bot.** Built. The Status above describes it. The parent commit is
+   `a32ceda06b57adc89a692b038f88bfaaceaa8ae3`.
    - Enter on a bot in slice 2b's pane says that starting a session as a bot comes in a later release,
      and begins none (`bots-pick-later` in `en-US.ftl`). Replace that line with the session this slice
      begins, and give `Phase::Session` the bots layout, which slice 2b leaves as the default.

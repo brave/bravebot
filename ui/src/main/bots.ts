@@ -127,13 +127,11 @@ export async function worksIn(held: Bot, directory: string | undefined): Promise
  * Record a durable conversation and the folder it ran in, without discarding any earlier ones.
  *
  * A turn that ended in the home folder at a prompt the agent numbered also moves `lastHome` there,
- * which is where a summon elsewhere places its card (MEMORY-14). The module records the conversation.
- * `lastHome` is not one of its fields yet, so that one write still replaces the row.
+ * which is where a summon elsewhere places its card (MEMORY-14). The module records both.
  */
 export async function noteBotSession(slug: string, id: string, directory: string, prompt?: number): Promise<void> {
-  await writeThroughBridge(() => ({ method: 'bot.record_conversation', params: { slug, id, directory } }))
-  if (typeof prompt !== 'number' || !Number.isInteger(prompt) || prompt < 0) return
-  await changeBot(slug, (held) => (directory === held.home ? { ...held, lastHome: { id, prompt } } : null))
+  const numbered = typeof prompt === 'number' && Number.isInteger(prompt) && prompt >= 0 ? prompt : null
+  await writeThroughBridge(() => ({ method: 'bot.record_conversation', params: { slug, id, directory, prompt: numbered } }))
 }
 
 /** Note how much compaction has taken out of a bot's session. The module raises the stored length only when the new figure is greater. */
@@ -195,15 +193,6 @@ export async function removeBot(slug: unknown, turnInProgress: boolean): Promise
     return { method: 'bot.delete', params: { slug: held.slug } }
   })
   return removed === null ? null : slug
-}
-
-async function changeBot(slug: string, change: (held: Bot) => Bot | null): Promise<Bot | null> {
-  const written = await updateBots((all) => {
-    const held = botOf(all, slug)
-    const next = held && change(held)
-    return next ? withBot(all, { ...next, updated: Date.now() }) : null
-  })
-  return written.find((each) => each.slug === slug) ?? null
 }
 
 /**

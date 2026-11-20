@@ -13,6 +13,10 @@ use std::io;
 pub(super) enum Exit {
     Quit,
     Layout(Layout),
+    Bot {
+        slug: String,
+        conversation: Option<String>,
+    },
     Failed(io::Error),
 }
 
@@ -70,6 +74,7 @@ pub(super) fn run(
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
+    notice: Option<String>,
 ) -> Exit {
     let columns = terminal.size().map_or(0, |size| size.width);
     let mut session = opened(
@@ -79,6 +84,9 @@ pub(super) fn run(
         State::read(),
         columns,
     );
+    if let Some(notice) = notice {
+        session.bots_mut().say(notice);
+    }
     match drive(terminal, &mut session) {
         Ok(exit) => exit,
         Err(failure) => Exit::Failed(failure),
@@ -110,6 +118,12 @@ fn drive(
             None
         };
         owed = owes_a_frame(taken.as_ref());
+        if let Some(open) = session.take_bot_open() {
+            return Ok(Exit::Bot {
+                slug: open.slug,
+                conversation: open.conversation,
+            });
+        }
         match taken {
             None => {}
             Some(Step::Quit) => return Ok(Exit::Quit),

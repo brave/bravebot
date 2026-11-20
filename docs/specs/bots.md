@@ -10,6 +10,7 @@ governs:
   - crates/cli/src/flags.rs
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/bot.rs
   - crates/tui/src/app/bots_screen.rs
   - crates/tui/src/app/phase.rs
   - crates/tui/src/bots_pane.rs
@@ -49,8 +50,9 @@ edit, set the model and home folder operations with the bridge methods the GUI c
 (slice 3a), and archive, restore and delete with the bridge methods the GUI calls them through
 (slice 3b), and the operations that record a conversation, an archive length, a released session
 and a forgotten conversation, with the bridge methods the GUI calls them through (slice 3c). The
-terminal does not record a turn, does not continue a conversation from the layout, and has no
-delete of a conversation. Still not built are a session as a bot, the forms and the memory. The reasoning and the trust analysis are in
+terminal begins a session as a bot, addresses it to the row, and records the conversation (slice 7).
+It has no delete of a conversation. Still not built are the memory view and the consolidation turns.
+The reasoning and the trust analysis are in
 [../design/bots-layer.md](../design/bots-layer.md). Where each clause is built, and in what order,
 is in [../PLAN.md](../PLAN.md).
 
@@ -657,7 +659,8 @@ already lets a bot take a project folder, and the terminal does the same.
 `verified-by: bravebot_agent::bots::operations::a_home_that_is_not_a_directory_is_refused`
 `verified-by: bravebot_agent::bots::operations::a_folder_whose_name_is_not_text_is_refused`
 `verified-by: bravebot_ui_bridge::bots::a_turn_folder_checked_through_the_bridge_allows_only_the_three`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-directory.test.mjs asserts that worksIn calls the bridge, that the home is allowed, a not-yet-chosen absolute path is refused, an undefined folder is refused, a folder chosen in this run is allowed and the one beside it is not, a recorded conversation folder is allowed after a fresh load, a cancelled picker leaves the path refused, an offered directory that mayOpenSessionIn accepts is refused, a path that differs by a trailing slash or a dot segment is refused, and a home that is not a directory is refused while another folder is not; ui/scripts/session-directory.test.mjs keeps its assertions on mayOpenSessionIn; make check-ui runs both. The terminal's check of a folder moved to with /cd is not built. The module refuses a folder whose name is not text with the same answer as a folder outside the three, and the bridge only receives text, so the GUI does not show a separate line for it. A turn in the home directory, in a folder that holds it, or with that directory opened beside the session, is not refused here. Slice 7 still has that refusal)`
+`verified-by: bravebot_tui::app::bot::a_folder_that_holds_the_home_blocks_the_definition_and_the_home_itself_does_not`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-directory.test.mjs asserts that worksIn calls the bridge, that the home is allowed, a not-yet-chosen absolute path is refused, an undefined folder is refused, a folder chosen in this run is allowed and the one beside it is not, a recorded conversation folder is allowed after a fresh load, a cancelled picker leaves the path refused, an offered directory that mayOpenSessionIn accepts is refused, a path that differs by a trailing slash or a dot segment is refused, and a home that is not a directory is refused while another folder is not; ui/scripts/session-directory.test.mjs keeps its assertions on mayOpenSessionIn; make check-ui runs both. The terminal passes the folders a typed /cd confirmed to works_in, and passes the row's own spelling of the current directory when that spelling is the same directory and has no trailing slash or dot segment, in crates/tui/src/app/bot.rs. A finished turn is recorded under that same spelling. A workspace root that is a \\?\ drive path is given and remembered without that prefix. A \\?\UNC path, and a drive path too long for the ordinary spelling, are not rewritten. The module refuses a folder whose name is not text with the same answer as a folder outside the three, and the bridge only receives text, so the GUI does not show a separate line for it. The terminal refuses a turn in a folder that holds the home directory, and a turn with that directory opened beside the session, and does not refuse a turn in the home directory itself)`
 
 <a id="BOT-10"></a>
 ### BOT-10: every turn of a bot's session in the terminal addresses the bot's definition
@@ -690,7 +693,9 @@ reach, wider than the bot's, on a turn the person did not type. A conversation c
 layout is not narrowed, as the GUI's is not, and the layout is where a person continues one as
 the bot.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::layout_tests::a_cleared_bot_session_records_no_definition`
+`verified-by: bravebot_tui::app::layout_tests::bg_is_refused_in_a_bots_session`
+`verified-by: bravebot_tui::app::layout_tests::enter_on_a_bot_asks_to_begin_its_session`
 
 <a id="BOT-11"></a>
 ### BOT-11: a conversation is recorded in the row, and either surface can continue it
@@ -740,7 +745,8 @@ lists to keep equal. A slug in the record is a product alternative this design l
 `verified-by: bravebot_agent::bots::operations::an_archive_length_only_rises`
 `verified-by: bravebot_agent::bots::operations::releasing_a_session_clears_it_and_keeps_the_conversation`
 `verified-by: bravebot_agent::bots::operations::forgetting_a_deleted_conversation_removes_it_from_every_row_that_lists_it`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a recorded conversation sets the session and is added once, that a second note of the same pair does not add it again, that an archive length only rises, that a release sets session to none and archived to zero and keeps the conversation, and that a forgotten conversation is removed from every row that lists it and releases a row whose session equals that id, with updated stamped on each write and the definition bytes unchanged; ui/scripts/bot-store.test.mjs asserts that a note which does not write the file leaves a failure already shown; make check-ui runs both. The terminal does not record a turn, does not continue a conversation from the layout, and has no delete of a conversation)`
+`verified-by: bravebot_agent::bots::operations::a_numbered_prompt_in_the_home_sets_last_home_and_any_other_turn_leaves_it`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-operations-bridge.test.mjs runs the real bravebot-rpc and asserts that a recorded conversation sets the session and is added once, that a second note of the same pair does not add it again, that an archive length only rises, that a release sets session to none and archived to zero and keeps the conversation, and that a forgotten conversation is removed from every row that lists it and releases a row whose session equals that id, with updated stamped on each write and the definition bytes unchanged; ui/scripts/bot-store.test.mjs asserts that a note which does not write the file leaves a failure already shown; make check-ui runs both. The terminal records a finished turn through record_conversation, passing the row's spelling of the current directory when that spelling is the same directory, and otherwise the workspace root in the ordinary spelling of a Windows drive path. It passes the ordinal of the last recounted user message whose text is the prompt that was sent, and only when the turn did not fail. A prompt that is not one of those messages passes no ordinal. It continues a conversation chosen in the layout. It has no delete of a conversation)`
 
 <a id="BOT-12"></a>
 ### BOT-12: a bot's session is refused with incognito
@@ -1059,8 +1065,8 @@ bot's session is addressed to the definition of its row and the flag would name 
 `verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_pane_is_dropped_when_the_pane_stops_being_drawn`
 `verified-by: bravebot_tui::app::layout_tests::the_arrows_and_j_and_k_move_through_the_list_and_stop_at_its_ends`
 `verified-by: bravebot_tui::app::layout_tests::the_marker_is_drawn_on_the_selected_bot`
-`verified-by: bravebot_tui::app::layout_tests::enter_on_a_bot_says_so_and_begins_no_session`
-`verified-by: bravebot_tui::app::layout_tests::tab_with_one_pane_drawn_moves_nothing`
+`verified-by: bravebot_tui::app::layout_tests::enter_on_a_bot_asks_to_begin_its_session`
+`verified-by: bravebot_tui::app::layout_tests::tab_moves_to_the_conversations_and_keeps_the_bot`
 `verified-by: bravebot_tui::app::layout_tests::escape_returns_focus_to_the_prompt`
 `verified-by: bravebot_tui::app::layout_tests::the_chord_moves_focus_both_ways_and_nothing_where_no_pane_is_drawn`
 `verified-by: bravebot_tui::app::layout_tests::narrowing_the_terminal_returns_focus_to_the_prompt`

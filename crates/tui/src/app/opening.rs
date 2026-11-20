@@ -270,7 +270,10 @@ pub(super) fn handle_after_clear(
         bravebot_session::sessions::Front::Terminal,
         bravebot_stamp::BUILD,
     );
-    handle.set_agent(session.standing_definition().map(|one| one.name.clone()));
+    handle.set_agent(match session.bot_slug() {
+        Some(_) => None,
+        None => session.standing_definition().map(|one| one.name.clone()),
+    });
     handle.set_skill_mode(session.skill_mode().map(str::to_string));
     handle
 }
@@ -388,7 +391,8 @@ pub(super) fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
         | Start::Prefilling(..)
         | Start::Choose
         | Start::ChooseFromPr(_)
-        | Start::Layout(_) => Beginning::New,
+        | Start::Layout(_)
+        | Start::Bot { .. } => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),

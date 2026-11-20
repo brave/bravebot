@@ -594,7 +594,7 @@ mod keys {
     }
 
     #[test]
-    fn enter_on_a_bot_says_so_and_begins_no_session() {
+    fn enter_on_a_bot_asks_to_begin_its_session() {
         let mut session = in_the_panes();
         handle_key(&mut session, key(KeyCode::Down));
 
@@ -603,21 +603,83 @@ mod keys {
             Action::Redraw
         );
 
-        assert_eq!(
-            session.bots().message(),
-            Some("Starting a session as a bot arrives in a later release.")
-        );
+        let open = session.take_bot_open().expect("Enter begins the bot");
+        assert_eq!(open.slug, "alpha");
+        assert_eq!(open.conversation, None);
+        assert_eq!(session.bots().message(), None);
         assert!(!session.bots().form_open(), "Enter opened a form");
-        assert_eq!(selected(&session), 1);
+    }
+
+    #[test]
+    fn a_narrow_session_draws_the_chat_and_the_line_about_width() {
+        let mut session = in_a_session(three_bots(), 80);
+        session
+            .transcript
+            .push(crate::state::Entry::user("CHATMARK"));
+        let buffer = drawn(&mut session, 80, 30);
+        let text = screen_text(&buffer);
+        assert!(text.contains("CHATMARK"), "{text}");
+        assert!(text.contains(&bots_pane::line_about_width()), "{text}");
+        assert!(the_laid_pane(&session, Pane::Bots).is_none());
+    }
+
+    #[test]
+    fn tab_moves_to_the_conversations_and_keeps_the_bot() {
+        let mut session = in_the_panes();
+        handle_key(&mut session, key(KeyCode::Tab));
+        assert!(session.bots().list_is_conversations());
+        assert_eq!(selected(&session), 0);
         assert!(session.panes_have_the_keys());
-        let buffer = drawn(&mut session, 120, 30);
-        assert!(screen_text(&buffer).contains("Starting a session as a bot"));
-        handle_key(&mut session, key(KeyCode::Down));
+    }
+
+    #[test]
+    fn the_model_field_is_absent_and_delete_is_refused_while_the_bots_turn_runs() {
+        let mut archived = row("zeta", "Zeta", "answers questions", "seed-zeta");
+        archived.retired = 1.0;
+        let mut session = in_a_session(vec![archived], 120);
+        session.as_bot("zeta".to_string());
+        session.pretend_a_turn_is_running();
+        session.bots_mut().set_focus(crate::bots_pane::Focus::Panes);
+        handle_key(&mut session, key(KeyCode::Char('e')));
+        assert!(session.bots().form_open());
+        assert_eq!(session.bots().form_model(), None);
+        handle_key(&mut session, key(KeyCode::Esc));
+        handle_key(&mut session, key(KeyCode::Char('d')));
+        assert!(!session.bots().confirmation_open());
         assert_eq!(
             session.bots().message(),
-            None,
-            "the message outlived the next key"
+            Some("Delete is refused while a turn of this bot is in progress.")
         );
+    }
+
+    #[test]
+    fn a_cleared_bot_session_records_no_definition() {
+        let root = crate::testutil::scratch_dir("bot-clear-record");
+        std::fs::create_dir_all(&root).expect("a directory");
+        let mut session = Session::new("none");
+        session.as_bot("zeta".to_string());
+        session.work_under(crate::state::Addressed {
+            name: "zeta".to_string(),
+            model: None,
+        });
+        let handle = super::opening::handle_after_clear(&root, &session);
+        assert_eq!(handle.agent(), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bg_is_refused_in_a_bots_session() {
+        let mut session = Session::new("none");
+        session.as_bot("zeta".to_string());
+        let refused = super::handed_to_the_background(
+            &session,
+            None,
+            None,
+            bravebot_sandbox::SandboxMode::Off,
+            false,
+        )
+        .expect_err("a bot session is not handed over");
+        assert!(refused.contains("/bg"), "{refused}");
     }
 
     #[test]
@@ -627,6 +689,10 @@ mod keys {
         assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
         assert!(session.panes_have_the_keys());
         assert_eq!(selected(&session), 1);
+        assert!(
+            session.bots().list_is_conversations(),
+            "Tab left the bot list in place"
+        );
     }
 
     /// BOT-17.
@@ -2365,7 +2431,7 @@ mod phases {
 
     fn bots_screen_of(phase: &Phase) -> Option<(Option<&Resumable>, bool)> {
         match phase {
-            Phase::NoSession(Screen::Bots { left, carrying }) => {
+            Phase::NoSession(Screen::Bots { left, carrying, .. }) => {
                 Some((left.as_ref(), carrying.is_some()))
             }
             _ => None,
@@ -2382,6 +2448,7 @@ mod phases {
             Phase::starting_with(Start::Layout(Layout::Default)),
             Phase::Session {
                 start: Start::Fresh,
+                layout: Layout::Default,
                 carrying: None
             }
         ));
@@ -2398,6 +2465,7 @@ mod phases {
         let Phase::NoSession(Screen::Bots {
             left: Some(left),
             carrying: Some(carrying),
+            ..
         }) = phase
         else {
             panic!("no screen with no session");
@@ -2430,6 +2498,7 @@ mod phases {
             ),
             Phase::Session {
                 start: Start::Fresh,
+                layout: Layout::Default,
                 carrying: None
             }
         ));

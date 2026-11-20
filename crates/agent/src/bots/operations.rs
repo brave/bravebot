@@ -1,5 +1,5 @@
 use super::{
-    AVATAR_MAX, CEILING, Conversation, LOCK_WAIT, Parsed, Problem, Reading, Refused, Row,
+    AVATAR_MAX, CEILING, Conversation, LOCK_WAIT, LastHome, Parsed, Problem, Reading, Refused, Row,
     bots_file, composed_home, entries_of, is_absolute_path, is_identifier, is_model, is_slug,
     is_text, list_in, list_waiting, lock, make_state_directory, move_with, now, parse_entries,
     write_entries,
@@ -293,17 +293,32 @@ pub fn record_conversation(
     slug: &str,
     id: &str,
     directory: &str,
+    prompt: Option<u64>,
 ) -> Result<Noted, Refused> {
     let home = writable_home()?;
-    record_conversation_in(&home, data_folder, slug, id, directory, now(), LOCK_WAIT)
+    record_conversation_in(
+        &home,
+        data_folder,
+        slug,
+        id,
+        directory,
+        prompt,
+        now(),
+        LOCK_WAIT,
+    )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the prompt ordinal is independent of the conversation's id and directory"
+)]
 pub fn record_conversation_in(
     home: &Path,
     data_folder: &Path,
     slug: &str,
     id: &str,
     directory: &str,
+    prompt: Option<u64>,
     now: f64,
     wait: Duration,
 ) -> Result<Noted, Refused> {
@@ -324,6 +339,12 @@ pub fn record_conversation_in(
             held.conversations.push(Conversation {
                 id: id.to_string(),
                 directory: directory.to_string(),
+            });
+        }
+        if let Some(ordinal) = prompt.filter(|_| directory == held.home) {
+            held.last_home = Some(LastHome {
+                id: id.to_string(),
+                prompt: ordinal,
             });
         }
         held.updated = now;
@@ -2439,6 +2460,7 @@ mod tests {
             "keeper",
             "s-1",
             &dir_a,
+            None,
             NOW + 1.0,
             WAIT,
         ));
@@ -2462,6 +2484,7 @@ mod tests {
             "keeper",
             "s-1",
             &dir_a,
+            None,
             NOW + 2.0,
             WAIT,
         ));
@@ -2485,6 +2508,7 @@ mod tests {
             "keeper",
             "s-1",
             &dir_b,
+            None,
             NOW + 3.0,
             WAIT,
         ));
@@ -2515,11 +2539,61 @@ mod tests {
             "ghost",
             "s-1",
             &absolute(&scratch, "proj-a"),
+            None,
             NOW + 4.0,
             WAIT,
         ));
         assert_eq!(scratch.bots_text(), text);
         assert_eq!(std::fs::read(&definition).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_numbered_prompt_in_the_home_sets_last_home_and_any_other_turn_leaves_it() {
+        let scratch = Scratch::new("record-last-home");
+        let home = scratch.make("Keeper").row.home;
+        let elsewhere = absolute(&scratch, "proj");
+
+        let away = wrote(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "keeper",
+            "s-1",
+            &elsewhere,
+            Some(3),
+            NOW + 1.0,
+            WAIT,
+        ));
+        assert!(away.last_home.is_none());
+
+        let there = wrote(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "keeper",
+            "s-1",
+            &home,
+            Some(4),
+            NOW + 2.0,
+            WAIT,
+        ));
+        assert_eq!(
+            there.last_home,
+            Some(LastHome {
+                id: "s-1".into(),
+                prompt: 4,
+            })
+        );
+
+        let failed = wrote(record_conversation_in(
+            &scratch.home(),
+            &scratch.data(),
+            "keeper",
+            "s-1",
+            &home,
+            None,
+            NOW + 3.0,
+            WAIT,
+        ));
+        assert_eq!(failed.last_home, there.last_home);
     }
 
     #[test]
@@ -2544,6 +2618,7 @@ mod tests {
                 "keeper",
                 id,
                 directory,
+                None,
                 NOW + 1.0,
                 WAIT,
             )
@@ -2559,6 +2634,7 @@ mod tests {
             "ghost",
             "a/b",
             "relative",
+            None,
             NOW + 1.0,
             WAIT,
         ));
@@ -2569,6 +2645,7 @@ mod tests {
             "keeper",
             "s-1",
             &directory,
+            None,
             NOW + 2.0,
             WAIT,
         ));
