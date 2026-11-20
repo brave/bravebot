@@ -15,12 +15,19 @@ export interface ComposerState {
   reason: string | null
 }
 
-/** What the composer offers for a session's state. Rust reports the status; this only maps it to controls. */
-export function composerState(status: Status, ended: string | null): ComposerState {
+/**
+ * What the composer offers for a session's state. Rust reports the status; this only maps it to controls.
+ * `trustAskedHere` is whether the host sent this client the trust question, which it does only to a client
+ * it let answer trust. Without it the question is answered on the computer the host runs on.
+ */
+export function composerState(status: Status, ended: string | null, trustAskedHere = false): ComposerState {
   if (ended !== null) return { editable: false, reason: ended }
   switch (status) {
     case 'awaiting_trust':
-      return { editable: false, reason: 'Answer the trust question to start.' }
+      return {
+        editable: false,
+        reason: trustAskedHere ? 'Answer the trust question to start.' : "This folder isn't trusted yet. Answer the question on the computer the host runs on.",
+      }
     case 'detached':
       return { editable: false, reason: 'This session is closed.' }
     default:
@@ -39,6 +46,7 @@ export function Composer({
   onSend,
   onCancel,
   error,
+  trustAskedHere = false,
 }: {
   draft: string
   onDraft: (text: string) => void
@@ -49,10 +57,11 @@ export function Composer({
   onSend: () => void
   onCancel: () => void
   error: string | null
+  trustAskedHere?: boolean
 }) {
   const theme = useTheme()
   const [focused, setFocused] = useState(false)
-  const state = composerState(status, ended)
+  const state = composerState(status, ended, trustAskedHere)
   const turnActive = turnIsRunning(status, ended !== null)
   const canSend = state.editable && !turnActive && draft.trim() !== '' && !sending
   // Why the box is dead matters more than an old error once the session is over.

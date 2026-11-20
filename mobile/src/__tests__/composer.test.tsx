@@ -73,11 +73,12 @@ describe('composer', () => {
   })
 
   it('says why it cannot take a message', async () => {
-    expect(composerState('awaiting_trust', null)).toEqual({ editable: false, reason: 'Answer the trust question to start.' })
+    expect(composerState('awaiting_trust', null)).toEqual({ editable: false, reason: "This folder isn't trusted yet. Answer the question on the computer the host runs on." })
+    expect(composerState('awaiting_trust', null, true)).toEqual({ editable: false, reason: 'Answer the trust question to start.' })
     expect(composerState('detached', null).editable).toBe(false)
     expect(composerState('completed', 'The connection was lost. Start a new session to continue.').editable).toBe(false)
     const tree = await render(composer(props({ status: 'awaiting_trust' }).value))
-    expect(textOf(byTestId(tree, 'composer-note'))).toBe('Answer the trust question to start.')
+    expect(textOf(byTestId(tree, 'composer-note'))).toBe("This folder isn't trusted yet. Answer the question on the computer the host runs on.")
     expect(byTestId(tree, 'composer-input').props.editable).toBe(false)
   })
 
