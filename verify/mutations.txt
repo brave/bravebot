@@ -388,3 +388,35 @@ replace: let given = label; => let given = Label { integrity: crate::label::Inte
 mutation: Label::new builds a label at another integrity than the one it was given
 file: crates/core/src/label.rs
 replace: let integrity_given = integrity; => let integrity_given = Integrity::Trusted;
+
+mutation: write_reason lets a destination nobody has read through to a rule
+file: crates/core/src/policy.rs
+replace: if facts.by_reference { => if false {
+
+mutation: write_reason lets an allow rule answer for a protected path
+file: crates/core/src/policy.rs
+replace: if facts.protected { => if false {
+
+mutation: write_reason lets the trust map overturn an ask rule
+file: crates/core/src/policy.rs
+replace: return WriteReason::Ruled(ruling); => return if ruling == crate::permissions::Ruling::Allow { WriteReason::Ruled(ruling) } else { WriteReason::KeepsTrust };
+
+mutation: write_reason lets a write through to a path nobody has vouched for
+file: crates/core/src/policy.rs
+replace: return WriteReason::Undecided; => return WriteReason::AlreadyUntrusted;
+
+mutation: write_reason lets untrusted data into a trusted path unasked
+file: crates/core/src/policy.rs
+replace: return WriteReason::LowersTrust; => return WriteReason::KeepsTrust;
+
+mutation: write_reason reads a write into a trusted path as one into an untrusted path
+file: crates/core/src/policy.rs
+replace: let into_trusted = in_force == Integrity::Trusted; => let into_trusted = false;
+
+mutation: WriteReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let write_allowed = ruling == crate::permissions::Ruling::Allow; => let write_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: WriteReason::asks lets a protected path through
+file: crates/core/src/policy.rs
+replace: // write would make a trusted path untrusted. => Self::Protected => false,

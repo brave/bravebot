@@ -590,6 +590,95 @@ pub enum Containment {
     Held,
 }
 
+/// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) struct WriteFacts {
+    /// The data being written is trusted.
+    pub(crate) data_trusted: bool,
+    /// The destination came out of a reference, so nobody has read it yet.
+    pub(crate) by_reference: bool,
+    /// The destination is a path where a write runs code later (PERM-9).
+    pub(crate) protected: bool,
+    /// What the settings file's `Edit` rules say about the destination.
+    pub(crate) rule: crate::permissions::Decision,
+    /// What the trust map says about the destination, or `None` where nobody has said.
+    pub(crate) in_force: Option<Integrity>,
+}
+
+/// Which question decided whether a write is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum WriteReason {
+    Reference,
+    Protected,
+    Ruled(crate::permissions::Ruling),
+    Undecided,
+    LowersTrust,
+    KeepsTrust,
+    RaisesTrust,
+    AlreadyUntrusted,
+}
+
+impl WriteReason {
+    /// Whether the write is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::write_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // Nobody has read the path, it runs code later, nobody has vouched for it, or the
+            // write would make a trusted path untrusted.
+            Self::Reference | Self::Protected | Self::Undecided | Self::LowersTrust => true,
+            Self::Ruled(ruling) => {
+                let write_allowed = ruling == crate::permissions::Ruling::Allow;
+                !write_allowed
+            }
+            Self::KeepsTrust | Self::RaisesTrust | Self::AlreadyUntrusted => false,
+        }
+    }
+}
+
+/// The question that decides whether a write is put to a person, in the order they are asked.
+///
+/// A destination out of a reference and a protected path are asked about before any rule is read,
+/// since no rule can put a path in front of somebody and no rule may answer for a path that runs
+/// code later. A rule is read before the trust map. The map asks where nobody has said anything
+/// about the path, and where untrusted data would make a trusted path untrusted.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::write_reason_is_sound(facts, r),
+))]
+fn write_reason(facts: WriteFacts) -> WriteReason {
+    if facts.by_reference {
+        return WriteReason::Reference;
+    }
+    if facts.protected {
+        return WriteReason::Protected;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = facts.rule {
+        return WriteReason::Ruled(ruling);
+    }
+    let Some(in_force) = facts.in_force else {
+        // Nobody has said anything about this path, so the first write is the moment to ask.
+        return WriteReason::Undecided;
+    };
+    let into_trusted = in_force == Integrity::Trusted;
+    if into_trusted && facts.data_trusted {
+        return WriteReason::KeepsTrust;
+    }
+    // The one irreversible case: a trusted path is about to stop being trusted.
+    if into_trusted {
+        return WriteReason::LowersTrust;
+    }
+    // Already untrusted. Trusted data only raises it; untrusted data changes nothing.
+    if facts.data_trusted {
+        return WriteReason::RaisesTrust;
+    }
+    WriteReason::AlreadyUntrusted
+}
+
 /// What [`Policy::plan_needs_approval_held`] knows about a line, gathered before it decides.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(verus_keep_ghost, verus_verify)]
@@ -7684,74 +7773,50 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         contents: Label,
         destination: Destination,
     ) -> bool {
-        let data_trusted = contents.is_trusted();
-
-        // A destination taken out of a reference is shown whatever the table says, because the
-        // approval is the only moment the path exists anywhere a person can see it. The table
-        // below reasons about a path somebody named; this one nobody has.
-        if destination == Destination::Reference {
-            self.allow(
-                "approval",
-                format!("{path}: named only by a reference, so it is shown, asking"),
-            );
-            return true;
-        }
-
-        // A path where a write runs code later is put to the person whatever a rule or the trust
-        // map says. Read off the routing path alone, as a deny rule is (PERM-9, MODE-2).
-        if crate::protected::is_protected(path) {
-            self.allow(
-                "approval",
-                format!("{path}: a path where a write runs code later, asking"),
-            );
-            return true;
-        }
-
-        // A rule the user wrote in advance answers before the table below, which is what a rule
-        // is for. It cannot reach the case above: nothing a pattern says can put a path in front
-        // of somebody, and that prompt is the only place a reference's path is ever seen.
-        match self
-            .permissions
-            .for_path(crate::permissions::Subject::Edit, path)
-        {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "{path}: a rule in the settings file says {ruling}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                return needed;
-            }
-            crate::permissions::Decision::Unmatched => {}
-        }
-
-        let (needed, reason) = match self.integrity_in_force(path) {
-            // Nobody has said anything about this path, so the first write is the moment to ask.
-            None => (true, "a path nobody has vouched for either way"),
-            // The one irreversible case: a trusted path is about to stop being trusted.
-            Some(Integrity::Trusted) if !data_trusted => (
-                true,
-                "untrusted data into a trusted path, which it will make untrusted",
-            ),
-            Some(Integrity::Trusted) => (false, "trusted data to a trusted path"),
-            // Already untrusted. Trusted data only raises it; untrusted data changes nothing.
-            Some(Integrity::Untrusted) if data_trusted => (
-                false,
-                "trusted data into an untrusted path, which it will make trusted",
-            ),
-            Some(Integrity::Untrusted) => (false, "untrusted data to an already untrusted path"),
+        let facts = WriteFacts {
+            data_trusted: contents.is_trusted(),
+            by_reference: destination == Destination::Reference,
+            protected: crate::protected::is_protected(path),
+            rule: self
+                .permissions
+                .for_path(crate::permissions::Subject::Edit, path),
+            in_force: self.integrity_in_force(path),
         };
-
-        self.allow(
-            "approval",
-            format!(
-                "{path}: {reason}, {}",
+        let reason = write_reason(facts);
+        let needed = reason.asks();
+        let said = match reason {
+            // A destination taken out of a reference is shown whatever the table says, because the
+            // approval is the only moment the path exists anywhere a person can see it.
+            WriteReason::Reference => {
+                format!("{path}: named only by a reference, so it is shown, asking")
+            }
+            // A path where a write runs code later is put to the person whatever a rule or the
+            // trust map says. Read off the routing path alone, as a deny rule is (PERM-9, MODE-2).
+            WriteReason::Protected => {
+                format!("{path}: a path where a write runs code later, asking")
+            }
+            WriteReason::Ruled(ruling) => format!(
+                "{path}: a rule in the settings file says {ruling}, {}",
                 if needed { "asking" } else { "no prompt" }
             ),
-        );
+            WriteReason::Undecided => {
+                format!("{path}: a path nobody has vouched for either way, asking")
+            }
+            WriteReason::LowersTrust => format!(
+                "{path}: untrusted data into a trusted path, which it will make untrusted, asking"
+            ),
+            WriteReason::KeepsTrust => {
+                format!("{path}: trusted data to a trusted path, no prompt")
+            }
+            WriteReason::RaisesTrust => format!(
+                "{path}: trusted data into an untrusted path, which it will make trusted, no \
+                 prompt"
+            ),
+            WriteReason::AlreadyUntrusted => {
+                format!("{path}: untrusted data to an already untrusted path, no prompt")
+            }
+        };
+        self.allow("approval", said);
         needed
     }
 

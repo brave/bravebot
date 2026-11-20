@@ -37,6 +37,8 @@ crates/core/src/label.rs::is_public: r => ensures r == (self.confidentiality == 
 crates/core/src/permissions.rs::ruling_of: r => ensures r == crate::spec::ruling_of(denied, asked, allowed),
 crates/core/src/permissions.rs::pipeline_decision: r => ensures r == crate::spec::pipeline_decision(each@),
 crates/core/src/permissions.rs::pipeline_decision/loop: invariant at <= each.len(), denied == crate::spec::some_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Deny), ), asked == crate::spec::some_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Ask), ), all_allowed == crate::spec::every_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Allow), ), decreases each.len() - at,
+crates/core/src/policy.rs::asks: r => ensures r == crate::spec::write_reason_asks(self),
+crates/core/src/policy.rs::write_reason: r => ensures crate::spec::write_reason_is_sound(facts, r),
 crates/core/src/policy.rs::asks: r => ensures r == crate::spec::reason_asks(self),
 crates/core/src/policy.rs::run_reason: r => ensures crate::spec::run_reason_is_sound(facts, r),
 crates/core/src/policy.rs::output_label: r => requires opaque.integrity == Integrity::Untrusted, ensures crate::spec::output_label_is_sound(facts, opaque, r.0),
