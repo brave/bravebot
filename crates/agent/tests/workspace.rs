@@ -11089,7 +11089,7 @@ fn an_attributes_file_the_map_does_not_trust_refuses_a_checkout() {
     );
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     for (name, distrusted, expected) in [
-        ("untrusted", Some("docs"), Refused::AttributesUntrusted),
+        ("untrusted", Some("docs"), Refused::Distrusted),
         ("trusted", None, Refused::Converts(Conversion::Filter)),
     ] {
         let mut trust = TrustStore::new(workspace.root());
@@ -11115,6 +11115,115 @@ fn an_attributes_file_the_map_does_not_trust_refuses_a_checkout() {
             other => panic!("{name}: the checkout was not refused: {other:?}"),
         }
         assert!(!target.exists(), "{name}: a refused checkout was written");
+    }
+}
+
+/// CHECKOUT-4. A spawn refused for an entry under a path the map does not trust gets one sentence,
+/// the same for an entry git refuses to check out, a `.gitattributes` file and a tree past the
+/// bound, and the map's own rule for the path selects it: the same tree under a trusted path gets
+/// the sentence that names the check. The sentence is the one a planner reads.
+#[test]
+fn a_spawn_refused_for_an_entry_under_a_distrusted_path_gets_one_fixed_sentence() {
+    use bravebot_agent::git::checkout::{Bound, Refused};
+    use bravebot_core::delegate::CheckoutRefusal;
+    let trees: [(&str, &[(&str, &str)]); 2] = [
+        (
+            "name",
+            &[("README", "hello\n"), ("incoming/.GIT/config", "x\n")],
+        ),
+        (
+            "attributes",
+            &[
+                ("README", "hello\n"),
+                ("incoming/.gitattributes", "* filter=x\n"),
+            ],
+        ),
+    ];
+    let mut sentences = Vec::new();
+    let mut named = Vec::new();
+    for (name, files) in trees {
+        let (_scratch, state, workspace) =
+            repository_with_a_state_directory(&format!("checkout-distrusted-{name}"), files);
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.distrust("incoming");
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        let refused = workspace
+            .checkout_for_cause(&policy, &state.path, d1())
+            .expect_err(name);
+        assert_eq!(refused.0, CheckoutRefusal::RepositoryRefused, "{name}");
+        sentences.push(refused.1);
+
+        let mut sink = RecordingSink::new();
+        let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+        named.push(
+            workspace
+                .checkout_for(&policy, &state.path, d1())
+                .expect_err(name),
+        );
+    }
+    assert_eq!(sentences[0], sentences[1], "{sentences:?}");
+    assert_eq!(
+        sentences[0],
+        Refused::Distrusted.describe("the working directory")
+    );
+    assert_ne!(named[0], named[1], "{named:?}");
+    assert!(
+        named.iter().all(|sentence| *sentence != sentences[0]),
+        "{named:?}"
+    );
+
+    // A tree past the bound, through the same closure of the map.
+    let scratch = Scratch::new("checkout-distrusted-bound");
+    let elsewhere = Scratch::new("checkout-distrusted-bound-target");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("incoming/a", "a\n"),
+            ("incoming/b", "b\n"),
+        ],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let bound = Bound {
+        files: 2,
+        bytes: 1 << 20,
+    };
+    for (distrusted, expected) in [(true, Refused::Distrusted), (false, Refused::TooManyFiles)] {
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        if distrusted {
+            trust.distrust("incoming");
+        }
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        let target = elsewhere.path.join(format!("c{distrusted}"));
+        match workspace.make_checkout(&policy, &target, "c1", bound) {
+            Err(WorkspaceError::Checkout { refused, .. }) => {
+                assert_eq!(refused, expected, "{distrusted}")
+            }
+            other => panic!("{distrusted}: the checkout was not refused: {other:?}"),
+        }
+        assert!(
+            !target.exists(),
+            "{distrusted}: a refused checkout was written"
+        );
     }
 }
 
