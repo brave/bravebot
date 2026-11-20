@@ -123,6 +123,10 @@ struct Open {
     /// The question asked beside the work, while one may be out (CMD-8, CMD-16). One at a time: a
     /// second is refused until this one has settled.
     aside: Option<AsideOut>,
+    /// The exchange and the file authority the turn in flight, or the last one, published for a
+    /// question asked beside it (CMD-8). Outside `state`, which the turn's worker holds for the
+    /// whole turn, and emptied when a turn begins.
+    published: crate::turn::Published,
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
@@ -180,6 +184,7 @@ impl Open {
             compacting: None,
             handing_off: None,
             aside: None,
+            published: crate::turn::Published::default(),
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
             refused_folders: Vec::new(),
@@ -2161,6 +2166,10 @@ impl Bridge {
             .lock()
             .map(|s| (s.turns + 1, s.tokens))
             .unwrap_or((1, open.tokens_at_turn));
+        // What the last turn published is dropped before anything says this one has started, so
+        // a question asked beside this turn waits for this turn's first request.
+        let published = open.published.clone();
+        published.turn_begins();
 
         let crate::running::Started {
             running,
@@ -2257,6 +2266,7 @@ impl Bridge {
                 finished,
                 interjections,
                 actors: actors.clone(),
+                published,
             });
         });
 
@@ -4436,6 +4446,8 @@ struct Work {
     finished: Arc<std::sync::atomic::AtomicBool>,
     interjections: crate::running::Interjections,
     actors: crate::turn::ActorNotes,
+    /// Where the turn publishes its exchange and file authority for a `/btw` asked beside it.
+    published: crate::turn::Published,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -4548,6 +4560,7 @@ fn work(work: Work) {
         finished,
         interjections,
         actors,
+        published,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -4573,7 +4586,8 @@ fn work(work: Work) {
     crate::reports::hold(&reports).turn_started(turn, config.context_budget);
     let mut reporter = BridgeReporter::new(emitter.clone(), &session)
         .sharing(Arc::clone(&state.roster))
-        .holding(Arc::clone(&reports));
+        .holding(Arc::clone(&reports))
+        .publishing(published.exchange_slot());
 
     // The session begins with its first turn (HOOK-10), here on the worker so the request that
     // sent the turn is answered at once, and before anything else the turn does, so a hook that
@@ -4694,6 +4708,8 @@ fn work(work: Work) {
     let trust = state.answers.trust.clone();
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
+    // A question asked beside this turn reads files under the turn's own authority (CMD-8).
+    published.keep_files(file_authority.clone());
     let programs = state.answers.programs.clone();
     // The session's language servers (LSP-8), taken for this turn and put back after it. The
     // first turn builds the set. Building it starts no server: one starts on the first question
@@ -7126,6 +7142,10 @@ mod link_tests;
 #[cfg(test)]
 #[path = "account_session_tests.rs"]
 mod account_session_tests;
+
+#[cfg(test)]
+#[path = "published_tests.rs"]
+mod published_tests;
 
 #[cfg(test)]
 #[path = "project_questions_tests.rs"]
