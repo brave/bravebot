@@ -106,6 +106,56 @@ fn variables_that_select_code_set_in_the_persons_environment_do_not_reach_the_cl
     }
 }
 
+/// SANDBOX-30, PLUGIN-3, PATH-005: an `ssh` that a stage wrote, in a directory first on the `PATH`
+/// the person's environment holds, is not the program `git` starts for an `ssh://` remote. The
+/// directory is recorded with `keep_out` and the real `PATH` follows it. The planted `ssh` writes a
+/// marker and fails, so the clone is refused whichever `ssh` it reaches and the marker is the
+/// evidence. The remote is a loopback port nothing listens on, so no clone reaches a host.
+///
+/// The control starts the same clone with the same `PATH` kept as the person's environment holds
+/// it, which does write the marker: a start that never ran `ssh` would pass the clone's half of the
+/// test whatever `PATH` it was given.
+///
+/// Rejects: a start that gives `git` the inherited `PATH` (`SearchPath::Inherited`) and so lets it
+/// look `ssh` up in a directory a stage may write.
+#[test]
+fn an_ssh_a_stage_planted_first_on_the_persons_path_is_not_run_by_the_clone() {
+    let markers = Markers::new();
+    let planted = tempfile::tempdir().unwrap();
+    markers.script(planted.path(), "ssh", "planted-ssh", 255);
+    bravebot_sandbox::programs::keep_out(planted.path());
+    let mut entries = vec![planted.path().to_path_buf()];
+    entries.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(entries)
+        .unwrap()
+        .into_string()
+        .unwrap();
+    let parent = vec![("PATH", path)];
+    let remote = "ssh://127.0.0.1:1/demo.git";
+
+    let dir = tempfile::tempdir().unwrap();
+    let kept = shallow_clone_from(
+        &|| unchecked(&real_git(), &parent),
+        remote,
+        None,
+        &["ssh"],
+        dir.path(),
+    );
+    assert_eq!(kept.err(), Some(CloneFailed));
+    assert_eq!(
+        markers.seen(),
+        vec!["planted-ssh".to_string()],
+        "the control did not run the planted ssh, so the test could not tell"
+    );
+    markers.clear();
+
+    let (_, dir) = clone_as_if_held(&real_git(), &parent, remote, None, &["ssh"]);
+    drop(dir);
+    assert_eq!(markers.seen(), Vec::<String>::new());
+}
+
 /// T6: a `GIT_TEMPLATE_DIR` in the person's environment is not used to make the clone's git
 /// directory. A `git init` that does not pass `--template=` is the case that reads the variable,
 /// so the clone's start is tested on its own for it: its git directory holds no hook, and the
