@@ -5995,10 +5995,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
         let mut vouched = 0;
         for command in ended.programs.iter() {
-            if since.programs.contains(
+            if since.programs.contains_routed(
                 &command.program,
                 &command.started_as,
                 &command.args,
+                &command.routes,
                 &command.directory,
             ) {
                 continue;
@@ -8385,11 +8386,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// reads, so one such step makes the whole line's output untrusted however familiar the steps
     /// either side of it are.
     ///
-    /// An entry holds a resolved program, its arguments and the tree it was given in, so this
-    /// answers about all three: the plan's directory has to be the entry's directory exactly, and
-    /// an entry given in `sub/` covers neither the root above it nor a `nested/` below it
-    /// ([RUN-8]). `sh check.sh` names a different file in every tree it is read in, which is why
-    /// the tree is part of the key rather than beside it.
+    /// An entry holds a resolved program, its arguments, where its streams go and the tree it was
+    /// given in, so this answers about all four: the plan's directory has to be the entry's
+    /// directory exactly, and an entry given in `sub/` covers neither the root above it nor a
+    /// `nested/` below it ([RUN-8]). `sh check.sh` names a different file in every tree it is read
+    /// in, which is why the tree is part of the key rather than beside it. The routes are compared
+    /// too, so an entry made at `sh check.sh > /dev/null` does not cover `sh check.sh`.
     ///
     /// [`crate::command::Plan::carries_an_assignment`] is still the separate question, and every
     /// gate that consults this one has to ask that one too.

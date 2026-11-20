@@ -348,28 +348,31 @@ pub open spec fn same_texts(a: Seq<String>, b: Seq<String>) -> bool {
     a.len() == b.len() && forall|i: int| 0 <= i < a.len() ==> (#[trigger] a[i])@ == b[i]@
 }
 
-/// A vouched entry covers a step exactly where all four of its fields are the step's: the file,
-/// the path that starts it, the arguments and the tree (RUN-8). Every field is named, so a field
-/// added to `Command` stops the build here.
+/// A vouched entry covers a step exactly where all five of its fields are the step's: the file,
+/// the path that starts it, the arguments, where its streams go and the tree (RUN-8). Every field
+/// is named, so a field added to `Command` stops the build here.
 pub open spec fn command_is(
     command: Command,
     program: PathBuf,
     started_as: PathBuf,
     args: Seq<String>,
+    routes: Seq<Route>,
     directory: PathBuf,
 ) -> bool {
     let Command {
         program: held_program,
         started_as: held_started_as,
         args: held_args,
+        routes: held_routes,
         directory: held_directory,
     } = command;
     same_path_buf(held_program, program) && same_path_buf(held_started_as, started_as)
-        && same_texts(held_args@, args) && same_path_buf(held_directory, directory)
+        && same_texts(held_args@, args) && same_routes(held_routes@, routes)
+        && same_path_buf(held_directory, directory)
 }
 
 /// An entry is a step, in a tree, exactly where `command_is` says so of the step's resolved file,
-/// the path that starts it and its arguments. A step's assignments and routes are no entry's.
+/// the path that starts it, its arguments and its routes. A step's assignments are no entry's.
 pub open spec fn entry_is_step(command: Command, step: Step, directory: PathBuf) -> bool {
     let Step {
         program: _,
@@ -378,13 +381,13 @@ pub open spec fn entry_is_step(command: Command, step: Step, directory: PathBuf)
         args,
         // The person vouched for the expanded arguments, whichever a pattern produced.
         matched: _,
-        // Refused before an entry is consulted, by `Plan::carries_an_assignment` and the write
-        // question, which `run_reason_is_sound` states.
+        // Refused before an entry is consulted, by `Plan::carries_an_assignment`, which
+        // `run_reason_is_sound` states.
         environment: _,
         expansions: _,
-        routes: _,
+        routes,
     } = step;
-    command_is(command, resolved, started_as, args@, directory)
+    command_is(command, resolved, started_as, args@, routes@, directory)
 }
 
 pub open spec fn some_entry_is(listed: Seq<Command>, step: Step, directory: PathBuf) -> bool {

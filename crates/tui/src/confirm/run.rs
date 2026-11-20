@@ -2178,6 +2178,60 @@ mod tests {
         assert_eq!(shouted, None, "the shifted spelling still answered");
     }
 
+    /// A compiled plan whose output goes to the null device, as `sh check.sh > /dev/null` compiles.
+    /// The line writes no file, so it is offered the key, and the entry the key would make holds the
+    /// route.
+    fn a_run_discarding_its_output() -> RunRequest {
+        let mut request = a_run_writing_a_file();
+        let routes = vec![bravebot_core::command::Route::Stdout {
+            path: std::path::PathBuf::from("/dev/null"),
+            append: false,
+        }];
+        let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+            unreachable!("a_run_writing_a_file builds a pipeline");
+        };
+        steps[0].routes = routes;
+        request.plan.line = "sh check.sh > /dev/null".to_string();
+        request.plan.writes = Vec::new();
+        request
+    }
+
+    /// RUN-6: `a` at `sh check.sh > /dev/null` is offered, answers, and the entry it would make is
+    /// drawn with its redirection. The regression it rejects is an entry drawn as the bare
+    /// `sh check.sh`, which tells the person the grant is for a line that would then run unasked
+    /// with its output kept.
+    #[test]
+    fn a_run_discarding_its_output_draws_the_entry_with_its_route() {
+        let request = a_run_discarding_its_output();
+        assert!(
+            request.can_be_remembered(),
+            "the control is a line the key is offered for, so the rows below prove nothing"
+        );
+        let entries = request.would_vouch_for();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].routes.len(),
+            1,
+            "the entry the key would make holds no route: {entries:?}"
+        );
+
+        let drawn = rendered_run(&request);
+        assert!(
+            drawn.contains("/bin/sh check.sh > /dev/null"),
+            "the entry the key would make is drawn without its route: {drawn}"
+        );
+
+        let pressed = run_answer_for(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            &request,
+        );
+        assert_eq!(
+            pressed,
+            Some(RunResponse::Answer(RunAnswer::ApproveAlways)),
+            "`a` did not answer a line the prompt offers it for"
+        );
+    }
+
     /// SANDBOX-29: a line the planner asked to run with no sandbox says so on the prompt, offers no
     /// answer that lasts, and binds none of `a`, `r`, `f`, `m` or `e`, though the request carries
     /// every path those keys write to. The control is the same request without the flag, where

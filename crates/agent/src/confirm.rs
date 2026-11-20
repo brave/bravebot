@@ -778,7 +778,10 @@ impl RunRequest {
     }
 
     /// Whether an entry could record this line at all, which is what `a` would make, as
-    /// [`bravebot_core::command::Plan::can_be_remembered_as`] answers it.
+    /// [`bravebot_core::command::Plan::can_be_remembered_as`] answers it. A line that sends a
+    /// stream to the null device or merges its streams can be recorded, and its entry holds those
+    /// routes, so it covers that line and not the same program without them. A line that opens a
+    /// file by a redirection cannot.
     pub fn can_be_remembered(&self) -> bool {
         self.plan.can_be_remembered_as(self.asked())
     }
@@ -1392,7 +1395,9 @@ pub fn shown_binary(step: &bravebot_core::command::Step) -> String {
 /// always were.
 pub fn shown_command(command: &bravebot_core::programs::Command) -> String {
     let program = shown_through(&command.started_as, &command.program);
-    bravebot_core::command::Stage::new(program, command.args.clone()).display()
+    let mut shown = bravebot_core::command::Stage::new(program, command.args.clone()).display();
+    shown.push_str(&bravebot_core::command::spelled_routes(&command.routes));
+    shown
 }
 
 /// `file`, and `started_as` before it with an arrow where the program is started through another

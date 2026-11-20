@@ -24117,7 +24117,7 @@ fn a_line_refused_for_a_credential_it_left_counts_as_run() {
         &mut reporter,
         &mut sink,
         trusting_the_workspace(),
-        vouching_for("cat", &["key.txt"], &scratch.path),
+        vouching_for_writing("cat", &["key.txt"], &scratch.path, "build.log", false),
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -32659,6 +32659,106 @@ fn a_line_that_writes_is_not_remembered_however_it_is_answered() {
     );
 }
 
+/// `a` at a line that sends its output to `/dev/null` is a vouch for that line, so the same
+/// program and arguments with nothing discarded are asked about again. An entry that held no route
+/// would cover the bare line, which then runs unasked and whose output reaches the planner as
+/// trusted.
+///
+/// Both lines are served in one turn, so the second is decided by what the first `a` recorded.
+/// Rejects an entry keyed on the program and arguments alone.
+#[test]
+fn a_vouch_made_at_a_line_that_discards_its_output_does_not_cover_the_bare_line() {
+    let scratch = Scratch::new("run-always-discard");
+    std::fs::write(scratch.path.join("check.sh"), "echo checked\n").unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let seen = confirmer.seen.clone();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh check.sh > /dev/null"}"#),
+        tool_request("run", r#"{"command":"sh check.sh"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it twice"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        2,
+        "the bare line ran unasked on an entry made at a line that discarded its output"
+    );
+}
+
+/// `a` at a line that sends its output to `/dev/null` still stops the prompt for that same line:
+/// the entry holds the route, so a second `sh check.sh > /dev/null` in the turn is covered and is
+/// not asked about. The entry recorded is the routed one.
+///
+/// Rejects the other way of closing the hole for the bare line, which is to record no entry at all
+/// for a line that discards its output, and so to ask about it every time.
+#[test]
+fn a_vouch_made_at_a_line_that_discards_its_output_covers_that_line_again() {
+    let scratch = Scratch::new("run-always-discard-twice");
+    std::fs::write(scratch.path.join("check.sh"), "echo checked\n").unwrap();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    let seen = confirmer.seen.clone();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh check.sh > /dev/null"}"#),
+        tool_request("run", r#"{"command":"sh check.sh > /dev/null"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it twice"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "the second line that discards its output was asked about again, so `a` stopped nothing"
+    );
+    let entries: Vec<_> = outcome.programs.iter().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(
+        entries[0].routes.len(),
+        1,
+        "the entry made at a line that discards its output holds no route: {entries:?}"
+    );
+}
+
 /// Approving once is not approving always: a run approved for this call alone leaves the session
 /// vouching for nothing.
 #[test]
@@ -33130,6 +33230,23 @@ fn vouched_in(
         tree.canonicalize().expect("the tree exists"),
     )
     .started_as(found.started_as)
+}
+
+/// [`vouched_in`] for a line that sends its output to `file`, given as the line spells it and
+/// opened in `tree`. An entry holds where the streams go, so an entry without the route is not the
+/// line with the redirection: a fixture for `cat .env > .env.bak` has to hold the route or no entry
+/// covers the line.
+fn vouched_in_writing(
+    program: &str,
+    args: &[&str],
+    tree: &std::path::Path,
+    file: &str,
+    append: bool,
+) -> bravebot_core::programs::Command {
+    vouched_in(program, args, tree).routed(vec![bravebot_core::command::Route::Stdout {
+        path: tree.canonicalize().expect("the tree exists").join(file),
+        append,
+    }])
 }
 
 /// The point of the list: a session that already vouched for the program is not asked again, and
@@ -60226,11 +60343,12 @@ fn checkout_events(sink: &RecordingSink) -> Vec<(Option<String>, String)> {
 
 /// Runs `command` as a worker given a checkout of a one-commit repository, and returns the
 /// checkouts left under the state directory and what the planner was told about its delegate.
+/// `vouched` is a program, its arguments and the file in the checkout its line redirects to.
 fn checkouts_after_a_worker_ran(
     tag: &str,
     committed: &[(&str, &str)],
     command: &str,
-    vouched: Option<(&str, &[&str])>,
+    vouched: Option<(&str, &[&str], &str)>,
 ) -> (Vec<PathBuf>, Vec<String>) {
     let scratch = Scratch::new(&format!("checkout-started-{tag}"));
     let home = Scratch::new(&format!("checkout-started-{tag}-home"));
@@ -60263,8 +60381,8 @@ fn checkouts_after_a_worker_ran(
     // it exists: its name is the first number, under the project's key in the state directory.
     // What the scan of a destination reads is decided by whether the line's program was vouched
     // for, so a line nobody vouched for would never reach the refusal under test.
-    let programs =
-        bravebot_core::programs::TrustedPrograms::from_iter(vouched.map(|(program, arguments)| {
+    let programs = bravebot_core::programs::TrustedPrograms::from_iter(vouched.map(
+        |(program, arguments, output)| {
             let found =
                 bravebot_agent::programs::find(program, &scratch.path).expect("the program exists");
             let made = home
@@ -60274,13 +60392,20 @@ fn checkouts_after_a_worker_ran(
                 .join("checkouts")
                 .join(bravebot_agent::home::key_for(workspace.root()))
                 .join("c1");
+            // The entry holds the file the line writes, so it is the line with its redirection.
+            let route = bravebot_core::command::Route::Stdout {
+                path: made.join(output),
+                append: false,
+            };
             bravebot_core::programs::Command::new(
                 found.resolved,
                 arguments.iter().map(|a| a.to_string()).collect(),
                 made,
             )
             .started_as(found.started_as)
-        }));
+            .routed(vec![route])
+        },
+    ));
     turn::resume(
         &config,
         &egress,
@@ -60312,7 +60437,7 @@ fn a_checkout_is_kept_when_a_line_in_it_was_refused_for_a_credential() {
         // before it runs.
         &[("key.txt", "AKIAIOSFODNN7EXAMPLE\n")],
         "cat key.txt > build.log",
-        Some(("cat", &["key.txt"])),
+        Some(("cat", &["key.txt"], "build.log")),
     );
     assert!(
         asked.iter().any(|body| body.contains("refused: ")),
@@ -84092,6 +84217,20 @@ fn vouching_for(
     bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(program, args, tree)])
 }
 
+/// [`vouching_for`] for a line that sends its output to `file` in `tree`, whose entry holds that
+/// route ([`vouched_in_writing`]).
+fn vouching_for_writing(
+    program: &str,
+    args: &[&str],
+    tree: &std::path::Path,
+    file: &str,
+    append: bool,
+) -> bravebot_core::programs::TrustedPrograms {
+    bravebot_core::programs::TrustedPrograms::from_iter([vouched_in_writing(
+        program, args, tree, file, append,
+    )])
+}
+
 /// The clause's own reproduction. A turn asked to change `.env` backs it up with a `run` line
 /// first, and the credential is then in a second file in the tree: the pre-edit backup CRED-11
 /// names, with nothing refused and nothing said.
@@ -84108,7 +84247,7 @@ fn a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there() {
     let scratch = Scratch::new("credential-run-redirect");
     let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
     std::fs::write(scratch.path.join(".env"), &env).unwrap();
-    let programs = vouching_for("cat", &[".env"], &scratch.path);
+    let programs = vouching_for_writing("cat", &[".env"], &scratch.path, ".env.bak", false);
 
     let (_home, reporter, answered) =
         a_run_turn_scanning(&scratch, "cat .env > .env.bak", programs);
@@ -84178,7 +84317,7 @@ fn a_refused_line_is_a_write_only_where_the_put_back_left_a_file_different() {
                 .set_modified(past)
                 .unwrap();
         }
-        let programs = vouching_for("cat", &[".env"], &scratch.path);
+        let programs = vouching_for_writing("cat", &[".env"], &scratch.path, ".env.bak", false);
         let workspace = Workspace::new(&scratch.path).expect("workspace");
         let (_home, _reporter, answered, work) =
             a_run_turn_scanning_with_work(&workspace, "cat .env > .env.bak", programs);
@@ -84224,7 +84363,7 @@ fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_works
     std::fs::write(elsewhere.path.join("credentials"), &env).unwrap();
     let away = elsewhere.path.to_str().expect("a UTF-8 scratch path");
     let programs = bravebot_core::programs::TrustedPrograms::from_iter([
-        vouched_in("cat", &[".env"], &scratch.path),
+        vouched_in_writing("cat", &[".env"], &scratch.path, "d/credentials", false),
         vouched_in("rm", &["-r", "d"], &scratch.path),
         vouched_in("ln", &["-s", away, "d"], &scratch.path),
     ]);
@@ -84266,7 +84405,7 @@ fn a_refused_line_puts_a_destination_that_lands_on_a_protected_name_to_the_confi
         std::fs::write(scratch.path.join(".git/hooks/pre-commit"), back).unwrap();
         std::os::unix::fs::symlink(".git/hooks/pre-commit", scratch.path.join("notes.txt"))
             .unwrap();
-        let programs = vouching_for("cat", &[".env"], &scratch.path);
+        let programs = vouching_for_writing("cat", &[".env"], &scratch.path, "notes.txt", false);
         let workspace = Workspace::new(&scratch.path).expect("workspace");
         let mut confirmer = match approved {
             true => RecordingConfirmer::approving(),
@@ -84549,7 +84688,7 @@ fn a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_i
     let scratch = Scratch::new("credential-run-carried");
     let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
     std::fs::write(scratch.path.join(".env"), &env).unwrap();
-    let programs = vouching_for("echo", &["PORT=8080"], &scratch.path);
+    let programs = vouching_for_writing("echo", &["PORT=8080"], &scratch.path, ".env", true);
 
     let (_home, reporter, answered) =
         a_run_turn_scanning(&scratch, "echo PORT=8080 >> .env", programs);
@@ -84593,7 +84732,7 @@ fn a_value_a_line_wrote_that_only_looks_like_a_secret_is_told_to_the_person() {
         format!("SECRET_KEY_BASE={GENERATED_SECRET}\n"),
     )
     .unwrap();
-    let programs = vouching_for("cat", &["secret.txt"], &scratch.path);
+    let programs = vouching_for_writing("cat", &["secret.txt"], &scratch.path, ".env", false);
 
     let (_home, reporter, answered) =
         a_run_turn_scanning(&scratch, "cat secret.txt > .env", programs);
@@ -84702,7 +84841,7 @@ fn an_ambient_authority_is_recorded_for_a_line_the_credential_scan_refuses() {
     )
     .unwrap();
     let programs = bravebot_core::programs::TrustedPrograms::from_iter([
-        vouched_in("cat", &[".env"], &scratch.path),
+        vouched_in_writing("cat", &[".env"], &scratch.path, "backup.env", false),
         vouched_in("echo", &["http://169.254.169.254/"], &scratch.path),
     ]);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -84815,7 +84954,7 @@ fn a_credential_a_line_left_at_a_destination_is_written_to_the_record() {
         format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
     )
     .unwrap();
-    let programs = vouching_for("cat", &[".env"], &scratch.path);
+    let programs = vouching_for_writing("cat", &[".env"], &scratch.path, ".env.bak", false);
 
     let (home, _reporter, _answered) =
         a_run_turn_scanning(&scratch, "cat .env > .env.bak", programs);
@@ -88595,10 +88734,12 @@ fn a_redirection_into_a_memory_is_recorded_before_it_opens_it() {
         Some(&home),
         "echo OUR-OWN-WORDS > .bravebot/memory/notes-keeper.md",
         bravebot_agent::RunDecision::approve(),
-        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in_writing(
             "echo",
             &["OUR-OWN-WORDS"],
             &scratch.path,
+            ".bravebot/memory/notes-keeper.md",
+            false,
         )]),
     );
     assert_eq!(std::fs::read_to_string(&memory).unwrap(), "OUR-OWN-WORDS\n");
@@ -98496,7 +98637,13 @@ fn a_credential_refusal_names_the_redirection_under_the_directory_as_typed() {
     .unwrap();
     let home = Scratch::new("linked-directory-cred-home");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let programs = vouching_for("cat", &[".env"], &scratch.path.join("docs"));
+    let programs = vouching_for_writing(
+        "cat",
+        &[".env"],
+        &scratch.path.join("docs"),
+        ".env.bak",
+        false,
+    );
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2(
             "run",

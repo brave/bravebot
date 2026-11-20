@@ -205,6 +205,10 @@ mutation: Command::is_entry_for covers a binary started by another path
 file: crates/core/src/programs.rs
 replace: && crate::compare::same_path_buf(held_started_as, started_as) => && true
 
+mutation: Command::is_entry_for covers a step with its streams sent elsewhere
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_routes(held_routes, routes) => && true
+
 mutation: Command::is_entry_for covers another binary
 file: crates/core/src/programs.rs
 replace: crate::compare::same_path_buf(held_program, program) => true

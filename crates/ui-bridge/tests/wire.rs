@@ -1704,6 +1704,56 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
     assert_eq!(value["vouches"], json!([]));
 }
 
+/// RUN-8, PROMPT-11: the desktop draws `vouches[].display`, so the entry a yes would make for
+/// `sh check.sh > /dev/null` reaches it with its redirection. A display without the route would
+/// tell the person the grant is for the bare line, which the entry does not cover.
+#[test]
+fn a_run_prompt_draws_the_entry_for_a_discarding_line_with_its_route() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Plan, Route, Step, Steps};
+    let request = RunRequest {
+        reach_record: None,
+        unconfined: false,
+        key_choice: None,
+        confined: None,
+        record: None,
+        pattern: None,
+        stdin: None,
+        plan: Plan {
+            line: "sh check.sh > /dev/null".into(),
+            directory: "/tmp".into(),
+            steps: Steps::Pipeline(vec![Step {
+                program: "sh".into(),
+                resolved: "/bin/sh".into(),
+                started_as: "/bin/sh".into(),
+                args: vec!["check.sh".into()],
+                matched: Vec::new(),
+                environment: vec![],
+                expansions: vec![],
+                routes: vec![Route::Stdout {
+                    path: "/dev/null".into(),
+                    append: false,
+                }],
+            }]),
+            writes: vec![],
+            reads: vec![],
+            stdin: None,
+        },
+        classified: Default::default(),
+        protected: false,
+        destinations: Vec::new(),
+    };
+    let value = wire::run_request(3, &request);
+    assert_eq!(value["canBeRemembered"], json!(true));
+    let vouches = value["vouches"].as_array().expect("vouches");
+    assert_eq!(vouches.len(), 1);
+    assert_eq!(
+        vouches[0]["display"],
+        json!("/bin/sh check.sh > /dev/null"),
+        "the entry was drawn without its route: {vouches:?}"
+    );
+}
+
 /// A line with nothing that forces a question every time has a standing answer, so the front end
 /// is told it may offer one.
 #[test]

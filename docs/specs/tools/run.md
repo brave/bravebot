@@ -433,10 +433,20 @@ next prompt for *this* line, and the only thing it could ever grant is the bare 
 read the program and the arguments the entry would hold, which is what makes this narrower than a
 source; what they did not read is the line that entry covers. The refusal is made twice, as above.
 
+**A stream sent to `/dev/null`, or `2>&1`, is not withheld, because the entry holds it.** Neither
+route opens a file, so the line has an empty write set and is offered `a`
+([CMDLINE-5](command-line.md#CMDLINE-5)). The entry records the route as well as the program and the
+arguments ([RUN-8](#RUN-8)), so an entry made at `sh check.sh > /dev/null` covers that line, which
+the person read, and does not cover `sh check.sh`, whose output the planner would read as trusted.
+The prompt draws the entry with its route. A line whose route opens a file is withheld as above,
+since an entry would then record a destination that a later line can name differently.
+
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_line`
 `verified-by: bravebot_agent::cmdline::an_input_redirection_is_private_input`
 `verified-by: bravebot_agent::turn::a_line_that_reads_a_file_is_not_remembered_however_it_is_answered`
 `verified-by: bravebot_agent::turn::a_line_that_writes_is_not_remembered_however_it_is_answered`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_does_not_cover_the_bare_line`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_covers_that_line_again`
 `verified-by: bravebot_agent::turn::always_at_a_prompt_for_a_fed_page_does_not_cover_the_next_page`
 `verified-by: bravebot_core::policy::no_standing_answer_is_offered_for_a_line_fed_a_reference`
 `verified-by: bravebot_tui::confirm::run::a_run_fed_a_reference_offers_no_standing_permission`
@@ -511,6 +521,18 @@ behave as two programs ([RUN-2](#RUN-2)), for example a venv's `python` and the 
 to, or a multi-call binary that reads the name it was started by. An entry holds both paths, so an
 answer about `venv/bin/python` covers the interpreter only when it is started by that link. A record
 with no start path reads back as the file started by its own path.
+
+**Where the streams go is keyed with the program.** An entry holds the routes of the step it was made
+at, in the order the line wrote them, and a line is covered only where its routes are the same. The
+routes an entry can hold are the ones that open no file, which are a stream sent to `/dev/null` and
+`2>&1` ([RUN-6](#RUN-6)): `sh check.sh > /dev/null` and `sh check.sh 2>&1` are each an entry of their
+own, and neither covers `sh check.sh`. An entry with no routes covers a line with none and not a line
+that discards or merges a stream. A line whose route opens a file is not offered the key, so no entry
+holds one. A record from before entries held routes reads back as entries with none, which is the
+line they were made for. Before this key held routes, an entry made at a line that discarded its
+output covered the same program and arguments with the stream left alone, and a vouched entry made
+at a line that merged its streams covered the same program with them apart. Both are now different
+lines and are asked about.
 
 **The path itself, and never a rendering of it.** A path is bytes, and not every sequence of bytes is
 text. `to_string_lossy` maps every byte it cannot read onto one replacement character, so two files
@@ -615,6 +637,10 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::programs::two_spellings_of_one_binary_are_two_entries`
 `verified-by: bravebot_core::programs::a_command_started_through_a_link_reads_back_as_the_link_and_the_file`
 `verified-by: bravebot_core::programs::arguments_that_spell_a_link_draw_apart_from_the_link`
+`verified-by: bravebot_core::command::an_entry_made_at_a_line_with_routes_does_not_cover_the_line_without_them`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_does_not_cover_the_bare_line`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_covers_that_line_again`
+`verified-by: bravebot_session::sessions::the_routes_of_a_command_come_back_with_it`
 `verified-by: bravebot_core::policy::vouching_does_not_follow_a_binary_onto_another_path_it_is_started_by`
 `verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
 `verified-by: bravebot_session::sessions::the_path_a_command_was_started_by_comes_back_with_it`
@@ -1559,10 +1585,12 @@ cover the same program with them apart. Setting a variable makes a different lin
 reason. An assignment decides what a program loads and reads before its own arguments are looked at,
 which is why the hand-audited table refuses to prove a line carrying one
 ([command-line.md](command-line.md)), so a record that left it out would cover the line the person
-read with anything at all put in front of it. This is still a narrower key than a vouch has. A vouch
-is keyed on the program's two paths and the exact arguments and nothing else ([RUN-8](#RUN-8)), so a
-vouched entry covers the same program with its two streams merged; the session it was given in is
-what bounds that, and a record that outlives the session has no such bound.
+read with anything at all put in front of it. A vouch is keyed the same way, on the program's two
+paths, the exact arguments, where its streams go and the tree ([RUN-8](#RUN-8)), so a vouched entry
+made at a line that merged its streams does not cover the same program with them apart, and an entry
+made at a line that discarded its output does not cover the line that prints it. The key of an entry
+once left the routes out, and a vouched entry then covered the same program with its two streams
+merged.
 
 **The assignment is in the key and still cannot be recorded, and that is not a contradiction.** A
 line carrying one is asked about before this record is reached ([RUN-8](#RUN-8)), so an entry holding
@@ -1743,6 +1771,7 @@ differ every time is not helped at all, which
 `verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_binary_onto_another_path_it_is_started_by`
 `verified-by: bravebot_core::remembered::an_environment_assignment_makes_a_different_line`
 `verified-by: bravebot_core::remembered::sending_the_streams_somewhere_else_makes_a_different_line`
+`verified-by: bravebot_core::remembered::discarding_the_output_makes_a_different_line`
 `verified-by: bravebot_core::remembered::a_pipeline_is_covered_only_where_every_stage_is`
 `verified-by: bravebot_core::remembered::how_the_steps_are_joined_is_part_of_the_line`
 `verified-by: bravebot_core::remembered::an_empty_record_covers_nothing`

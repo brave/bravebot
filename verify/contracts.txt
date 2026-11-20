@@ -65,7 +65,7 @@ crates/core/src/policy.rs::promote_confined_read: r => ensures r is Ok <==> crat
 crates/core/src/policy.rs::consume_grant: r => ensures r is Ok <==> spec_granted(*old(self), tool@, field@, concrete@),
 crates/core/src/policy.rs::weakest_name: r => ensures r == Integrity::Trusted <==> (answers@.len() > 0 && forall|i: int| 0 <= i < answers@.len() ==> #[trigger] answers@[i] == Some(Integrity::Trusted)),
 crates/core/src/policy.rs::weakest_name/loop: invariant at <= answers.len(), forall|i: int| 0 <= i < at ==> #[trigger] answers@[i] == Some(Integrity::Trusted), decreases answers.len() - at,
-crates/core/src/programs.rs::is_entry_for: r => ensures r == crate::spec::command_is(*self, *program, *started_as, args@, *directory),
+crates/core/src/programs.rs::is_entry_for: r => ensures r == crate::spec::command_is(*self, *program, *started_as, args@, routes@, *directory),
 crates/core/src/programs.rs::some_entry_is: r => ensures r == crate::spec::some_entry_is(listed@, *step, *directory),
 crates/core/src/programs.rs::some_entry_is/loop: invariant at <= listed.len(), forall|i: int| 0 <= i < at ==> !crate::spec::entry_is_step( #[trigger] listed@[i], *step, *directory, ), decreases listed.len() - at,
 crates/core/src/programs.rs::steps_vouched: r => ensures r == crate::spec::steps_vouched(listed@, *steps, *directory), decreases *steps, 0nat,
