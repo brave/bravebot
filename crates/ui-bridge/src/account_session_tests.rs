@@ -362,12 +362,28 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
     if !profile::in_isolated_profile() {
         return;
     }
-    // A service that needs no credential, so that a request can be built; it is never answered.
+    // A service that needs no credential, so that a request can be built. It answers every
+    // request with a 500 and `maxRetries` of zero sends each request once, so a turn ends as soon
+    // as its level is recorded. A port nothing listens on ends a turn only as fast as the machine
+    // refuses the connection, and a runner that holds the connection open keeps the turn running
+    // past the 30 seconds `dispatch_when_idle` waits for it.
+    let service = std::net::TcpListener::bind("127.0.0.1:0").expect("a port on this machine");
+    let port = service.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        for mut connection in service.incoming().flatten() {
+            let _ = connection.write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
     let home = bravebot_agent::home::directory().expect("the profile's state directory");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(
         home.join("settings.json"),
-        r#"{"provider":{"local":{"options":{"baseURL":"http://127.0.0.1:9/v1"},"models":{"m":{}}}},"model":"local/m"}"#,
+        format!(
+            r#"{{"provider":{{"local":{{"options":{{"baseURL":"http://127.0.0.1:{port}/v1","maxRetries":0}},"models":{{"m":{{}}}}}}}},"model":"local/m"}}"#
+        ),
     )
     .unwrap();
     let (directory, workspace, trust) = project();
