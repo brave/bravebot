@@ -26,16 +26,34 @@ use crate::value::Labelled;
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// Identifier for a slot. Trusted metadata: slot ids are chosen by the planner from
 /// trusted input, never derived from content.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct SlotId(String);
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type whose fields
+// it does not read.
+impl Clone for SlotId {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl SlotId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r@ == crate::policy::spec_slot_name(*self),
+    ))]
     pub fn as_str(&self) -> &str {
         &self.0
     }

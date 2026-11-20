@@ -16,6 +16,11 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Labelled::into_trusted` | The value comes out exactly when the label is `(T,pub)`, and otherwise the labelled value comes back unchanged |
 | `Labelled::relabel` | It succeeds exactly when the new label is a degradation, and keeps the value |
 | `Policy::refuse_untrusted`, `Policy::read_trusted_content` | Each refuses exactly when the label is untrusted |
+| `Labelled::new`, `Labelled::trusted`, `Label::new` | Each builds the value and label it is given, `trusted` at `(T,pub)` |
+| `Policy::read_planner_argument`, `Policy::promote_confined_read` | Each passes exactly when the argument is public and the planner's context has met nothing untrusted, and `promote_confined_read` returns `(T,pub)` |
+| `Policy::declassify`, `Policy::declassify_into_place` | Each releases exactly the slots the release plan named before any content was seen, `declassify_into_place` only to the destination named with the slot |
+| `Policy::declassify_into_workspace`, `Policy::declassify_written_into_workspace`, `Policy::declassify_checkout_into_workspace` | Each returns the value at public with the integrity it had, so a release never raises integrity |
+| `Policy::endorsed_for_reading` | `read_output`, `promote_vetted` and `promote_vetted_picture` hand a slot to the planner only where it is the kind the gate serves and a single-use endorsement for it was issued |
 | `Plan::can_be_remembered` | It allows a line exactly when everything that decides what each step does is in the entry `a` records, as `spec::plan_is_its_entries` states over every field of `Plan` and `Step`: no file written or read by name, no reference fed in, no assignment, and no route that opens a file |
 | `Plan::can_be_remembered_as` | It allows a request exactly when its plan can be remembered and it asked for no scope, did not ask to run with no profile, and writes no protected path. `Plan::vouch` makes the only `Vouch`, and `Policy::remember_vouch` records only from one |
 | `policy::run_reason` | Private input, a requested scope, a write, an assignment, and a line outside the root that no entry names are always put to a person, and so is a line an `ask` or `deny` rule matches. A line goes unasked only on the answer that covers it, and a fed reference only on an `allow` rule or the audited table |
@@ -141,4 +146,11 @@ make check-verus
   code with access to the private fields, which `check_labelled_impls` in the security-audit skill
   refuses.
 - That a closure handed to `render_in_place` or `render_pair_in_place` decides nothing.
+- What `read_output`, `promote_vetted` and `promote_vetted_picture` return. `SlotStore` is opaque
+  to Verus, so their contract is the one on `endorsed_for_reading`, the question each asks before it
+  reads the slot.
+- That a release plan, an endorsement or the context integrity is what the session holds.
+  `Policy` is opaque to Verus, so `precommitted`, `precommitted_into`, `consume_grant` and
+  `context_integrity` are assumed to answer the uninterpreted `spec_precommitted`,
+  `spec_precommitted_into`, `spec_granted` and `spec_context`.
 - Any gate without a row above.

@@ -246,6 +246,46 @@ pub trait ExSink {
 }
 }
 
+// What a contract may say about a policy's release plan, which is fixed before any content is
+// seen: whether it names a slot, and whether it names a slot with a destination. Uninterpreted, and
+// `Policy::precommitted` and `Policy::precommitted_into` are assumed to answer them.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_precommitted<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    slot: SlotId,
+) -> bool;
+
+pub uninterp spec fn spec_precommitted_into<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    slot: SlotId,
+    destination: Seq<char>,
+) -> bool;
+}
+
+// Whether a policy holds a single-use endorsement for a tool's field at an exact value, which only
+// a person's answer, or a mode answering in their place, issues. Uninterpreted, and
+// `Policy::consume_grant` is assumed to succeed exactly where one is held.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_granted<'sink, S: Sink>(
+    policy: Policy<'sink, S>,
+    tool: Seq<char>,
+    field: Seq<char>,
+    value: Seq<char>,
+) -> bool;
+
+pub uninterp spec fn spec_slot_name(slot: SlotId) -> Seq<char>;
+}
+
+// What a contract may say about a policy: the integrity of the context the planner writes from,
+// which is the integrity of what it writes. `Policy` is opaque to Verus, so this is uninterpreted
+// and `Policy::context_integrity` is assumed to return it.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_context<'sink, S: Sink>(policy: Policy<'sink, S>) -> Integrity;
+}
+
 // A refusal's message is a `String` built by `format!`, which Verus does not read, so a contract
 // says only whether a gate refused. Opaque to Verus, and unchanged in a build.
 #[cfg(verus_keep_ghost)]
@@ -1085,6 +1125,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     pub fn routing(&self) -> &Routing {
         &self.routing
+    }
+
+    /// Whether the release plan names `slot` as a source.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_precommitted(*self, *slot),
+    ))]
+    fn precommitted(&self, slot: &SlotId) -> bool {
+        self.release.contains(slot)
+    }
+
+    /// Whether the release plan names `slot` with `destination`.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_precommitted_into(*self, *slot, destination@),
+    ))]
+    fn precommitted_into(&self, slot: &SlotId, destination: &str) -> bool {
+        self.release.allows_into(slot, destination)
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
@@ -2650,6 +2710,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Only what [`Policy::present`] let through counts. A reference is not its content: a slot
     /// id, a line count and a byte count carry no instruction, so being told about quarantined
     /// bytes is not the same as meeting them.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == spec_context(*self),
+    ))]
     pub fn context_integrity(&self) -> Integrity {
         self.context
     }
@@ -7013,14 +7078,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &crate::slot::SlotStore,
         by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
-        if slots.is_a_picture(slot) {
-            return Err(self.deny(
-                "vet_content",
-                Principle::Confinement,
-                format!("{slot} is a picture, and a picture is attached rather than given as text"),
-            ));
-        }
-        self.consume_grant("vet_content", "ref", slot.as_str())?;
+        self.endorsed_for_reading(
+            "vet_content",
+            slot,
+            !slots.is_a_picture(slot),
+            "is a picture, and a picture is attached rather than given as text",
+        )?;
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -7069,14 +7132,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &crate::slot::SlotStore,
         by: crate::vetting::Endorsed,
     ) -> Gated<crate::vetting::Attached> {
-        let Some(media) = slots.picture_of(slot).map(str::to_string) else {
-            return Err(self.deny(
-                "vet_content",
-                Principle::Confinement,
-                format!("{slot} is not a picture, so there is nothing to attach"),
-            ));
-        };
-        self.consume_grant("vet_content", "ref", slot.as_str())?;
+        let media = slots.picture_of(slot).map(str::to_string);
+        self.endorsed_for_reading(
+            "vet_content",
+            slot,
+            media.is_some(),
+            "is not a picture, so there is nothing to attach",
+        )?;
+        let media = media.unwrap_or_default();
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -7260,18 +7323,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &crate::slot::SlotStore,
         by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
-        if !slots.is_from_command(slot) {
-            return Err(self.deny(
-                "read_output",
-                Principle::Confinement,
-                format!(
-                    "{slot} is not something a program printed. Only command output may be read \
-                     this way; what a file is worth is the trust map's answer"
-                ),
-            ));
-        }
-
-        self.consume_grant("read_output", "ref", slot.as_str())?;
+        self.endorsed_for_reading(
+            "read_output",
+            slot,
+            slots.is_from_command(slot),
+            "is not something a program printed. Only command output may be read this way; \
+             what a file is worth is the trust map's answer",
+        )?;
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -7364,6 +7422,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Never for a network body, a command line, or a message to someone. Those leave, and
     /// [`Policy::before_action`] refusing them is exactly right.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::released(
+                crate::value::spec_label_of(&value),
+            ),
+    ))]
     pub fn declassify_into_workspace(
         &mut self,
         slot: &SlotId,
@@ -7371,7 +7435,119 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         value: Labelled<String>,
     ) -> Labelled<String> {
         let from = value.label();
-        let to = Label::new(from.integrity, crate::label::Confidentiality::Public);
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let to_its_workspace = Label::new(from.integrity, Confidentiality::Public);
+        let to = to_its_workspace;
+        self.record_into_workspace(slot, path, from, to);
+        let proof = Declassification::authorise("written back inside the workspace it came from");
+        Labelled::new(value.declassify(&proof), to)
+    }
+
+    /// The question every gate that hands a slot's bytes to the planner asks first: the slot is
+    /// the kind the gate serves, and a single-use endorsement for this slot is held, which only a
+    /// person's answer, a safe verdict where auto-vetting is on, or a mode answering in a person's
+    /// place issues. The endorsement is spent.
+    ///
+    /// `wrong_kind` says why a slot of the wrong kind is refused, after the slot's name.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> (right_kind && spec_granted(
+                *old(self),
+                tool@,
+                "ref"@,
+                spec_slot_name(*slot),
+            )),
+    ))]
+    fn endorsed_for_reading(
+        &mut self,
+        tool: &'static str,
+        slot: &SlotId,
+        right_kind: bool,
+        wrong_kind: &'static str,
+    ) -> Gated<()> {
+        if !right_kind {
+            return Err(self.refuse_wrong_kind(tool, slot, wrong_kind));
+        }
+        self.consume_grant(tool, "ref", slot.as_str())
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_wrong_kind(&mut self, tool: &'static str, slot: &SlotId, why: &str) -> Denial {
+        self.deny(tool, Principle::Confinement, format!("{slot} {why}"))
+    }
+
+    /// The refusal of a release the plan did not name, to `destination` where one was asked for.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn refuse_unplanned_release(&mut self, slot: &SlotId, destination: Option<&str>) -> Denial {
+        let message = match destination {
+            Some(destination) => {
+                format!("slot '{slot}' was not precommitted as releasable to {destination}")
+            }
+            None => format!("slot '{slot}' was not precommitted as releasable"),
+        };
+        self.deny("declassify", Principle::Confinement, message)
+    }
+
+    /// The event for [`Policy::declassify`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_release(&mut self, slot: &SlotId, from: Label, to: Label) {
+        self.sink.emit(Event::Declassified {
+            slot: slot.clone(),
+            from,
+            to,
+            reason: "precommitted release source",
+        });
+    }
+
+    /// The event and trail line for [`Policy::declassify_into_place`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_into_place(&mut self, slot: &SlotId, destination: &str, from: Label, to: Label) {
+        self.sink.emit(Event::Declassified {
+            slot: slot.clone(),
+            from,
+            to,
+            reason: "precommitted release to a connector place",
+        });
+        self.allow(
+            "declassify",
+            format!("{slot} released to {destination}, as its plan named"),
+        );
+    }
+
+    /// The trail line for [`Policy::declassify_written_into_workspace`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_written_into_workspace(&mut self, tool: &str, path: &str, from: Label, to: Label) {
+        self.allow(
+            "declassify",
+            format!(
+                "{tool}: what the planner wrote, {from}, released into {path}, which is inside \
+                 the workspace, as {to}"
+            ),
+        );
+    }
+
+    /// The trail line for [`Policy::declassify_checkout_into_workspace`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_checkout_into_workspace(
+        &mut self,
+        checkout_path: &str,
+        path: &str,
+        from: Label,
+        to: Label,
+    ) {
+        self.allow(
+            "declassify",
+            format!(
+                "{checkout_path}, which is {from}, released into {path}, which is inside the \
+                 workspace, as {to}"
+            ),
+        );
+    }
+
+    /// The trail lines for [`Policy::declassify_into_workspace`]. Apart from the gate so a contract
+    /// on the gate states its label, which is all the gate decides.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn record_into_workspace(&mut self, slot: &SlotId, path: &str, from: Label, to: Label) {
         self.sink.emit(Event::Declassified {
             slot: slot.clone(),
             from,
@@ -7382,8 +7558,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "declassify",
             format!("{slot} released into {path}, which is inside the workspace"),
         );
-        let proof = Declassification::authorise("written back inside the workspace it came from");
-        Labelled::new(value.declassify(&proof), to)
     }
 
     /// Release a quarantined value into the connector destination its plan named for it.
@@ -7397,30 +7571,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The witness unwraps the bytes for one place: the standard input of the credential
     /// authority, which carries them into the HTTP body it sends (LABEL-6). The caller unwraps
     /// them there and nowhere else, exactly as [`Policy::authorise_program_input`]'s caller does.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_precommitted_into(*old(self), *slot, destination@),
+    ))]
     pub fn declassify_into_place(
         &mut self,
         slot: &SlotId,
         destination: &str,
         from: Label,
     ) -> Gated<Declassification> {
-        if !self.release.allows_into(slot, destination) {
-            return Err(self.deny(
-                "declassify",
-                Principle::Confinement,
-                format!("slot '{slot}' was not precommitted as releasable to {destination}"),
-            ));
+        let precommitted_here = self.precommitted_into(slot, destination);
+        if !precommitted_here {
+            return Err(self.refuse_unplanned_release(slot, Some(destination)));
         }
         let to = Label::new(from.integrity, Confidentiality::Public);
-        self.sink.emit(Event::Declassified {
-            slot: slot.clone(),
-            from,
-            to,
-            reason: "precommitted release to a connector place",
-        });
-        self.allow(
-            "declassify",
-            format!("{slot} released to {destination}, as its plan named"),
-        );
+        self.record_into_place(slot, destination, from, to);
         Ok(Declassification::authorise(
             "precommitted release to a connector place",
         ))
@@ -7433,6 +7599,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// confidentiality. Integrity is untouched, so the write is decided exactly as it was before
     /// the planner was shown anything. A public value comes back as it went in and records
     /// nothing.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::released(
+                crate::value::spec_label_of(&value),
+            ),
+    ))]
     pub fn declassify_written_into_workspace(
         &mut self,
         tool: &str,
@@ -7443,14 +7615,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         if from.is_public() {
             return value;
         }
-        let to = Label::new(from.integrity, Confidentiality::Public);
-        self.allow(
-            "declassify",
-            format!(
-                "{tool}: what the planner wrote, {from}, released into {path}, which is inside \
-                 the workspace, as {to}"
-            ),
-        );
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let to_the_workspace = Label::new(from.integrity, Confidentiality::Public);
+        let to = to_the_workspace;
+        self.allow_written_into_workspace(tool, path, from, to);
         let proof = Declassification::authorise("the planner's words written into the workspace");
         Labelled::new(value.declassify(&proof), to)
     }
@@ -7462,6 +7630,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// confidentiality that stops content crossing a bridge is not in play. Integrity is untouched:
     /// the label is the one the checkout's path has, and completing the file effect that
     /// writes them records the destination as untrusted where the bytes are.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::released(
+                crate::value::spec_label_of(&value),
+            ),
+    ))]
     pub fn declassify_checkout_into_workspace(
         &mut self,
         checkout_path: &str,
@@ -7469,14 +7643,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         value: Labelled<String>,
     ) -> Labelled<String> {
         let from = value.label();
-        let to = Label::new(from.integrity, Confidentiality::Public);
-        self.allow(
-            "declassify",
-            format!(
-                "{checkout_path}, which is {from}, released into {path}, which is inside the \
-                 workspace, as {to}"
-            ),
-        );
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let to_the_checkouts_workspace = Label::new(from.integrity, Confidentiality::Public);
+        let to = to_the_checkouts_workspace;
+        self.allow_checkout_into_workspace(checkout_path, path, from, to);
         let proof =
             Declassification::authorise("a checkout's file written back into its workspace");
         Labelled::new(value.declassify(&proof), to)
@@ -9201,21 +9371,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Only slots named in the precommitted [`ReleasePlan`] may be released, and the
     /// plan was fixed before any content was observed, so content cannot nominate
     /// itself for release.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_precommitted(*old(self), *slot),
+    ))]
     pub fn declassify(&mut self, slot: &SlotId, from: Label) -> Gated<Declassification> {
-        if !self.release.contains(slot) {
-            return Err(self.deny(
-                "declassify",
-                Principle::Confinement,
-                format!("slot '{slot}' was not precommitted as releasable"),
-            ));
+        let precommitted = self.precommitted(slot);
+        if !precommitted {
+            return Err(self.refuse_unplanned_release(slot, None));
         }
-        let to = Label::new(from.integrity, crate::label::Confidentiality::Public);
-        self.sink.emit(Event::Declassified {
-            slot: slot.clone(),
-            from,
-            to,
-            reason: "precommitted release source",
-        });
+        let to = Label::new(from.integrity, Confidentiality::Public);
+        self.record_release(slot, from, to);
         Ok(Declassification::authorise("precommitted release source"))
     }
 
@@ -9248,6 +9414,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// private content still names paths and commands, and refusing every argument after a vet
     /// would end the turn. The arguments that hand the planner's words to a server are labelled
     /// from the context instead, and [`Policy::mcp_call_needs_approval`] asks about them.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::spec::the_planner_may_decide(
+                crate::value::spec_label_of(value),
+                spec_context(*old(self)),
+            ),
+    ))]
     pub fn read_planner_argument(
         &mut self,
         tool: &str,
@@ -9255,7 +9428,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         value: &Labelled<String>,
     ) -> Gated<String> {
         let label = value.label();
-        if !label.is_public() {
+        // A private argument is the person's data in a field the driver reads.
+        let private_argument = !label.is_public();
+        if private_argument {
             return Err(self.deny(
                 "argument",
                 Principle::Confinement,
@@ -9265,7 +9440,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         }
-        if self.context != Integrity::Trusted {
+        // A fallen context writes untrusted words, which must not decide anything.
+        let fallen_argument = self.context_integrity() != Integrity::Trusted;
+        if fallen_argument {
             return Err(self.deny(
                 "argument",
                 Principle::IntegrityGate,
@@ -9318,6 +9495,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Every promotion is recorded, so the audit trail shows which choices were the
     /// model's rather than the user's.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::spec::the_planner_may_decide(
+                crate::value::spec_label_of(proposed),
+                spec_context(*old(self)),
+            ),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_confined_read(
         &mut self,
         tool: &str,
@@ -9328,7 +9513,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // Private content is not promotable: reading it back out would launder the
         // user's data into a value the model can steer.
-        if !label.is_public() {
+        let private_proposal = !label.is_public();
+        if private_proposal {
             return Err(self.deny(
                 "promote",
                 Principle::Confinement,
@@ -9338,7 +9524,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         }
-        if self.context != Integrity::Trusted {
+        // A fallen context proposes untrusted paths, which must not decide anything.
+        let fallen_proposal = self.context_integrity() != Integrity::Trusted;
+        if fallen_proposal {
             return Err(self.deny(
                 "promote",
                 Principle::IntegrityGate,
@@ -9828,6 +10016,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// as plain strings a person read, and the grant match is the whole of its authority. Keeping
     /// the lookup in one place is what stops its callers drifting apart on what counts as a
     /// match.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_granted(*old(self), tool@, field@, concrete@),
+    ))]
     fn consume_grant(&mut self, tool: &str, field: &str, concrete: &str) -> Gated<()> {
         let found = self
             .grants

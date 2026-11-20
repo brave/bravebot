@@ -320,3 +320,71 @@ replace: if each.is_empty() { => if false {
 mutation: pipeline_decision reads a denied stage as an ask
 file: crates/core/src/permissions.rs
 replace: return Decision::Ruled(Ruling::Deny); => return Decision::Ruled(Ruling::Ask);
+
+mutation: read_planner_argument reads a private argument
+file: crates/core/src/policy.rs
+replace: let private_argument = !label.is_public(); => let private_argument = false;
+
+mutation: read_planner_argument reads an argument written from a fallen context
+file: crates/core/src/policy.rs
+replace: let fallen_argument = self.context_integrity() != Integrity::Trusted; => let fallen_argument = false;
+
+mutation: promote_confined_read promotes a private proposal
+file: crates/core/src/policy.rs
+replace: let private_proposal = !label.is_public(); => let private_proposal = false;
+
+mutation: promote_confined_read promotes a proposal from a fallen context
+file: crates/core/src/policy.rs
+replace: let fallen_proposal = self.context_integrity() != Integrity::Trusted; => let fallen_proposal = false;
+
+mutation: declassify_written_into_workspace raises the integrity of what it releases
+file: crates/core/src/policy.rs
+replace: let to_the_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_workspace = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: declassify_written_into_workspace keeps a private write private
+file: crates/core/src/policy.rs
+replace: let to_the_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_workspace = from;
+
+mutation: declassify_into_workspace raises the integrity of what it releases
+file: crates/core/src/policy.rs
+replace: let to_its_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_its_workspace = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: declassify_into_workspace keeps a private release private
+file: crates/core/src/policy.rs
+replace: let to_its_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_its_workspace = from;
+
+mutation: declassify_checkout_into_workspace raises the integrity of what it releases
+file: crates/core/src/policy.rs
+replace: let to_the_checkouts_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_checkouts_workspace = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: declassify_checkout_into_workspace keeps a private release private
+file: crates/core/src/policy.rs
+replace: let to_the_checkouts_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_checkouts_workspace = from;
+
+mutation: declassify releases a slot the plan did not name
+file: crates/core/src/policy.rs
+replace: let precommitted = self.precommitted(slot); => let precommitted = true;
+
+mutation: declassify_into_place releases a slot to a destination the plan did not name
+file: crates/core/src/policy.rs
+replace: let precommitted_here = self.precommitted_into(slot, destination); => let precommitted_here = self.precommitted(slot);
+
+mutation: endorsed_for_reading hands a slot of the wrong kind to the planner
+file: crates/core/src/policy.rs
+replace: if !right_kind { => if false {
+
+mutation: endorsed_for_reading hands a slot to the planner without an endorsement
+file: crates/core/src/policy.rs
+replace: self.consume_grant(tool, "ref", slot.as_str()) => Ok(())
+
+mutation: Labelled::trusted builds a value that is private
+file: crates/core/src/value.rs
+replace: confidentiality: crate::label::Confidentiality::Public, => confidentiality: crate::label::Confidentiality::Private,
+
+mutation: Labelled::new builds a value at a label other than the one it was given
+file: crates/core/src/value.rs
+replace: let given = label; => let given = Label { integrity: crate::label::Integrity::Trusted, confidentiality: label.confidentiality };
+
+mutation: Label::new builds a label at another integrity than the one it was given
+file: crates/core/src/label.rs
+replace: let integrity_given = integrity; => let integrity_given = Integrity::Trusted;
