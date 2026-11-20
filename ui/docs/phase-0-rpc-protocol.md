@@ -856,6 +856,20 @@ record kept come back as `asides` (`[{ question, answer, kept }]`, `answer` null
 did not keep it) when the session is opened. `session.aside.cancel` (`{ "session" }`) stops a
 question that is out and answers `{}` whether or not one was.
 
+#### `session.btw`
+
+```json
+{ "id": 9, "method": "session.btw", "params": { "session": "s1", "question": "why does it retry", "model": null } }
+→ { "started": true }
+```
+
+Asks the session's model the person's `/btw` question over the exchange as it stands, with no
+tools, and returns before it has answered (CMD-8). The conversation is not changed. The answer is
+kept as an aside in the session's record under the question, its cost is charged to the session, and
+it arrives as an `aside.done` event with `recap` false. An empty question is refused with
+`bad_request`, as is a second question while one is out, a `/recap` included. A turn that is
+running is refused with `turn_in_flight`. `session.aside.cancel` stops it.
+
 #### `mentions.offer`
 
 ```json
@@ -1150,7 +1164,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
-| `aside.done` | `{ status, question, recap, answer?, kept?, message? }` | what a `session.recap` came back with: `answered` (`answer`, and `kept`, whether the record keeps it), `stopped`, or `failed` (`message`). `question` is the row's label, `/recap` for a recap |
+| `aside.done` | `{ status, question, recap, answer?, kept?, message? }` | what a `session.btw` or `session.recap` came back with: `answered` (`answer`, and `kept`, whether the record keeps it), `stopped`, or `failed` (`message`). `question` is the row's label: the person's question, or `/recap` for a recap |
 | `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
 | `phase` | `{ phase, retry }`, where `retry` is `{ attempt, in_ms, gives_up_in_ms }` while a failed request waits to be sent again and `null` otherwise | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |

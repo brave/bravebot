@@ -32,6 +32,12 @@ const RECAP_OPENS: &str = "We are adding retries to fetch_page";
 /// What the stub answers a turn with.
 const TURN_REPLY: &str = "fetch_page makes one attempt.";
 
+/// The person's `/btw` question in these tests.
+const BTW_QUESTION: &str = "why does fetch_page give up so soon";
+
+/// What the stub answers [`BTW_QUESTION`] with.
+const BTW_REPLY: &str = "Nobody asked it to retry.";
+
 struct Scratch {
     path: PathBuf,
 }
@@ -118,6 +124,7 @@ fn answer(mut stream: std::net::TcpStream, seen: &Mutex<Vec<Value>>) {
     } else {
         let asked: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         let recap = last_message(&asked).contains("I am coming back to this session");
+        let btw = last_message(&asked).contains(BTW_QUESTION);
         let held = asked.to_string().contains(HELD);
         seen.lock().unwrap().push(asked);
         if held {
@@ -125,6 +132,8 @@ fn answer(mut stream: std::net::TcpStream, seen: &Mutex<Vec<Value>>) {
         }
         let text = if recap {
             long_recap()
+        } else if btw {
+            BTW_REPLY.to_string()
         } else {
             TURN_REPLY.to_string()
         };
@@ -273,6 +282,17 @@ impl Window {
     fn recap(&mut self) -> Value {
         let session = self.session.clone();
         let started = self.ask("session.recap", json!({"session": session}));
+        assert_eq!(started["ok"]["started"], true, "{started}");
+        until(&self.said, |m| m["event"] == "aside.done")
+    }
+
+    /// Ask `question` with `/btw` and wait for its `aside.done`.
+    fn btw(&mut self, question: &str) -> Value {
+        let session = self.session.clone();
+        let started = self.ask(
+            "session.btw",
+            json!({"session": session, "question": question}),
+        );
         assert_eq!(started["ok"]["started"], true, "{started}");
         until(&self.said, |m| m["event"] == "aside.done")
     }
@@ -441,5 +461,137 @@ fn a_recap_while_a_turn_runs_is_refused_as_turn_in_flight() {
         window.requests().len(),
         1,
         "a refused recap reached the service"
+    );
+}
+
+/// CMD-8: a `/btw` at rest goes to the model once, over the exchange, with the person's question
+/// and no tools, and comes back as the answer to that question.
+#[test]
+fn a_btw_at_rest_is_answered_over_the_exchange_with_no_tools() {
+    let mut window = Window::open("bridge-aside-btw-asks");
+    window.say("look at src/net.rs and tell me how fetch_page handles errors");
+    let before = window.requests().len();
+
+    let done = window.btw(BTW_QUESTION);
+
+    assert_eq!(done["data"]["status"], "answered", "{done}");
+    assert_eq!(done["data"]["recap"], false, "{done}");
+    assert_eq!(done["data"]["question"], BTW_QUESTION, "{done}");
+    assert_eq!(done["data"]["answer"], BTW_REPLY, "{done}");
+    let requests = window.requests();
+    assert_eq!(
+        requests.len(),
+        before + 1,
+        "one request, and no turn behind it"
+    );
+    let asked = &requests[before];
+    assert!(
+        asked
+            .get("tools")
+            .is_none_or(|tools| tools.as_array().is_some_and(Vec::is_empty)),
+        "the question was offered tools: {asked}"
+    );
+    assert!(
+        last_message(asked).contains(BTW_QUESTION),
+        "the question is missing: {asked}"
+    );
+    assert!(
+        asked.to_string().contains("how fetch_page handles errors"),
+        "the exchange is missing: {asked}"
+    );
+}
+
+/// CMD-8: a `/btw` leaves the exchange as it was, so a turn sent afterwards carries neither the
+/// question nor the answer.
+#[test]
+fn a_btw_is_not_added_to_the_exchange() {
+    let mut window = Window::open("bridge-aside-btw-leaves-the-exchange");
+    window.say("look at src/net.rs");
+    window.btw(BTW_QUESTION);
+
+    window.say("and the tests?");
+    let requests = window.requests();
+    let last = requests.last().unwrap().to_string();
+    assert!(last.contains("and the tests?"), "{last}");
+    assert!(
+        !last.contains(BTW_QUESTION),
+        "the question entered the exchange: {last}"
+    );
+    assert!(
+        !last.contains(BTW_REPLY),
+        "the answer entered the exchange: {last}"
+    );
+}
+
+/// CMD-8: the `/btw` is kept as an aside in the session's record under the person's question, so
+/// opening the session again returns it.
+#[test]
+fn a_btw_is_in_the_record_when_the_session_is_opened_again() {
+    let mut window = Window::open("bridge-aside-btw-recorded");
+    let ended = window.say("look at src/net.rs");
+    let id = ended["data"]["id"]
+        .as_str()
+        .expect("the turn names its session")
+        .to_string();
+    window.btw(BTW_QUESTION);
+
+    let opened = window.reopen(&id);
+
+    let asides = opened["ok"]["asides"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no asides: {opened}"));
+    assert_eq!(asides.len(), 1, "{opened}");
+    assert_eq!(asides[0]["question"], BTW_QUESTION, "{opened}");
+    assert_eq!(asides[0]["answer"], BTW_REPLY, "{opened}");
+    assert_eq!(asides[0]["kept"], true, "{opened}");
+}
+
+/// CMD-8: a `/btw` with nothing after it is refused, and nothing reaches the service for it.
+#[test]
+fn an_empty_btw_is_refused() {
+    let mut window = Window::open("bridge-aside-btw-empty");
+    window.say("look at src/net.rs");
+    let before = window.requests().len();
+    let session = window.session.clone();
+
+    let refused = window.ask(
+        "session.btw",
+        json!({"session": session, "question": "   "}),
+    );
+
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert_eq!(
+        window.requests().len(),
+        before,
+        "an empty question reached the service"
+    );
+}
+
+/// CMD-8: one question at a time, so a second `/btw` while the first is out is refused, and
+/// nothing reaches the service for it.
+#[test]
+fn a_second_btw_while_one_is_out_is_refused() {
+    let mut window = Window::open("bridge-aside-btw-one-at-a-time");
+    window.say("look at src/net.rs");
+    let before = window.requests().len();
+    let session = window.session.clone();
+    let started = window.ask(
+        "session.btw",
+        json!({"session": session, "question": format!("{HELD} for the first question")}),
+    );
+    assert_eq!(started["ok"]["started"], true, "{started}");
+    window.wait_for_requests(before + 1);
+
+    let refused = window.ask(
+        "session.btw",
+        json!({"session": session, "question": BTW_QUESTION}),
+    );
+
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        window.requests().len(),
+        before + 1,
+        "the second question reached the service"
     );
 }

@@ -475,7 +475,8 @@ impl Bridge {
             "session.handoff" => self.handoff_brief(request),
             "session.handoff.cancel" => self.cancel_handoff(request),
             "session.background" => self.background_session(request),
-            "session.recap" => self.recap(request),
+            "session.recap" => self.ask_aside(request, false),
+            "session.btw" => self.ask_aside(request, true),
             "session.aside.cancel" => self.cancel_aside(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
@@ -2664,15 +2665,28 @@ impl Bridge {
         Ok(json!({ "handedOver": left.id, "mode": mode.word() }))
     }
 
-    /// Ask the session's model to recap the exchange, and return before it has answered (CMD-16).
+    /// Ask the session's model a question beside the work, and return before it has answered:
+    /// the person's `question` for `/btw` (CMD-8) when `btw` is set, otherwise a recap (CMD-16).
     ///
-    /// The request is [`bravebot_agent::aside::Question::recap`], the one the terminal's `/recap`
-    /// makes, over the exchange as it stands and with no tools. The conversation is not changed:
-    /// the answer is kept as an aside in the session's record and comes back as an `aside.done`
-    /// event. Refused while a turn runs, since `/recap` waits for the turn (CMD-16).
-    fn recap(&mut self, request: &Request) -> Result<Value, Failure> {
+    /// The request is [`bravebot_agent::aside::Question::about`] or
+    /// [`bravebot_agent::aside::Question::recap`], the ones the terminal's `/btw` and `/recap`
+    /// make at rest, over the exchange as it stands and with no tools. The conversation is not
+    /// changed: the answer is kept as an aside in the session's record and comes back as an
+    /// `aside.done` event. Refused with `turn_in_flight` while a turn runs: `/recap` waits for the
+    /// turn (CMD-16), and a `/btw` beside a turn needs the exchange the turn published, which the
+    /// bridge does not hold yet.
+    fn ask_aside(&mut self, request: &Request, btw: bool) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let requested_model = crate::models::selection(request.params.get("model"))?;
+        let question = if btw {
+            let question = request.string("question")?;
+            if let Some(refused) = crate::aside::refusal(&question) {
+                return Err(Failure::bad_request(refused));
+            }
+            Some(question)
+        } else {
+            None
+        };
 
         self.reap(&handle);
 
@@ -2702,7 +2716,14 @@ impl Bridge {
                 Failure::new(ErrorCode::Internal, "the session's state is unavailable")
             })?;
             (
-                bravebot_agent::aside::Question::recap(&state.conversation),
+                match &question {
+                    Some(question) => bravebot_agent::aside::Question::about(
+                        &state.conversation,
+                        question,
+                        Vec::new(),
+                    ),
+                    None => bravebot_agent::aside::Question::recap(&state.conversation),
+                },
                 state.account.clone(),
                 state.answers.trust.clone(),
             )
@@ -2731,12 +2752,10 @@ impl Bridge {
                 |_written| {},
                 &cancel,
             );
-            let (event, aside, tokens) = crate::aside::settle(
-                done,
-                cancel.is_cancelled(),
-                crate::aside::RECAP_LABEL.to_string(),
-                true,
-            );
+            let recap = question.is_none();
+            let asked = question.unwrap_or_else(|| crate::aside::RECAP_LABEL.to_string());
+            let (event, aside, tokens) =
+                crate::aside::settle(done, cancel.is_cancelled(), asked, recap);
             keep_aside(&project, &state, aside, tokens);
             settled.store(true, std::sync::atomic::Ordering::Release);
             emitter.send(Event::new("aside.done", &session, event));

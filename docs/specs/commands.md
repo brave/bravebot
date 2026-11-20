@@ -824,6 +824,12 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
 `verified-by: bravebot_ui_bridge::reports_tests::the_status_report_leaves_out_the_rules_a_running_turn_holds`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Session Status… is offered on an open chat during a turn and after it and is routed to its own action, and ui/scripts/reports.test.mjs that the status says the rules are held by the running turn when the bridge sets rulesHeldByTurn and lists them otherwise; make check-ui runs both)`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_at_rest_is_answered_over_the_exchange_with_no_tools`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_in_the_record_when_the_session_is_opened_again`
+`verified-by: bravebot_ui_bridge::asking_aside::an_empty_btw_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_while_one_is_out_is_refused`
+`verified-by: bravebot_ui_bridge::aside::an_empty_question_is_refused`
 
 ## What a slash word is offered
 
