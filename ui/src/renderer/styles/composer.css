@@ -308,6 +308,17 @@
 .context-meter.full { --leo-progressring-color: var(--status-error); }
 .meter-ring { display: grid; }
 
+/* ---- spend limit */
+
+.spend-limit { flex: none; }
+.spend-limit-figures { font: var(--type-caption); font-variant-numeric: tabular-nums; }
+.spend-limit.reached { --leo-icon-color: var(--status-warning); }
+.spend-limit-refused {
+  margin: var(--leo-spacing-m) 0 0;
+  font: var(--type-meta);
+  color: var(--status-error);
+}
+
 /* ---- attachments */
 
 .attachment-chips {

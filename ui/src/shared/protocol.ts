@@ -431,6 +431,30 @@ export type SandboxMode = 'workspace-write' | 'read-only' | 'strict'
 /** The order the sandbox menu lists them. */
 export const SANDBOX_MODES: readonly SandboxMode[] = ['workspace-write', 'read-only', 'strict']
 
+/** What a session spend limit counts (TURN-8). */
+export type SpendUnit = 'tokens' | 'credits'
+
+/** A session spend limit: a positive count of one unit. */
+export interface SpendLimitFigure {
+  unit: SpendUnit
+  count: number
+}
+
+/**
+ * `session.limit`'s params. Without `limit` the call only reads. A string is read the way the
+ * `limit` setting is (`50000`, `500k`, `20 credits`), and `null` takes the limit away.
+ */
+export interface SessionLimitParams {
+  session: string
+  limit?: string | null
+}
+
+/** `session.limit`'s answer: the limit in force, and what the session has spent in its unit (tokens when there is none). */
+export interface SessionLimit {
+  limit: SpendLimitFigure | null
+  spent: number
+}
+
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
 }

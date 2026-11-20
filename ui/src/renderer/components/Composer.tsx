@@ -12,6 +12,7 @@ import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { SessionControlsMenu } from './SessionControlsMenu'
+import { SpendLimit } from './SpendLimit'
 import { typing } from '../avatar/clock'
 import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
@@ -500,6 +501,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 onClick={props.onQueue}>Queue for after</Button>
             )}
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
+            {onMode && <SpendLimit key={`limit-${session}`} session={session} running={running} pending={pending} />}
             <SessionControlsMenu key={`controls-${session}`} permissionMode={permissionMode} onPermissionMode={onMode}
               sandboxMode={sandboxMode} onSandboxMode={onSandbox} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
