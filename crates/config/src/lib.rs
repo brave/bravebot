@@ -34,6 +34,7 @@ pub mod embeddings;
 pub mod embeddings_key;
 pub mod git_identities;
 pub mod hooks;
+pub mod hooks_approved;
 pub mod install;
 pub mod keys;
 pub mod limit;

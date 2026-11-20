@@ -49,6 +49,9 @@ pub struct Lent<'a, T: ?Sized> {
     /// it never waits for the lock (DELEGATE-16). `None` for anything that is not a confirmer, and
     /// for a confirmer that answers nothing in advance.
     unasked: Option<crate::permission_mode::Unasked>,
+    /// Whether the lent confirmer puts the question about a plugin's hook to a person, taken before
+    /// it was lent for the reason `unasked` is: reading it never waits on another run's question.
+    asks_about_hooks: bool,
     totals: Mutex<Totals>,
 }
 
@@ -92,6 +95,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         Self {
             inner: Mutex::new(inner),
             unasked: None,
+            asks_about_hooks: false,
             totals: Mutex::new(Totals::default()),
         }
     }
@@ -103,8 +107,10 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         T: Confirmer,
     {
         let unasked = inner.answering_unasked();
+        let asks_about_hooks = inner.can_ask_about_a_hook();
         Self {
             unasked,
+            asks_about_hooks,
             ..Self::new(inner)
         }
     }
@@ -577,6 +583,19 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
             |unasked| unasked.moved(),
             |held| held.confirm_move(request),
             |refuse| refuse.confirm_move(request),
+        )
+    }
+
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.lent.asks_about_hooks
+    }
+
+    fn confirm_hook(&mut self, request: &crate::confirm::HookRequest) -> Decision {
+        // No mode answers it (PLUGIN-7), so nothing is decided in advance.
+        self.asked(
+            |_| None,
+            |held| held.confirm_hook(request),
+            |refuse| refuse.confirm_hook(request),
         )
     }
 

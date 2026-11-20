@@ -68,6 +68,8 @@ pub mod permissions;
 pub mod picture;
 pub mod plan_approval;
 mod plugin_git;
+pub mod plugin_hooks;
+pub mod plugin_servers;
 pub mod plugin_source;
 pub mod plugins;
 pub mod preamble;

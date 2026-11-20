@@ -1884,6 +1884,20 @@ servers-nobody-at-a-terminal =
     { $alias } was not started: there is no terminal to ask at, so run bravebot mcp approve
     { $alias } at one
 servers-declined = { $alias } is not used in this session
+servers-carried-by = carried by the plugin { $plugin }
+servers-plugin-nobody =
+    { $alias } was not started: it is a server of the plugin { $plugin }, and a run that cannot ask
+    a person approves no server a plugin carries
+servers-plugin-disabled = { $alias } was not started: the plugin { $plugin } is turned off
+servers-plugin-changed =
+    { $alias } was not started: the files of the plugin { $plugin } no longer match what was
+    installed. Remove the plugin and install it again to use its servers
+servers-plugin-shadowed =
+    { $alias } is declared in mcp.json, so the server the plugin { $plugin } carries under that
+    name is not used
+servers-plugin-stopped-changed =
+    A server of the plugin { $plugin } was stopped: the plugin's files no longer match what was
+    installed. Remove the plugin and install it again to use its servers.
 servers-program-relative = { $program } is a relative path, which names a different program in each directory
 servers-program-without-path =
     { $program } is found through PATH, which the declaration does not name: declare it with
@@ -2111,6 +2125,34 @@ plugin-install-no-skills = This plugin offers no skill
 plugin-install-definitions = Definitions ({ $count })
 plugin-install-no-definitions = This plugin offers no definition
 plugin-install-kind = kind: { $kind }
+plugin-install-hooks = Hooks ({ $count })
+plugin-install-no-hooks = This plugin offers no hook
+plugin-install-hook-at = Runs at { $moment }
+plugin-install-hook-tool = Only for the tool
+plugin-install-hook-path = Watches the file
+plugin-install-hook-timeout = Bound: { $seconds } seconds
+plugin-install-argv = Program and arguments
+plugin-install-hooks-unkept = The hooks file holds more than is listed here: { $dropped } entries the hook reader cannot use and { $keys } keys it does not read. Only what is listed here can run.
+plugin-install-servers = Servers ({ $count })
+plugin-install-no-servers = This plugin offers no server
+plugin-install-server = Server
+plugin-install-server-unusable = This entry states no declaration that can be used, so it is never started
+plugin-install-server-unreachable = The plugin name and this alias are too long together, so it is never started
+plugin-install-server-transport = Transport
+plugin-install-server-url = Address
+plugin-install-server-variable = Variable it names
+plugin-install-server-stored = Variable given a value, as written
+plugin-install-reach-command = Would start the program
+plugin-install-reach-host = Would reach the host
+plugin-install-reach-file = May read the file
+plugin-install-reach-directory = Runs in the directory
+plugin-install-fault-unreadable = The file this part names could not be read, so nothing of it is listed
+plugin-install-fault-not-file = The path this part names is not a regular file, so nothing of it is listed
+plugin-install-fault-too-large = The file this part names is too large to read, so nothing of it is listed
+plugin-install-fault-not-text = The file this part names is not text, so nothing of it is listed
+plugin-install-fault-not-hooks = The file this part names is not a hooks file, so nothing of it is listed
+plugin-install-fault-not-servers = The file this part names is not a servers file, so nothing of it is listed
+plugin-install-fault-path = The directory this plugin installs to is not text, so nothing of this part is listed
 plugin-install-shadowed = Shadowed by { $by }. The one named here is not the one a session gets
 plugin-install-expand = (e to show the rest)
 plugin-install-collapse = (e to cut long text)
@@ -2118,6 +2160,16 @@ plugin-install-not-done = A yes copies this plugin and records it. It does not m
 plugin-install-question = Install this plugin?
 plugin-install-yes = Yes, install it
 plugin-install-no = No, install nothing
+plugin-hook-title = run this plugin's hook?
+plugin-hook-plugin = Plugin
+plugin-hook-moment = Moment
+plugin-hook-argv = Starts, one word to a row
+plugin-hook-explained = This hook starts a program the plugin carries, with your own access, each time that moment comes in a session. It has not been answered about yet.
+plugin-hook-recorded = A yes is written to { $file }, so it is not asked again for this exact hook and plugin files. A no is not written, and the question comes again in a later session.
+plugin-hook-session-only = A yes is not written anywhere and lasts until this session ends.
+plugin-hook-yes = Yes, run it
+plugin-hook-no = No, do not run it
+plugin-hook-stopped-changed = A hook of the plugin { $plugin } did not run: the plugin's files no longer match what was installed. Remove the plugin and install it again to use its hooks.
 mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-command-not-an-alias = { $alias } is not the name of an MCP server
 mcp-command-no-match = No MCP server is named by { $pattern }. Nothing was changed

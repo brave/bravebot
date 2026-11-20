@@ -70,6 +70,10 @@ const MAX_ALIAS: usize = 64;
 /// What the digested form starts with, so a later change to that form cannot collide with this one.
 const DIGEST_FORM: &str = "bravebot-mcp-declaration-1";
 
+/// What a plugin server's approval digest is tagged with, so it is never a digest made for a
+/// declaration in `mcp.json`.
+const PLUGIN_DIGEST_FORM: &str = "bravebot-mcp-plugin-declaration-1";
+
 /// The longest word a server's tool may be offered under.
 pub const MAX_TOOL: usize = 64;
 
@@ -761,6 +765,58 @@ impl Declaration {
                 ask_every_call,
             },
         }
+    }
+
+    /// This declaration with `change` applied to each word of a local server's program and
+    /// arguments and to nothing else: not the stored values, the variables, the files it may read,
+    /// the directory or a url. A remote declaration is returned as it was.
+    ///
+    /// A plugin's `${PLUGIN_ROOT}` is replaced this way (PLUGIN-13), before [`Self::digest`] is
+    /// taken, so an approval binds to the path that runs.
+    #[must_use]
+    pub fn mapping_argv(mut self, change: impl Fn(&str) -> String) -> Self {
+        if let Self::Stdio { argv, .. } = &mut self {
+            *argv = argv.iter().map(|word| change(word)).collect();
+        }
+        self
+    }
+
+    /// The program and its arguments of a local server, empty for a remote one.
+    pub fn argv(&self) -> &[String] {
+        match self {
+            Self::Stdio { argv, .. } => argv,
+            Self::Http { .. } => &[],
+        }
+    }
+
+    /// Where a remote server is, as the file wrote it. `None` for a local one.
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Http { url, .. } => Some(url),
+            Self::Stdio { .. } => None,
+        }
+    }
+
+    /// The directory a local server runs in, where the declaration named one.
+    pub fn directory(&self) -> Option<&str> {
+        match self {
+            Self::Stdio { directory, .. } => directory.as_deref(),
+            Self::Http { .. } => None,
+        }
+    }
+
+    /// The variables a local server receives with the value the declaration gave, by name. For a
+    /// declaration a person wrote this is a secret to keep off the screen. A plugin's declaration
+    /// is drawn in the install listing with its values, since a value can name code to load.
+    pub fn stored_values(&self) -> impl Iterator<Item = (&str, &str)> {
+        let env = match self {
+            Self::Stdio { env, .. } => Some(env),
+            Self::Http { .. } => None,
+        };
+        env.into_iter().flat_map(|env| {
+            env.iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+        })
     }
 
     /// The tool names this server offers where a filter was given, or empty where every tool is
@@ -1489,6 +1545,26 @@ impl Declaration {
                 serde_json::Value::Array(form)
             }
         };
+        Digest(Sha256::digest(form.to_string().as_bytes()).into())
+    }
+
+    /// What an approval of this declaration as the server of an installed plugin binds to.
+    ///
+    /// The digest of the declaration as the plugin's reader returns it, with `${PLUGIN_ROOT}`
+    /// already replaced (PLUGIN-13), and with the plugin's name, the directory it is installed in
+    /// and the digest of its tree the install recorded.
+    /// Two plugins declaring the same server, or one plugin installed in two places, digest apart
+    /// even where the declaration never names its own directory, so an answer about one is not an
+    /// answer about the other. The same declaration in `mcp.json` digests as [`Self::digest`] says,
+    /// so a home approval is no answer about a plugin's server either.
+    pub fn plugin_digest(&self, plugin: &str, install_dir: &str, tree: &str) -> Digest {
+        let form = serde_json::json!([
+            PLUGIN_DIGEST_FORM,
+            plugin,
+            install_dir,
+            tree,
+            self.digest().to_string()
+        ]);
         Digest(Sha256::digest(form.to_string().as_bytes()).into())
     }
 
@@ -2243,11 +2319,28 @@ fn entry(alias: &str, value: &serde_json::Value) -> Entry {
 ///
 /// A `tools` line, which an earlier version wrote as a vouch for a tool list, is passed over and
 /// dropped the next time the file is written: a list is asked about every session (SERVERS-8).
+///
+/// A server an installed plugin carries is approved on a line of its own kind, which names the
+/// plugin and the alias the plugin's file gave the server (PLUGIN-7):
+///
+/// ```text
+/// plugin 9be2d1c4...  demo-plugin  weather
+/// ```
+///
+/// Its digest is [`Declaration::plugin_digest`], so it is never one a declaration in `mcp.json`
+/// has, and [`Approvals::approves`] does not read it. No declaration in `mcp.json` resolves to it,
+/// so [`Approvals::keep_only`] keeps these lines as they are and a person's own `mcp add` or
+/// `mcp remove` does not drop them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Approvals {
     approved: BTreeMap<Digest, BTreeSet<String>>,
     changed: BTreeSet<String>,
+    /// The approvals of plugins' servers: the digest, and the plugin and the alias it was given.
+    plugins: BTreeSet<(Digest, String, String)>,
 }
+
+/// The word a line approving a plugin's server starts with.
+const PLUGIN_LINE: &str = "plugin";
 
 /// The word a line recording a changed declaration starts with.
 const CHANGED: &str = "changed";
@@ -2272,10 +2365,19 @@ impl Approvals {
     pub fn parse(text: &str) -> Self {
         let mut approvals = Self::default();
         for line in text.lines() {
-            let words: Vec<&str> = line.split_whitespace().take(4).collect();
+            let words: Vec<&str> = line.split_whitespace().take(5).collect();
             match words.as_slice() {
                 [CHANGED, alias] if is_alias(alias) => {
                     approvals.changed.insert(alias.to_string());
+                }
+                [PLUGIN_LINE, hex, plugin, alias]
+                    if crate::plugin::is_valid_name(plugin) && is_alias(alias) =>
+                {
+                    if let Some(digest) = Digest::parse(hex) {
+                        approvals
+                            .plugins
+                            .insert((digest, plugin.to_string(), alias.to_string()));
+                    }
                 }
                 [hex, alias @ ..] if alias.len() <= 1 && alias.iter().all(|a| is_alias(a)) => {
                     let Some(digest) = Digest::parse(hex) else {
@@ -2293,6 +2395,41 @@ impl Approvals {
     /// Whether this digest was approved.
     pub fn approves(&self, digest: &Digest) -> bool {
         self.approved.contains_key(digest)
+    }
+
+    /// Whether the person approved the server of a plugin that this digest
+    /// ([`Declaration::plugin_digest`]) is of. A digest approved for a declaration in `mcp.json` is
+    /// not an answer about a plugin's server, and the reverse.
+    pub fn approves_plugin(&self, digest: &Digest) -> bool {
+        self.plugins.iter().any(|(held, _, _)| held == digest)
+    }
+
+    /// Record an approval of a plugin's server: `digest` is [`Declaration::plugin_digest`], and
+    /// `alias` is the name the plugin's own file gave the server. An earlier approval of the same
+    /// plugin's server of that name, for a declaration that has since changed, is replaced.
+    pub fn approve_plugin(&mut self, plugin: &str, alias: &str, digest: Digest) {
+        self.plugins
+            .retain(|(_, held, named)| !(held == plugin && named == alias));
+        self.plugins
+            .insert((digest, plugin.to_string(), alias.to_string()));
+    }
+
+    /// Whether the person approved the server `alias` of `plugin` as something other than `digest`,
+    /// so what the plugin declares now is one they have not seen.
+    pub fn plugin_changed(&self, plugin: &str, alias: &str, digest: &Digest) -> bool {
+        !self.approves_plugin(digest)
+            && self
+                .plugins
+                .iter()
+                .any(|(_, held, named)| held == plugin && named == alias)
+    }
+
+    /// How many approvals are held for servers of the plugin called `plugin`.
+    pub fn plugin_count(&self, plugin: &str) -> usize {
+        self.plugins
+            .iter()
+            .filter(|(_, held, _)| held == plugin)
+            .count()
     }
 
     /// Whether `alias` was approved as something other than `digest`, so the declaration it names
@@ -2324,7 +2461,10 @@ impl Approvals {
     /// nothing. Called whenever the declarations are rewritten, so the two files agree about what
     /// is approved.
     pub fn keep_only(&mut self, declarations: &Declarations) {
-        let mut kept = Self::default();
+        let mut kept = Self {
+            plugins: self.plugins.clone(),
+            ..Self::default()
+        };
         for Entry { alias, declaration } in declarations.entries() {
             let digest = declaration.as_ref().ok().map(Declaration::digest);
             match digest {
@@ -2361,8 +2501,50 @@ impl Approvals {
         for alias in &self.changed {
             text.push_str(&format!("{CHANGED} {alias}\n"));
         }
+        for (digest, plugin, alias) in &self.plugins {
+            text.push_str(&format!("{PLUGIN_LINE} {digest} {plugin} {alias}\n"));
+        }
         text
     }
+}
+
+/// Remove every line approving a server of the plugin called `plugin` from the approvals file in
+/// `directory`, so a later install of that name is asked about again (PLUGIN-9). Every other line
+/// is kept exactly as it is, including a line that does not read and a missing final newline, and
+/// the file keeps its permissions. The file is written beside itself and renamed over, so a reader
+/// sees the old file or the new one. No file, or no line for the plugin, writes nothing.
+pub fn withdraw_plugin(directory: &Path, plugin: &str) -> std::io::Result<()> {
+    let path = approvals_file(directory);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let kept: String = text
+        .split_inclusive('\n')
+        .filter(|line| !is_plugin_line_for(line, plugin))
+        .collect();
+    if kept == text {
+        return Ok(());
+    }
+    let permissions = std::fs::metadata(&path)?.permissions();
+    let temporary = directory.join(format!(".{APPROVALS_FILE}.plugin.tmp"));
+    std::fs::write(&temporary, kept)
+        .and_then(|()| std::fs::set_permissions(&temporary, permissions))
+        .and_then(|()| std::fs::rename(&temporary, &path))
+        .inspect_err(|_| {
+            std::fs::remove_file(&temporary).ok();
+        })
+}
+
+/// Whether `line` is one [`Approvals::parse`] reads as an approval of a server of `plugin`.
+fn is_plugin_line_for(line: &str, plugin: &str) -> bool {
+    let mut words = line.split_whitespace();
+    matches!(
+        (words.next(), words.next(), words.next(), words.next(), words.next()),
+        (Some(PLUGIN_LINE), Some(hex), Some(name), Some(alias), None)
+            if name == plugin && Digest::parse(hex).is_some() && is_alias(alias)
+    )
 }
 
 /// The projects in which answer 2 said to use every future server, one path per line.
@@ -4499,5 +4681,123 @@ mod tests {
             weather().moved_to("https://b.example.com".into()),
             Err(Problem::Transport)
         );
+    }
+
+    /// PLUGIN-7: a plugin's server digests over its name, its install directory and its tree, and
+    /// apart from the same declaration in `mcp.json`.
+    ///
+    /// Rejects a digest that leaves one of the four out, which would let an answer about one
+    /// install or one plugin stand for another.
+    #[test]
+    fn a_plugin_servers_digest_names_the_plugin_its_directory_and_its_tree() {
+        let declaration = weather();
+        let digest = declaration.plugin_digest("demo", "/state/plugins/demo", "aa");
+        assert_eq!(
+            digest,
+            declaration.plugin_digest("demo", "/state/plugins/demo", "aa")
+        );
+        for other in [
+            declaration.plugin_digest("other", "/state/plugins/demo", "aa"),
+            declaration.plugin_digest("demo", "/elsewhere/plugins/demo", "aa"),
+            declaration.plugin_digest("demo", "/state/plugins/demo", "bb"),
+            declaration.digest(),
+        ] {
+            assert_ne!(digest, other);
+        }
+        let changed =
+            Declaration::stdio(words(&["weather-mcp", "--more"]), Vec::new(), None).unwrap();
+        assert_ne!(
+            digest,
+            changed.plugin_digest("demo", "/state/plugins/demo", "aa"),
+            "a changed declaration"
+        );
+    }
+
+    /// PLUGIN-7: a plugin's approval is a line of its own kind that reads back, approves only its
+    /// own digest, and survives the rewrite a person's own `mcp add` or `mcp remove` makes.
+    ///
+    /// Rejects an approval that `approves` reads as a home one, one a rewrite from the declarations
+    /// drops, and one whose line cannot be read back.
+    #[test]
+    fn a_plugins_approval_is_its_own_line_and_a_home_rewrite_keeps_it() {
+        let declaration = weather();
+        let digest = declaration.plugin_digest("demo", "/state/plugins/demo", "aa");
+        let mut approvals = Approvals::default();
+        approvals.approve_plugin("demo", "weather", digest);
+        approvals.approve("home-weather", declaration.digest());
+
+        assert!(approvals.approves_plugin(&digest));
+        assert!(
+            !approvals.approves(&digest),
+            "a plugin line is no home approval"
+        );
+        assert!(!approvals.approves_plugin(&declaration.digest()));
+
+        let mut declarations = Declarations::default();
+        declarations.insert("home-weather", &declaration);
+        approvals.keep_only(&declarations);
+        assert!(
+            approvals.approves_plugin(&digest),
+            "the home rewrite dropped it"
+        );
+
+        let again = Approvals::parse(&approvals.to_text());
+        assert_eq!(again, approvals);
+        assert!(
+            approvals
+                .to_text()
+                .contains(&format!("plugin {digest} demo weather"))
+        );
+
+        let mut renewed = approvals.clone();
+        let next = declaration.plugin_digest("demo", "/state/plugins/demo", "bb");
+        assert!(renewed.plugin_changed("demo", "weather", &next));
+        renewed.approve_plugin("demo", "weather", next);
+        assert!(
+            !renewed.approves_plugin(&digest),
+            "the old answer was replaced"
+        );
+        assert_eq!(renewed.plugin_count("demo"), 1);
+    }
+
+    /// S32: withdrawing a plugin's server answers removes that plugin's lines and leaves every
+    /// other line as it was, byte for byte, including one that does not read, a plugin whose name
+    /// begins with the removed one's, and a missing final newline.
+    ///
+    /// Rejects a withdraw that rewrites from the parsed set, one that matches by prefix, and one
+    /// that removes a line of the person's own.
+    #[test]
+    fn withdrawing_a_plugins_answers_leaves_every_other_line_as_it_was() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/config-mcp-withdraw");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let declaration = weather();
+        let ours = declaration.plugin_digest("demo", "/s/demo", "aa");
+        let longer = declaration.plugin_digest("demo-two", "/s/demo-two", "aa");
+        let own = declaration.digest();
+        let text = format!(
+            "{own} weather\n  not a line anyone wrote\nplugin {ours} demo weather\nplugin {longer} demo-two weather\nchanged docs"
+        );
+        std::fs::write(approvals_file(&root), &text).unwrap();
+
+        withdraw_plugin(&root, "demo").unwrap();
+
+        let after = std::fs::read_to_string(approvals_file(&root)).unwrap();
+        assert_eq!(
+            after,
+            format!(
+                "{own} weather\n  not a line anyone wrote\nplugin {longer} demo-two weather\nchanged docs"
+            )
+        );
+        withdraw_plugin(&root, "demo").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(approvals_file(&root)).unwrap(),
+            after
+        );
+        let nothing = root.join("nowhere");
+        withdraw_plugin(&nothing, "demo").unwrap();
+        assert!(!approvals_file(&nothing).exists(), "no file means no write");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

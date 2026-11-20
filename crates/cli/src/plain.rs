@@ -828,7 +828,11 @@ fn run(
     // first prompt is not yet read (HOOK-10). Run before the stderr lock is taken: the lock is for
     // writing the sentences, not for the length of a hook.
     if let Some(moments) = &mut moments {
-        let said = moments.started();
+        // The lines session can put a question to the person, so a plugin's hook on this moment is
+        // asked about first, through the decision every moment of a plugin's hook goes through. The
+        // answers are the session's, so the same ones count at its end (PLUGIN-7).
+        moments.keep_answers(running.account.clone());
+        let said = moments.started_asking(&mut asking);
         crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
     }
     // The streams themselves rather than a lock on each. A lock held for the length of the session
@@ -2007,6 +2011,23 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         self.ask(&lines, t!(mcp_move_title))
     }
 
+    /// A line session has somebody at it, so the question is put in lines (PLUGIN-7). The end of the
+    /// input is a refusal, as at every question here.
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    fn confirm_hook(&mut self, request: &bravebot_agent::confirm::HookRequest) -> Decision {
+        let lines = bravebot_approval::hook_lines(&bravebot_approval::Hook {
+            plugin: &request.plugin,
+            moment: request.moment,
+            argv: &request.argv,
+            records: request.records,
+        });
+        self.about(Held::Question);
+        self.ask(&lines, t!(plugin_hook_title))
+    }
+
     /// The plan, before anything has run.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
         let lines = bravebot_approval::manifest_lines(&request.task, &request.steps);
@@ -2644,6 +2665,102 @@ mod tests {
                 asking.put(&["something".to_string()], "do it?"),
                 expected,
                 "{answer:?} was not read as {expected:?}"
+            );
+        }
+    }
+
+    /// PLUGIN-7, S11, S15 in lines: a session in lines has somebody at it, so it says so, puts the
+    /// hook question, and only the affirmative approves. A line that is anything else and the end of
+    /// the input refuse. The question carries the plugin's argv behind the margin.
+    ///
+    /// Rejects: a lines session that cannot be asked (it would fire no hook for a person who is
+    /// there), a yes taken from anything but yes, and an end of input read as a yes.
+    #[test]
+    fn a_plugin_hook_is_asked_in_lines_and_only_a_yes_approves() {
+        use bravebot_agent::confirm::{Confirmer, HookRequest};
+        let request = HookRequest {
+            plugin: "demo".to_string(),
+            moment: "turn-started",
+            argv: vec!["/h/hook.sh".to_string()],
+            records: true,
+        };
+        for (typed, expected) in [
+            ("y\n", Decision::Approve),
+            ("Y\n", Decision::Approve),
+            ("n\n", Decision::Reject),
+            ("yes please\n", Decision::Reject),
+            ("\n", Decision::Reject),
+            ("", Decision::Reject),
+        ] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            assert!(asking.can_ask_about_a_hook());
+            assert_eq!(asking.confirm_hook(&request), expected, "{typed:?}");
+            let said = String::from_utf8(asking.output).expect("utf-8");
+            assert!(
+                said.contains("demo") && said.contains("1. /h/hook.sh"),
+                "{said}"
+            );
+        }
+    }
+
+    /// PLUGIN-7, S10, S11 at `session-started` in lines: the start of the session asks through the
+    /// lines confirmer, and the hook runs after a typed yes and not after a no or the end of the
+    /// input. The question was printed with the plugin's name, and a no is not recorded.
+    ///
+    /// Rejects: a lines session whose start fires a plugin's hook without the question, one that
+    /// fires after a no or an end of input, and one that records a no.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_hook_at_the_start_of_a_lines_session_is_asked_and_runs_only_after_a_yes() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::test_support::Scratch::new("plain-plugin-hook-session-started");
+        let marker = scratch.path.join("marker");
+        let source = scratch.path.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("plugin.toml"),
+            "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("hooks.json"),
+            r#"{"hooks":[{"on":"session-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+        )
+        .unwrap();
+        let script = source.join("hook.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = scratch.path.join("state");
+        bravebot_agent::plugins::install(&source, &home).unwrap();
+
+        for (typed, fires) in [("n\n", false), ("", false), ("y\n", true)] {
+            let _ = std::fs::remove_file(&marker);
+            let _ = std::fs::remove_file(home.join("hooks-approved"));
+            let mut moments =
+                bravebot_agent::hooks::SessionMoments::read(Some(&home), &scratch.path);
+            moments.keep_answers(bravebot_agent::chatgpt::AccountSession::begin());
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            moments.started_asking(&mut asking);
+            assert_eq!(marker.exists(), fires, "{typed:?}");
+            assert_eq!(
+                home.join("hooks-approved").exists(),
+                fires,
+                "{typed:?} left a record"
+            );
+            let said = String::from_utf8(asking.output).expect("utf-8");
+            assert!(
+                said.contains("demo") && said.contains("session-started"),
+                "{said}"
             );
         }
     }
@@ -4389,6 +4506,7 @@ mod tests {
                 declaration: &declaration,
                 program: None,
                 changed: false,
+                plugin: None,
             });
 
             assert_eq!(answer, expected, "{typed:?}");

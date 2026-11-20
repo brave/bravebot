@@ -1098,6 +1098,17 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.inner.can_ask_about_a_hook()
+    }
+
+    /// Always the person's. No mode answers whether a plugin's hook may fire, bypassing every check
+    /// included, for the reason none answers the install prompt (PLUGIN-4, PLUGIN-7): the question
+    /// has no mode in its request and [`Unasked`] holds no answer for it.
+    fn confirm_hook(&mut self, request: &crate::confirm::HookRequest) -> Decision {
+        self.asking().confirm_hook(request)
+    }
+
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
     /// invented here would be reported to the model as the user's own words.
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
@@ -2229,6 +2240,58 @@ mod tests {
             destination: "https://elsewhere.example/mcp".to_string(),
             authority: "elsewhere.example:443".to_string(),
             may_record: true,
+        }
+    }
+
+    /// PLUGIN-7, S31: no mode answers whether a plugin's hook may fire. Bypassing every check
+    /// answers a write and a run, and this question still reaches the confirmer behind it: a
+    /// refusing person is not overridden, an agreeing one is asked exactly once, and a confirmer
+    /// nobody can ask says so through the mode.
+    ///
+    /// Rejects: a mode that answers the hook question yes unasked, and a wrapper that does not pass
+    /// on whether anybody can be asked.
+    #[test]
+    fn no_mode_answers_the_question_about_a_plugins_hook() {
+        use crate::confirm::{AnswersHooks, HookRequest};
+        let request = HookRequest {
+            plugin: "demo".to_string(),
+            moment: "turn-started",
+            argv: vec!["/p/hook.sh".to_string()],
+            records: true,
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+        ] {
+            let mut refuses = AnswersHooks::new(Decision::Reject);
+            let mut confining = Confining::new(&mut refuses, mode, false);
+            assert!(confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
+            assert_eq!(refuses.asked.len(), 1, "{mode:?} did not put the question");
+
+            let mut agrees = AnswersHooks::new(Decision::Approve);
+            assert_eq!(
+                Confining::new(&mut agrees, mode, false).confirm_hook(&request),
+                Decision::Approve,
+                "{mode:?}"
+            );
+            assert_eq!(agrees.asked.len(), 1, "{mode:?}");
+
+            let mut nobody = Unattended;
+            let mut confining = Confining::new(&mut nobody, mode, false);
+            assert!(!confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
         }
     }
 

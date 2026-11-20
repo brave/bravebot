@@ -185,6 +185,10 @@ later run without the flag asks. A remote server whose reply points somewhere el
 followed: a yes would rewrite your declaration to an address the server chose, so the hop is refused
 without asking. See [MCP servers](../customize/mcp-servers.md#approving-one).
 
+No mode answers the question about a [plugin's hook](../customize/plugins.md#a-plugins-hooks) or the
+first use of a [plugin's server](../customize/plugins.md#a-plugins-servers), this one included. Only
+your yes to that hook or that server does.
+
 **The file tools reach any path your account can.** In this mode `read_file`, `write_file`, `edit_file`,
 `list_files`, `search`, `repo_map`, `read_git`, `download_url`, a `run` directory and the target of
 a redirection reach a path outside the workspace with no call to `request_path`, whatever the sandbox mode is,

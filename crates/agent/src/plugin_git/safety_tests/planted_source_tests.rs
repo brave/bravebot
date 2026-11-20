@@ -4,7 +4,7 @@
 use super::*;
 use crate::plugin_git::stage_from;
 use crate::plugins::Staged;
-use bravebot_config::plugin::Part;
+use bravebot_config::plugin::{FileFault, Part};
 
 fn control_clone(source: &Path, into: &Path) {
     let output = std::process::Command::new("git")
@@ -201,8 +201,8 @@ fn stage_planted(
 }
 
 /// What the asker saw when the listing was put: the markers written, whether `plugins` existed,
-/// the paths not copied and the parts not installed.
-type AtListing = (Vec<String>, bool, Vec<PathBuf>, Vec<Part>);
+/// the paths not copied and why the hooks file could not be read, if it could not.
+type AtListing = (Vec<String>, bool, Vec<PathBuf>, Option<FileFault>);
 
 /// An asker that, when the listing is put, records what exists then.
 struct Inspecting<'a> {
@@ -225,7 +225,10 @@ impl Asker for Inspecting<'_> {
             self.markers.seen(),
             self.home.join("plugins").exists(),
             staged.skipped.clone(),
-            staged.manifest.not_installed(),
+            staged
+                .hooks
+                .as_ref()
+                .and_then(|read| read.as_ref().err().copied()),
         ));
         true
     }
@@ -233,7 +236,8 @@ impl Asker for Inspecting<'_> {
 
 /// S15, PLUGIN-3: the tree a clone made is read as data only. When the listing is put to the
 /// person, nothing from the tree has run, nothing is installed, the link the repository held is
-/// listed as not copied and the hook part is listed as not installed. After the install the tree's
+/// listed as not copied and the hooks part, which the fixture makes a directory, is reported as not
+/// a file the reader could use. After the install the tree's
 /// scripts have still not run and the installed tree holds no link.
 ///
 /// The repository holds a link at its root to a file outside the plugin, an executable script in
@@ -278,7 +282,7 @@ fn nothing_in_the_cloned_tree_runs_before_the_listing_and_a_link_is_not_copied()
             Vec::<String>::new(),
             false,
             vec![PathBuf::from("link-out")],
-            vec![Part::Hooks]
+            Some(FileFault::NotARegularFile)
         )]
     );
     assert_eq!(markers.seen(), Vec::<String>::new());

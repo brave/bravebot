@@ -13,7 +13,7 @@
 
 use crate::confirm::{Classified, FetchRequest};
 use crate::plugin_source::{Commit, GitSource, NotASource, Requested, Source, classify};
-use bravebot_config::plugin::{self, Manifest, Part};
+use bravebot_config::plugin::{self, FileFault, HookList, Manifest, Part, ServerList};
 use sha2::{Digest as _, Sha256};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -82,6 +82,12 @@ pub struct Staged {
     pub digest: String,
     /// Paths, relative to the source, of links and other non-regular files that were not copied.
     pub skipped: Vec<PathBuf>,
+    /// The plugin's hooks file read from the staged tree as data, with `${PLUGIN_ROOT}` already
+    /// replaced by the directory the plugin will have once installed (PLUGIN-13). `None` where the
+    /// manifest names none; an `Err` says the file could not be read, and the listing says so.
+    pub hooks: Option<Result<HookList, FileFault>>,
+    /// The plugin's servers file, read and expanded the same way.
+    pub servers: Option<Result<ServerList, FileFault>>,
 }
 
 #[expect(
@@ -276,7 +282,7 @@ pub(crate) fn stage_directory(
     let manifest = plugin::read(directory).map_err(Refusal::Manifest)?;
     plugin::check_links(directory, &manifest.named_parts()).map_err(Refusal::Manifest)?;
     for (part, path) in manifest.named_parts() {
-        if part.is_installed() && std::fs::symlink_metadata(path.under(directory)).is_err() {
+        if std::fs::symlink_metadata(path.under(directory)).is_err() {
             return Err(Refusal::PartMissing(part));
         }
     }
@@ -284,6 +290,9 @@ pub(crate) fn stage_directory(
     let tree = holder.dir.join("tree");
     let skipped = copy_tree(directory, &tree)?;
     let digest = digest_tree(&tree)?;
+    let will_be = installed_dir(home, &manifest.name);
+    let hooks = manifest.hooks_list(&tree, &will_be);
+    let servers = manifest.servers_list(&tree, &will_be);
     Ok(Staged {
         _holder: holder,
         tree,
@@ -291,7 +300,26 @@ pub(crate) fn stage_directory(
         manifest,
         digest,
         skipped,
+        hooks,
+        servers,
     })
+}
+
+/// The plugin's hooks, read from its installed directory with `${PLUGIN_ROOT}` replaced by that
+/// directory (PLUGIN-13): the list a later step digests and fires from.
+///
+/// `None` where the plugin is not installed, its manifest cannot be read or names no hooks file.
+/// `Some(Err)` where the file cannot be read. The manifest is read again from the installed
+/// directory, so an edit there shows here and is for the digest check to refuse. Nothing is run.
+pub fn installed_hooks(home: &Path, name: &str) -> Option<Result<HookList, FileFault>> {
+    let dir = installed_dir(home, name);
+    plugin::read(&dir).ok()?.hooks_list(&dir, &dir)
+}
+
+/// The plugin's servers, read from its installed directory and expanded as [`installed_hooks`] is.
+pub fn installed_servers(home: &Path, name: &str) -> Option<Result<ServerList, FileFault>> {
+    let dir = installed_dir(home, name);
+    plugin::read(&dir).ok()?.servers_list(&dir, &dir)
 }
 
 /// `<state>/plugins`, where `state` is the state directory itself (`~/.bravebot`, or what
@@ -303,6 +331,34 @@ pub fn plugins_dir(home: &Path) -> PathBuf {
 /// The directory an installed plugin is copied to.
 pub fn installed_dir(home: &Path, name: &str) -> PathBuf {
     plugins_dir(home).join(name)
+}
+
+/// Why an installed plugin's directory is not the one its record describes (PLUGIN-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mismatch {
+    /// The plugin has no readable record, so there is no digest to hold the directory to.
+    NoRecord,
+    /// The directory could not be hashed: it is missing, holds a link or another entry that is not
+    /// a file or a directory, or a file in it could not be read.
+    Unreadable,
+    /// The directory hashes to something other than the digest recorded at install.
+    Differs,
+}
+
+/// Hashes the installed directory of `name` again and compares it with the digest the install
+/// recorded, the check made before a plugin's hook fires or a plugin's server starts (PLUGIN-7).
+///
+/// The driver uses the answer only to refuse. It reads no byte of the tree to decide anything else,
+/// and an `Err` of any kind means the hook or the server does not run. The digest is the one
+/// [`stage`] computed over the copy, so a tree nobody touched matches.
+pub fn tree_matches_record(home: &Path, name: &str) -> Result<(), Mismatch> {
+    let recorded = read_record(home, name).ok_or(Mismatch::NoRecord)?;
+    let now = digest_tree(&installed_dir(home, name)).map_err(|_| Mismatch::Unreadable)?;
+    if now == recorded.digest {
+        Ok(())
+    } else {
+        Err(Mismatch::Differs)
+    }
 }
 
 fn record_path(home: &Path, name: &str) -> PathBuf {
@@ -668,8 +724,11 @@ fn list_in(plugins: &Path) -> Vec<Installed> {
     found
 }
 
-/// Deletes the plugin's directory and its record (PLUGIN-9). The directory goes first, so a
-/// failure leaves the record and the removal can be run again.
+/// Deletes the plugin's directory and its record (PLUGIN-9), after withdrawing the answers
+/// recorded for its hooks in `hooks-approved`, so a later install of the same name asks again. The
+/// withdrawal comes first: a failure after it leaves a plugin that asks again, and one before it
+/// would leave a yes with nothing it applies to. The directory goes before the record, so a failure
+/// leaves the record and the removal can be run again.
 pub fn remove(home: &Path, name: &str) -> Result<(), ManageRefusal> {
     checked_name(name)?;
     let directory = installed_dir(home, name);
@@ -677,6 +736,10 @@ pub fn remove(home: &Path, name: &str) -> Result<(), ManageRefusal> {
     if !is_present(&directory) && !is_present(&record) {
         return Err(ManageRefusal::NotInstalled(name.to_string()));
     }
+    bravebot_config::hooks_approved::withdraw(home, name)
+        .map_err(|error| ManageRefusal::Io(error.kind()))?;
+    bravebot_config::mcp::withdraw_plugin(home, name)
+        .map_err(|error| ManageRefusal::Io(error.kind()))?;
     if is_present(&directory) {
         std::fs::remove_dir_all(&directory).map_err(|error| ManageRefusal::Io(error.kind()))?;
     }
@@ -2034,5 +2097,147 @@ mod tests {
         assert!(!first.tree.join(lookalike).exists());
         assert!(second.tree.join(lookalike).is_file());
         assert!(!second.tree.join(invalid).exists());
+    }
+
+    const WITH_PARTS: &str = "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nskills = \"skills\"\nhooks = \"hooks.json\"\nservers = \"servers.json\"\n";
+    const HOOKS: &str = r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]},{"on":"nope","run":["x"]}]}"#;
+    const SERVERS: &str = r#"{"servers":{"s":{"transport":"stdio","argv":["${PLUGIN_ROOT}/server.py"],"env":{"K":"${PLUGIN_ROOT}/k"}}}}"#;
+
+    fn plugin_with_parts(parent: &Path) -> PathBuf {
+        let root = plugin_dir(parent, "src", WITH_PARTS);
+        std::fs::write(root.join("hooks.json"), HOOKS).unwrap();
+        std::fs::write(root.join("servers.json"), SERVERS).unwrap();
+        root
+    }
+
+    /// S1, S2, S6, S7, S29: stage reads both files from the staged copy as data, and a staged
+    /// plugin's argv already names the directory it will have once installed, not the staging
+    /// directory it was read from. What the hook reader passed over is counted.
+    ///
+    /// Rejects: a staged read that expands to the staging path, a read of the source directory
+    /// instead of the copy, a hooks file that is not read at all, and a drop of an entry with no
+    /// trace in the result.
+    #[test]
+    fn a_staged_plugin_reads_its_hooks_and_servers_with_the_path_it_will_have() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let staged = stage(&plugin_with_parts(scratch.path()), &home).unwrap();
+        let will_be = installed_dir(&home, "demo");
+        let hooks = staged.hooks.as_ref().unwrap().as_ref().unwrap();
+        let hook = &hooks.hooks.declared()[0];
+        assert_eq!(hooks.hooks.declared().len(), 1);
+        assert_eq!(hook.run(), [format!("{}/hook.sh", will_be.display())]);
+        assert_eq!(hooks.unkept.dropped, 1);
+        let servers = staged.servers.as_ref().unwrap().as_ref().unwrap();
+        let server = servers.entries[0].declaration.as_ref().unwrap();
+        assert_eq!(server.argv(), [format!("{}/server.py", will_be.display())]);
+        assert!(!server.argv()[0].contains(".plugin-staging"));
+        // A plugin naming neither part has nothing to read.
+        let bare = stage(&plugin_dir(scratch.path(), "bare", MANIFEST), &home).unwrap();
+        assert!(bare.hooks.is_none() && bare.servers.is_none());
+    }
+
+    /// S8: the list read from the installed directory is the list the staged copy gave before the
+    /// install, so a digest taken at install and one taken at a later check are over the same argv.
+    ///
+    /// Rejects: an installed read that expands against a different directory than a staged read.
+    #[test]
+    fn the_installed_read_gives_the_list_the_staged_read_gave() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let staged = stage(&plugin_with_parts(scratch.path()), &home).unwrap();
+        let (hooks, servers) = (staged.hooks.clone(), staged.servers.clone());
+        commit_install(staged, &home).unwrap();
+        assert_eq!(installed_hooks(&home, "demo"), hooks);
+        assert_eq!(installed_servers(&home, "demo"), servers);
+        assert_eq!(installed_hooks(&home, "missing"), None);
+    }
+
+    /// S18: an install of a plugin carrying hooks and servers writes the tree and its record under
+    /// `plugins/` and nothing else: no `hooks-approved`, no `mcp-approved`, no `mcp.json`.
+    ///
+    /// Rejects: an install that records an answer for a hook or a server.
+    #[test]
+    fn an_install_records_no_answer_for_a_hook_or_a_server() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        commit_install(
+            stage(&plugin_with_parts(scratch.path()), &home).unwrap(),
+            &home,
+        )
+        .unwrap();
+        let mut top: Vec<String> = std::fs::read_dir(&home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        top.sort();
+        assert_eq!(top, ["plugins"]);
+        let mut inside: Vec<String> = std::fs::read_dir(plugins_dir(&home))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        inside.sort();
+        assert_eq!(inside, ["demo", "demo.record"]);
+    }
+
+    /// S20: the re-hash the servers worker calls. An untouched install matches its record. An
+    /// edited file, an added file, a removed file and a missing directory are each a mismatch, and
+    /// a plugin with no record has nothing to match.
+    ///
+    /// Rejects: a comparison that is skipped (always Ok), one that ignores an added or removed
+    /// file, and one that reads a missing record as a match.
+    #[test]
+    fn the_installed_tree_is_hashed_again_and_compared_with_the_record() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        commit_install(
+            stage(&plugin_with_parts(scratch.path()), &home).unwrap(),
+            &home,
+        )
+        .unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+        let dir = installed_dir(&home, "demo");
+
+        std::fs::write(dir.join("hooks.json"), HOOKS.replace("x", "y")).unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Err(Mismatch::Differs));
+        std::fs::write(dir.join("hooks.json"), HOOKS).unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+
+        std::fs::write(dir.join("added"), "").unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Err(Mismatch::Differs));
+        std::fs::remove_file(dir.join("added")).unwrap();
+        std::fs::remove_file(dir.join("servers.json")).unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Err(Mismatch::Differs));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            tree_matches_record(&home, "demo"),
+            Err(Mismatch::Unreadable)
+        );
+        assert_eq!(
+            tree_matches_record(&home, "missing"),
+            Err(Mismatch::NoRecord)
+        );
+    }
+
+    /// S1, S2: a named hooks or servers file that is not there is refused like a missing skills
+    /// directory, and one that cannot be used is carried as a fault for the listing, not refused.
+    ///
+    /// Rejects: a plugin that stages with a part path naming nothing, and a staged plugin whose
+    /// unusable hooks file is read as no hooks.
+    #[test]
+    fn a_named_part_file_that_is_missing_is_refused_and_one_that_is_unusable_is_a_fault() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = plugin_with_parts(scratch.path());
+        std::fs::write(source.join("hooks.json"), "not json").unwrap();
+        let staged = stage(&source, &home).unwrap();
+        assert_eq!(staged.hooks, Some(Err(plugin::FileFault::NotHooks)));
+        drop(staged);
+        std::fs::remove_file(source.join("servers.json")).unwrap();
+        assert_eq!(
+            stage(&source, &home).unwrap_err(),
+            Refusal::PartMissing(Part::Servers)
+        );
     }
 }

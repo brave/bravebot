@@ -855,3 +855,108 @@ fn a_private_session_refuses_to_write_the_bots_and_says_why() {
     assert!(refused.to_string().contains("incognito"), "{refused}");
     assert!(!scratch.home.join("bots.json").exists());
 }
+
+/// A state directory holding the plugin `demo`, whose one hook is on `turn-started` and appends a
+/// line to the marker beside it.
+#[cfg(unix)]
+fn a_home_with_a_plugin_hook(scratch: &Scratch) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let marker = scratch.home.join("marker");
+    let source = scratch.home.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        source.join("hooks.json"),
+        r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+    )
+    .expect("hooks");
+    let script = source.join("hook.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    )
+    .expect("script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let state = scratch.home.join("state");
+    bravebot_agent::plugins::install(&source, &state).expect("install");
+    (state, marker)
+}
+
+/// One `turn-started` moment in `session`, through the gate a turn uses, and how many of the
+/// plugin's hooks it let through.
+#[cfg(unix)]
+fn the_hooks_a_moment_lets_through(
+    state: &Path,
+    session: &bravebot_agent::plugin_hooks::Answers,
+    confirmer: &mut bravebot_agent::confirm::AnswersHooks,
+) -> usize {
+    use bravebot_config::hooks::{Hooks, Moment};
+    bravebot_agent::plugin_hooks::PluginHooks::read(Some(state))
+        .joined_with(
+            &Hooks::default(),
+            Moment::TurnStarted,
+            None,
+            session,
+            confirmer,
+        )
+        .firing(Moment::TurnStarted, None)
+        .count()
+}
+
+/// INCOG-3, PLUGIN-7: the question about a plugin's hook is put in a private session, says that a
+/// yes is not written, and a yes fires the hook for the session without creating `hooks-approved`.
+/// The next session asks again, since nothing was kept.
+///
+/// The regression it rejects: writing the yes whatever the session says, which would leave a line
+/// a private session was to leave behind and would let the next session fire the hook unasked.
+#[cfg(unix)]
+#[test]
+fn a_yes_to_a_plugin_hook_in_a_private_session_is_not_written_down() {
+    use bravebot_agent::confirm::{AnswersHooks, Decision};
+    use bravebot_agent::plugin_hooks::Answers;
+    let scratch = Scratch::new("plugin-hook-yes");
+    let (state, marker) = a_home_with_a_plugin_hook(&scratch);
+    assert!(
+        bravebot_core::incognito::engaged(),
+        "the fixture engages it"
+    );
+    assert!(!state.join("hooks-approved").exists());
+
+    let session = Answers::default();
+    let mut person = AnswersHooks::new(Decision::Approve);
+    assert_eq!(
+        the_hooks_a_moment_lets_through(&state, &session, &mut person),
+        1
+    );
+    assert_eq!(person.asked.len(), 1, "{:?}", person.asked);
+    assert!(
+        !person.asked[0].records,
+        "the question did not say that a yes is not written"
+    );
+    assert!(
+        !state.join("hooks-approved").exists(),
+        "a private session wrote the yes"
+    );
+    // The yes holds for the rest of the session: the same session is not asked again.
+    assert_eq!(
+        the_hooks_a_moment_lets_through(&state, &session, &mut person),
+        1
+    );
+    assert_eq!(person.asked.len(), 1, "the session asked again after a yes");
+
+    let mut later = AnswersHooks::new(Decision::Approve);
+    assert_eq!(
+        the_hooks_a_moment_lets_through(&state, &Answers::default(), &mut later),
+        1
+    );
+    assert_eq!(later.asked.len(), 1, "the next session was not asked");
+    assert!(!state.join("hooks-approved").exists());
+    assert!(
+        !marker.exists(),
+        "nothing ran the hook: only the gate was exercised"
+    );
+}

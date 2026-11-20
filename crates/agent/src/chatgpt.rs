@@ -196,6 +196,9 @@ pub struct AccountSession(std::sync::Arc<Begun>);
 struct Begun {
     identifier: String,
     effort: Option<Effort>,
+    /// What the person answered about plugin hooks in this session (PLUGIN-7). A new session begins
+    /// with none, so a no is asked again in the next one.
+    hook_answers: crate::plugin_hooks::Answers,
 }
 
 impl AccountSession {
@@ -214,7 +217,14 @@ impl AccountSession {
         Self(std::sync::Arc::new(Begun {
             identifier: bravebot_skus::new_request_id(),
             effort,
+            hook_answers: crate::plugin_hooks::Answers::default(),
         }))
+    }
+
+    /// What the person answered about plugin hooks in this session, shared by every clone of this
+    /// handle and so by every turn of the session (PLUGIN-7).
+    pub fn plugin_hook_answers(&self) -> &crate::plugin_hooks::Answers {
+        &self.0.hook_answers
     }
 
     /// The effort level the session began with, which is the level the account is sent for all of

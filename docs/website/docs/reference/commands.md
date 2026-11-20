@@ -978,7 +978,9 @@ repository and shows the commit it resolved to before it asks to install. Where 
 one-shot run, nothing is installed. `list` prints each
 installed plugin's name, version, source, resolved commit, digest and whether it is enabled. `remove` deletes the
 plugin's folder and its record, `disable` keeps it installed and offers nothing from it, and
-`enable` turns it back on without asking again. All three take the plugin's name. `update` is not
+`enable` turns it back on without asking again for a folder that has not changed. All three take the
+plugin's name, and `remove` also withdraws the plugin's hook and server answers. A plugin's hooks and
+servers each ask their own question before they first run or start. `update` is not
 built. Every form waits for a running turn to end. See [Plugins](../customize/plugins.md).
 
 ## `/caffeinate`

@@ -2447,6 +2447,80 @@ fn a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_faile
     assert!(stderr.contains("/no/such/closer"), "{stderr}");
 }
 
+/// T6, S15, PLUGIN-7: `bravebot -p` fires no plugin hook, because nobody can be asked. The plugin is
+/// installed and enabled and a yes for its hook is already recorded in `hooks-approved`, so a run that
+/// fired it would. The marker the hook writes stays absent and the approvals file is as it was.
+///
+/// Rejects: a one-shot run that reads a plugin's hooks and fires one recorded earlier.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_fires_no_plugin_hook_even_one_the_person_said_yes_to() {
+    use std::os::unix::fs::PermissionsExt;
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-plugin-hook-one-shot").with_settings(&settings_for(&gateway));
+    let state = scratch.path.join(".bravebot");
+    let marker = scratch.path.join("plugin-hook-ran");
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("hooks.json"),
+        r#"{"hooks":[
+            {"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]},
+            {"on":"turn-finished","run":["${PLUGIN_ROOT}/hook.sh"]},
+            {"on":"session-started","run":["${PLUGIN_ROOT}/hook.sh"]},
+            {"on":"session-ended","run":["${PLUGIN_ROOT}/hook.sh"]}
+        ]}"#,
+    )
+    .unwrap();
+    let script = source.join("hook.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bravebot_agent::plugins::install(&source, &state).expect("install the plugin");
+
+    // A yes recorded for every hook the plugin carries, as a person's earlier answers would be.
+    let tree = bravebot_agent::plugins::read_record(&state, "demo")
+        .expect("a record")
+        .digest;
+    let hooks = bravebot_agent::plugins::installed_hooks(&state, "demo")
+        .expect("a hooks file")
+        .expect("readable");
+    let mut recorded = String::new();
+    for hook in hooks.hooks.declared() {
+        let digest = bravebot_config::hooks_approved::Digest::of(
+            "demo",
+            hook.moment().as_str(),
+            hook.run(),
+            &tree,
+        );
+        recorded.push_str(&format!("{digest} demo\n"));
+    }
+    std::fs::write(state.join("hooks-approved"), &recorded).unwrap();
+
+    let answered = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+    let (_, stderr) = said(&answered);
+    assert!(answered.status.success(), "{stderr}");
+    assert!(
+        !marker.exists(),
+        "a plugin hook fired in a run nobody could be asked in: {:?}",
+        std::fs::read_to_string(&marker)
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.join("hooks-approved")).unwrap(),
+        recorded,
+        "the run changed the approvals"
+    );
+}
+
 /// HOOK-10 in a session in lines: `session-started` fires once however many prompts follow, and
 /// `session-ended` fires when the input ends. The regression it rejects is a session that fires its
 /// start at each prompt, which runs a command meant to run once as often as the person types.
