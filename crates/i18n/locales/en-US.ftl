@@ -6089,6 +6089,14 @@ ui-usage-ping-notice-more = More…
 ui-usage-ping-notice-less = Less
 ui-usage-ping-notice-settings = Open settings
 ui-usage-ping-notice-dismiss = Dismiss usage ping notice
+# Shown once in the window, on the first launch whose bridge sends crash reports (CRASH-9). The key
+# crashReports and the variable BRAVEBOT_CRASH_REPORTS=0 are the two ways of turning it off, and are
+# not a translator's to reword.
+ui-crash-reports-notice = If BraveBot crashes, a report is sent to Brave on the next launch. It holds the version, your operating system and the line of BraveBot's source that failed, and never your prompts, files or keys. To turn this off, set crashReports to false in your settings file, or set BRAVEBOT_CRASH_REPORTS=0.
+ui-crash-reports-notice-short = If BraveBot crashes, a report is sent to Brave on the next launch. It never holds your prompts, files or keys.
+ui-crash-reports-notice-more = More…
+ui-crash-reports-notice-less = Less
+ui-crash-reports-notice-dismiss = Dismiss crash report notice
 # The Folders section of the Files tab, and the More menu item that adds one: folders open beside the
 # project in one chat, as /add-dir opens them in the terminal. $name is a folder's own name.
 ui-folders-heading = Folders

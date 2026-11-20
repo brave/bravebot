@@ -52,6 +52,11 @@ const catalogEnUs = {
     if (category === 'one') return String(count) + ' earlier message kept out of the request, recalled when relevant'
     return String(count) + ' earlier messages kept out of the request, recalled when relevant'
   },
+  uiCrashReportsNotice: (): string => 'If BraveBot crashes, a report is sent to Brave on the next launch. It holds the version, your operating system and the line of BraveBot\'s source that failed, and never your prompts, files or keys. To turn this off, set crashReports to false in your settings file, or set BRAVEBOT_CRASH_REPORTS=0.',
+  uiCrashReportsNoticeDismiss: (): string => 'Dismiss crash report notice',
+  uiCrashReportsNoticeLess: (): string => 'Less',
+  uiCrashReportsNoticeMore: (): string => 'More…',
+  uiCrashReportsNoticeShort: (): string => 'If BraveBot crashes, a report is sent to Brave on the next launch. It never holds your prompts, files or keys.',
   uiFoldersAbout: (): string => 'Folders open beside the project in this chat. The agent can read and change files in them until you close them.',
   uiFoldersAdd: (): string => 'Add folder…',
   uiFoldersAdded: (): string => 'Folder added',
@@ -236,6 +241,11 @@ const catalogFr: Messages = {
   uiAppearanceLight: (): string => 'Clair',
   uiAppearanceSystem: (): string => 'Système',
   uiContextOutOfRequest: catalogEnUs.uiContextOutOfRequest,
+  uiCrashReportsNotice: (): string => 'Si BraveBot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version, votre système d\'exploitation et la ligne du code source de BraveBot qui a échoué, jamais vos invites, vos fichiers ni vos clés. Pour l\'éviter, mettez crashReports à false dans votre fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.',
+  uiCrashReportsNoticeDismiss: (): string => 'Fermer l\'avis sur les rapports de plantage',
+  uiCrashReportsNoticeLess: (): string => 'Moins',
+  uiCrashReportsNoticeMore: (): string => 'Plus…',
+  uiCrashReportsNoticeShort: (): string => 'Si BraveBot plante, un rapport est envoyé à Brave au lancement suivant. Il ne contient jamais vos invites, vos fichiers ni vos clés.',
   uiFoldersAbout: (): string => 'Dossiers ouverts à côté du projet dans cette conversation. L\'agent peut lire et modifier leurs fichiers jusqu\'à ce que vous les fermiez.',
   uiFoldersAdd: (): string => 'Ajouter un dossier…',
   uiFoldersAdded: (): string => 'Dossier ajouté',
