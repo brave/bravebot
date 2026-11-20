@@ -954,8 +954,10 @@ and tells the project root by an empty `path`. Both also carry `rulesQuestion`, 
 `no_such_request` can read which question, if any, is out now.
 Each `commands` entry is `{ program, startedAs, args, directory, shownDirectory, display }`.
 `directory` is the tree the command was vouched in, as held, and is null where the tree has no
-text spelling. `shownDirectory` is the same tree spelled for the screen (`.` for the workspace
-root, relative to it inside it, absolute elsewhere) and is only drawn. Two entries for one command
+text spelling. `shownDirectory` is the same tree spelled for the screen as `/status` spells it,
+by the one function `bravebot_agent::confirm::shown_tree` (`.` for the workspace root, relative to
+it inside it, absolute elsewhere, a byte that is not text written `\xNN`), without the `~` for the
+home directory that `/status` adds, and is only drawn. Two entries for one command
 in two trees are two grants, so a client keys rows on all four of `program`, `startedAs`, `args`
 and `directory`.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,

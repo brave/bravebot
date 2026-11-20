@@ -642,6 +642,14 @@ the window disables its Revoke button and says why, which is a Known cost
 somebody asked to be remembered past the session is a separate record holding less, which
 [RUN-19](#RUN-19) governs, and it puts no entry in this list.
 
+The tree is spelled by one function, `bravebot_agent::confirm::shown_tree`, which `/status` and the
+desktop's list both call: `.` for the workspace root, the path relative to it inside it, and the
+whole path outside it, each spelled as a path is in a prompt ([PROMPT-1](../prompting.md#PROMPT-1)),
+so a byte that is not text is written `\xNN` in both. The one difference is the home directory:
+`/status` writes a tree outside the root from `~`, as it does every other path it draws, and the
+window passes no home directory and writes it in full. The spelling is only drawn and a revoke
+never compares it.
+
 A tree inside the project is written into the record relative to it and comes back under the
 directory the resumed session works in, as a rewind's paths and the trust map's rules are
 ([SESSION-22](../sessions.md#SESSION-22)); a tree outside the project is written in full, there
@@ -665,6 +673,9 @@ does not appear, so it has to be readable back.
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 `verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
 `verified-by: bravebot_tui::status::the_report_names_the_tree_each_vouched_command_runs_unasked_in`
+`verified-by: bravebot_tui::status::the_report_spells_a_tree_that_is_not_text_with_its_byte`
+`verified-by: bravebot_agent::confirm::a_tree_is_spelled_relative_to_the_root_and_whole_outside_it`
+`verified-by: bravebot_agent::confirm::a_tree_that_is_not_text_is_spelled_with_its_bytes_in_every_position`
 `verified-by: bravebot_ui_bridge::bridge::a_command_vouched_in_two_trees_is_listed_with_each_tree_and_revoked_by_it`
 `verified-by: bravebot_ui_bridge::bridge::revoking_a_command_without_its_tree_or_in_a_tree_not_held_changes_nothing`
 `verified-by: bravebot_ui_bridge::bridge::a_tree_that_is_not_text_is_not_revoked_by_the_tree_that_renders_like_it`

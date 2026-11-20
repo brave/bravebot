@@ -1366,6 +1366,49 @@ pub fn shown_path(path: &std::path::Path) -> String {
     shown(&pieces, true)
 }
 
+/// The tree a remembered command was given in, spelled for a person: relative to the workspace
+/// root where it is inside it, `.` for the root itself, and the absolute path otherwise, each
+/// spelled as [`shown_path`] spells a path, so a byte that is not text is written `\xNN` here as
+/// everywhere else a path is drawn.
+///
+/// `roots` are the spellings of the workspace root, tried in order, and the first that holds the
+/// tree is the one it is made relative to. A caller whose root has a link in it passes the
+/// resolved root and the one it was named by.
+///
+/// `home` is where a tree outside the root is written from `~` instead of in full, for a client
+/// that does this to every other path it draws. `None` writes it in full. The prefix is removed by
+/// path component, so a directory whose name merely starts with the home directory's is not under
+/// it, and an empty `home` or the filesystem root abbreviates nothing, since every absolute path
+/// would otherwise read as `~`.
+///
+/// For display only, and a pure mapping from the three paths: entries are keyed on the path and a
+/// revoke never compares this.
+pub fn shown_tree(
+    directory: &std::path::Path,
+    roots: &[&std::path::Path],
+    home: Option<&std::path::Path>,
+) -> String {
+    for root in roots {
+        if let Ok(rest) = directory.strip_prefix(root) {
+            return if rest.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                shown_path(rest)
+            };
+        }
+    }
+    if let Some(home) = home.filter(|home| {
+        !home.as_os_str().is_empty() && *home != std::path::Path::new(std::path::MAIN_SEPARATOR_STR)
+    }) && let Ok(rest) = directory.strip_prefix(home)
+    {
+        if rest.as_os_str().is_empty() {
+            return "~".to_string();
+        }
+        return shown_path(&std::path::Path::new("~").join(rest));
+    }
+    shown_path(directory)
+}
+
 /// The file a step runs, and the path that starts it where that is another, each spelled as
 /// [`shown_path`] spells a path.
 ///
@@ -4014,6 +4057,78 @@ mod tests {
                 assert_ne!(one, other);
             }
         }
+    }
+
+    /// PROMPT-1, RUN-9: a tree is spelled the one way in every client. The root is `.`, a
+    /// directory under it is relative, and one outside it is whole. The home directory is
+    /// abbreviated only where the caller gives it, by path component, and the escape of a name that
+    /// is not text is the one [`shown_path`] writes, with or without the abbreviation.
+    #[test]
+    fn a_tree_is_spelled_relative_to_the_root_and_whole_outside_it() {
+        use std::path::Path;
+        let root = Path::new("/work/proj");
+        let shown = |tree: &str, home: Option<&str>| {
+            shown_tree(Path::new(tree), &[root], home.map(Path::new))
+        };
+        assert_eq!(shown("/work/proj", None), ".");
+        assert_eq!(shown("/work/proj/crates/tui", None), "crates/tui");
+        assert_eq!(shown("/elsewhere/x", None), "/elsewhere/x");
+        // A directory whose name only starts with the root's is not under it.
+        assert_eq!(shown("/work/proj2", None), "/work/proj2");
+        // A second spelling of the root is tried after the first.
+        assert_eq!(
+            shown_tree(
+                Path::new("/private/work/proj/sub"),
+                &[Path::new("/work/proj"), Path::new("/private/work/proj")],
+                None
+            ),
+            "sub"
+        );
+        // The root wins over the home directory, which holds it.
+        assert_eq!(shown("/work/proj/sub", Some("/work")), "sub");
+        assert_eq!(shown("/work/proj", Some("/work")), ".");
+        // Outside the root the home directory is abbreviated only when it is given.
+        assert_eq!(shown("/home/me/other", Some("/home/me")), "~/other");
+        assert_eq!(shown("/home/me", Some("/home/me")), "~");
+        assert_eq!(shown("/home/me/other", None), "/home/me/other");
+        assert_eq!(
+            shown("/home/meagain/x", Some("/home/me")),
+            "/home/meagain/x"
+        );
+        assert_eq!(shown("/tmp/x", Some("/home/me")), "/tmp/x");
+        // An empty home or the root abbreviates nothing.
+        assert_eq!(shown("/tmp/x", Some("")), "/tmp/x");
+        assert_eq!(shown("/tmp/x", Some("/")), "/tmp/x");
+        // A name that needs spelling is spelled as a path is.
+        assert_eq!(shown("/work/proj/a b /c", None), "\"a b\u{2423}/c\"");
+    }
+
+    /// PROMPT-1, PATH-003: a tree that is not text is spelled with the byte written out, under the
+    /// root, outside it and under the home directory, and two trees that differ in such a byte are
+    /// not spelled alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_that_is_not_text_is_spelled_with_its_bytes_in_every_position() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+        let root = Path::new("/work/proj");
+        let home = Path::new("/home/me");
+        let shown = |bytes: &[u8], home: Option<&Path>| {
+            shown_tree(Path::new(OsStr::from_bytes(bytes)), &[root], home)
+        };
+        assert_eq!(shown(b"/work/proj/t\xff", None), "\"t\\xff\"");
+        assert_eq!(shown(b"/elsewhere/t\xff", None), "\"/elsewhere/t\\xff\"");
+        assert_eq!(
+            shown(b"/elsewhere/t\xff", Some(home)),
+            "\"/elsewhere/t\\xff\""
+        );
+        assert_eq!(shown(b"/home/me/t\xff", Some(home)), "\"~/t\\xff\"");
+        assert_eq!(shown(b"/home/me/t\xff", None), "\"/home/me/t\\xff\"");
+        assert_ne!(
+            shown(b"/elsewhere/t\xff", None),
+            shown("/elsewhere/t\u{fffd}".as_bytes(), None)
+        );
     }
 
     /// PROMPT-12: a note is one line, cut to a length, and nothing where there is nothing in it.

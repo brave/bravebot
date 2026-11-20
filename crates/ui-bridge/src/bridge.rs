@@ -2900,6 +2900,10 @@ impl Bridge {
                 );
             }
         }
+        // The workspace root is the project with its links resolved, so both spellings of it are
+        // tried.
+        let resolved =
+            std::fs::canonicalize(&open.project).unwrap_or_else(|_| open.project.clone());
         let mut listed = json!({
             "paths": listed_rules(&state.answers.trust),
             // Each entry names the tree it was vouched in: two entries for one command in two
@@ -2911,8 +2915,13 @@ impl Bridge {
                 // The tree as held. A tree with no text spelling is null, which no revoke
                 // matches, so a rendering never decides which entry is withdrawn.
                 "directory": command.directory.to_str(),
-                // The same tree spelled for the screen, and never compared.
-                "shownDirectory": shown_tree(&command.directory, &open.project),
+                // The same tree spelled for the screen as `/status` spells it, without the `~`
+                // abbreviation the terminal gives a tree outside the root, and never compared.
+                "shownDirectory": bravebot_agent::confirm::shown_tree(
+                    &command.directory,
+                    &[&resolved, &open.project],
+                    None,
+                ),
                 "display": command.display(),
             })).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
@@ -3789,23 +3798,6 @@ fn shown_path(path: &Path, project: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
-}
-
-/// The tree a remembered command was given in, spelled for the screen: relative to the workspace
-/// root where it is inside it, `.` for the root itself, and the absolute path otherwise. The home
-/// directory is not abbreviated.
-///
-/// For the screen only. Entries are keyed on the path, and a revoke never compares this.
-fn shown_tree(directory: &Path, project: &Path) -> String {
-    let resolved = std::fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
-    match directory
-        .strip_prefix(&resolved)
-        .or_else(|_| directory.strip_prefix(project))
-    {
-        Ok(rest) if rest.as_os_str().is_empty() => ".".to_string(),
-        Ok(rest) => bravebot_agent::confirm::shown_path(rest),
-        Err(_) => bravebot_agent::confirm::shown_path(directory),
-    }
 }
 
 /// Run one turn to its end, whatever that end is.
