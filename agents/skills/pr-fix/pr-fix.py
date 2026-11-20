@@ -39,7 +39,7 @@ comment. <pr> is a number or a pull request URL, several of them separated by co
 issue number or URL, one at a time. Several run in
 parallel, each in a process of its own, and each one's output is printed as soon as it finishes. Several
 that wait share one wait, so they take no longer than one. It works from the main clone or from any
-worktree.
+worktree, and the copy that runs is the one the session names by absolute path.
 
 A branch already checked out in another worktree is used there only when that worktree is not locked
 and is inside the directory worktrees are made in (.worktrees/ unless BRAVEBOT_PR_WORKTREES names
@@ -71,7 +71,6 @@ except ImportError:
     fcntl = None
 
 REVIEWER = "netzenbot-reviewer"
-SCRIPT = "python3 agents/skills/pr-fix/pr-fix.py"
 TREE_STEPS = ("start", "continue", "check", "push")
 ISSUE_STEPS = ("issue", "open")
 BASE_BRANCH = "main"
@@ -96,6 +95,9 @@ def _load_shared():
 # The skill scripts are not an importable package, so the module they share is loaded by path.
 pr_worktree = _load_shared()
 
+# Every next step this script prints names the file that is running by its absolute path. A session whose
+# directory is a pull request's worktree would otherwise run that worktree's copy of the script.
+SCRIPT = pr_worktree.script_command(__file__)
 BASE_REPO = pr_worktree.BASE_REPO
 die = pr_worktree.die
 run = pr_worktree.run

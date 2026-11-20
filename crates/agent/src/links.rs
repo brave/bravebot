@@ -354,7 +354,10 @@ fn number_after(words: &[&str]) -> Option<u64> {
 /// repository from the segment it is in: `--repo`, `--repo=`, `-R` or `GH_REPO=`, else
 /// `default_repository`, else the number names nothing. A prose `#12` with no `gh` word or closing
 /// keyword before it is not read. Quoting is not parsed beyond taking a quote off the ends of a
-/// word, so a quoted `;` cuts a segment short.
+/// word, so a quoted `;` cuts a segment short. A `pr-fix.py` or `gh` word is matched on the part
+/// after its last `/`, so the script named by a relative path, an absolute path or an absolute path
+/// quoted for a space (`'/a b/pr-fix.py'`, whose last word ends in the file name once its quote is
+/// taken off) is the same word.
 ///
 /// This reads the string and returns what it found. It decides nothing about the command: whether
 /// it runs, what it is asked about or what the planner is told is settled without it. It reads the
@@ -1021,6 +1024,27 @@ mod tests {
             command("pr-fix.py ci 4376 --wait", None),
             ["brave/bravebot#4376 PullRequest named=true"]
         );
+        // Coverage of reader code that did not change: the words are split at whitespace and the
+        // script is matched on the part after its last `/`, so an absolute path reads like a
+        // relative one. The reader does not parse quoting. A path with a space quoted for a shell
+        // ends in a word whose trailing quote is trimmed, and that word is the file name.
+        for line in [
+            "python3 /home/a/bravebot/agents/skills/pr-fix/pr-fix.py ci 4376",
+            "python3 '/home/a b/bravebot/agents/skills/pr-fix/pr-fix.py' ci 4376",
+        ] {
+            assert_eq!(
+                command(line, None),
+                ["brave/bravebot#4376 PullRequest named=true"],
+                "{line}"
+            );
+        }
+        assert!(
+            command(
+                "python3 /home/a/bravebot/agents/skills/pr-fix/pr-fix.py open 3628 --title t",
+                None
+            )
+            .is_empty()
+        );
         for line in [
             "python3 agents/skills/pr-fix/pr-fix.py open 3628 --branch fix-x --title t",
             "python3 agents/skills/pr-fix/pr-fix.py issue 3628",
@@ -1044,6 +1068,14 @@ mod tests {
         );
         assert_eq!(
             creation_in_command("python3 agents/skills/pr-fix/pr-fix.py open 3628 --title t"),
+            Some(LinkKind::PullRequest)
+        );
+        // The same coverage for `open`: an absolute path creates a pull request as a relative one
+        // does, since the script is matched on the part after its last `/`.
+        assert_eq!(
+            creation_in_command(
+                "python3 /home/a/bravebot/agents/skills/pr-fix/pr-fix.py open 3628 --title t"
+            ),
             Some(LinkKind::PullRequest)
         );
         for line in [

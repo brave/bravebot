@@ -12,7 +12,7 @@ description:
   Triggers on: /implement-issues <issues or query>, work through this label, one pull request for
   these issues, implement all of these.'
 argument-hint: '<issue numbers, links or search queries, separated by commas, or the batch branch of an unfinished run, or the number of a pull request this skill opened>, then optionally a line that starts with Notes:'
-allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
 ---
 
 # Implement a list of issues in one pull request
@@ -23,7 +23,8 @@ request that holds the commits for all of them. It uses `pr-fix.py` for everythi
 already does (reading an issue, making worktrees, opening and pushing the pull request, CI, review
 threads), so read [the pr-fix skill](../pr-fix/SKILL.md) first. Its rules about worktrees, hooks,
 signing and refused `run` arguments apply here unchanged. Below, `...` stands for
-`python3 agents/skills/pr-fix/pr-fix.py`.
+`python3 <clone>/agents/skills/pr-fix/pr-fix.py`, where `<clone>` is the main clone, as
+[the pr-fix skill](../pr-fix/SKILL.md) says.
 
 `make implement-issues ISSUES="<argument>" NOTES="<notes>"` starts this skill in the terminal client
 with the argument unchanged, then a `Claimed:` line, then `NOTES`, where it is given, on a line that
