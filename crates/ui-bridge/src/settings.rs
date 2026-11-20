@@ -107,7 +107,8 @@ fn ignored(settings: &Settings) -> Vec<Value> {
         .collect()
 }
 
-/// What the settings in force say about the two keys that only refuse and the three run limits.
+/// What the settings in force say about the two keys that only refuse, the three run limits and
+/// the session spend limit.
 ///
 /// A limit nobody named is `null`: the built-in figure belongs to the crate that applies it, and
 /// answering with one here would be a second copy. A refusal in force is `true` and names the file
@@ -133,6 +134,12 @@ fn limits(settings: &Settings, managed: &Managed) -> Value {
             "defaultSeconds": deadlines.default.map(|d| d.as_secs()),
             "maxSeconds": deadlines.ceiling.map(|d| d.as_secs()),
             "maxOutput": settings.run_output_cap(),
+        },
+        // What a session opened under these settings starts with (TURN-8), in the shape
+        // `session.limit` answers with. A checkout's figure that was not obeyed is in `ignored`.
+        "session": {
+            "limit": settings.limit().map(|limit| json!({ "unit": limit.unit.word(), "count": limit.figure })),
+            "path": settings.limit_by(),
         },
     })
 }
@@ -551,10 +558,10 @@ mod tests {
     #[test]
     fn the_report_names_each_limit_and_the_file_that_asked_for_a_refusal() {
         let (directory, settings) = vetting_layers(
-            Some(r#"{"run": {"defaultSeconds": 90, "maxOutput": 4096}}"#),
+            Some(r#"{"run": {"defaultSeconds": 90, "maxOutput": 4096}, "limit": "200k"}"#),
             Some(
                 r#"{"permissions": {"readsStayInWorkspace": true, "bypassUnreachable": "yes"},
-                    "run": {"maxSeconds": 120}}"#,
+                    "run": {"maxSeconds": 120}, "limit": "100k"}"#,
             ),
         );
         let project = directory.path().join("project/.bravebot/settings.json");
@@ -576,6 +583,11 @@ mod tests {
             report["run"],
             json!({ "defaultSeconds": 90, "maxSeconds": 120, "maxOutput": 4096 })
         );
+        assert_eq!(
+            report["session"],
+            json!({ "limit": { "unit": "tokens", "count": 100_000 }, "path": project }),
+            "the checkout's lower limit is the one in force and its file is named"
+        );
 
         let (_, none) = vetting_layers(None, None);
         let report = limits(&none, &Managed::default());
@@ -585,6 +597,26 @@ mod tests {
             "an unnamed limit was reported as a figure"
         );
         assert_eq!(report["readsStayInWorkspace"]["value"], json!(null));
+        assert_eq!(
+            report["session"],
+            json!({ "limit": null, "path": null }),
+            "a session limit nobody named was reported"
+        );
+    }
+
+    /// A checkout's figure above the person's is not obeyed, so the file the report names for the
+    /// session limit is the person's own.
+    #[test]
+    fn the_session_limit_a_checkout_could_not_widen_names_the_persons_file() {
+        let (directory, settings) = vetting_layers(
+            Some(r#"{"limit": "40 credits"}"#),
+            Some(r#"{"limit": "90 credits"}"#),
+        );
+        let home = directory.path().join("home/settings.json");
+        assert_eq!(
+            limits(&settings, &Managed::default())["session"],
+            json!({ "limit": { "unit": "credits", "count": 40 }, "path": home })
+        );
     }
 
     #[test]

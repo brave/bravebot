@@ -426,18 +426,20 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
 struct Narrowed {
     /// What the last layer entitled to the key wrote, usable or not.
     standing: Option<serde_json::Value>,
+    /// The file that wrote `standing`.
+    standing_from: Option<PathBuf>,
     /// What each layer not entitled wrote, weakest layer first.
     offered: Vec<(PathBuf, serde_json::Value)>,
 }
 
 impl Narrowed {
     /// Put the value in force under `key` in `document`, and answer for the files that wrote one
-    /// that was not obeyed, weakest first.
+    /// that was not obeyed, weakest first, and for the file whose value is in force.
     ///
     /// An offered value is compared with the one in force when its turn comes, so two checkout
     /// files each narrow what the one before left, and a figure in the other unit than the one in
     /// force is refused whichever file wrote it.
-    fn settle(self, kind: Narrows, document: &mut Document, key: &str) -> Vec<PathBuf> {
+    fn settle(self, kind: Narrows, document: &mut Document, key: &str) -> Settled {
         self.settle_against(kind, kind.unstated().as_ref(), document, key)
     }
 
@@ -453,10 +455,18 @@ impl Narrowed {
         unstated: Option<&serde_json::Value>,
         document: &mut Document,
         key: &str,
-    ) -> Vec<PathBuf> {
-        let Self { standing, offered } = self;
+    ) -> Settled {
+        let Self {
+            standing,
+            standing_from,
+            offered,
+        } = self;
+        let mut from = None;
         let mut held = match standing {
-            Some(value) if kind.usable(&value) => Some(value),
+            Some(value) if kind.usable(&value) => {
+                from = standing_from;
+                Some(value)
+            }
             // The person's own file stating nothing usable states that there is nothing to keep.
             Some(value) => {
                 document.displaced.push(value);
@@ -476,6 +486,7 @@ impl Narrowed {
                 if let Some(wider) = held.replace(value) {
                     document.displaced.push(wider);
                 }
+                from = Some(path);
                 continue;
             }
             document.displaced.push(value);
@@ -489,8 +500,16 @@ impl Narrowed {
         if let Some(value) = held {
             document.put_key(key, value);
         }
-        refused
+        Settled { refused, from }
     }
+}
+
+/// What [`Narrowed::settle`] decided about one key.
+struct Settled {
+    /// The files whose value was not obeyed, weakest first.
+    refused: Vec<PathBuf>,
+    /// The file whose value is in force, or `None` where no value is.
+    from: Option<PathBuf>,
 }
 
 /// The number of days a record is kept when no `retentionDays` is stated.
@@ -699,6 +718,8 @@ pub struct Settings {
     editor_mode: Option<String>,
     /// The session spend limit the top-level `limit` key named, if it named a usable one.
     limit: Option<crate::limit::Limit>,
+    /// The file whose value is in force for each key of [`NARROW_ONLY`] a layer stated.
+    narrowed_from: BTreeMap<&'static str, PathBuf>,
     /// The size in tokens above which the top-level `deferMcpToolsAbove` key asks for a server's
     /// tools to be offered by name, if it named a usable one.
     defer_mcp_tools_above: Option<u64>,
@@ -1231,6 +1252,8 @@ struct LayerFacts {
     /// What each layer said about a key of [`NARROW_ONLY`], one entry per row of the table, settled
     /// by [`LayerFacts::settle_narrowed`] once all are read.
     narrowed: Vec<Narrowed>,
+    /// The file whose value is in force for a key of [`NARROW_ONLY`], where one is.
+    narrowed_from: BTreeMap<&'static str, PathBuf>,
     /// Settled per layer for the reason `model` is: how long the person's own records are kept is
     /// theirs to state, and the merge keeps whichever file spoke last.
     retention_unreadable: Vec<PathBuf>,
@@ -1321,6 +1344,7 @@ impl LayerFacts {
                 if let Some(replaced) = held.standing.replace(value) {
                     merged.displaced.push(replaced);
                 }
+                held.standing_from = Some(path.to_path_buf());
             } else {
                 held.offered.push((path.to_path_buf(), value));
             }
@@ -1332,9 +1356,12 @@ impl LayerFacts {
     /// files that named a key of [`HOME_ONLY`].
     fn settle_narrowed(&mut self, merged: &mut Document) {
         for ((key, kind, _), held) in NARROW_ONLY.iter().zip(std::mem::take(&mut self.narrowed)) {
-            let refused = held.settle(*kind, merged, key);
+            let Settled { refused, from } = held.settle(*kind, merged, key);
             if !refused.is_empty() {
                 self.not_obeyed.entry(*key).or_default().extend(refused);
+            }
+            if let Some(path) = from {
+                self.narrowed_from.insert(*key, path);
             }
         }
     }
@@ -1656,6 +1683,7 @@ impl LayerFacts {
         settings.model_outranks_a_pick = self.model_above_home && settings.model.is_some();
         settings.effort_outranks_a_pick = self.effort_above_home && settings.effort.is_some();
         settings.not_obeyed = self.not_obeyed;
+        settings.narrowed_from = self.narrowed_from;
         settings.retention_unreadable = self.retention_unreadable;
     }
 }
@@ -2219,6 +2247,11 @@ impl Settings {
     /// zero, is absence: a misspelt limit leaves the session unbounded, as it was without the key.
     pub fn limit(&self) -> Option<crate::limit::Limit> {
         self.limit
+    }
+
+    /// The file whose figure [`Settings::limit`] is, where the layers named one.
+    pub fn limit_by(&self) -> Option<&Path> {
+        self.narrowed_from.get("limit").map(PathBuf::as_path)
     }
 
     /// The size in tokens above which the settings in force have a server's tools offered by name
@@ -9567,15 +9600,18 @@ mod tests {
         ] {
             let held = Narrowed {
                 standing: None,
+                standing_from: None,
                 offered: vec![(PathBuf::from("/checkout/settings.json"), offered.clone())],
             };
             let mut document = Document::default();
-            let refused = held.settle_against(
-                Narrows::Limit,
-                Some(&serde_json::json!("200k")),
-                &mut document,
-                "limit",
-            );
+            let refused = held
+                .settle_against(
+                    Narrows::Limit,
+                    Some(&serde_json::json!("200k")),
+                    &mut document,
+                    "limit",
+                )
+                .refused;
             assert_eq!(refused.len(), reported, "{offered}");
             assert_eq!(
                 limit_stated(document.root.get("limit")),
