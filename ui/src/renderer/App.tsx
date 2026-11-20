@@ -33,7 +33,7 @@ import { About, type AboutInfo } from './components/About'
 import { BugReport } from './components/BugReport'
 import { UpdateBanner } from './components/UpdateBanner'
 import { UsagePingNotice } from './components/UsagePingNotice'
-import { CrashReportNotice } from './components/CrashReportNotice'
+import { CrashReportsNotice } from './components/CrashReportsNotice'
 import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
 import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
 import { canSend } from './can-send'
@@ -145,12 +145,16 @@ export function App(): React.JSX.Element {
       void call('usage_ping.mark_notice_shown').catch(() => {})
     }).catch(() => {})
   }, [])
-  /** Whether to say that crash reports are sent. The bridge records it in the file the terminal also reads. */
-  const [crashNoticeShown, setCrashNoticeShown] = useState(false)
+  /**
+   * Whether to say that crash reports are sent. Due only for a launch that is reporting and that no
+   * front end has told yet; the bridge records it, in the marker the terminal reads, as soon as it
+   * is drawn.
+   */
+  const [crashReportsNoticeShown, setCrashReportsNoticeShown] = useState(false)
   useEffect(() => {
     void call<{ due?: boolean }>('crash_reports.notice_due').then((answer) => {
       if (answer.due !== true) return
-      setCrashNoticeShown(true)
+      setCrashReportsNoticeShown(true)
       void call('crash_reports.mark_notice_shown').catch(() => {})
     }).catch(() => {})
   }, [])
@@ -911,13 +915,14 @@ export function App(): React.JSX.Element {
     ? <UsagePingNotice onSettings={() => { setUsagePingNoticeShown(false); openSettingsPage('general') }}
       onDismiss={() => setUsagePingNoticeShown(false)} />
     : null, [usagePingNoticeShown, openSettingsPage])
-  const crashReportNotice = useMemo(() => crashNoticeShown
-    ? <CrashReportNotice onDismiss={() => setCrashNoticeShown(false)} />
-    : null, [crashNoticeShown])
+  const crashReportsNotice = useMemo(() => crashReportsNoticeShown
+    ? <CrashReportsNotice onSettings={() => { setCrashReportsNoticeShown(false); openSettingsPage('general') }}
+      onDismiss={() => setCrashReportsNoticeShown(false)} />
+    : null, [crashReportsNoticeShown, openSettingsPage])
   // `Transcript` has one notice slot, so the first-launch banners share it.
-  const startupNotices = useMemo(() => usagePingNotice || crashReportNotice
-    ? <>{usagePingNotice}{crashReportNotice}</>
-    : null, [usagePingNotice, crashReportNotice])
+  const startupNotices = useMemo(() => usagePingNotice || crashReportsNotice
+    ? <>{usagePingNotice}{crashReportsNotice}</>
+    : null, [usagePingNotice, crashReportsNotice])
 
   useCommandRouter({
     create: (directory) => { void (directory ? create(directory) : newChat()) },

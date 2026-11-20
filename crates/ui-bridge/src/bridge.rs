@@ -478,6 +478,8 @@ impl Bridge {
             "language.set" => crate::language::set(request),
             "usage_ping.get" => Ok(crate::usage_ping::get()),
             "usage_ping.set" => crate::usage_ping::set(request),
+            "crash_reports.get" => Ok(crate::crash_reports::get()),
+            "crash_reports.set" => crate::crash_reports::set(request),
             "usage_ping.notice_due" => {
                 Ok(json!({"due": bravebot_session::store::usage_ping_notice_due()}))
             }

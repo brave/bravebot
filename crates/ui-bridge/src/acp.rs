@@ -368,6 +368,7 @@ impl Acp {
             if let Some(note) = held.opening_note.take() {
                 say(&mut shared, &session, &note);
             }
+            say_crash_reports_once(&mut shared, &session);
             shared
                 .unasked
                 .remove(&session)
@@ -883,6 +884,22 @@ fn say(shared: &mut Shared, session: &str, text: &str) {
             "content": { "type": "text", "text": plain(text) },
         }),
     );
+}
+
+/// Tell the editor's person that crash reports are sent, once (CRASH-12).
+///
+/// A message in the session, because this program has no screen and its standard output is the
+/// protocol: the words reach the editor as a string inside a notification and are never written
+/// outside one. Whether it is due is the answer the terminal and the window ask, which is yes only
+/// for a launch that is reporting and has not said it in any front end, so a person told in one is
+/// not told here. Recorded as it is sent, as the terminal records it, because nothing here learns
+/// whether the editor drew it and the alternative is a line said on every prompt.
+fn say_crash_reports_once(shared: &mut Shared, session: &str) {
+    if !bravebot_backtrace::notice_due() {
+        return;
+    }
+    bravebot_backtrace::notice_given();
+    say(shared, session, bravebot_i18n::t!(crash_reports_notice));
 }
 
 /// Put a bridge question to the editor, or refuse it where it cannot be put.

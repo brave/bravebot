@@ -3,7 +3,10 @@
    single inspector rather than as five panels that grew up separately. */
 
 .context { display: flex; flex-direction: column; overflow: hidden; }
-.context-content { flex: 1; min-height: 0; overflow-y: auto; }
+/* Sized by the column, never by its panels, like `.entries`. Without this, a column of panels taller
+   than the window scrolls under the custom 10px scrollbar of base.css and the renderer process
+   ends with SIGSEGV when the pointer moves over the window (#3581). */
+.context-content { flex: 1; min-height: 0; overflow-y: auto; contain: size layout style; }
 .context-content[hidden] { display: none; }
 .context-files .context-content { display: flex; flex-direction: column; overflow: hidden; }
 .context-files .context-content[hidden] { display: none; }
