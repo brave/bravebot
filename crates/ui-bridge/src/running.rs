@@ -93,6 +93,12 @@ pub struct State {
     /// and extended by every turn taken here, so a save writes back the history it was given.
     pub history: Option<Vec<bravebot_session::sessions::StoredTurn>>,
     pub tokens: u64,
+    /// The most the session may spend before a turn asks the person whether to go on (TURN-8).
+    ///
+    /// Shared with each turn, so a figure given at the question is the session's afterwards. Not
+    /// saved: a session opened, resumed or forked here reads it from the `limit` setting, as the
+    /// terminal does.
+    pub spend_limit: bravebot_agent::SpendLimit,
     /// How many of `tokens` the model read and how many it wrote, for the turns that reported it.
     pub split: bravebot_session::sessions::Split,
     /// What each turn cost, by turn number.
@@ -280,6 +286,9 @@ impl State {
             turns: 0,
             history: Some(Vec::new()),
             tokens: 0,
+            // The bridge replaces this with the project's `limit` setting when it opens the
+            // session.
+            spend_limit: Default::default(),
             split: Default::default(),
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
