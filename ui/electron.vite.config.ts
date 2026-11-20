@@ -65,9 +65,21 @@ export function appIcon(): Plugin {
 }
 
 export default defineConfig({
-  main: { build: { rollupOptions: { input: resolve(__dirname, 'src/main/index.ts') } } },
-  // Four preloads and four pages: the window somebody types in, the offscreen one a PDF is
-  // printed from, the one a sign-in's URL or code is shown in, and the one a key is typed in.
+  // The entry decides whether this is the ordinary app or the desktop as a client of the host, and
+  // loads the ordinary app only for the first, so a host client runs none of its start-up work.
+  // The chunks sit beside the entry, not in a folder of their own: the main process finds the
+  // preloads and pages by `__dirname` and a path up from it.
+  main: {
+    build: {
+      rollupOptions: {
+        input: { index: resolve(__dirname, 'src/main/entry.ts') },
+        output: { chunkFileNames: '[name]-[hash].js' },
+      },
+    },
+  },
+  // Five preloads and five pages: the window somebody types in, the offscreen one a PDF is
+  // printed from, the one a sign-in's URL or code is shown in, the one a key is typed in, and the
+  // one the desktop shows as a client of the host.
   // Rollup names each chunk after its key, which is what puts them at the paths
   // `src/main/export.ts` loads them from.
   preload: {
@@ -78,6 +90,7 @@ export default defineConfig({
           export: resolve(__dirname, 'src/preload/export.ts'),
           'sign-in': resolve(__dirname, 'src/preload/sign-in.ts'),
           'key-window': resolve(__dirname, 'src/preload/key-window.ts'),
+          prototype: resolve(__dirname, 'src/preload/prototype.ts'),
         },
       },
     },
@@ -91,6 +104,7 @@ export default defineConfig({
           export: resolve(__dirname, 'src/renderer/export.html'),
           'sign-in': resolve(__dirname, 'src/renderer/sign-in.html'),
           'key-window': resolve(__dirname, 'src/renderer/key-window.html'),
+          prototype: resolve(__dirname, 'src/renderer/prototype.html'),
         },
       },
     },

@@ -75,7 +75,8 @@
     "drive:rewind": "pnpm run build && node scripts/drive-rewind.mjs",
     "drive:note-changelog-awake": "pnpm run build && node scripts/drive-note-changelog-awake.mjs",
     "drive:agent-settings": "pnpm run build && node scripts/drive-agent-settings.mjs",
-    "drive:agent-rpc": "pnpm run bridge && node scripts/drive-agent-rpc.mjs"
+    "drive:agent-rpc": "pnpm run bridge && node scripts/drive-agent-rpc.mjs",
+    "drive:prototype": "pnpm run bridge && pnpm --dir ../packages/agent-client run build && electron-vite build && node scripts/drive-prototype.mjs"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
