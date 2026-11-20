@@ -683,6 +683,7 @@ mod command_tests {
             path: path.to_string(),
             by: by.map(PathBuf::from),
             pinned,
+            from_a_checkout: false,
         };
         assert_eq!(
             typed(&[

@@ -89,6 +89,12 @@ pub struct Entry {
     pub by: Option<PathBuf>,
     /// Whether the managed layer wrote it, which nothing a person wrote can lift.
     pub pinned: bool,
+    /// Whether a layer that arrives with a clone wrote it (the project or local settings file, or
+    /// a `--settings` file read as one), so its spelling is text the person did not write. It is
+    /// set from the layer the entry was read from and never from the spelling. The spelling is
+    /// kept for the person's own screens and left out of a sentence the planner reads
+    /// ([SANDBOX-25](../../../docs/specs/sandboxing.md#SANDBOX-25)).
+    pub from_a_checkout: bool,
 }
 
 /// The four lists, as written.
@@ -192,6 +198,7 @@ impl Rules {
                 path: path.to_string_lossy().into_owned(),
                 by: None,
                 pinned: false,
+                from_a_checkout: false,
             },
             state: State::InForce(vec![path.clone()]),
         };
@@ -258,11 +265,10 @@ impl Rules {
     ///
     /// An entry of `denyRead` or `denyWrite` that is not in force is a path the person meant to
     /// hold back and that a stage would reach, so a caller starting a stage refuses it rather than
-    /// start one. An allow entry that is not in force only leaves reach where it was.
-    pub fn unapplied_denial(&self) -> Option<&Item> {
-        self.refused()
-            .map(|(item, _)| item)
-            .find(|item| item.list.is_a_denial())
+    /// start one. An allow entry that is not in force only leaves reach where it was. The reason it
+    /// is refused comes with it, since only a refused entry is returned.
+    pub fn unapplied_denial(&self) -> Option<(&Item, Reason)> {
+        self.refused().find(|(item, _)| item.list.is_a_denial())
     }
 
     /// The denials in force that name a path beneath a row a stage is granted, which are the
@@ -1308,12 +1314,14 @@ mod tests {
             path: path.to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         }
     }
 
     fn pinned(path: &str) -> Entry {
         Entry {
             pinned: true,
+            from_a_checkout: false,
             ..entry(path)
         }
     }

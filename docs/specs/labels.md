@@ -89,7 +89,7 @@ guards:
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
       - crates/agent/src/tools/tests/activity.rs: 3
-      - crates/agent/src/tools/tests/editing.rs: 8
+      - crates/agent/src/tools/tests/editing.rs: 9
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
       - crates/agent/src/turn.rs: 10
@@ -729,7 +729,7 @@ and the content has no say in it.
 | what a line whose every step is accounted for printed | trusted and private, because the steps were vouched for and the output is a function of what went in | `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted` |
 | a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
 | input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for. The body of a delivery to `bravebot trigger serve` is this row: it is written to the standard input of the run it starts and takes no label of its own ([TRIGGER-7](triggers.md#TRIGGER-7)) | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` `verified-by: bravebot_cli::running::a_signed_delivery_starts_the_prompt_and_the_planner_never_sees_the_body` |
-| the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
+| the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant. A checkout's settings file is not the person's own: its text is not carried into a sentence the planner gets, which names only the list key, a closed reason and the file ([SANDBOX-25](sandboxing.md#SANDBOX-25)) | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
 | a fact kept by `remember` or the person | trusted, with the confidentiality its `label` field states, private when missing, because a kept fact is in the user's own memory and is written only by the person or by a save they were shown; a private one makes what the planner writes private once it is read | `verified-by: bravebot_core::policy::a_kept_fact_is_trusted_with_the_confidentiality_it_states` `verified-by: bravebot_core::policy::labelling_a_kept_fact_is_recorded_in_the_audit_trail` `verified-by: bravebot_core::policy::reading_a_private_fact_makes_the_context_private` `verified-by: bravebot_core::policy::reading_a_public_fact_leaves_the_context_as_it_was` |
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
@@ -1392,6 +1392,66 @@ arrives at all.
   include pattern, the rules, the resolved directory argument and the name order above, no name is
   in any of these conditions. A name in that sentence, or a choice of which directory to cut or how
   to word the sentence made from a name, is a violation and not covered here.
+
+- **The reason a checkout's refused filesystem entry is named is chosen from the entry's spelling,
+  and is not one of the ten.** A `run` is not started while an entry of `sandbox.filesystem.denyRead`
+  or `denyWrite` cannot be applied ([SANDBOX-25](sandboxing.md#SANDBOX-25)). Where the project or
+  local settings file of a checkout wrote that entry, the sentence the planner reads names the list,
+  one reason and the file, and not the spelling. The reason is one of five sentences the driver
+  wrote (`sandbox-rule-*` in the catalog): the entry starts with a variable, starts with `~` in a
+  session with no home directory, climbs out of the directory it is read from, holds a wildcard in a
+  write list, or holds a wildcard that looks at more of the disk than a pattern may. `resolve` in
+  `bravebot-sandbox` picks it by reading the entry's text, and for the last one by counting the
+  paths the wildcard visits on the disk. The same function, reading the same text, already decided
+  whether the entry is refused, and so whether the stage started and whether the planner was told it
+  did not. What is new is which of five sentences that refusal carries.
+
+  What the planner can learn is which of those five the first refused entry hit: one of five, about
+  2.3 bits, and for the last one that the wildcard's directory held more entries than a pattern may
+  visit. This is a branch on bytes a checkout wrote whose result reaches the planner, and it is
+  recorded here for that reason. It is not counted among the ten because the same function, reading
+  the same text, already decided that the entry is refused and the stage not started, which the
+  planner was already told, and because the sentence chosen carries no byte of the entry. The file
+  that holds the entry is a checkout's file the person did not trust, and its author wrote the entry
+  and already knows which reason it hits. The choice names no tool, argument, destination or label
+  and changes no effect: the stage is refused whichever of the five is named, a checkout can add a
+  refusal and never an allowance ([SANDBOX-25](sandboxing.md#SANDBOX-25)), and which entry is
+  reported is the first refused one in list order. A sentence that put any part of the spelling in
+  it, a reason outside the closed set, or a different sentence chosen from the entry for any other
+  purpose is a violation and not covered here.
+
+- **Whether a `run` line is refused for standing for too many names, or for reading too many
+  directories, is not one of the ten, and is one bit per call about a directory nobody vouched
+  for.** [CMDLINE-4](tools/command-line.md#CMDLINE-4) bounds a word at 100 arguments and a walk at
+  4,096 directories. The compile compares the number of names the patterns matched with the first,
+  and the number of directories it read with the second, and a line past either is refused. The
+  refusal states the cap, which is a constant, and states no count taken from the directory's
+  entries, so no number out of the directory is spelled into a sentence the driver writes. The
+  brace bound is counted from the planner's own word before anything is read and its count is
+  still spelled. What remains is that a line is accepted or refused according to whether the count
+  passes the bound. A planner that pads a pattern with `k` literal alternatives, as in
+  `dir/{p*,{1..k}}`, learns from one call whether the names starting with `p` number more than
+  `100 - k`, and finds a count by about seven calls. The comparison reads no name and no byte of a
+  file: it reads how many entries a directory listing held, and the planner learns one bit per call
+  from the answer, as it learns whether a path exists from whether a read of it succeeds. The
+  bit is bounded by the calls the planner makes, each of which a person may be asked about when
+  it is not covered by a rule, and no name is revealed by it. The same kind of bit is in the
+  reason a checkout's refused filesystem entry is named, when the wildcard visits more paths
+  than a pattern may, which is the entry above this one. The refusal carries no name, no
+  count and no fact about which pattern matched. A change that spells the count, or a name, or
+  chooses the sentence from either, is a violation of shape 1 or 3 and is not covered here.
+
+- **Whether a `cell` edit of a file named by `path_ref` is refused as not a notebook is chosen from
+  the extension of the name behind the reference, and only after a person vouched for the file.**
+  [EDIT-8](tools/edit-file.md#EDIT-8) refuses a `cell` edit of a file nobody vouched for with the
+  refusal [EDIT-2](tools/edit-file.md#EDIT-2) gives, whatever the name ends in. For a file a person
+  vouched for, `edit_file` tests whether the name ends in `.ipynb`, and `output_of` on `read_file`
+  does the same, so the planner learns from the answer whether the name behind a reference it holds
+  is a notebook. The name came out of a directory, and the test is not made until the person has
+  vouched for that file, which they did knowing its name, so what the planner learns is a fact the
+  person already accepted. It is one bit about one vouched file per call, from a closed test of the
+  extension against one suffix. A change that makes the test before the vouch, or that tests any
+  other part of the name, is a violation of shape 1 and is not covered here.
 
 - **A model that searches the web is kept out by a list of ids, and a model nobody listed is not.**
   Whether a model adds retrieved pages to its context is not something a request or a reply states,

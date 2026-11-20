@@ -298,6 +298,148 @@ fn an_edit_by_reference_that_cannot_be_read_does_not_name_the_file() {
     );
 }
 
+/// A policy that vouches for nothing, so every file is quarantined.
+fn policy_vouching_nothing(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+    Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+        sink,
+    )
+    .expect("policy")
+}
+
+/// One `edit_file` call by `path_ref` on a file named `name` that holds `contents`, under `policy`.
+/// Returns what the planner is told and the file as it is afterwards.
+fn edit_by_reference(
+    policy: &mut Policy<'_, RecordingSink>,
+    name: &str,
+    contents: &str,
+    arguments: &Value,
+) -> (String, String) {
+    let scratch = Scratch::new("cell-by-reference");
+    std::fs::write(scratch.path.join(name), contents).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut slots = SlotStore::new();
+    policy
+        .defer(
+            "list_files",
+            SlotId::new("ref:1"),
+            name,
+            &Labelled::trusted(name.to_string()),
+            contents.len(),
+            &mut slots,
+        )
+        .expect("the file is reserved");
+
+    let produced = edit_file(
+        policy,
+        &workspace,
+        &slots,
+        crate::findings::Recording::default(),
+        crate::PermissionMode::Ask,
+        false,
+        None,
+        &mut crate::confirm::ApproveWrites,
+        arguments,
+    );
+    let told = super::arguments::told(policy, &produced.text);
+    (
+        told,
+        std::fs::read_to_string(scratch.path.join(name)).unwrap(),
+    )
+}
+
+/// EDIT-2. The refusal of an edit by `path_ref` of a file nobody vouched for is the same whether
+/// the name behind the reference has a picture extension or not. The hint that a `read_file`
+/// would put the vouch question is chosen from the extension of the name for a typed `path`,
+/// and the name behind a reference came out of a directory nobody vouched for, so a hint that
+/// differs tells the planner a fact about it. The regression it rejects is choosing the hint from
+/// that name, which sends a `.png` to "ask the person" and any other name to "read it with
+/// read_file".
+#[test]
+fn an_edit_by_reference_of_an_untrusted_file_gives_the_same_hint_whatever_its_extension() {
+    let arguments = json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"});
+    let mut told = Vec::new();
+    for name in ["zqxleak.png", "zqxleak.txt", "zqxleak"] {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_vouching_nothing(&mut sink);
+        let (said, after) = edit_by_reference(&mut policy, name, "old\n", &arguments);
+        assert_eq!(after, "old\n", "{name} was written");
+        assert!(
+            said.starts_with("refused: this file is closed to edit_file"),
+            "{name} was not refused as an untrusted file: {said}"
+        );
+        assert!(!said.contains("zqxleak"), "{name} was named: {said}");
+        told.push(said);
+    }
+    assert_eq!(told[0], told[1], "the hint depends on the hidden name");
+    assert_eq!(told[1], told[2], "the hint depends on the hidden name");
+}
+
+/// EDIT-8, EDIT-2. A `cell` edit by `path_ref` of a file nobody vouched for gets the same refusal
+/// whatever the name behind the reference is. The name came out of a directory nobody
+/// vouched for, so a sentence that differs between a `.ipynb` and any other name tells the
+/// planner a fact about it. The regression it rejects is testing the extension of the hidden
+/// name before the trust check, which refuses a `.txt` as "not a notebook" and a `.ipynb` as
+/// closed to editing. Neither file is changed.
+#[test]
+fn a_cell_edit_by_reference_of_an_untrusted_file_is_refused_the_same_whatever_its_name() {
+    let arguments = json!({"path_ref": "ref:1", "cell": 1, "new_text": "y"});
+    let mut told = Vec::new();
+    for name in ["zqxleak.ipynb", "zqxleak.txt", "zqxleak"] {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_vouching_nothing(&mut sink);
+        let (said, after) = edit_by_reference(&mut policy, name, "old\n", &arguments);
+        assert_eq!(after, "old\n", "{name} was written");
+        assert!(
+            said.starts_with("refused: this file is closed to edit_file"),
+            "{name} was not refused as an untrusted file: {said}"
+        );
+        assert!(!said.contains("zqxleak"), "{name} was named: {said}");
+        assert!(
+            !said.contains("is not one"),
+            "the extension was tested before the trust check: {said}"
+        );
+        told.push(said);
+    }
+    assert_eq!(told[0], told[1], "the refusal depends on the hidden name");
+    assert_eq!(told[0], told[2], "the refusal depends on the hidden name");
+}
+
+/// EDIT-8. A `cell` edit by `path_ref` of a vouched file that is not a `.ipynb` is refused as
+/// not being a notebook, as it is for a typed `path`, and the same edit of a vouched `.ipynb`
+/// is made. The regression it rejects is dropping the extension test for a reference, which
+/// would let a cell edit rewrite a plain file as a notebook, or making `cell` unusable by
+/// reference.
+#[test]
+fn a_cell_edit_by_reference_of_a_vouched_file_is_made_only_on_a_notebook() {
+    const NOTEBOOK: &str = "{\n \"cells\": [\n  {\n   \"cell_type\": \"markdown\",\n   \
+        \"metadata\": {},\n   \"source\": [\n    \"# Top\"\n   ]\n  }\n ],\n \"metadata\": {},\n \
+        \"nbformat\": 4,\n \"nbformat_minor\": 5\n}\n";
+    let arguments = json!({"path_ref": "ref:1", "cell": 1, "new_text": "# Changed"});
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let (said, after) = edit_by_reference(&mut policy, "n.ipynb", NOTEBOOK, &arguments);
+    assert!(said.contains("ref:1"), "{said}");
+    assert!(!said.contains("n.ipynb"), "the notebook was named: {said}");
+    assert!(
+        after.contains("# Changed"),
+        "the cell was not replaced: {after}"
+    );
+    assert!(!after.contains("# Top"), "the old cell stayed: {after}");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let (said, after) = edit_by_reference(&mut policy, "plain.txt", "old\n", &arguments);
+    assert!(
+        said.starts_with("error: 'cell' addresses a cell of a .ipynb notebook"),
+        "{said}"
+    );
+    assert_eq!(after, "old\n");
+}
+
 /// The same property on the other road a reference's file is opened by. Nothing reads a
 /// quarantined file when the listing reserves it; it is read when something needs the
 /// bytes, which is `spawn_processor`, a `contents_ref` write, a `stdin_ref` run or

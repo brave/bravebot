@@ -3645,7 +3645,16 @@ directory has none.
 
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
-is, and the result names the key and the entry. Where the backend cannot subtract from a grant
+is, and the result names the key and the entry, with one exception: an entry a checkout's project or
+local file wrote is text the person did not write, and the result reaches the planner as the driver's
+own sentence, so it names the key, the reason and the file and does not repeat the spelling. The
+reason is one of five sentences the driver wrote, chosen from the spelling by the code that decides
+that the entry is refused, and which of the five the planner can learn is a Known cost
+([Known costs in labels.md](labels.md#known-costs)). The entry
+is marked as a checkout's by the layer that wrote it, never by what it says. A file `--settings`
+names is the person's own wherever it sits, as [PERM-14](permissions.md#PERM-14) says, so its entries
+are quoted, unless the file is withheld, which is read as a checkout's file and marks them. The
+person's own screens (`doctor`, the window) still show the spelling. Where the backend cannot subtract from a grant
 (Windows) a stage the refusal would reach is refused as [SANDBOX-1](#SANDBOX-1) requires, and a
 `denyRead` or `denyWrite` inside the directory the session was opened on, or inside an `allowRead` or
 `allowWrite` entry, is reported as not in force, with why, by `doctor` and by the window, since a stage there is refused and none runs with the path
@@ -3663,8 +3672,10 @@ of a pipeline, of a line left running and of a delegate's turn alike, in the ter
 window. `doctor` lists every entry with the file or flag that wrote it and each entry that is not in
 force with why. `/status` gives how many entries each list holds and the files that wrote them. The
 opening screen says only that the person's rules are in force. The run prompt says the counts once,
-and the sentence a failed step carries says them. None of them names a path, since a glob's matches
-are the machine's and a path is the person's.
+and the sentence a failed step carries says them. None of those names a path, since a glob's matches
+are the machine's and a path is the person's. The refusal of a stage over an entry that cannot be
+applied is a separate sentence, described above: it names the entry only where the person's own
+file, the command line or the managed file wrote it.
 
 The desktop window shows the four lists and edits nothing: the permissions view lists each entry
 under the list it is in with the file that wrote it, or the command line, and an entry that is not
@@ -3735,6 +3746,8 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::permissions::a_denial_the_backend_cannot_subtract_is_not_in_force_and_nothing_else_changes`
 `verified-by: bravebot_agent::permissions::a_denial_beneath_an_allowance_is_not_in_force_where_the_backend_cannot_subtract`
 `verified-by: bravebot_cli::doctor::doctor_reports_a_denial_the_backend_cannot_subtract_as_not_in_force`
+`verified-by: bravebot_cli::doctor::doctor_still_shows_the_text_of_an_entry_a_checkout_wrote`
+`verified-by: bravebot_ui_bridge::rules::the_window_still_lists_the_text_of_an_entry_a_checkout_wrote`
 `verified-by: bravebot_agent::confine::a_refusal_of_the_persons_is_not_lifted_by_the_scope_a_stage_carries`
 `verified-by: bravebot_agent::confine::what_the_default_leaves_every_stage_is_withheld_by_the_persons_lists`
 `verified-by: bravebot_agent::confine::every_kind_of_stage_holds_the_lists`
@@ -3761,6 +3774,13 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::confine::a_denied_write_holds_back_a_file_inside_a_session_directory`
 `verified-by: bravebot_agent::confine::a_denied_read_written_through_a_link_holds_where_the_link_leads`
 `verified-by: bravebot_agent::confine::a_denial_that_cannot_be_applied_stops_the_stage`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refusal_for_a_checkouts_unapplied_entry_does_not_repeat_its_spelling`
+`verified-by: bravebot_agent::tools::tests::confinement::a_checkouts_refused_write_entry_is_named_by_its_list_reason_and_file`
+`verified-by: bravebot_config::settings::an_entry_is_marked_as_a_checkouts_by_the_layer_that_wrote_it`
+`verified-by: bravebot_config::settings::a_withheld_named_files_entries_are_marked_as_a_checkouts`
+`verified-by: bravebot_agent::tools::tests::confinement::a_checkouts_home_entry_without_a_home_is_told_by_its_reason_in_both_starts`
+`verified-by: bravebot_agent::tools::tests::confinement::a_background_line_refused_for_a_checkouts_entry_does_not_repeat_its_spelling`
+`verified-by: bravebot_agent::permissions::every_reason_an_entry_is_refused_for_has_its_own_sentence`
 `verified-by: bravebot_cli::running::doctor_names_each_filesystem_rule_with_where_it_came_from`
 `verified-by: bravebot_cli::running::a_denied_write_reaches_the_programs_a_run_starts`
 `verified-by: bravebot_ui_bridge::sandbox_filesystem::a_denied_write_in_the_settings_reaches_the_programs_a_window_runs`

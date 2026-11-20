@@ -43,6 +43,7 @@ pub fn resolve(flags: &Lists, settings: &Settings, managed: &Managed) -> Filesys
                     // A refusal the managed file wrote cannot be lifted by an entry beneath it. A
                     // pinned allow is the administrator's own row.
                     pinned: list.is_a_denial(),
+                    from_a_checkout: false,
                 })
                 .collect::<Vec<_>>()
         });
@@ -119,6 +120,7 @@ mod tests {
             path: path.to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         }
     }
 

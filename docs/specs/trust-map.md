@@ -847,6 +847,13 @@ name it was given, so a prompt titled with one file would hand over the trust ha
 rather than one a person typed. Reach it would not grant, which is the only part of that gesture
 this could not have imitated.
 
+Those two tests are made on a name the planner typed. A read through a `path_ref` is offered for a
+vouch whatever the name behind the reference is, because that name came out of a directory nobody
+vouched for: an offer chosen by its extension, or by what the file system says of it, would be put
+for one reference and not for another, and under a mode that answers the offer the planner would be
+handed text for one and told there is none for the other. The reference came from a listing, which
+gives references to files only, and the person is shown the path before they answer.
+
 A confined check reads the file before the question is drawn, and the word it gave is on the screen
 with the preview. It reads **the whole file** and not the preview, because a yes grants the whole
 file. That is [CHECK-10](vetting.md#CHECK-10), and it decides nothing here: a yes writes the rule
@@ -889,6 +896,8 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking`
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone`
 `verified-by: bravebot_agent::turn::a_trusted_file_is_not_offered_for_vouching`
+`verified-by: bravebot_agent::turn::a_reference_is_offered_for_vouching_whatever_the_name_behind_it_is`
+`verified-by: bravebot_agent::turn::output_of_on_a_reference_nobody_vouched_for_is_answered_whatever_the_name_is`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
 `verified-by: bravebot_tui::confirm::vet::a_preview_with_nothing_in_it_says_so`
 

@@ -808,4 +808,41 @@ mod tests {
         assert_eq!(json["filesystem"].as_array().map(Vec::len), Some(4));
         assert_eq!(json["filesystemIgnored"][0]["key"], "allowWrite");
     }
+
+    /// SANDBOX-25: an entry a checkout's project file wrote is kept out of the sentence the planner
+    /// gets, and the window is the person's own screen, so it still lists the entry as written
+    /// with the file that wrote it. The regression it rejects is a permissions view that drops or
+    /// hides the spelling of a checkout's entry.
+    #[test]
+    fn the_window_still_lists_the_text_of_an_entry_a_checkout_wrote() {
+        let (dir, settings) = layers(
+            None,
+            Some(
+                r#"{"sandbox": {"filesystem": {"denyRead": ["MARKER-FROM-THE-CLONE"],
+                    "denyWrite": ["../MARKER-CLIMBS"]}}}"#,
+            ),
+        );
+        let workspace = dir.path().join("project");
+        let rules = SettingsRules::read(&settings, &workspace);
+        let project_file = workspace.join(".bravebot/settings.json");
+        let held = |key: &str, path: &str| {
+            rules
+                .filesystem
+                .iter()
+                .find(|entry| entry.key == key && entry.path == path)
+                .unwrap_or_else(|| panic!("{key} {path} not reported: {:?}", rules.filesystem))
+        };
+        assert_eq!(
+            held("denyRead", "MARKER-FROM-THE-CLONE").file.as_ref(),
+            Some(&project_file)
+        );
+        let climbing = held("denyWrite", "../MARKER-CLIMBS");
+        assert_eq!(climbing.file.as_ref(), Some(&project_file));
+        assert!(climbing.refused.is_some(), "{climbing:?}");
+        let json = rules.json().to_string();
+        assert!(
+            json.contains("MARKER-FROM-THE-CLONE") && json.contains("../MARKER-CLIMBS"),
+            "{json}"
+        );
+    }
 }

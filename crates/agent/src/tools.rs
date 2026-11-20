@@ -4365,7 +4365,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // map, so all of them ask about that name and not about the spelling.
     let keyed = workspace.trust_key(&proposed_path);
 
-    let media = bravebot_filetype::by_name::media_for(&proposed_path);
+    // Taken from a name the planner typed alone. The name behind a reference came out of a
+    // directory nobody vouched for, so a picture's reference for a `.png` and the text of a `.txt`
+    // would tell the planner what the hidden name ends in. A reference to a file that may be read
+    // is read like any such file, and what it holds decides the answer (READ-3, READ-5).
+    let media = (destination == Destination::Named)
+        .then(|| bravebot_filetype::by_name::media_for(&proposed_path))
+        .flatten();
 
     // What a check over this file cost, where one was made. Carried out of the block so it can be
     // put on whatever this call ends up handing back: a check is a model request, and the turn's
@@ -4379,18 +4385,23 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // not land rather than reading as the file simply being quarantined.
     let mut approval_outlived = false;
 
+    // The extension and `stat` of a name decide whether the question is put only where the name is
+    // the planner's own words. The name behind a reference came out of a directory nobody vouched
+    // for, so a decision made from it would put the question for a `.txt` and not for a `.png`, and
+    // under a mode that answers the question for the person the planner would be handed text in one
+    // case and told the file holds none in the other. A reference to a file nobody vouched for is
+    // offered like any other. The listing that issued it gave references to files only.
+    let is_askable = destination == Destination::Reference
+        || (media.is_none() && workspace.names_a_file(&proposed_path));
+
     // The other names the file has are looked up only for a quarantined file the person could be
     // asked about. A read of it is asked under all of them (TRUST-2), and a yes writes a rule about
     // one name, so where another is distrusted, or the lookup of them did not finish, a yes would
     // change nothing and the question is not put.
-    if policy.read_is_quarantined(&keyed)
-        && media.is_none()
-        && workspace.names_a_file(&proposed_path)
-        && {
-            let other_names = workspace.other_trust_keys(&proposed_path);
-            policy.should_offer_vouch(&keyed, &other_names.keys, other_names.complete)
-        }
-    {
+    if policy.read_is_quarantined(&keyed) && is_askable && {
+        let other_names = workspace.other_trust_keys(&proposed_path);
+        policy.should_offer_vouch(&keyed, &other_names.keys, other_names.complete)
+    } {
         // Whether the question is put has already been settled. What the file holds shapes the
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
@@ -4557,7 +4568,8 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         ));
     }
 
-    // A picture, decided from the extension: the driver's own table, so nothing read chooses this.
+    // A picture, decided from the extension of a name the planner typed: the driver's own table, so
+    // nothing read chooses this. Never for a reference, whose name is not the planner's to learn.
     //
     // Handed back as a reference whatever the trust map says, unlike text. A processor may look at
     // it and the planner may not, for the reason PASTE-2 gives: a picture in a planner's context
@@ -7626,6 +7638,11 @@ fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
         .ok_or("error: every entry of 'edits' needs 'old_text' and 'new_text' strings")
 }
 
+/// What `edit_file` says of `cell` on a file that is not a `.ipynb` (EDIT-8). Fixed text, said
+/// for a typed name at once and for a reference only once the file is known to be trusted.
+const NOT_A_NOTEBOOK: &str = "error: 'cell' addresses a cell of a .ipynb notebook, and this is \
+     not one. Give 'old_text' and 'new_text' for a passage";
+
 /// Replace an exact passage in a file, after a person approves the diff.
 ///
 /// Same endorsement shape as [`write_file`], since the model never decides a write destination,
@@ -7675,11 +7692,17 @@ fn edit_file<S: Sink, C: Confirmer>(
     };
     let pairs = match &cell_request {
         // A cell edit carries its text in `new_text` alone and locates nothing by it.
-        Some(_) if !crate::notebook::is_notebook_path(&proposed_path) => {
-            return Produced::problem(
-                "error: 'cell' addresses a cell of a .ipynb notebook, and this is not one. Give \
-                 'old_text' and 'new_text' for a passage",
-            );
+        //
+        // The extension is tested here only for a name the planner typed, which is its own
+        // words. The name behind a reference came out of a directory nobody vouched for, so
+        // testing it before the trust check below would tell the planner whether that name ends
+        // in `.ipynb`: a `.txt` would be refused as not a notebook and a `.ipynb` as closed to
+        // editing. For a reference the test is made once the file is known to be trusted.
+        Some(_)
+            if destination == Destination::Named
+                && !crate::notebook::is_notebook_path(&proposed_path) =>
+        {
+            return Produced::problem(NOT_A_NOTEBOOK);
         }
         Some(_) => Vec::new(),
         None => match edit_pairs(arguments) {
@@ -7783,7 +7806,13 @@ fn edit_file<S: Sink, C: Confirmer>(
         // `read_file` asks before it does, from the path, the map, the mode and the turn's list.
         // A run with nobody to ask outside bypass gets no question from a read, so it is not sent
         // to one.
-        let read = if !nobody_to_ask
+        //
+        // Not named for a reference. Whether a read would put the question depends on the
+        // extension of the name and on what the file system says of it, and the name behind a
+        // reference came out of a directory nobody vouched for, so the sentence would differ by
+        // a name the planner was not shown. A reference gets the vouch as the person's to give.
+        let read = if destination == Destination::Named
+            && !nobody_to_ask
             && policy.reading_files_is_offered()
             && bravebot_filetype::by_name::media_for(&proposed_path).is_none()
             && workspace.names_a_file(&proposed_path)
@@ -7802,6 +7831,15 @@ fn edit_file<S: Sink, C: Confirmer>(
         };
         return Produced::problem(closed_to_editing(policy, source.label(), read));
     };
+
+    // The file is trusted, so a name a person vouched for may be tested. For a reference this is
+    // the first moment the extension may be looked at (see the check above for a typed name).
+    if cell_request.is_some()
+        && destination == Destination::Reference
+        && !crate::notebook::is_notebook_path(&proposed_path)
+    {
+        return Produced::problem(NOT_A_NOTEBOOK);
+    }
 
     // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair
     // has applied, so a refusal part-way leaves the file as it was.

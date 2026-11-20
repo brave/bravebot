@@ -1415,7 +1415,7 @@ impl LayerFacts {
         }
     }
 
-    fn sandbox(&mut self, root: &Document, path: &Path, granting: bool) {
+    fn sandbox(&mut self, root: &Document, path: &Path, granting: bool, from_a_checkout: bool) {
         match crate::sandbox::stated(root) {
             Stated::Absent => {}
             Stated::Unreadable => self.sandbox_unreadable.push(path.to_path_buf()),
@@ -1446,6 +1446,7 @@ impl LayerFacts {
                             path: entry,
                             by: Some(path.to_path_buf()),
                             pinned: false,
+                            from_a_checkout,
                         }
                     }));
                 }
@@ -1916,12 +1917,16 @@ impl Settings {
             facts.vetting_and_narrowing(&root, &path, own);
             facts.last_speaker(&root, &path, own);
             facts.mcp(&root, &path);
-            facts.run_network(&root, &path, granting);
-            facts.sandbox(&root, &path, granting);
-            facts.git_identities(&root, &path, granting);
             // One of the checkout's two files is one however the command line reached it, so naming
             // it does not move where its rules start.
             let a_checkouts_file = !own && (!named_file_here || is_a_checkouts_file(&path, cwd));
+            facts.run_network(&root, &path, granting);
+            // The spelling of a filesystem entry is the checkout's text where the layer is read as
+            // the checkout's, which is decided here from the layer and never from the entry. The
+            // file the command line named is the person's own wherever it sits, the project's own
+            // file named by the flag included (PERM-14, #4133), unless it is withheld.
+            facts.sandbox(&root, &path, granting, !granting);
+            facts.git_identities(&root, &path, granting);
             let anchor = slash_anchor(&path, a_checkouts_file, workspace.as_deref());
             facts.allow_rules(&root, &path, own, granting, &anchor);
             facts.misshapen_rules(&root, &path);
@@ -4573,6 +4578,7 @@ pub(crate) fn filesystem_lists(
                     path,
                     by: by.map(Path::to_path_buf),
                     pinned: false,
+                    from_a_checkout: false,
                 }
             }));
         }
@@ -6697,6 +6703,94 @@ mod tests {
             .read();
         assert_eq!(inside.sandbox_filesystem().allow_write.len(), 1);
         assert_eq!(inside.sandbox_filesystem_ignored().count(), 0);
+    }
+
+    /// SANDBOX-25, #4063, R14, R18: an entry is marked as a checkout's by the layer that wrote it,
+    /// the project file and the local file both, and not by anything in the entry. The home layer
+    /// and a file the command line named are the person's own wherever the file sits (#4133), so
+    /// their entries are not marked. Rejects a mark read from the spelling, a mark that misses the
+    /// local file, and a mark on the person's own layers.
+    #[test]
+    fn an_entry_is_marked_as_a_checkouts_by_the_layer_that_wrote_it() {
+        let spelled = r#"{"sandbox": {"filesystem": {"denyRead": ["../same-spelling"]}}}"#;
+        let marked = |settings: &Settings| -> Vec<(bool, bool)> {
+            settings
+                .sandbox_filesystem()
+                .deny_read
+                .iter()
+                .map(|entry| (entry.from_a_checkout, entry.by.is_some()))
+                .collect()
+        };
+        let own = |settings: Settings| marked(&settings);
+        assert_eq!(
+            own(Layers::new("mark-project").project(spelled).read()),
+            [(true, true)]
+        );
+        assert_eq!(
+            own(Layers::new("mark-local").local(spelled).read()),
+            [(true, true)]
+        );
+        assert_eq!(
+            own(Layers::new("mark-home").global(spelled).read()),
+            [(false, true)]
+        );
+        assert_eq!(
+            own(Layers::new("mark-named-outside").named(spelled).read()),
+            [(false, true)]
+        );
+        assert_eq!(
+            own(Layers::new("mark-named-inside")
+                .named_inside_the_workspace(spelled)
+                .read()),
+            [(false, true)]
+        );
+        // The project's own file, and a file in the checkout holding the workspace, are the
+        // person's own where the command line named them (#4133, PERM-14), whatever the list
+        // says and wherever they sit.
+        assert_eq!(
+            own(Layers::new("mark-named-project")
+                .project(spelled)
+                .naming_the_project_layer()
+                .read()),
+            [(false, true)]
+        );
+        assert_eq!(
+            own(Layers::new("mark-named-enclosing")
+                .named_in_the_enclosing_checkout(spelled)
+                .read()),
+            [(false, true)]
+        );
+        // The same spelling from the home layer and from the project: only the layer differs.
+        assert_eq!(
+            own(Layers::new("mark-both")
+                .global(spelled)
+                .project(spelled)
+                .read()),
+            [(false, true), (true, true)]
+        );
+    }
+
+    /// SANDBOX-25, #4063, R5: a named file a platform cannot hold back from a stage, lying inside a
+    /// directory a stage may write, is read as a checkout's file, so its entries are the checkout's
+    /// text and are marked. The same file read where it can be held back, or lying outside every
+    /// writable root, is the person's own and is not. Rejects a mark that follows where the file
+    /// sits and not whether it is read as the person's.
+    #[test]
+    fn a_withheld_named_files_entries_are_marked_as_a_checkouts() {
+        let spelled = r#"{"sandbox": {"filesystem": {"denyRead": ["../same-spelling"]}}}"#;
+        let layers = Layers::new("mark-withheld").named_inside_the_workspace(spelled);
+        let marks = |settings: Settings| -> Vec<bool> {
+            settings
+                .sandbox_filesystem()
+                .deny_read
+                .iter()
+                .map(|entry| entry.from_a_checkout)
+                .collect()
+        };
+        let roots = std::slice::from_ref(&layers.cwd);
+        assert_eq!(marks(layers.read_reaching(roots, false)), [true]);
+        assert_eq!(marks(layers.read_reaching(roots, true)), [false]);
+        assert_eq!(marks(layers.read_reaching(&[], false)), [false]);
     }
 
     /// A list that is not a list of strings is reported and not read, and a blank entry is left out

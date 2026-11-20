@@ -15277,6 +15277,77 @@ fn a_cell_argument_is_refused_beside_a_passage_and_on_a_plain_file() {
     );
 }
 
+/// Lists a workspace holding one unvouched file called `name`, then asks `edit_file` for a `cell`
+/// edit of it by `path_ref`. Returns the request that carries the result of the edit, and the
+/// file as it is afterwards.
+fn cell_edit_of_an_unvouched_reference(label: &str, name: &str) -> (String, String) {
+    let scratch = Scratch::new(label);
+    std::fs::write(scratch.path.join(name), NOTEBOOK_WITH_AN_OUTPUT).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":"."}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path_ref":"ref:1","cell":1,"new_text":"y"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("edit the cell"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let _second = received.recv().expect("second request");
+    let third = received.recv().expect("third request");
+    assert!(confirmer.seen.is_empty(), "somebody was asked about {name}");
+    // Only what the edit answered, which is the last tool message of the request.
+    let parsed: serde_json::Value = serde_json::from_str(&third).expect("a request");
+    let answered = parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rfind(|message| message["role"] == "tool")
+        .expect("the edit's result")["content"]
+        .to_string();
+    (
+        answered,
+        std::fs::read_to_string(scratch.path.join(name)).unwrap(),
+    )
+}
+
+/// EDIT-8, EDIT-2. A `cell` edit by `path_ref` of a file nobody vouched for is refused the same
+/// whether the name the reference stands for ends in `.ipynb` or not, so the planner learns
+/// nothing about a name it was not shown. The regression it rejects is testing the extension of
+/// that name before the trust check, which answers a `.txt` with "is not one" and a `.ipynb`
+/// with the closed-to-editing refusal. Neither file is written.
+#[test]
+fn a_cell_edit_by_reference_of_an_unvouched_file_is_refused_whatever_its_name() {
+    let (notebook, notebook_after) =
+        cell_edit_of_an_unvouched_reference("cell-reference-ipynb", "zqxleak.ipynb");
+    let (plain, plain_after) =
+        cell_edit_of_an_unvouched_reference("cell-reference-txt", "zqxleak.txt");
+
+    for (request, after) in [(&notebook, &notebook_after), (&plain, &plain_after)] {
+        assert!(request.contains("closed to edit_file"), "{request}");
+        assert!(!request.contains("is not one"), "{request}");
+        assert!(!request.contains("zqxleak"), "{request}");
+        assert_eq!(after, NOTEBOOK_WITH_AN_OUTPUT, "a file was written");
+    }
+    assert_eq!(notebook, plain, "the result depends on the hidden name");
+}
+
 /// A notebook as Jupyter writes it: a markdown cell, and a code cell that ran and printed.
 const NOTEBOOK_WITH_AN_OUTPUT: &str = r##"{
  "cells": [
@@ -34815,6 +34886,82 @@ fn a_pattern_matching_nothing_in_an_unvouched_directory_is_treated_as_one_that_m
     assert!(
         !second.contains(planted),
         "a name out of an unvouched directory reached the planner: {second}"
+    );
+}
+
+/// CMDLINE-4, LABEL-3: the refusal of a word standing for more names than the bound states the
+/// bound and no count taken from the directory. `echo incoming/*` over 150 files and the padded
+/// `echo incoming/{p*,{1..99}}`, which stands for the 90 names starting with `p` and 99 literals,
+/// are told in the same words, so the planner cannot subtract the padding to recover a number. A
+/// line over 90 names still runs.
+///
+/// The wrong implementation spells how many names matched, which the planner reads as 150 for the
+/// first line and as 189 for the second.
+#[test]
+fn the_refusal_of_too_many_matched_names_does_not_state_how_many_matched() {
+    let scratch = Scratch::new("run-pattern-too-many");
+    std::fs::create_dir(scratch.path.join("incoming")).unwrap();
+    for n in 1..=90 {
+        std::fs::write(scratch.path.join(format!("incoming/p{n:03}")), "x\n").unwrap();
+    }
+    for n in 1..=60 {
+        std::fs::write(scratch.path.join(format!("incoming/q{n:03}")), "x\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"echo incoming/*"}"#),
+        tool_request("run", r#"{"command":"echo incoming/{p*,{1..99}}"}"#),
+        tool_request("run", r#"{"command":"echo incoming/p*"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut trust = trusting_the_workspace();
+    trust.distrust("incoming");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("list them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after_the_first = &sent[1];
+    let after_the_second = &sent[2];
+    let said = "stands for more than the 100 arguments";
+    assert!(after_the_first.contains(said), "{after_the_first}");
+    assert!(after_the_second.contains(said), "{after_the_second}");
+    for (request, count) in [
+        (after_the_first, "150 arguments"),
+        (after_the_second, "189 arguments"),
+    ] {
+        assert!(
+            !request.contains(count),
+            "the count of names a pattern matched reached the planner: {request}"
+        );
+    }
+    assert!(
+        !after_the_second.contains("90 arguments"),
+        "{after_the_second}"
+    );
+    // 90 names are under the bound, so the line was put to the person and run.
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "the 90-name line was not run"
     );
 }
 
@@ -82587,6 +82734,179 @@ fn a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line() {
     );
     assert_eq!(trail_entries(&sink, "approval", "note.txt"), [OFFERED_LINE]);
     assert!(trail_entries(&sink, "trust", "note.txt trusted:").is_empty());
+}
+
+/// One turn that lists the working directory, nobody having vouched for it, and reads the one
+/// file in it through its reference. The planner is never shown `name`. Returns the trail and
+/// every request the planner was sent, without the checks the driver makes on its own.
+fn a_turn_reading_an_unvouched_file_through_its_reference<
+    C: bravebot_agent::confirm::Confirmer + Send,
+>(
+    scratch_name: &str,
+    (name, bytes): (&str, &[u8]),
+    read_arguments: &str,
+    mode: bravebot_agent::PermissionMode,
+    confirmer: &mut C,
+) -> (RecordingSink, Vec<String>) {
+    let scratch = Scratch::new(scratch_name);
+    std::fs::write(scratch.path.join(name), bytes).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request("read_file", read_arguments),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("look at what is here").with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    let requests = every_request(&received)
+        .into_iter()
+        .filter(|body| !body.contains("prompt-injection classifier"))
+        .collect();
+    (sink, requests)
+}
+
+const A_PICTURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// A read through a reference to a file nobody vouched for puts the offer to vouch, or has the mode
+/// answer it, whatever the name behind the reference is. Whether it is put was decided from the
+/// extension of that name and from `stat` of it, and the name came out of a directory nobody
+/// vouched for. Under bypass the answer is yes, so the planner was handed the text of a `.txt` and
+/// told "already names that file" for a `.png`, a difference only the hidden name made.
+///
+/// Rejects deciding the offer from `media_for` or `names_a_file` of the name behind a reference.
+#[test]
+fn a_reference_is_offered_for_vouching_whatever_the_name_behind_it_is() {
+    let files: [(&str, &[u8]); 2] = [("note.txt", b"hello\n"), ("shot.png", &A_PICTURE)];
+    let mut declined = Vec::new();
+    for (index, (name, bytes)) in files.into_iter().enumerate() {
+        let mut inner = VouchesForFiles::new(false);
+        let offered = inner.offered.clone();
+        let mut confirmer = bravebot_agent::Confining::new(
+            &mut inner,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+        );
+        let (sink, _requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+            &format!("vouch-reference-bypass-{index}"),
+            (name, bytes),
+            r#"{"path_ref":"ref:1"}"#,
+            bravebot_agent::PermissionMode::Bypass,
+            &mut confirmer,
+        );
+        assert_eq!(
+            trail_entries(&sink, "approval", name),
+            [format!("{name}: answered by bypass mode, nobody was asked")],
+            "{name}: bypass mode was not asked the question"
+        );
+        assert!(offered.lock().unwrap().is_empty());
+
+        let mut person = VouchesForFiles::new(false);
+        let offered = person.offered.clone();
+        let (_sink, requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+            &format!("vouch-reference-asked-{index}"),
+            (name, bytes),
+            r#"{"path_ref":"ref:1"}"#,
+            bravebot_agent::PermissionMode::Ask,
+            &mut person,
+        );
+        assert_eq!(
+            offered.lock().unwrap().len(),
+            1,
+            "{name}: the person was not offered the chance to vouch for it"
+        );
+        declined.push(newest_tool_result_text(requests.last().expect("a request")));
+    }
+    assert_eq!(
+        declined[0], declined[1],
+        "what a declined offer told the planner depended on the name behind the reference"
+    );
+
+    // Bypass vouches for the file, so the read goes on and hands back what the file holds. The same
+    // bytes under a `.txt` and a `.png` name must come back as the same whole result: the form of
+    // a read (text, a binary report, a picture reference) was chosen from the extension of the
+    // hidden name by the picture branch.
+    for (kind, bytes) in [("text", &b"hello\n"[..]), ("picture", &A_PICTURE[..])] {
+        let mut results = Vec::new();
+        for (index, name) in ["note.txt", "shot.png"].into_iter().enumerate() {
+            let mut inner = VouchesForFiles::new(false);
+            let mut confirmer = bravebot_agent::Confining::new(
+                &mut inner,
+                bravebot_agent::PermissionMode::Bypass,
+                false,
+            );
+            let (_sink, requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+                &format!("vouch-reference-bypass-form-{kind}-{index}"),
+                (name, bytes),
+                r#"{"path_ref":"ref:1"}"#,
+                bravebot_agent::PermissionMode::Bypass,
+                &mut confirmer,
+            );
+            // The change token is taken from the file's own metadata, so two files written at
+            // different moments differ in it alone. It is masked and nothing else is.
+            let text = newest_tool_result_text(requests.last().expect("a request"));
+            results.push(match text.rfind("change token ") {
+                Some(at) => {
+                    let after = text[at..].find(')').map_or(text.len(), |close| at + close);
+                    format!("{}change token{}", &text[..at], &text[after..])
+                }
+                None => text,
+            });
+        }
+        assert_eq!(
+            results[0], results[1],
+            "the result of a read of {kind} bytes depended on the name behind the reference"
+        );
+        assert!(
+            !results[1].contains("image/png"),
+            "{kind}: the read was handed back as a picture reference: {}",
+            results[1]
+        );
+    }
+}
+
+/// `output_of` names a cell of a notebook, and whether a name is one is read from its extension. For
+/// a reference to a file nobody vouched for the name is the hidden one, so the answer has to be the
+/// one every such reference gets, and the notebook error ("this is not one") must not come first.
+///
+/// Rejects testing `output_of` against the name behind a reference before the read is held back.
+#[test]
+fn output_of_on_a_reference_nobody_vouched_for_is_answered_whatever_the_name_is() {
+    let mut told = Vec::new();
+    for (index, name) in ["note.txt", "cells.ipynb"].into_iter().enumerate() {
+        let mut person = VouchesForFiles::new(false);
+        let (_sink, requests) = a_turn_reading_an_unvouched_file_through_its_reference(
+            &format!("output-of-reference-{index}"),
+            (name, b"{}\n"),
+            r#"{"path_ref":"ref:1","output_of":1}"#,
+            bravebot_agent::PermissionMode::Ask,
+            &mut person,
+        );
+        let last = newest_tool_result_text(requests.last().expect("a request"));
+        assert!(
+            last.contains("already names that file"),
+            "{name}: the read was not held back as a reference: {last}"
+        );
+        told.push(last);
+    }
+    assert_eq!(
+        told[0], told[1],
+        "the answer depended on the name behind the reference"
+    );
 }
 
 /// MODE-9. A delegate is lent the turn's confirmer, so its offer to vouch is answered by the same

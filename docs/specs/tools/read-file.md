@@ -187,7 +187,12 @@ A file whose extension names a picture or a PDF is read as bytes, encoded into a
 handed back as a reference. The planner is shown one only where `vet_content` let it through, and a
 vouched-for directory does not change that: what the trust map answers is whether a file's **text**
 may be read, and a picture has none. Nothing offers to vouch for one either, because a yes would
-grant the reading of text there is none of.
+grant the reading of text there is none of. That holds for a name the planner typed. A `path_ref`
+is offered for a vouch whatever extension the name behind it has ([TRUST-8](../trust-map.md#TRUST-8)),
+since the name is not the planner's to learn. What the read hands back for a `path_ref` does not
+depend on that extension either: where the file may be read it is read as any file is, by what it
+holds ([READ-3](#READ-3)), so a `.png` and a `.txt` with the same bytes give the same result, and
+the picture handling below is for a name the planner typed.
 
 The reference says what kind of thing it is rather than how many lines it has, because a line count
 over base64 describes nothing a reader can act on. The person watching is shown rows saying the same
@@ -215,13 +220,15 @@ as it answers for text. It never passes through the gate a paste does, and the t
 offer and the read are untouched by it.
 
 **The media type is the driver's.** From a closed table of extensions, shared with the one a drop
-uses, never sniffed from the bytes. It ends up in the `data:` URI where it is routing, so deciding
+uses, applied to a name the planner typed and never sniffed from the bytes. It ends up in the
+`data:` URI where it is routing, so deciding
 it from content would be deciding a destination from content. A file cannot become a picture by
 holding something that looks like one, and a picture cannot become text by being called `.txt`:
 either way the extension is what was decided from, and it is part of a path a person can read.
 
 `verified-by: bravebot_agent::turn::a_picture_is_never_shown_to_the_planner`
 `verified-by: bravebot_agent::turn::a_picture_is_not_offered_for_vouching`
+`verified-by: bravebot_agent::turn::a_reference_is_offered_for_vouching_whatever_the_name_behind_it_is`
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
 `verified-by: bravebot_agent::turn::a_picture_read_from_a_file_is_described_to_the_person_and_not_drawn_as_base64`

@@ -193,7 +193,11 @@ tree built elsewhere cannot be moved into place at `~/.config/systemd`. Files ma
 the refused path are not affected.
 
 An entry that cannot be applied is not in force. A refused `denyRead` or `denyWrite` stops the
-commands it would have held back, with a message naming it, rather than letting them through. On
+commands it would have held back, with a message naming the list, the reason and, for an entry a
+project or local settings file wrote, that file, rather than letting them through. The message does
+not repeat the entry when a project or local file wrote it, because that text arrives with a clone. A
+file you name with `--settings` is your own wherever it sits, so its entries are repeated, unless the
+file is withheld from the session, which is read as a checkout's. `bravebot doctor` and the window show the entry. On
 Linux a directory holding a path you refused writes to cannot have new entries made directly in it,
 and on Windows a command the refusal would reach is not started, since neither can narrow a write
 grant.

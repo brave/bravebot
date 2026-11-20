@@ -180,12 +180,30 @@ conditions. A change that put the directory's name in the sentence, or chose whi
 cut or how to word the sentence from a name, would be a violation of shape 1 or 3 and is not
 covered by this paragraph.
 
+The reason in the sentence for a checkout's refused filesystem entry (SANDBOX-25) is chosen from
+the entry's spelling by `resolve` in `bravebot-sandbox`, which already decides from that spelling
+whether the entry is refused. It is a branch on bytes a checkout wrote whose result reaches the
+planner. It is one of five sentences the driver wrote, it carries no byte of the entry, and it
+changes no effect, so it is recorded under Known costs in
+[specs/labels.md](../specs/labels.md) and is not counted among the ten. A sentence that put any part of the
+spelling in it, a reason outside the closed set, or a choice made from the spelling for another
+purpose is a violation of shape 1.
+
 Whether a session directory's `.git` is a file or a directory is file-type metadata, like the link
 count above. The failure sentence for a git step (`crates/agent/src/confine.rs`, SANDBOX-19) reads it with
 `symlink_metadata` and branches on the kind, which says whether the checkout is a linked worktree
 or a submodule. It never opens the `.git` file: the `gitdir:` line it holds is the checkout's
 content, and a change that read it, or named the directory it points to, would be a violation of
 shape 1.
+
+The same holds for whether a `run` line is refused for standing for more than 100 names, or for
+reading more than 4,096 directories (CMDLINE-4). The compile compares how many names the patterns
+matched with the bound, and the refusal states the cap and no count taken from the directory, so
+no number out of a directory nobody vouched for is spelled into a sentence the driver writes. What
+remains is one bit per call, whether the count passed the bound, which
+[specs/labels.md](../specs/labels.md) lists under Known costs. A change that spelled the count, or
+chose the sentence from a name, would be a violation of shape 1 or 3 and is not covered by this
+paragraph.
 
 A measurement of file names, lengths and modification times that the driver compares and reduces to
 one bool is not a branch on untrusted content, for the same reason an exit status is not. The work

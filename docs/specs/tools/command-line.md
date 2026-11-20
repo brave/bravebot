@@ -268,15 +268,21 @@ It is never looked up, so it is passed as written whether or not anything matche
 named like it cannot change what the program receives. A dash with no name before the `=`, a
 pattern ahead of the `=`, and a dash with no `=` are still patterns.
 
-Expansion is bounded. Past the bound the compile fails and says the count, rather than putting a
-thousand paths in front of a reader who will approve them unread.
+Expansion is bounded. Past the bound the compile fails, rather than putting a thousand paths in
+front of a reader who will approve them unread. A bound on the alternatives a word's braces write
+is counted from the planner's own line before anything is read, so the refusal says that count. A
+bound on the names the patterns matched, and the ceiling on the directories a walk reads, are
+counted from a directory nobody may have vouched for, so those refusals state the cap and never a
+count taken from the directory's entries. Whether a line is refused for either is still one bit
+about the tree per call, which is listed under [Known costs](../labels.md#known-costs).
 
 **The names a pattern matched are for the person, not the planner.** What is said to the planner
 about a line is said in the words the planner wrote: the result of a run, the account of a job that
 started, moved or ended, an error that the line did not start or run, and a refusal by a deny rule,
 which names the program and not its operands. The expanded plan is what the person is shown and
 endorses, so a file name read out of a directory nobody vouched for is never spelled into a
-sentence the driver writes to the planner. The names are drawn with a control character, a character
+sentence the driver writes to the planner, and neither is a count taken from the directory's
+entries. The names are drawn with a control character, a character
 that draws as nothing and the other characters [PROMPT-1](../prompting.md#PROMPT-1) lists written
 as `\u{..}`, so a name holding one does not draw as another name.
 
@@ -338,7 +344,11 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::an_option_value_with_braces_is_passed_through_for_each_spelling`
 `verified-by: bravebot_agent::cmdline::only_an_option_carrying_a_value_is_passed_through`
 `verified-by: bravebot_agent::tools::the_run_description_says_when_a_pattern_for_the_program_is_quoted`
-`verified-by: bravebot_agent::cmdline::expansion_is_bounded_and_the_refusal_says_the_count`
+`verified-by: bravebot_agent::cmdline::a_brace_count_past_the_bound_is_refused_with_the_count`
+`verified-by: bravebot_agent::cmdline::names_past_the_bound_are_refused_without_a_count`
+`verified-by: bravebot_agent::cmdline::names_up_to_the_bound_still_expand`
+`verified-by: bravebot_agent::cmdline::a_walk_past_the_directory_ceiling_is_refused_with_the_cap_only`
+`verified-by: bravebot_agent::turn::the_refusal_of_too_many_matched_names_does_not_state_how_many_matched`
 `verified-by: bravebot_agent::cmdline::a_tree_pattern_does_not_descend_into_an_ignored_directory`
 `verified-by: bravebot_agent::cmdline::a_dot_file_is_matched_only_by_a_pattern_that_writes_the_dot`
 `verified-by: bravebot_agent::cmdline::a_class_matches_the_characters_it_names`

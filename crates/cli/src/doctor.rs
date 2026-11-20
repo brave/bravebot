@@ -4953,6 +4953,7 @@ mod tests {
             path: path.to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         };
         let outside = directory.parent().unwrap().join("outside.env");
         let outside = outside.to_str().unwrap();
@@ -4996,6 +4997,46 @@ mod tests {
                 ]
             );
         }
+    }
+
+    /// SANDBOX-25: an entry a checkout's file wrote is kept out of the sentence the planner gets,
+    /// and `doctor` is the person's own screen, so it still prints the entry as written, with the
+    /// file that wrote it, whether the entry is in force or refused. The regression it rejects is
+    /// a report that hides the spelling of a checkout's entry from the person who has to read it.
+    #[test]
+    fn doctor_still_shows_the_text_of_an_entry_a_checkout_wrote() {
+        use bravebot_sandbox::rules::{Entry, Lists, resolve};
+        let directory = scratch("checkout-entry-text").canonicalize().unwrap();
+        let file = directory.join(".bravebot/settings.json");
+        let entry = |path: &str| Entry {
+            path: path.to_string(),
+            by: Some(file.clone()),
+            pinned: false,
+            from_a_checkout: true,
+        };
+        let lists = Lists {
+            deny_read: vec![entry("MARKER-FROM-THE-CLONE.env")],
+            deny_write: vec![entry("MARKER-WILDCARD-*.env")],
+            ..Lists::default()
+        };
+        let rules = resolve(&lists, None, None, &directory);
+        let shown = progress::printable_path(&file);
+
+        let lines = sandbox_filesystem_lines(&rules, &directory, None);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let read = lines
+            .iter()
+            .find(|line| line.contains("MARKER-FROM-THE-CLONE.env"))
+            .unwrap_or_else(|| panic!("the entry is not shown: {lines:?}"));
+        assert!(read.contains("denyRead") && read.contains(&shown), "{read}");
+        let write = lines
+            .iter()
+            .find(|line| line.contains("MARKER-WILDCARD-*.env"))
+            .unwrap_or_else(|| panic!("the refused entry is not shown: {lines:?}"));
+        assert!(
+            write.contains("denyWrite") && write.contains(&shown),
+            "{write}"
+        );
     }
 
     /// SANDBOX-22 and SANDBOX-10: `doctor` names the mode and where it came from, and names the
