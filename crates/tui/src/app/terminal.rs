@@ -101,8 +101,8 @@ pub(super) fn leave<W: Write>(
     hand_back: impl FnOnce(&mut W) -> io::Result<()>,
 ) -> io::Result<()> {
     let handed_back = hand_back(out);
-    crate::herdr::release();
-    handed_back
+    let left = crate::herdr::leave(out);
+    handed_back.and(left)
 }
 
 /// [`hand_back_terminal`], told whether disambiguated keys were pushed and how to leave raw mode, so
