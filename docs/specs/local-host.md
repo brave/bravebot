@@ -90,6 +90,8 @@ The replies that widen what a session may do or read (`output.reply`, `vouch.rep
 `verified-by: bravebot_ui_bridge::host_process::a_reply_of_the_wrong_kind_is_refused_and_the_question_stays_answerable`
 `verified-by: bravebot_ui_bridge::host_allowlist::the_allowlist_classifies_every_method_the_bridge_answers`
 `verified-by: bravebot_ui_bridge::host_allowlist::the_scan_reads_arms_with_several_names`
+`verified-by: bravebot_ui_bridge::spend_limit::session_limit_sets_clears_and_reads`
+`verified-by: bravebot_ui_bridge::spend_limit::a_limit_set_while_a_turn_runs_holds_its_next_request`
 
 <a id="HOST-4"></a>
 ### HOST-4: the host's records are in a directory of its own

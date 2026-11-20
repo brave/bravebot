@@ -500,6 +500,8 @@ outside the turn; it is not kept when a session is resumed, and `/clear` starts 
 `verified-by: bravebot_ui_bridge::spend_limit::going_on_without_a_limit_sends_the_request`
 `verified-by: bravebot_ui_bridge::spend_limit::a_new_limit_typed_at_the_question_is_the_sessions_afterwards`
 `verified-by: bravebot_ui_bridge::spend_limit::a_figure_below_what_is_spent_is_asked_again_and_the_third_stops`
+`verified-by: bravebot_ui_bridge::spend_limit::session_limit_sets_clears_and_reads`
+`verified-by: bravebot_ui_bridge::spend_limit::a_limit_set_while_a_turn_runs_holds_its_next_request`
 `verified-by: bravebot_config::settings::only_a_positive_count_is_a_session_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`

@@ -135,6 +135,12 @@ struct Open {
     /// What `/cost`, `/context` and `/request` are answered from, which the session's turns write
     /// into as they run, so a report asked while a turn holds the state is answered (CMD-8).
     reports: crate::reports::Shared,
+    /// The state's spend limit, the same shared handle, so `session.limit` sets it while a turn
+    /// holds the state and that turn's next request is held to it (TURN-8).
+    spend_limit: bravebot_agent::SpendLimit,
+    /// The state's token total when its current turn began, which `session.limit` reports while
+    /// that turn holds the state.
+    tokens_at_turn: u64,
 }
 
 impl Open {
@@ -152,6 +158,8 @@ impl Open {
             folders: state.directories.clone(),
             // Measured against no budget until a turn starts, which reads it from the settings.
             reports: Arc::new(Mutex::new(crate::reports::Held::of(&state, 0))),
+            spend_limit: state.spend_limit.clone(),
+            tokens_at_turn: state.tokens,
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -381,6 +389,7 @@ impl Bridge {
             "session.close" => self.close_session(request),
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
+            "session.limit" => self.session_limit(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
             "session.folders.list" | "session.folders.add" | "session.folders.close" => {
@@ -1890,6 +1899,45 @@ impl Bridge {
         Ok(json!({ "permissionMode": wire::permission_mode_name(mode) }))
     }
 
+    /// Set, clear or read the session's spend limit: the desktop window's `/limit` (TURN-8).
+    ///
+    /// `limit` a string is read as the `limit` setting is, `null` is no limit, and absent reads the
+    /// limit without changing it. The handle is the one each turn holds, so a limit set while a
+    /// turn runs applies to that turn's next request.
+    fn session_limit(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let asked = match request.params.get("limit") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(Value::String(text)) => Some(Some(
+                bravebot_config::limit::parse(text, bravebot_config::limit::Unit::Tokens)
+                    .ok_or_else(|| {
+                        Failure::bad_request(format!("`{text}` is not a spend limit"))
+                    })?,
+            )),
+            Some(_) => return Err(Failure::bad_request("`limit` must be a string or null")),
+        };
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(limit) = asked {
+            open.spend_limit.set(limit);
+        }
+        // A turn holds the state while it runs, and adds what it spent when it ends.
+        let tokens = match open.state.try_lock() {
+            Ok(state) => state.tokens,
+            Err(_) => open.tokens_at_turn,
+        };
+        Ok(match open.spend_limit.limit() {
+            Some(limit) => json!({
+                "limit": {"unit": limit.unit.word(), "count": limit.figure},
+                "spent": bravebot_agent::spend_limit::spent_in(limit.unit, &open.spend_limit, tokens),
+            }),
+            None => json!({"limit": null, "spent": tokens}),
+        })
+    }
+
     /// Choose the sandbox mode the session's next turn runs its programs under.
     ///
     /// `strict` or `workspace-write`: a window has no way to show that nothing confines a program, so
@@ -2085,7 +2133,10 @@ impl Bridge {
         let state = Arc::clone(&open.state);
         let reports = Arc::clone(&open.reports);
         let watches = Arc::clone(&open.watches);
-        let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
+        let (turn_number, tokens_at_turn) = state
+            .lock()
+            .map(|s| (s.turns + 1, s.tokens))
+            .unwrap_or((1, open.tokens_at_turn));
 
         let crate::running::Started {
             running,
@@ -2141,6 +2192,7 @@ impl Bridge {
             open.running = Some(running);
             open.model = model;
             open.definition = standing;
+            open.tokens_at_turn = tokens_at_turn;
         }
         self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {
