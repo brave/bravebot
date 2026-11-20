@@ -21,6 +21,10 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Policy::declassify`, `Policy::declassify_into_place` | Each releases exactly the slots the release plan named before any content was seen, `declassify_into_place` only to the destination named with the slot |
 | `Policy::declassify_into_workspace`, `Policy::declassify_written_into_workspace`, `Policy::declassify_checkout_into_workspace` | Each returns the value at public with the integrity it had, so a release never raises integrity |
 | `Policy::endorsed_for_reading` | `read_output`, `promote_vetted` and `promote_vetted_picture` hand a slot to the planner only where it is the kind the gate serves and a single-use endorsement for it was issued |
+| `Policy::promote_a_tool_list`, `Policy::promote_a_server_move` | Each passes exactly when a single-use endorsement for the server's alias was issued, and returns `(T,pub)` |
+| `Policy::adopt_edited_body` | It adopts a body a person edited exactly when the proposed body was `(T,pub)`, and records the saved body at `(T,pub)` |
+| `Policy::record_answers` | It records a reply exactly when the questions were trusted, at the questions' own label |
+| `Policy::label_user_command_output`, `Policy::label_user_configuration`, `Policy::label_kept_fact` | Each gives the first label its provenance names: `(T,priv)` for a command the person typed, `(T,pub)` for their configuration, and trusted at the confidentiality the fact was kept at |
 | `Plan::can_be_remembered` | It allows a line exactly when everything that decides what each step does is in the entry `a` records, as `spec::plan_is_its_entries` states over every field of `Plan` and `Step`: no file written or read by name, no reference fed in, no assignment, and no route that opens a file |
 | `Plan::can_be_remembered_as` | It allows a request exactly when its plan can be remembered and it asked for no scope, did not ask to run with no profile, and writes no protected path. `Plan::vouch` makes the only `Vouch`, and `Policy::remember_vouch` records only from one |
 | `policy::run_reason` | Private input, a requested scope, a write, an assignment, and a line outside the root that no entry names are always put to a person, and so is a line an `ask` or `deny` rule matches. A line goes unasked only on the answer that covers it, and a fed reference only on an `allow` rule or the audited table |
@@ -154,4 +158,6 @@ make check-verus
   `Policy` is opaque to Verus, so `precommitted`, `precommitted_into`, `consume_grant` and
   `context_integrity` are assumed to answer the uninterpreted `spec_precommitted`,
   `spec_precommitted_into`, `spec_granted` and `spec_context`.
+- `Policy::record_note` and `Policy::promote_reference_for_read`. The first keeps the note in
+  `Policy`, which is opaque to Verus, and the second reads the path out of `SlotStore`.
 - Any gate without a row above.
