@@ -14,6 +14,7 @@
 //! directory called `C:`.
 
 use std::borrow::Cow;
+use std::path::Path;
 
 /// `path` with `/` between its segments, for a name below a root.
 ///
@@ -54,6 +55,45 @@ pub fn to_key(path: &str, backslash_separates: bool) -> Cow<'_, str> {
         Some(from_the_drive) => Cow::Owned(format!("/{}", from_the_drive.replace('\\', "/"))),
         None => to_slash(path, backslash_separates),
     }
+}
+
+/// What `name` is below `root`, or `None` where it is not at or below it.
+///
+/// Compared as [`Path`] components first, which is how the two read where both are spelled alike.
+/// Where they are not, both are compared as keys ([`to_key`]), so a `root` the platform resolved to
+/// `\\?\C:\proj` holds the name `C:\proj\x` a person typed: `Path::strip_prefix` reads the two
+/// first components as different prefixes and finds nothing below. The result is `x` either way,
+/// and the empty string for the root itself. The drive letter is compared in upper case, as
+/// [`Path`] compares it on the host that has one.
+///
+/// A name below a root is `/`-spelled where a backslash separates, which is the spelling a key is
+/// asked about the map under. Nothing is resolved here: a link is not followed and a `..` is kept,
+/// so a caller that has to refuse either does so before asking.
+pub fn below(root: &Path, name: &str, backslash_separates: bool) -> Option<String> {
+    if let Ok(inside) = Path::new(name).strip_prefix(root) {
+        return Some(to_slash(&inside.to_string_lossy(), backslash_separates).into_owned());
+    }
+    // A root that is not text has no key, and its lossy rendering would be another root's.
+    let root = root.to_str()?;
+    let drive_in_upper_case = |key: Cow<'_, str>| -> String {
+        let key = key.into_owned();
+        let at_a_drive = backslash_separates
+            && matches!(key.as_bytes(), [b'/', letter, b':', b'/', ..] | [b'/', letter, b':'] if letter.is_ascii_alphabetic());
+        match at_a_drive {
+            true => key
+                .chars()
+                .enumerate()
+                .map(|(at, c)| if at == 1 { c.to_ascii_uppercase() } else { c })
+                .collect(),
+            false => key,
+        }
+    };
+    let name = drive_in_upper_case(to_key(name, backslash_separates));
+    let root = drive_in_upper_case(to_key(root, backslash_separates));
+    Path::new(&name)
+        .strip_prefix(&root)
+        .ok()
+        .map(|inside| inside.to_string_lossy().into_owned())
 }
 
 /// `path` from its drive letter on, for a name rooted at one, without the `\\?\` a canonical name
@@ -161,5 +201,56 @@ mod tests {
     fn a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator() {
         assert_eq!(to_key(r"C:\other", false), r"C:\other");
         assert_eq!(to_key(r"\\?\C:\other", false), r"\\?\C:\other");
+    }
+
+    /// The platform resolves a root to `\\?\C:\proj` and a person or a program names a file in it
+    /// as `C:\proj\x`. `Path` reads the two first components as different prefixes, so a
+    /// comparison by components finds nothing below the root and a rule about the file is never
+    /// asked. Every spelling of the drive path is below the root, and the names that only look
+    /// like it (`proj-other`, another drive, the drive root) are not.
+    #[test]
+    fn a_name_is_below_a_verbatim_root_whichever_way_the_drive_path_is_spelled() {
+        let root = Path::new(r"\\?\C:\proj");
+        for (named, below_it) in [
+            (r"C:\proj\src\a.rs", Some("src/a.rs")),
+            ("C:/proj/src/a.rs", Some("src/a.rs")),
+            (r"c:\proj\src\a.rs", Some("src/a.rs")),
+            (r"\\?\C:\proj\src\a.rs", Some("src/a.rs")),
+            (r"C:\proj", Some("")),
+            (r"C:\proj-other\a.rs", None),
+            (r"C:\other\a.rs", None),
+            (r"D:\proj\a.rs", None),
+            (r"C:\", None),
+        ] {
+            assert_eq!(
+                below(root, named, true).as_deref(),
+                below_it,
+                "'{named}' under '{}'",
+                root.display()
+            );
+        }
+    }
+
+    /// Where a slash is the only separator a backslash is a filename byte, so `C:\proj\a.rs` is one
+    /// file at the top of the project and is not below a root spelled `\\?\C:\proj`. A name spelled
+    /// like its root is below it on either kind of host.
+    #[test]
+    fn a_drive_spelling_is_not_below_a_root_where_a_slash_is_the_only_separator() {
+        assert_eq!(
+            below(Path::new(r"\\?\C:\proj"), r"C:\proj\a.rs", false),
+            None
+        );
+        for backslash_separates in [false, true] {
+            let root = Path::new("/work");
+            assert_eq!(
+                below(root, "/work/src/a.rs", backslash_separates).as_deref(),
+                Some("src/a.rs")
+            );
+            assert_eq!(
+                below(root, "/work", backslash_separates).as_deref(),
+                Some("")
+            );
+            assert_eq!(below(root, "/workshop/a.rs", backslash_separates), None);
+        }
     }
 }

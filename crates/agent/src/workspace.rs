@@ -4750,6 +4750,24 @@ impl Workspace {
         bravebot_core::spelling::to_slash(&named, backslash_separates).into_owned()
     }
 
+    /// `named` spelled below the root, or `None` where it is not at or below it.
+    ///
+    /// The root is the form the platform resolved to, which on Windows is `\\?\C:\proj`, and a
+    /// name a person or a program typed is `C:\proj\x`. Compared as [`Path`] components the two
+    /// have different prefixes and nothing is below the root, so a caller that asks the file system
+    /// about the relative name asks about the absolute one instead, which
+    /// [`Workspace::resolve`] refuses inside the root. [`bravebot_core::spelling::below`] compares
+    /// them in one spelling.
+    pub(crate) fn below_root(&self, named: &str) -> Option<String> {
+        self.below_root_where(named, BACKSLASH_SEPARATES)
+    }
+
+    /// [`Workspace::below_root`] with the host's answer about the separator supplied, so a test
+    /// states it on any host.
+    fn below_root_where(&self, named: &str, backslash_separates: bool) -> Option<String> {
+        bravebot_core::spelling::below(&self.root, named, backslash_separates)
+    }
+
     /// The name the trust map holds a rule about `named` under.
     ///
     /// Every rule is recorded about a directory a person opened, under the name that directory was
@@ -6445,6 +6463,44 @@ mod tests {
             "a name that exists is never respelled"
         );
         assert_eq!(workspace.respelled_when_missing("absent file.txt"), None);
+    }
+
+    /// A file in the project named the way a person types it on Windows, `C:\work\project\x`, is
+    /// below the workspace root the platform resolved to `\\?\C:\work\project`, and its lookup of
+    /// other names is made under the relative name `Workspace::resolve` accepts. Compared by
+    /// components the two read as different prefixes, the name is taken for one outside the
+    /// project, and the lookup is made for an absolute name that `resolve` refuses inside the root,
+    /// so a file with a second name keeps none. The host's answer about the separator is given, so
+    /// this runs on any host.
+    #[test]
+    fn a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path()
+     {
+        let scratch = crate::testutil::scratch_dir("bravebot-verbatim-root");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).expect("create scratch");
+        let mut workspace = Workspace::new(&scratch).unwrap();
+        workspace.root = PathBuf::from(r"\\?\C:\work\project");
+
+        for (typed, below) in [
+            (r"C:\work\project\src\a.md", Some("src/a.md")),
+            (r"\\?\C:\work\project\src\a.md", Some("src/a.md")),
+            ("C:/work/project/src/a.md", Some("src/a.md")),
+            (r"C:\work\project", Some("")),
+            (r"C:\work\project-other\a.md", None),
+            (r"C:\work\a.md", None),
+        ] {
+            assert_eq!(
+                workspace.below_root_where(typed, true).as_deref(),
+                below,
+                "'{typed}'"
+            );
+        }
+        assert_eq!(
+            workspace.below_root_where(r"C:\work\project\a.md", false),
+            None,
+            "a name holding a backslash was read as a drive where a slash is the only separator"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// The name the workspace hands back and the key it asks the map about are both spelled from
