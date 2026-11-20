@@ -63929,22 +63929,30 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
 fn a_place_a_finished_delegate_returned_is_taken_by_the_next_one_the_turn_starts() {
     let scratch = Scratch::new("delegate-place-returned");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "REUSE-THE-PLACE",
-            vec![
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"FIRST-TASK"}"#),
-                // Answering with a delegate outstanding makes the turn wait for it, so the next
-                // request is after the first delegate has ended.
-                reply_with("waiting"),
-                tool_request("spawn_agent", r#"{"kind":"reader","task":"SECOND-TASK"}"#),
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        ("FIRST-TASK", vec![reply_with("first")]),
-        ("SECOND-TASK", vec![reply_with("second")]),
-    ]);
+    // The first delegate is not answered until the planner has been asked again, so it is still
+    // running when that answer arrives. A reply that comes back first ends the turn before the
+    // second delegate is asked for.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "REUSE-THE-PLACE",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"FIRST-TASK"}"#),
+                    reply_with("waiting"),
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"SECOND-TASK"}"#),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            ("FIRST-TASK", vec![reply_with("first")]),
+            ("SECOND-TASK", vec![reply_with("second")]),
+        ],
+        Order::After {
+            held: "FIRST-TASK",
+            after: "REUSE-THE-PLACE",
+            asked: 2,
+        },
+    );
     let mut config = config_for(&endpoint);
     config.max_running_delegates = Some(1);
     let egress = bravebot_net::Egress::new();
@@ -63964,6 +63972,10 @@ fn a_place_a_finished_delegate_returned_is_taken_by_the_next_one_the_turn_starts
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the first delegate had ended before the planner was asked again"
+    );
     for number in ["d1", "d2"] {
         assert!(
             reporter
