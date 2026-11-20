@@ -188,6 +188,16 @@ pub fn notice_given() {
     }
 }
 
+/// Whether this launch is reporting and the person has been told so, by this front end or another.
+///
+/// False for a launch that is not reporting, so an answer about the notice never says it was shown
+/// for reports that are not being sent.
+pub fn notice_recorded() -> bool {
+    STARTED
+        .get()
+        .is_some_and(|state| store::notice_was_given(state))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +312,15 @@ mod tests {
         assert_eq!(plan(None, Some("1"), address(), || Some(true)), None);
         assert!(STARTED.get().is_none());
         assert!(!notice_due());
+    }
+
+    /// CRASH-9: a launch that did not start reporting has no record of the notice, and recording
+    /// it does nothing, so no answer says the notice was shown for reports that are not sent.
+    #[test]
+    fn with_nothing_started_no_notice_is_recorded() {
+        assert!(STARTED.get().is_none());
+        notice_given();
+        assert!(!notice_recorded());
     }
 
     /// CRASH-3: a build that was given nowhere to send reports reports nothing, and does not leave
