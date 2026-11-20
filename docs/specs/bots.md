@@ -1185,9 +1185,8 @@ list later if the list looks too packed.
 - **A write removes the entries the read dropped.** The read drops a row that fails the rules of
   [BOT-3](#BOT-3) and every row past the 100th, and the next write does not put them back. A hand-edited
   mistake in a row loses that row on the next write. [COMPAT-001](../best-practices/compatibility.md#COMPAT-001)
-  says a reader must not discard data it cannot parse, and this clause does. The owner accepted it on
-  2026-10-22. The read reports each dropped entry with its reason, and the GUI shows the report before
-  the write removes the entry. The GUI's own save did the same before the module existed.
+  says a reader must not discard data it cannot parse, and this clause does. The read reports each
+  dropped entry with its reason, and the GUI shows the report before the write removes the entry.
 - **A purpose has no length bound.** It is the body of the definition read into every turn, so a long
   one costs tokens on every turn and can exceed the model's context. It is also stored in the shared
   file, which is read whole ([BOT-3](#BOT-3)).

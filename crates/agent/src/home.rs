@@ -441,10 +441,18 @@ pub(crate) fn replace_private(directory: &Path, file: &str, text: &str) -> std::
 /// file, so the name is not left half written. A failure of that removal is discarded, and the
 /// write's error is the one returned.
 pub fn create_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let mut file = open_private(
+    let file = open_private(
         std::fs::OpenOptions::new().write(true).create_new(true),
         path,
     )?;
+    write_or_remove(file, path, contents)
+}
+
+fn write_or_remove(
+    mut file: impl std::io::Write,
+    path: &Path,
+    contents: &[u8],
+) -> std::io::Result<()> {
     if let Err(error) = file.write_all(contents) {
         drop(file);
         std::fs::remove_file(path).unwrap_or_default();
@@ -733,6 +741,35 @@ mod tests {
 
     fn loosen(path: &Path, mode: u32) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("loosen");
+    }
+
+    struct FailingWrite;
+
+    impl std::io::Write for FailingWrite {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("the disk is full"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A failed write must not leave the new name in place, or the next create refuses it as taken.
+    #[test]
+    fn a_failed_write_of_a_new_file_removes_the_name_and_returns_the_write_error() {
+        let scratch = Scratch::new("create-new-write-fails");
+        let path = scratch.path.join("partial");
+        std::fs::write(&path, b"half").unwrap();
+
+        let error = write_or_remove(FailingWrite, &path, b"more").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(!path.exists(), "the half-written file was left behind");
+
+        let missing = scratch.path.join("missing");
+        let error = write_or_remove(FailingWrite, &missing, b"more").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
     }
 
     /// The longest a file name beside a key can get: the key, `.jsonl`, and the temporary name

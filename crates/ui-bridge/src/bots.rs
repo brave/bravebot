@@ -429,6 +429,46 @@ mod tests {
                 "bot.forget_conversation",
                 json!({"dataFolder": folder, "id": "s", "directory": true}),
             ),
+            ("bot.migrate", json!({"dataFolder": folder})),
+            ("bot.migrate", json!({"slug": "a"})),
+            ("bot.migrate", json!({"dataFolder": folder, "slug": 1})),
+            (
+                "bot.owes_carry_over",
+                json!({"dataFolder": folder, "slug": "a"}),
+            ),
+            (
+                "bot.owes_carry_over",
+                json!({"dataFolder": folder, "folder": "/d"}),
+            ),
+            ("bot.owes_carry_over", json!({"slug": "a", "folder": "/d"})),
+            (
+                "bot.owes_carry_over",
+                json!({"dataFolder": folder, "slug": 1, "folder": "/d"}),
+            ),
+            (
+                "bot.owes_carry_over",
+                json!({"dataFolder": folder, "slug": "a", "folder": 1}),
+            ),
+            (
+                "bot.works_in",
+                json!({"dataFolder": folder, "slug": "a", "directory": "/d"}),
+            ),
+            (
+                "bot.works_in",
+                json!({"dataFolder": folder, "slug": "a", "opened": []}),
+            ),
+            (
+                "bot.works_in",
+                json!({"dataFolder": folder, "directory": "/d", "opened": []}),
+            ),
+            (
+                "bot.works_in",
+                json!({"dataFolder": folder, "slug": "a", "directory": "/d", "opened": "/x"}),
+            ),
+            (
+                "bot.works_in",
+                json!({"dataFolder": folder, "slug": "a", "directory": "/d", "opened": [1]}),
+            ),
         ];
         for (method, params) in cases {
             let call = request(method, params.clone());
@@ -444,6 +484,9 @@ mod tests {
                 "bot.record_archived" => record_archived(&call),
                 "bot.release_session" => release_session(&call),
                 "bot.forget_conversation" => forget_conversation(&call),
+                "bot.migrate" => migrate(&call),
+                "bot.owes_carry_over" => owes_carry_over(&call),
+                "bot.works_in" => works_in(&call),
                 _ => panic!("untested method {method}"),
             }
             .expect_err("refused");
