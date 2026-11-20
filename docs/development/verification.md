@@ -18,6 +18,7 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Policy::refuse_untrusted`, `Policy::read_trusted_content` | Each refuses exactly when the label is untrusted |
 | `policy::shown_to_the_planner` | `Policy::present` shows the planner content exactly where it is trusted and not a picture, and every other value reaches it as a reference |
 | `Context::absorb`, `Context::hold`, `Context::fresh` | A turn's context starts trusted and public. Integrity only meets and confidentiality only joins, so nothing shown later restores what was already lost. `Policy::absorb` meets `spec_context` with what was observed |
+| `Grants::spend`, `Grants::issue` | An endorsement is spent only for exactly the tool, field and value it was issued for, and a spent one is gone, so it cannot authorise a second action or another value. `Policy::consume_grant` spends from `spec_grants` |
 | `Labelled::new`, `Labelled::trusted`, `Label::new` | Each builds the value and label it is given, `trusted` at `(T,pub)` |
 | `Policy::read_planner_argument`, `Policy::promote_confined_read` | Each passes exactly when the argument is public and the planner's context has met nothing untrusted, and `promote_confined_read` returns `(T,pub)` |
 | `Policy::declassify`, `Policy::declassify_into_place` | Each releases exactly the slots the release plan named before any content was seen, `declassify_into_place` only to the destination named with the slot |
@@ -160,7 +161,9 @@ make check-verus
   `Policy` is opaque to Verus, so `precommitted`, `precommitted_into`, `consume_grant` and
   `context_integrity` are assumed to answer the uninterpreted `spec_precommitted`,
   `spec_precommitted_into`, `spec_granted` and `spec_context`. `Policy::absorb` is assumed to meet
-  `spec_context` by handing the observation to its `Context`, whose `absorb` is proved.
+  `spec_context` by handing the observation to its `Context`, whose `absorb` is proved, and
+  `consume_grant` to spend from `spec_grants` by handing the call to its `Grants`, whose `spend` is
+  proved.
 - `Policy::record_note` and `Policy::promote_reference_for_read`. The first keeps the note in
   `Policy`, which is opaque to Verus, and the second reads the path out of `SlotStore`.
 - Any gate without a row above.

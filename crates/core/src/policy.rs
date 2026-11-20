@@ -264,16 +264,37 @@ pub uninterp spec fn spec_precommitted_into<'sink, S: Sink>(
 }
 
 // Whether a policy holds a single-use endorsement for a tool's field at an exact value, which only
-// a person's answer, or a mode answering in their place, issues. Uninterpreted, and
-// `Policy::consume_grant` is assumed to succeed exactly where one is held.
+// a person's answer, or a mode answering in their place, issues. The endorsements are the
+// policy's `Grants`, which Verus proves `spend` against; `Policy` is opaque to Verus, so which
+// endorsements it holds is uninterpreted, and `Policy::consume_grant` is assumed to spend from
+// them.
 #[cfg(verus_keep_ghost)]
 verus! {
-pub uninterp spec fn spec_granted<'sink, S: Sink>(
+pub uninterp spec fn spec_grants<'sink, S: Sink>(policy: Policy<'sink, S>) -> Seq<Grant>;
+
+/// An endorsement is for one tool's field at one exact value, compared as the texts are.
+pub closed spec fn grant_is_for(grant: Grant, tool: Seq<char>, field: Seq<char>, value: Seq<char>) -> bool {
+    grant.tool@ == tool && grant.field@ == field && grant.value@ == value
+}
+
+/// Some unspent endorsement is for this tool's field at this exact value.
+pub open spec fn granted(
+    pending: Seq<Grant>,
+    tool: Seq<char>,
+    field: Seq<char>,
+    value: Seq<char>,
+) -> bool {
+    exists|i: int| 0 <= i < pending.len() && grant_is_for(#[trigger] pending[i], tool, field, value)
+}
+
+pub open spec fn spec_granted<'sink, S: Sink>(
     policy: Policy<'sink, S>,
     tool: Seq<char>,
     field: Seq<char>,
     value: Seq<char>,
-) -> bool;
+) -> bool {
+    granted(spec_grants(policy), tool, field, value)
+}
 
 pub uninterp spec fn spec_slot_name(slot: SlotId) -> Seq<char>;
 }
@@ -453,7 +474,12 @@ impl Routing {
 /// Issued after a human confirms. Consumed by the first matching action check, so an
 /// endorsement cannot authorise a second action or a different value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Grant {
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
+pub struct Grant {
     tool: String,
     field: String,
     value: String,
@@ -465,29 +491,65 @@ struct Grant {
 /// change the list. An endorsement is for one tool's field at one exact value, so spending one for
 /// any other value finds nothing, and one spent is gone, so a second action finds nothing either.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 struct Grants {
     pending: Vec<Grant>,
 }
 
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl Grants {
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            final(self).pending@ == old(self).pending@.push(grant),
+    ))]
     fn issue(&mut self, grant: Grant) {
         self.pending.push(grant);
     }
 
     /// Take out an endorsement for exactly this tool, field and value, and say whether one was
     /// there.
+    #[cfg_attr(verus_keep_ghost, verus_spec(spent =>
+        ensures
+            spent == granted(old(self).pending@, tool@, field@, value@),
+            spent ==> exists|i: int|
+                0 <= i < old(self).pending@.len() && grant_is_for(
+                    #[trigger] old(self).pending@[i],
+                    tool@,
+                    field@,
+                    value@,
+                ) && final(self).pending@ == old(self).pending@.remove(i),
+            !spent ==> final(self).pending@ == old(self).pending@,
+    ))]
     fn spend(&mut self, tool: &str, field: &str, value: &str) -> bool {
-        let found = self
-            .pending
-            .iter()
-            .position(|g| g.tool == tool && g.field == field && g.value == value);
-        match found {
-            Some(index) => {
-                self.pending.remove(index);
-                true
+        let mut at = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant
+                at <= self.pending.len(),
+                self.pending@ == old(self).pending@,
+                forall|j: int| 0 <= j < at ==> !grant_is_for(
+                    #[trigger] self.pending@[j],
+                    tool@,
+                    field@,
+                    value@,
+                ),
+            decreases self.pending.len() - at,
+        ))]
+        while at < self.pending.len() {
+            let grant = &self.pending[at];
+            let matches = crate::compare::same_text(&grant.tool, tool)
+                && crate::compare::same_text(&grant.field, field)
+                && crate::compare::same_text(&grant.value, value);
+            if matches {
+                self.pending.remove(at);
+                return true;
             }
-            None => false,
+            at += 1;
         }
+        false
     }
 
     fn len(&self) -> usize {
@@ -10343,6 +10405,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     #[cfg_attr(verus_keep_ghost, verus_spec(r =>
         ensures
             r is Ok <==> spec_granted(*old(self), tool@, field@, concrete@),
+            r is Ok ==> exists|i: int|
+                0 <= i < spec_grants(*old(self)).len() && grant_is_for(
+                    #[trigger] spec_grants(*old(self))[i],
+                    tool@,
+                    field@,
+                    concrete@,
+                ) && spec_grants(*final(self)) == spec_grants(*old(self)).remove(i),
+            r is Err ==> spec_grants(*final(self)) == spec_grants(*old(self)),
     ))]
     fn consume_grant(&mut self, tool: &str, field: &str, concrete: &str) -> Gated<()> {
         match self.grants.spend(tool, field, concrete) {
