@@ -57,8 +57,9 @@ writing a bot's definition, [MEMORY-8](#MEMORY-8), rewriting it on an edit,
 one, and [MEMORY-11](#MEMORY-11), which migrates an existing bot and asks it to carry its old notes
 over. Summoning a bot for one turn, [MEMORY-14](#MEMORY-14), is built.
 [MEMORY-1](#MEMORY-1), the split between the file and the desktop's store, is what those build. The
-briefing and the quiet-turn counters are removed. A bot made before definitions is migrated before
-its turn, and the row has no `remembered` or `quiet` field. Not built are the sentences in
+desktop composes no briefing and keeps no quiet-turn counter. A bot made before definitions is
+migrated before its turn, and the row has no `remembered` or `quiet` field. Not built are the
+sentences in
 [MEMORY-4](#MEMORY-4) about the desktop's panel, which are a design, written to be agreed before
 that work starts.
 
@@ -584,8 +585,7 @@ saves the memory to the same file. Editing a bot's purpose or model, or changing
 its definition through the bridge methods `bot.edit` and `bot.set_model`, whose module calls
 `bravebot_agent::agents::redefine` ([MEMORY-9](#MEMORY-9)); the row is saved only if the file was.
 
-**What is not built.** The briefing and the counters are removed. A bot made before definitions is
-migrated before its turn, and the row has no `remembered` or `quiet` field. The history of earlier
+**What is not built.** The history of earlier
 memory versions is not retired ([MEMORY-4](#MEMORY-4)). A reply is drawn under the name the row
 gives, as it was before this clause.
 
