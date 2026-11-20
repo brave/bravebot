@@ -495,6 +495,11 @@ outside the turn; it is not kept when a session is resumed, and `/clear` starts 
 `verified-by: bravebot_agent::turn::two_questions_about_the_same_figures_are_different_questions`
 `verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
 `verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
+`verified-by: bravebot_ui_bridge::spend_limit::a_desktop_session_held_to_its_limit_asks_before_the_next_request`
+`verified-by: bravebot_ui_bridge::spend_limit::stopping_at_the_limit_ends_the_turn_as_a_stop`
+`verified-by: bravebot_ui_bridge::spend_limit::going_on_without_a_limit_sends_the_request`
+`verified-by: bravebot_ui_bridge::spend_limit::a_new_limit_typed_at_the_question_is_the_sessions_afterwards`
+`verified-by: bravebot_ui_bridge::spend_limit::a_figure_below_what_is_spent_is_asked_again_and_the_third_stops`
 `verified-by: bravebot_config::settings::only_a_positive_count_is_a_session_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`
