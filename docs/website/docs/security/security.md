@@ -730,6 +730,10 @@ Reports are on in a released build and off in a build from source that was not g
 them off, a checkout's settings file is not consulted, and an incognito session leaves and sends none.
 See [`crashReports`](../customize/configuration.md#crashreports).
 
+The terminal interface and the desktop window each say once, on the first launch that reports, what a
+report holds, that it goes to Brave and how to turn reports off. The two share one record of it, so
+after either has shown it neither shows it again.
+
 Only a panic is reported. A process that dies without one leaves nothing, and a minidump to cover that
 case would hold the memory of a process that holds credentials.
 
