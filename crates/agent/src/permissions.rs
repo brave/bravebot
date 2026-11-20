@@ -293,6 +293,11 @@ fn anchors(
 /// the file tools ask about a project file by that name.
 fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
     let root = workspace.canonicalize().ok();
+    // A rule's full path is spelled `C:/..`, and Windows canonicalizes the root to `\\?\C:\..`,
+    // whose first component never equals the rule's, so the two are compared without the prefix.
+    let ordinary_root = root
+        .clone()
+        .map(bravebot_sandbox::rules::without_verbatim_prefix);
     // Only rules that restrict are followed, so the answer that could not be had is read as yes.
     let folds_case = crate::workspace::case_answer(workspace).unwrap_or(true);
     permissions.follow_links(|prefix| {
@@ -311,7 +316,10 @@ fn follow_links(permissions: &mut Permissions, workspace: &std::path::Path) {
             // A full path to a place inside the project is also that place under the name the
             // file tools ask by, so a rule about `~/.ssh` covers `.ssh` in a session opened in
             // the home directory.
-            return match (&root, bravebot_core::trust::is_absolute_key(prefix)) {
+            return match (
+                &ordinary_root,
+                bravebot_core::trust::is_absolute_key(prefix),
+            ) {
                 (Some(root), true) => beneath(&named, root, folds_case),
                 _ => None,
             };
@@ -1986,6 +1994,55 @@ mod tests {
                 Decision::Ruled(ruling),
                 "{family}(~/**) in {list} did not cover the relative name where the volume could not be asked"
             );
+        }
+    }
+
+    /// PERM-7: a `deny` or `ask` rule written as `C:/..` about a place inside the workspace covers
+    /// the relative name the file tools ask by, though Windows canonicalizes the workspace to
+    /// `\\?\C:\..`. A rule beside it and a file it does not name stay unmatched, so the rule is
+    /// neither inert nor wider than written.
+    #[cfg(windows)]
+    #[test]
+    fn a_full_path_rule_inside_the_workspace_covers_its_relative_names_on_windows() {
+        let scratch = crate::testutil::scratch_dir("Permissions-Windows-Full-Path");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("secrets")).unwrap();
+        std::fs::create_dir_all(scratch.join("secrets-other")).unwrap();
+        let root = scratch.canonicalize().unwrap();
+        assert!(
+            root.to_string_lossy().starts_with(r"\\?\"),
+            "the workspace did not canonicalize to the verbatim form this test is about: {root:?}"
+        );
+        let ordinary = bravebot_sandbox::rules::without_verbatim_prefix(root.clone())
+            .to_string_lossy()
+            .replace('\\', "/");
+        for (subject, family, list, ruling) in [
+            (Subject::Read, "Read", "deny", Ruling::Deny),
+            (Subject::Edit, "Edit", "deny", Ruling::Deny),
+            (Subject::Edit, "Edit", "ask", Ruling::Ask),
+        ] {
+            let settings = Settings::parse(&format!(
+                r#"{{"permissions": {{"{list}": ["{family}({ordinary}/secrets/**)"]}}}}"#
+            ));
+            let (permissions, rejected) = from_settings(&settings, None, &root);
+            assert!(rejected.is_empty(), "{rejected:?}");
+            assert_eq!(
+                permissions.for_path(subject, &format!("{ordinary}/secrets/.env")),
+                Decision::Ruled(ruling),
+                "{family} in {list} stopped covering the full path"
+            );
+            assert_eq!(
+                permissions.for_path(subject, "secrets/.env"),
+                Decision::Ruled(ruling),
+                "{family} in {list} did not cover the relative name the file tools ask by"
+            );
+            for beside in ["secrets-other/.env", "control.txt"] {
+                assert_eq!(
+                    permissions.for_path(subject, beside),
+                    Decision::Unmatched,
+                    "{family} in {list} covered '{beside}', which it does not name"
+                );
+            }
         }
     }
 
