@@ -98,6 +98,12 @@ fn absent(command: &Command) -> bool {
 ///   the four `XDG_` directories to choose the handler it runs. Those names and kinds are those of
 ///   the browser opener (`crates/tui/src/opener.rs`). `XDG_DATA_DIRS` is also in the generic list
 ///   and is repeated here so this list reads as complete.
+/// - `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` are where `gio open`, which `xdg-open` runs
+///   under a GNOME session, finds the session bus (`$XDG_RUNTIME_DIR/bus` when the address is not
+///   set). A service a stage runs on a socket it can create answers as the bus. They are judged as
+///   the opener judges them: the directory as one directory and the address as a
+///   [`Names::BusAddress`]. Whether a service on such a socket can make `gio open` run code or
+///   choose a handler was not shown ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
 /// - `OPENSSL_CONF` is a configuration file of the OpenSSL the CLI bundles, which can load an
 ///   engine or a provider module, and `OPENSSL_CONF_INCLUDE` is where its `.include` lines are read
 ///   from. `OPENSSL_ENGINES` and `OPENSSL_MODULES` are where those engines and providers are loaded
@@ -118,7 +124,7 @@ fn absent(command: &Command) -> bool {
 /// frozen executable runs `AWS_PAGER` and `PAGER` only for output on a terminal, which every start
 /// here has piped. `AWS_DATA_PATH` names JSON service models, `AWS_CA_BUNDLE`, `SSL_CERT_FILE` and
 /// `SSL_CERT_DIR` name certificates, and `AWS_WEB_IDENTITY_TOKEN_FILE` names a token; none is run.
-const CODE_SELECTORS: [(&str, Names); 16] = [
+const CODE_SELECTORS: [(&str, Names); 18] = [
     ("AWS_CONFIG_FILE", Names::File),
     ("AWS_SHARED_CREDENTIALS_FILE", Names::File),
     selectors::BROWSER,
@@ -130,6 +136,8 @@ const CODE_SELECTORS: [(&str, Names); 16] = [
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    selectors::XDG_RUNTIME_DIR,
+    selectors::DBUS_SESSION_BUS_ADDRESS,
     ("HOME", Names::Directory),
     ("PAGER", Names::Commands),
     ("MANPAGER", Names::Commands),
@@ -1062,10 +1070,97 @@ mod tests {
     /// not here: it is in the list and is kept only for a directory outside every stage's.
     #[test]
     fn the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read() {
-        for name in ["AWS_PROFILE", "AWS_REGION", "DISPLAY", "XDG_RUNTIME_DIR"] {
+        for name in ["AWS_PROFILE", "AWS_REGION", "DISPLAY", "WAYLAND_DISPLAY"] {
             assert!(
                 !withheld_value(name, "/stage/anything"),
                 "{name} was removed"
+            );
+        }
+    }
+
+    /// SANDBOX-30, `gio open` under `aws sso login`: the session bus it connects to. The
+    /// regressions it rejects: neither name in the AWS list (a start that keeps both whatever they
+    /// hold), a name removed whatever it holds, which takes the person's own bus from
+    /// the sign-in, and `DBUS_SESSION_BUS_ADDRESS` judged as a path, which no address is.
+    #[test]
+    fn the_aws_start_removes_a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write()
+     {
+        assert!(withheld_value("XDG_RUNTIME_DIR", "/stage/run"));
+        assert!(withheld_value("XDG_RUNTIME_DIR", "run"));
+        assert!(!withheld_value("XDG_RUNTIME_DIR", "/safe/run"));
+
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/stage/run/bus"
+        ));
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus;unix:path=/stage/run/bus"
+        ));
+        assert!(withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:abstract=/tmp/dbus-x"
+        ));
+        assert!(!withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/safe/run/bus"
+        ));
+        assert!(!withheld_value(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:runtime=yes"
+        ));
+    }
+
+    /// A runtime directory or bus address that is not text is judged as the bytes it is. The
+    /// regressions it rejects: `unix:path=/safe/run/bus` followed by a byte that is not UTF-8 read
+    /// as the path under `/safe` and kept, `/stage/run\xff` read as a path outside `/stage`, and a
+    /// value judged by its lossy rendering: the only path judged outside is the one spelled with
+    /// `U+FFFD`, which the bytes `\xff` render as but are not.
+    #[cfg(unix)]
+    #[test]
+    fn an_aws_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(withheld_bytes(
+            "DBUS_SESSION_BUS_ADDRESS",
+            OsStr::from_bytes(b"unix:path=/safe/run/bus\xff")
+        ));
+        assert!(withheld_bytes(
+            "XDG_RUNTIME_DIR",
+            OsStr::from_bytes(b"/stage/run\xff")
+        ));
+
+        let only_the_lookalike = |path: &Path| {
+            path == Path::new("/safe/run\u{FFFD}") || path == Path::new("/safe/run/bus\u{FFFD}")
+        };
+        let withheld_where_only_the_lookalike_is_outside = |name: &str, value: &OsStr| {
+            command_for_with(
+                Path::new("/usr/bin/aws"),
+                [(OsString::from(name), value.to_os_string())],
+                &only_the_lookalike,
+            )
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        };
+        for (name, bytes, text) in [
+            (
+                "XDG_RUNTIME_DIR",
+                &b"/safe/run\xff"[..],
+                "/safe/run\u{FFFD}",
+            ),
+            (
+                "DBUS_SESSION_BUS_ADDRESS",
+                &b"unix:path=/safe/run/bus\xff"[..],
+                "unix:path=/safe/run/bus\u{FFFD}",
+            ),
+        ] {
+            assert!(
+                withheld_where_only_the_lookalike_is_outside(name, OsStr::from_bytes(bytes)),
+                "{name}: bytes were judged by their lossy rendering"
+            );
+            assert!(
+                !withheld_where_only_the_lookalike_is_outside(name, OsStr::new(text)),
+                "{name}: the genuine lookalike was removed"
             );
         }
     }

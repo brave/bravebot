@@ -511,6 +511,7 @@ impl Bridge {
                 self.settings.as_deref(),
             )),
             "window.fault" => crate::window_fault::record(request),
+            "opener.judge" => crate::opener_names::judge(request),
             "accounts.list" => crate::accounts::list_asked(
                 request,
                 self.project_of(request),
