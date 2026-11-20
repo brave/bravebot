@@ -420,3 +420,43 @@ replace: let write_allowed = ruling == crate::permissions::Ruling::Allow; => let
 mutation: WriteReason::asks lets a protected path through
 file: crates/core/src/policy.rs
 replace: // write would make a trusted path untrusted. => Self::Protected => false,
+
+mutation: promote_a_tool_list offers a list at a label other than (T,pub)
+file: crates/core/src/policy.rs
+replace: let vouched_list = Label::new(Integrity::Trusted, Confidentiality::Public); => let vouched_list = Label::new(Integrity::Trusted, Confidentiality::Private);
+
+mutation: promote_a_server_move declares a move at a label other than (T,pub)
+file: crates/core/src/policy.rs
+replace: let approved_move = Label::new(Integrity::Trusted, Confidentiality::Public); => let approved_move = Label::new(Integrity::Untrusted, Confidentiality::Public);
+
+mutation: adopt_edited_body adopts a body that was not trusted
+file: crates/core/src/policy.rs
+replace: let editable = was.is_trusted() && was.is_public(); => let editable = was.is_public();
+
+mutation: adopt_edited_body adopts a body that was private
+file: crates/core/src/policy.rs
+replace: let editable = was.is_trusted() && was.is_public(); => let editable = was.is_trusted();
+
+mutation: adopt_edited_body records an edited body at another label
+file: crates/core/src/policy.rs
+replace: let edited = Label::new(Integrity::Trusted, Confidentiality::Public); => let edited = Label::new(Integrity::Trusted, Confidentiality::Private);
+
+mutation: record_answers records a reply to questions that were not trusted
+file: crates/core/src/policy.rs
+replace: let asked_from_trust = label.is_trusted(); => let asked_from_trust = true;
+
+mutation: record_answers records a private reply as public
+file: crates/core/src/policy.rs
+replace: let replied = Label::new(Integrity::Trusted, label.confidentiality); => let replied = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: label_user_command_output labels what a person's own command printed as public
+file: crates/core/src/policy.rs
+replace: let typed_output = Label::new(Integrity::Trusted, Confidentiality::Private); => let typed_output = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: label_user_configuration labels the person's own configuration as private
+file: crates/core/src/policy.rs
+replace: let own_configuration = Label::new(Integrity::Trusted, Confidentiality::Public); => let own_configuration = Label::new(Integrity::Trusted, Confidentiality::Private);
+
+mutation: label_kept_fact labels a private fact public
+file: crates/core/src/policy.rs
+replace: let kept_fact = Label::new(Integrity::Trusted, confidentiality); => let kept_fact = Label::new(Integrity::Trusted, Confidentiality::Public);
