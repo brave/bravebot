@@ -200,6 +200,9 @@ struct Served {
     after_response: Vec<mpsc::Sender<()>>,
     /// The answers the person let each connection being served give.
     answers: HashMap<u64, Vec<Answer>>,
+    /// The name the person gave each connection's client on the host's command line. The view
+    /// credits a send, answer or cancel to it (RPCVIEW-14).
+    names: HashMap<u64, String>,
     /// Sessions whose view has started, from which their attached connections can answer.
     viewed: HashSet<String>,
 }
@@ -221,12 +224,12 @@ impl Host {
         &self.instance
     }
 
-    /// Serve one client until it closes its end or sends a line that is too long, while other
-    /// clients are served on other threads. The client may give only `answers`, which the person
-    /// chose for it.
+    /// Serve the client the person named `name` until it closes its end or sends a line that is too
+    /// long, while other clients are served on other threads. The client may give only `answers`,
+    /// which the person chose for it.
     ///
     /// Sessions the client was attached to stay open when this returns, with their work going on.
-    pub fn serve(&self, channel: UnixStream, answers: &[Answer]) -> io::Result<Ended> {
+    pub fn serve(&self, channel: UnixStream, name: &str, answers: &[Answer]) -> io::Result<Ended> {
         let connection = {
             let mut served = self.lock()?;
             served.connections += 1;
@@ -234,6 +237,7 @@ impl Host {
             let attached =
                 Attached::start(&self.output, connection, answers, &channel, WRITE_PATIENCE)?;
             served.answers.insert(connection, answers.to_vec());
+            served.names.insert(connection, name.to_string());
             if let Ok(mut output) = self.output.lock() {
                 output.insert(connection, attached);
             }
@@ -348,6 +352,7 @@ impl Served {
             connections: 0,
             after_response: Vec::new(),
             answers: HashMap::new(),
+            names: HashMap::new(),
             viewed: HashSet::new(),
         }
     }
@@ -396,7 +401,10 @@ impl Served {
                 info["inspection"] = json!(self.inspection);
                 Ok(info)
             }
-            _ => self.bridge.dispatch(request),
+            _ => match self.names.get(&connection) {
+                Some(name) => self.bridge.dispatch_as(name, request),
+                None => self.bridge.dispatch(request),
+            },
         }
     }
 
@@ -598,6 +606,7 @@ impl Served {
             output.remove(&connection);
         }
         self.answers.remove(&connection);
+        self.names.remove(&connection);
         self.responded();
         let left: Vec<(String, BTreeSet<u64>)> = match self.owners.lock() {
             Ok(mut owners) => owners

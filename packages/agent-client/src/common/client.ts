@@ -491,10 +491,6 @@ export class RpcAgentClient implements AgentClient {
     return session
   }
 
-  unsupported(operation: 'takeControl'): Promise<never> {
-    return Promise.reject(new UnsupportedError(`${operation} is unavailable on the local stdio client`))
-  }
-
   async createSession(options: { workspace: string }): Promise<AgentSession> {
     const workspace = this.configured.find((candidate) => candidate.id === options.workspace)
     if (!workspace) throw new RpcError('unknown_workspace', 'that workspace is not configured', 'rejected')

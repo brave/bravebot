@@ -27,6 +27,8 @@ export interface ViewState {
   readonly rows: readonly Row[]
   /** How many rows before the first in `rows` are not held. */
   readonly omitted: number
+  /** The host client that acted last, by the name the person gave it; null where none has. */
+  readonly actor: string | null
   /** Whether an update was missed and a snapshot has been asked for. */
   readonly resyncing: boolean
   readonly ended: ViewEnd | null
@@ -43,7 +45,7 @@ export function startView(initial: ViewUpdate): ViewState {
   if (initial.sequence !== 0) throw new ProtocolError(`the initial view has sequence ${initial.sequence}, not 0`)
   const ids = new Set(initial.rows.map((row) => row.id))
   if (ids.size !== initial.rows.length) throw new ProtocolError('the initial view repeats a row id')
-  const view: ViewState = { sequence: 0, turn: initial.turn, target: initial.target, status: initial.status, pending: initial.pending, rows: [...initial.rows], omitted: 0, resyncing: false, ended: null }
+  const view: ViewState = { sequence: 0, turn: initial.turn, target: initial.target, status: initial.status, pending: initial.pending, rows: [...initial.rows], omitted: 0, actor: initial.actor ?? null, resyncing: false, ended: null }
   return initial.status === 'detached' ? endView(view, 'detached', 'the session was closed') : view
 }
 
@@ -81,6 +83,7 @@ export function applyUpdate(view: ViewState, update: ViewUpdate, retained = Infi
     status: update.status,
     pending: update.pending,
     ...bound(rows, omitted, retained),
+    actor: update.actor ?? null,
     resyncing: false,
     ended: null,
   }
@@ -115,6 +118,7 @@ export function viewFromSnapshot(snapshot: ViewSnapshot): ViewState {
     pending: snapshot.pending,
     rows: [...snapshot.rows],
     omitted: snapshot.omitted,
+    actor: snapshot.actor ?? null,
     resyncing: false,
     ended: null,
   }

@@ -2110,6 +2110,36 @@ fn a_join_without_trust_is_not_asked_and_the_next_client_with_trust_is() {
     third.leave();
 }
 
+/// A trust answer names the client that gave it, in the update that leaves the question, for each
+/// client attached.
+#[test]
+fn a_trust_answer_names_the_client_that_gave_it() {
+    let scratch = Scratch::new();
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let mut a = host.client_named("a");
+    let mut b = host.client_named("b");
+    let opened = a.call("session.new", json!({"directory": scratch.project()}));
+    let session = opened["session"].as_str().unwrap().to_string();
+    a.call(
+        "session.view.start",
+        json!({"session": session, "version": 1}),
+    );
+    a.event("trust.request");
+    b.call("session.attach", json!({"session": session}));
+    let snapshot = b.event("session.view.snapshot");
+    assert_eq!(snapshot["data"]["status"], "awaiting_trust", "{snapshot}");
+    assert_eq!(snapshot["data"]["actor"], Value::Null, "{snapshot}");
+
+    b.call("trust.reply", json!({"session": session, "trusted": false}));
+    for client in [&mut a, &mut b] {
+        let idle = update_where(client, &session, |data| data["status"] == "idle");
+        assert_eq!(idle["actor"], "b", "{idle}");
+    }
+    a.leave();
+    b.leave();
+}
+
 /// A client that may not confirm a write is not shown the question, and the write does not land.
 #[test]
 fn a_write_is_not_put_to_a_client_that_may_not_confirm_it() {
@@ -2433,6 +2463,227 @@ fn a_client_leaving_that_alone_could_answer_the_waiting_question_refuses_it() {
     let snapshot = b.event("session.view.snapshot");
     assert_eq!(snapshot["data"]["sequence"], resynced["sequence"]);
     assert_eq!(snapshot["data"]["pending"], Value::Null, "{snapshot}");
+    b.leave();
+}
+
+/// The update of `session` a client reads next that `wanted` accepts.
+fn update_where(client: &mut Client, session: &str, wanted: impl Fn(&Value) -> bool) -> Value {
+    client.until(|said| {
+        said["event"] == "session.view.update"
+            && said["session"] == session
+            && wanted(&said["data"])
+    })["data"]
+        .clone()
+}
+
+/// Each send, answer and cancel that takes effect names the client that made it in the view every
+/// attached client is sent. A client that sent is named in the update of its prompt, the client
+/// that answered replaces it in the update that resolves the question, and a later action by the
+/// first replaces that.
+#[test]
+fn each_action_names_the_client_that_took_it() {
+    let scratch = Scratch::new();
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    for client in [&mut a, &mut b] {
+        let prompt = update_where(client, &session, |data| kinds(data) == ["prompt"]);
+        assert_eq!(prompt["actor"], "a", "{prompt}");
+    }
+    let asked = b.event("confirm.request");
+    b.call(
+        "confirm.reply",
+        json!({"session": session, "request": asked["data"]["request"], "decision": "approve"}),
+    );
+    for client in [&mut a, &mut b] {
+        let resolved = update_where(client, &session, |data| {
+            data["rows"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["kind"] == "approval" && row["resolved"] == true)
+            })
+        });
+        assert_eq!(resolved["actor"], "b", "{resolved}");
+    }
+    let done = update_where(&mut a, &session, |data| data["status"] == "completed");
+    assert_eq!(
+        done["actor"], "b",
+        "an update that is not an action kept the name: {done}"
+    );
+    a.leave();
+    b.leave();
+}
+
+/// The details of the entries a turn's trail holds about which client acted, in the order the
+/// client was sent them.
+fn actor_entries(client: &Client, session: &str) -> Vec<String> {
+    events_of(client, session)
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|said| said["event"] == "audit" && said["data"]["event"]["gate"] == "actor")
+        .filter_map(|said| said["data"]["event"]["detail"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// The trail of a turn says which client sent it and which answered its question.
+#[test]
+fn the_trail_names_the_client_that_sent_and_the_client_that_answered() {
+    let scratch = Scratch::new();
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    let asked = b.event("confirm.request");
+    let request = asked["data"]["request"].as_u64().unwrap();
+    b.call(
+        "confirm.reply",
+        json!({"session": session, "request": request, "decision": "approve"}),
+    );
+    a.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
+    assert_eq!(
+        actor_entries(&a, &session),
+        [
+            "client a sent the message that began this turn".to_string(),
+            format!("client b answered question {request}"),
+        ]
+    );
+    assert_eq!(actor_entries(&b, &session), actor_entries(&a, &session));
+
+    a.leave();
+    b.leave();
+}
+
+/// The trail of a turn says which client cancelled it.
+#[test]
+fn the_trail_names_the_client_that_cancelled() {
+    let scratch = Scratch::new();
+    let (before, reached, release) = a_gate();
+    let endpoint = a_model_service(ends_the_turn, before);
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model");
+    let running = update_where(&mut b, &session, |data| kinds(data) == ["prompt"]);
+    b.call(
+        "turn.cancel",
+        json!({"session": session, "target": running["target"]}),
+    );
+    release.send(()).unwrap();
+    a.until(|said| {
+        said["event"] == "audit" && said["data"]["event"]["detail"] == "client b cancelled the turn"
+    });
+    assert_eq!(
+        actor_entries(&a, &session),
+        [
+            "client a sent the message that began this turn",
+            "client b cancelled the turn",
+        ]
+    );
+    a.leave();
+    b.leave();
+}
+
+/// A cancel that stops a running turn names the client that sent it, in the update that ends the
+/// turn.
+#[test]
+fn a_cancel_names_the_client_that_stopped_the_turn() {
+    let scratch = Scratch::new();
+    let (before, reached, release) = a_gate();
+    let endpoint = a_model_service(ends_the_turn, before);
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "hello"})),
+    );
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the turn reached the model");
+    let running = update_where(&mut b, &session, |data| kinds(data) == ["prompt"]);
+    let cancelled = b.call(
+        "turn.cancel",
+        json!({"session": session, "target": running["target"]}),
+    );
+    assert_eq!(cancelled["cancelled"], true, "{cancelled}");
+    release.send(()).unwrap();
+    for client in [&mut a, &mut b] {
+        let ended = update_where(client, &session, |data| data["status"] == "cancelled");
+        assert_eq!(ended["actor"], "b", "{ended}");
+    }
+    a.leave();
+    b.leave();
+}
+
+/// A cancel while a question waits refuses the question and ends the turn, and the view still names
+/// the client that cancelled, not the one that sent the turn.
+#[test]
+fn a_cancel_while_a_question_waits_keeps_the_name_of_the_client_that_cancelled() {
+    let scratch = Scratch::new();
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, TWO);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    let waiting = update_where(&mut b, &session, |data| data["status"] == "waiting");
+    assert_eq!(waiting["actor"], "a", "{waiting}");
+    let cancelled = b.call(
+        "turn.cancel",
+        json!({"session": session, "target": waiting["target"]}),
+    );
+    assert_eq!(cancelled["cancelled"], true, "{cancelled}");
+    let ended = update_where(&mut b, &session, |data| data["status"] == "cancelled");
+    assert_eq!(ended["actor"], "b", "{ended}");
+    assert!(ended["pending"].is_null(), "{ended}");
+    a.leave();
+    b.leave();
+}
+
+/// A question refused because the client that could have answered it left is credited to nobody,
+/// and does not keep the name of the client that sent the turn.
+#[test]
+fn a_question_refused_because_its_answerer_left_names_no_client() {
+    let scratch = Scratch::new();
+    let requests = Arc::default();
+    let endpoint = a_model_service(writes_on_request(&requests), || {});
+    let host = Host::start_giving(&scratch, &endpoint, &[("a", "confirm,trust"), ("b", "run")]);
+    let (mut a, mut b, session) = two_attached(&host, &scratch);
+
+    a.call(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": session, "prompt": "write it"})),
+    );
+    let waiting = update_where(&mut b, &session, |data| data["status"] == "waiting");
+    assert_eq!(waiting["actor"], "a", "{waiting}");
+    a.leave();
+    host.says("client a ended");
+
+    let after = waiting["sequence"].as_u64().unwrap();
+    let refused = update_where(&mut b, &session, |data| {
+        data["sequence"].as_u64() > Some(after) && data["pending"].is_null()
+    });
+    assert_eq!(refused["actor"], Value::Null, "{refused}");
+    b.until(|said| said["event"] == "turn.done" && said["session"] == session.as_str());
     b.leave();
 }
 

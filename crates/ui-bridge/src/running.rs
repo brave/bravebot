@@ -429,6 +429,8 @@ pub struct Running {
     /// Lines typed into this turn, taken by the worker at a round boundary. A manifest run has
     /// none, because it plans before anything is read and never asks between rounds (MANIFEST-9).
     pub interjections: Option<Interjections>,
+    /// What the turn's trail is told about the host clients that act on it (TRACE-7).
+    pub actors: crate::turn::ActorNotes,
 }
 
 /// The next number for a turn or run to be stopped by. It counts across sessions, which is
@@ -454,6 +456,8 @@ pub struct Started {
     pub target: u64,
     /// The worker's end of [`Running::interjections`].
     pub interjections: Interjections,
+    /// The same notes [`Running::actors`] holds.
+    pub actors: crate::turn::ActorNotes,
 }
 
 impl Running {
@@ -467,6 +471,7 @@ impl Running {
         let finished = Arc::new(AtomicBool::new(false));
         let target = next_target();
         let interjections = Interjections::default();
+        let actors = crate::turn::ActorNotes::default();
         let running = Running {
             cancel: cancel.clone(),
             answers: answers_tx,
@@ -474,6 +479,7 @@ impl Running {
             target,
             finished: Arc::clone(&finished),
             interjections: Some(interjections.clone()),
+            actors: actors.clone(),
         };
         Started {
             running,
@@ -483,6 +489,7 @@ impl Running {
             finished,
             target,
             interjections,
+            actors,
         }
     }
 

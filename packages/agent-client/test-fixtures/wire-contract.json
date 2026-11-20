@@ -28,6 +28,7 @@
     "activity"
   ],
   "snapshot": {
+    "actor": "desktop",
     "omitted": 4,
     "pending": {
       "data": {
@@ -135,6 +136,7 @@
     "detached"
   ],
   "update": {
+    "actor": "desktop",
     "omitted": 2,
     "pending": {
       "data": {

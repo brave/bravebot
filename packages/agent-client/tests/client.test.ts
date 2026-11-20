@@ -463,6 +463,20 @@ test('a session joined starts its view from the snapshot the host sends, and is 
   assert.deepEqual(sent.find((request) => request.method === 'session.attach')?.params, { session: 's7' })
 })
 
+test('a joined session holds the name of the client that acted last, through the updates that do not act', async () => {
+  const { client } = aHostHoldingALeftSession('snapshot')
+  const session = await client.attach('s7')
+  assert.equal(session.view.actor, null, 'a snapshot that names nobody')
+  const update = (sequence: number, actor?: string | null) =>
+    client.receive(JSON.stringify({ event: 'session.view.update', session: 's7', data: { sequence, turn: 3, target: 9, status: 'running', pending: null, rows: [], omitted: 3, ...(actor === undefined ? {} : { actor }) } }) + '\n')
+  update(5, 'phone')
+  assert.equal(session.view.actor, 'phone')
+  update(6, 'desktop')
+  assert.equal(session.view.actor, 'desktop')
+  update(7, null)
+  assert.equal(session.view.actor, null, 'a refusal made because nobody could answer names no client')
+})
+
 test('a session joined with its startup question unanswered offers that question', async () => {
   const { client } = aHostHoldingALeftSession('trust')
   const session = await client.attach('s7')

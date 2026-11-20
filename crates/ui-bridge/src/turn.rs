@@ -78,6 +78,33 @@ pub struct Question {
 /// applied — which is what makes an approval single-use rather than replayable.
 pub type Pending = Arc<Mutex<Option<Question>>>;
 
+/// What a turn's trail is to say about the host client that acted on it (TRACE-7), left by the
+/// thread that took the action and written by the turn's sink before the next entry it records.
+/// Each line is made by the host from a name the person gave a client, never from anything a
+/// session read.
+#[derive(Clone, Default)]
+pub struct ActorNotes(Arc<Mutex<Vec<String>>>);
+
+impl ActorNotes {
+    pub fn note(&self, line: String) {
+        if let Ok(mut notes) = self.0.lock() {
+            notes.push(line);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn take_for_test(&self) -> Vec<String> {
+        self.take()
+    }
+
+    fn take(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .map(|mut notes| std::mem::take(&mut *notes))
+            .unwrap_or_default()
+    }
+}
+
 /// What a front-end answered.
 ///
 /// One variant per question rather than a bare [`Decision`] for every kind, so a reply
@@ -541,6 +568,7 @@ pub struct BridgeSink {
     counted: &'static str,
     turn: usize,
     trail: bravebot_session::audit::Trail,
+    actors: ActorNotes,
 }
 
 impl BridgeSink {
@@ -551,7 +579,33 @@ impl BridgeSink {
             counted: "turn",
             turn,
             trail: bravebot_session::audit::Trail::new(),
+            actors: ActorNotes::default(),
         }
+    }
+
+    /// Write what `actors` is given about the clients that act on this turn.
+    pub fn noting(mut self, actors: ActorNotes) -> Self {
+        self.actors = actors;
+        self
+    }
+
+    /// Write what the clients that acted since the last entry left, for a turn that ends with no
+    /// entry after a cancel.
+    pub fn write_notes(&mut self) {
+        let notes = self.actors.take();
+        if notes.is_empty() {
+            return;
+        }
+        // Entries about the turn, not about a delegate that happens to be recording.
+        let recording = self.trail.recording();
+        self.trail.recording_for(None);
+        for detail in notes {
+            self.write(bravebot_core::event::Event::GatePassed {
+                gate: "actor",
+                detail,
+            });
+        }
+        self.trail.recording_for(recording);
     }
 
     /// A sink for a manifest run, whose events carry `run` and no `turn`.
@@ -596,8 +650,8 @@ fn pictured_fields(event: &serde_json::Value) -> serde_json::Map<String, serde_j
         .collect()
 }
 
-impl Sink for BridgeSink {
-    fn emit(&mut self, event: bravebot_core::event::Event) {
+impl BridgeSink {
+    fn write(&mut self, event: bravebot_core::event::Event) {
         // Projected with the agent's own function rather than a second spelling of it:
         // two renderings of one trail would drift the moment either changed.
         let written = bravebot_session::audit::as_json(&event, self.trail.recording());
@@ -608,6 +662,13 @@ impl Sink for BridgeSink {
         });
         self.emitter.send(Event::new("audit", &self.session, data));
         self.trail.emit(event);
+    }
+}
+
+impl Sink for BridgeSink {
+    fn emit(&mut self, event: bravebot_core::event::Event) {
+        self.write_notes();
+        self.write(event);
     }
 
     /// Passed to the trail, which both readers above take the answer from: the record written at
@@ -793,7 +854,9 @@ impl BridgeConfirmer {
             *pending = None;
         }
 
-        self.emitter.view_answered(&self.session, id);
+        // Whoever cancelled the turn, if anyone did, stays the name on the view.
+        self.emitter
+            .view_answered(&self.session, id, crate::view::Acting::Same);
 
         // Belt and braces. `Running::answer` already refuses a reply whose kind does not
         // match the outstanding question, so this should be unreachable — and it is

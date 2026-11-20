@@ -126,8 +126,6 @@ export interface AgentClient {
    * view from the snapshot the host sends. A session this client holds is refused without sending.
    */
   attach(session: string): Promise<AgentSession>
-  /** Operations a later stage adds. They fail locally and send nothing. */
-  unsupported(operation: 'takeControl'): Promise<never>
 }
 
 /** One session a host holds, as `instance.info` lists it. */
