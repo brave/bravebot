@@ -104,7 +104,7 @@ export function applySnapshot(view: ViewState, snapshot: ViewSnapshot): ViewStat
   return viewFromSnapshot(snapshot)
 }
 
-/** The state a session taken over starts from: the snapshot the host sends before its answer. */
+/** The state a joined session starts from: the snapshot the host sends before its answer. */
 export function viewFromSnapshot(snapshot: ViewSnapshot): ViewState {
   if (new Set(snapshot.rows.map((row) => row.id)).size !== snapshot.rows.length) throw new ProtocolError('a snapshot repeats a row id')
   const next: ViewState = {

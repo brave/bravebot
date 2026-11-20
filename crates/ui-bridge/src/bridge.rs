@@ -1516,7 +1516,7 @@ impl Bridge {
             .collect()
     }
 
-    /// Say which kinds of question the session's controller can answer from now on. A question of
+    /// Say which kinds of question the session's clients can answer from now on. A question of
     /// another kind is refused when it is asked, without being shown; one already waiting is not
     /// touched. An empty list is nobody.
     pub fn set_answerable(&mut self, handle: &str, kinds: &[Kind]) -> Result<(), Failure> {
@@ -1526,51 +1526,58 @@ impl Bridge {
         self.answerers_of(handle).only(kinds)
     }
 
-    /// The session's controller is gone. Nobody can answer from now on, and the question waiting
-    /// is refused and shown as resolved. The turn or run goes on without it: what it asks next is
-    /// refused when asked. Nothing happens to a session with no question waiting.
-    pub fn lose_control(&mut self, handle: &str) {
+    /// A client of the session is gone, and the ones left can answer only `kinds`, which is
+    /// nobody where it is empty. The question waiting is refused and shown as resolved if its kind
+    /// is not among them, and stays waiting if it is. The turn or run goes on either way: what it
+    /// asks next is refused when asked unless its kind is among them. Nothing happens to a session
+    /// with no question waiting beyond the change of who can answer.
+    pub fn narrow_answerable(&mut self, handle: &str, kinds: &[Kind]) {
         if !self.open.contains_key(handle) {
             return;
         }
-        // First, so that a question asked from here on is refused and one asked just before this
-        // is registered where the refusal below finds it.
-        // Where the set cannot be written no question is answerable either, so a failure is the
-        // same refusal.
-        let _ = self.answerers_of(handle).nobody();
-        if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
-            running.refuse_pending_with(|request| self.emitter.view_answered(handle, request));
-        }
+        let answerers = self.answerers_of(handle);
+        let running = self.open.get(handle).and_then(|open| open.running.as_ref());
+        crate::running::narrow(&answerers, running, kinds, |request| {
+            self.emitter.view_answered(handle, request);
+        });
     }
 
-    /// Give a session's view to a client that is taking it over.
+    /// Give a session's view to a client that is joining it.
     ///
-    /// `hand_over` switches where the session's events go, and runs between the end of what the
-    /// previous client was sent and the start of what the new one is. The client is sent the
+    /// `hand_over` adds the client to those the session's events go to, and runs between the end
+    /// of what the client was not sent and the start of what it is. The client is sent the
     /// session's current state and most recent rows as `session.view.snapshot`, with the startup
-    /// question again if it is still unanswered, and is then able to answer the `kinds` named. The
+    /// question again if it is still unanswered. The session's clients can answer the `kinds`
+    /// named from then on, which are the kinds of those already there and of the one joining. A
+    /// hand-over that fails puts them back to `before`, the kinds of those already there. The
     /// session must have started a view.
     pub fn attach_view(
         &mut self,
         handle: &str,
         kinds: &[Kind],
+        before: &[Kind],
         hand_over: impl FnOnce() -> Result<(), Failure>,
     ) -> Result<Value, Failure> {
         if !self.open.contains_key(handle) {
             return Err(Failure::no_such_session());
         }
         let answerers = self.answerers_of(handle);
+        // Who can answer is set before the hand-over, so a failure to set it leaves the clients
+        // already there as they were.
         let snapshot = self.emitter.snapshot_view(handle, || {
-            // Who can answer is set first, so a failure to set it leaves the previous controller
-            // as it was. A hand-over that then fails puts it back to nobody, not to the kinds
-            // set here, since no client has the session.
             answerers.only(kinds)?;
-            if let Err(failed) = hand_over() {
-                let _ = answerers.nobody();
+            hand_over()
+        });
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(failed) => {
+                // Outside the update lock, which a question being asked holds its own lock to
+                // take: one registered for a kind only the joining client could answer is
+                // refused here and not left waiting for it.
+                self.narrow_answerable(handle, before);
                 return Err(failed);
             }
-            Ok(())
-        })?;
+        };
         self.ask_about_trust(handle);
         Ok(snapshot_answer(snapshot))
     }

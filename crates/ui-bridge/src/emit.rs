@@ -108,9 +108,10 @@ impl Emitter {
     /// every update.
     ///
     /// `hand_over` runs under the lock every update takes, before the snapshot is written. If it
-    /// fails nothing is written and the failure is returned. A client that takes a session over
-    /// passes the switch of its events, so it receives the snapshot first and then each later
-    /// update, and none from before it. A client that missed an update passes nothing to do, and
+    /// fails nothing is written and the failure is returned. A client that joins a session
+    /// passes its addition to those its events go to, so it receives the snapshot first and then
+    /// each later update, and none from before it, while those already there receive each update
+    /// once. A client that missed an update passes nothing to do, and
     /// each update after the snapshot follows it in sequence. Returns the snapshot's sequence number
     /// and how many earlier rows it leaves out.
     pub fn snapshot_view(

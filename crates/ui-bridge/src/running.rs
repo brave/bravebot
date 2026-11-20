@@ -549,10 +549,15 @@ impl Running {
     /// As [`Self::refuse_pending`], and publish the refused question's number before waking the
     /// worker, as an answer does ([`Self::answer_with`]).
     pub fn refuse_pending_with(&self, refused: impl FnOnce(u64)) {
+        self.refuse_pending_unless(&[], refused);
+    }
+
+    /// As [`Self::refuse_pending_with`], leaving waiting a question whose kind is among `kinds`.
+    pub fn refuse_pending_unless(&self, kinds: &[crate::turn::Kind], refused: impl FnOnce(u64)) {
         let Ok(mut pending) = self.pending.lock() else {
             return;
         };
-        let Some(question) = pending.take() else {
+        let Some(question) = pending.take_if(|question| !kinds.contains(&question.kind)) else {
             return;
         };
         // The lock is held through the refusal, so the worker cannot leave its wait and register
@@ -563,6 +568,27 @@ impl Running {
         // match arm accepts it. A `Write` sent at a waiting run would be discarded as
         // a mismatch and the turn would block until the channel dropped instead.
         let _ = self.answers.send(question.kind.refusal());
+    }
+}
+
+/// From now on only `kinds` can be answered, and the question `running` waits on is refused if
+/// its kind is not among them, with its number published first as [`Running::refuse_pending_with`]
+/// does. A question whose kind is still answerable stays waiting.
+pub fn narrow(
+    answerers: &crate::answerers::Answerers,
+    running: Option<&Running>,
+    kinds: &[crate::turn::Kind],
+    refused: impl FnOnce(u64),
+) {
+    // First, so that a question registered from here on is refused when it is asked, and one
+    // registered just before is where the refusal below finds it. Where the set cannot be written
+    // no question is answerable either, so the waiting one is refused whatever its kind.
+    let kinds = match answerers.only(kinds) {
+        Ok(()) => kinds,
+        Err(_) => &[],
+    };
+    if let Some(running) = running {
+        running.refuse_pending_unless(kinds, refused);
     }
 }
 

@@ -755,8 +755,8 @@ impl BridgeConfirmer {
             // nothing can be answered, so nothing is approved.
             return None;
         };
-        // Checked under the lock that registers the question. A controller lost after this point
-        // finds the question registered and refuses it; one lost before it is seen here. Checked
+        // Checked under the lock that registers the question. A narrowing after this point finds
+        // the question registered and refuses it; one before it is seen here. Checked
         // anywhere else, a question could be registered between the two and wait for nobody.
         if !self.answerers.can_answer(kind) {
             return None;

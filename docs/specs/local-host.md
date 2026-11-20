@@ -19,7 +19,7 @@ documented-by: none (internal: the host is started by a person from a command li
 
 `bravebot-host`, one process that owns a bridge and keeps its sessions while the programs that drive it come and go. It serves every client that is connected, each over an anonymous channel of its own ([RPCVIEW-8](session-view.md#RPCVIEW-8)), and reads each connection on a thread of its own. The host itself has no socket path, port or token, and no network or remote client. The development relay of [HOST-12](#HOST-12) is a client program that the host starts like any other. It listens on a loopback port so that an app in development can reach the host.
 
-Not here: more of a transcript for a client that returns than the most recent rows of [RPCVIEW-9](session-view.md#RPCVIEW-9), taking a session from a controller that is still connected, two clients acting on one session at once, pairing, and anything about a phone beyond the development relay.
+Not here: more of a transcript for a client that returns than the most recent rows of [RPCVIEW-9](session-view.md#RPCVIEW-9), pairing, and anything about a phone beyond the development relay.
 
 ## Clauses
 
@@ -53,7 +53,7 @@ When it starts, the host starts every client at once, in the order of the comman
 `verified-by: bravebot_ui_bridge::closing_tests::stopping_everything_closes_each_session_and_returns_its_running_workers`
 `verified-by: bravebot_ui_bridge::host::a_failed_attempt_to_refuse_inspection_is_an_error_and_the_other_outcomes_are_named`
 `verified-by: bravebot_ui_bridge::layering::every_binary_that_speaks_over_its_own_stdio_marks_itself_non_dumpable`
-`verified-by: bravebot_ui_bridge::host_process::a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it`
+`verified-by: bravebot_ui_bridge::host_process::a_client_not_attached_to_a_session_cannot_act_on_it_and_may_close_it_once_it_is_left`
 
 <a id="HOST-2"></a>
 ### HOST-2: a session opens only in a workspace the person gave
@@ -106,7 +106,7 @@ The root is chosen once, before the first record is read or written, and a secon
 <a id="HOST-5"></a>
 ### HOST-5: the host has an instance that changes when it restarts
 
-Each run of the host has an instance ID, drawn from the seed the standard library draws for its hash maps, so a restart gives another. It names a run and is not a credential: nothing is allowed because a client knows it. `agent.info` and `instance.info` report it, and `instance.info` also reports `inspection`, `refused` where the kernel refuses same-user inspection and `not_offered` where the platform has no such switch (macOS), and `agent.info` reports it too. `instance.info` also reports `answers`, the answers the asking client was given on the command line, in the order `confirm`, `run`, `fetch`, `ask`, `trust`; it grants nothing. `instance.info` lists the host's sessions with their state (`open`, `closing` or `closed`) and whether a worker is still running for each. A client that recorded an instance learns from a different one that the host restarted and that nothing it recorded about a session is about a session of this run.
+Each run of the host has an instance ID, drawn from the seed the standard library draws for its hash maps, so a restart gives another. It names a run and is not a credential: nothing is allowed because a client knows it. `agent.info` and `instance.info` report it, and `instance.info` also reports `inspection`, `refused` where the kernel refuses same-user inspection and `not_offered` where the platform has no such switch (macOS), and `agent.info` reports it too. `instance.info` also reports `answers`, the answers the asking client was given on the command line, in the order `confirm`, `run`, `fetch`, `ask`, `trust`; it grants nothing. `instance.info` lists the host's sessions with their state (`open`, `closing` or `closed`), whether a worker is still running for each, and `attached`, whether the asking connection is attached to it ([HOST-7](#HOST-7)). A client that recorded an instance learns from a different one that the host restarted and that nothing it recorded about a session is about a session of this run.
 
 `agent.info` and `agent.ready` as the host sends them carry no `home`. Other fields a session reports, such as the path of a trust record it offers to keep, are not filtered.
 
@@ -136,31 +136,39 @@ Each run of the host has an instance ID, drawn from the seed the standard librar
 `verified-by: bravebot_ui_bridge::closing_tests::a_session_is_working_exactly_while_a_worker_runs`
 
 <a id="HOST-7"></a>
-### HOST-7: a session has one controller
+### HOST-7: a session has a set of attached connections
 
-The controller of a session is the connection that opened it, or that took it over ([HOST-11](#HOST-11)). Requests naming a session are accepted only from its controller, and events of a session go only to its controller. Another connection sees the session in `instance.info`, with `controlled` true only for the connection that controls it, and is refused every request that names it with `not_allowed`. Once the controller's connection has ended, any other connection may close the session with `session.close`, and then owns it for the `session.closed` that follows, or take it over with `session.attach`.
+A session has a set of attached connections. The connection that opens it is attached from `session.new`, and another joins with `session.attach` ([HOST-11](#HOST-11)). There is no controller: each attached connection may send, cancel, reply and close, and a connection that is attached already is refused a second `session.attach` with `bad_request`. There is no request to leave a session other than ending the connection. A connection that is not attached sees the session in `instance.info` with `attached` false, and is refused every other request that names it with `not_allowed`. It may close a session only when no connection is attached.
 
-When the controller's connection ends the session stays open with no controller. The question it was waiting on is refused and shown as resolved in the session's view, and every question the turn asks from then on is refused when it is asked ([HOST-10](#HOST-10)). The turn goes on to its end: it is not cancelled, because the person who left may return, and an effect that needed an answer does not happen. Nothing is left asking a person who is no longer there. The session stays open until it is closed or the host stops. Events the turn produces meanwhile are not sent to anyone.
+A session's events go to every attached connection, in the order the bridge emits them, because the view and its sequence belong to the session and not to a connection. Two are sent only to the connection whose request made them, and only while it is attached: `session.view.snapshot`, which answers its `session.attach` or `session.view.resync`, and the startup question `trust.request` ([HOST-10](#HOST-10) says which connections are sent that). An event made while a session is being opened goes to the connection opening it. A `session.close` attaches the connection that sent it, so `session.closed` goes to it and to each connection attached when the close was answered, after the closer's answer ([HOST-8](#HOST-8)).
 
-`verified-by: bravebot_ui_bridge::host_process::a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it`
-`verified-by: bravebot_ui_bridge::host_process::a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answers_nothing`
-`verified-by: bravebot_ui_bridge::host_process::a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on`
-`verified-by: bravebot_ui_bridge::host::only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left`
+The first answer to a question counts, and a later answer to it is refused with `no_such_request` ([RPCVIEW-6](session-view.md#RPCVIEW-6)). A `turn.send` while a turn runs is refused with `turn_in_flight`, whichever attached connection sent the turn that is running.
+
+When an attached connection ends it leaves the set, and the session's other connections are served as before. When the last one ends the session stays open with nobody attached. Each question the turn asks from then on is refused when it is asked ([HOST-10](#HOST-10)). The turn goes on to its end: it is not cancelled, because the person who left may return, and an effect that needed an answer does not happen. Nothing is left asking a person who is no longer there. The session stays open until it is closed or the host stops. Events the turn produces meanwhile are not sent to anyone.
+
+`verified-by: bravebot_ui_bridge::host_process::a_client_not_attached_to_a_session_cannot_act_on_it_and_may_close_it_once_it_is_left`
+`verified-by: bravebot_ui_bridge::host_process::a_question_waiting_when_the_last_attached_client_leaves_is_refused_and_its_number_answers_nothing`
+`verified-by: bravebot_ui_bridge::host_process::a_question_asked_after_the_last_attached_client_left_is_refused_and_the_turn_goes_on`
+`verified-by: bravebot_ui_bridge::host::an_attached_connection_acts_on_a_session_and_another_may_join_it_or_close_one_left`
+`verified-by: bravebot_ui_bridge::host::an_event_goes_to_every_attached_connection_and_an_addressed_one_to_the_asker_alone`
+`verified-by: bravebot_ui_bridge::host_process::two_attached_clients_are_both_asked_and_the_first_answer_counts`
+`verified-by: bravebot_ui_bridge::host_process::a_send_from_each_attached_client_starts_one_turn_and_the_other_is_refused_as_busy`
+`verified-by: bravebot_ui_bridge::host_process::a_resync_is_sent_only_to_the_client_that_asked`
+`verified-by: bravebot_ui_bridge::host_process::a_close_reaches_each_attached_client_after_the_closer_is_answered`
 `verified-by: bravebot_ui_bridge::host_process::a_client_without_trust_is_not_asked_about_trust_and_cannot_answer_it`
-`verified-by: bravebot_ui_bridge::host_process::a_takeover_without_trust_is_not_asked_and_the_next_client_with_trust_is`
+`verified-by: bravebot_ui_bridge::host_process::a_join_without_trust_is_not_asked_and_the_next_client_with_trust_is`
 `verified-by: bravebot_ui_bridge::host::a_closing_or_unknown_session_is_not_found_by_anyone`
 `verified-by: bravebot_ui_bridge::host_process::two_clients_connected_at_once_each_act_on_and_hear_only_their_own_sessions`
 `verified-by: bravebot_ui_bridge::host_process::a_client_leaving_while_another_is_mid_turn_leaves_the_other_served`
 `verified-by: bravebot_ui_bridge::host::a_client_leaving_leaves_the_others_served`
 `verified-by: bravebot_ui_bridge::host::a_connection_given_up_on_leaves_the_others_served`
 `verified-by: bravebot_ui_bridge::host::an_event_of_a_session_being_opened_goes_to_the_connection_opening_it`
-`verified-by: bravebot_ui_bridge::control_tests::losing_the_controller_refuses_the_waiting_question_and_does_not_stop_the_turn`
-`verified-by: bravebot_ui_bridge::closing_tests::losing_control_of_a_session_with_no_work_changes_nothing`
+`verified-by: bravebot_ui_bridge::closing_tests::narrowing_a_session_with_no_work_changes_nothing`
 
 <a id="HOST-8"></a>
 ### HOST-8: a request line has a limit
 
-The host queues each line for a connection, and a thread of the connection's own writes them, so a client that reads slowly holds up no turn and no other event. A queue of 1024 lines that is full, or one holding more than 16 MiB of lines the writer has not yet taken, ends the connection, as a client that far behind is treated as gone. A line of any length is queued while the lines waiting are within 16 MiB, so a long event and its view update, written back to back, do not end a connection that is keeping up. Only each line's length is counted; nothing in it is read. It takes its sessions over again with `session.attach` to be sent where they stand ([HOST-11](#HOST-11)). A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. The channel is shut when the write gives up, so the host's read of it ends and the connection is lost even if the client sends nothing more. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
+The host queues each line for a connection, and a thread of the connection's own writes them, so a client that reads slowly holds up no turn and no other event. A queue of 1024 lines that is full, or one holding more than 16 MiB of lines the writer has not yet taken, ends the connection, as a client that far behind is treated as gone. A line of any length is queued while the lines waiting are within 16 MiB, so a long event and its view update, written back to back, do not end a connection that is keeping up. Only each line's length is counted; nothing in it is read. It joins its sessions again with `session.attach` to be sent where they stand ([HOST-11](#HOST-11)). A write to a client that waits more than five seconds, or fails, ends the connection: requests already read are not executed after that, because nobody can hear their answers. The channel is shut when the write gives up, so the host's read of it ends and the connection is lost even if the client sends nothing more. A client that reads nothing therefore cannot stop the host reading the connection and seeing it end. The answer to a `session.close` is written before the `session.closed` that follows it.
 
 A request line is at most 8 MiB, newline excluded. A line that reaches the limit without ending ends the connection without being answered or dispatched. A line of exactly the limit is read. Bytes that arrive without their end of line before the client closes its end are not a request and are not run.
 
@@ -198,46 +206,57 @@ The host holds the near end of its client's channel while it runs the person's h
 <a id="HOST-10"></a>
 ### HOST-10: a question is put only to a client that can answer it
 
-A client can answer a session's questions once it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. A host's session starts with nobody able to answer, whichever way it was opened. From the moment the connection ends, nobody can. A question is put to the client only if its kind is one the host offers a reply for (`confirm`, `run`, `fetch` and `ask`, from the same list as the allowlist), the client was given that answer ([HOST-1](#HOST-1)), and it can answer now. A write's question is the `confirm` kind. Any other question is refused when it is asked, in the shape its kind is refused in, and is not shown, not numbered and not left waiting. This holds for every kind, so a turn that asks for command output, a vouch or an MCP call does not hang.
+The kinds a session can be asked are the union of the answers ([HOST-1](#HOST-1)) of its attached connections, counted once the session's view has started: after `session.view.start` by a connection attached to it, or `session.attach` by one joining it. A host's session starts with nobody able to answer, whichever way it was opened. A question is put to the session only if its kind is one the host offers a reply for (`confirm`, `run`, `fetch` and `ask`, from the same list as the allowlist) and an attached connection was given that answer. A write's question is the `confirm` kind. Any other question is refused when it is asked, in the shape its kind is refused in, and is not shown, not numbered and not left waiting. This holds for every kind, so a turn that asks for command output, a vouch or an MCP call does not hang.
 
-The check is made under the lock that registers a question, and the loss of the controller sets the state before it refuses the waiting question. A question is therefore either refused before it is registered or registered where the loss finds it. A controller lost between the two cannot leave a question waiting for nobody. A stdio client of the bridge is unaffected: it can answer every kind.
+A question that is asked is shown to every attached connection in the view, including one not given its kind, and only a connection given its kind may answer it. Another connection's answer is refused with `not_allowed` and the question stays waiting. The startup question `trust.request` is sent only to a connection given `trust`.
+
+When a connection leaves, the union is narrowed to the answers of the connections that stay. The question waiting then is refused and shown as resolved in the view only if its kind is no longer in the union, and otherwise it stays waiting for the connections that can answer it. The startup question is not refused this way: it stays unanswered and is sent again to a connection given `trust` that joins later. When a join fails after the union was widened for the joining connection, the union is narrowed back the same way.
+
+The check is made under the lock that registers a question, and a narrowing sets the union before it takes that lock to refuse the waiting question. A question is therefore either refused before it is registered or registered where the narrowing finds it. A connection that leaves between the two cannot leave a question waiting for nobody. A stdio client of the bridge is unaffected: it can answer every kind.
 
 `verified-by: bravebot_ui_bridge::answering_tests::a_question_nobody_can_answer_is_refused_before_it_is_shown_for_every_kind`
-`verified-by: bravebot_ui_bridge::answering_tests::only_the_kinds_the_controller_can_answer_are_asked`
-`verified-by: bravebot_ui_bridge::answering_tests::the_loss_of_a_controller_refuses_the_question_waiting_for_every_kind`
-`verified-by: bravebot_ui_bridge::answering_tests::a_question_refused_by_the_loss_of_its_controller_is_shown_as_resolved`
+`verified-by: bravebot_ui_bridge::answering_tests::only_the_kinds_an_attached_client_can_answer_are_asked`
+`verified-by: bravebot_ui_bridge::answering_tests::the_loss_of_every_answerer_refuses_the_question_waiting_for_every_kind`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_refused_by_the_loss_of_its_answerers_is_shown_as_resolved`
 `verified-by: bravebot_ui_bridge::answerers::a_new_set_answers_every_kind_so_a_client_that_never_chose_is_unchanged`
 `verified-by: bravebot_ui_bridge::answerers::only_the_kinds_named_can_be_answered_and_nobody_answers_none`
 `verified-by: bravebot_ui_bridge::answerers::a_set_that_cannot_be_written_fails_and_answers_nothing`
 `verified-by: bravebot_ui_bridge::allowlist::every_offered_reply_but_the_startup_answer_is_a_kind_a_client_is_asked`
 `verified-by: bravebot_ui_bridge::control_tests::a_set_of_answerers_is_only_made_for_a_session_that_is_open`
 `verified-by: bravebot_ui_bridge::control_tests::a_bridge_that_refuses_until_set_starts_every_session_unanswerable`
-`verified-by: bravebot_ui_bridge::host_process::a_controller_that_started_its_view_is_asked_and_its_approval_lands`
+`verified-by: bravebot_ui_bridge::host_process::a_client_attached_with_its_view_started_is_asked_and_its_approval_lands`
 `verified-by: bravebot_ui_bridge::host_process::a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen`
 `verified-by: bravebot_ui_bridge::allowlist::a_client_is_asked_only_the_kinds_it_may_answer`
 `verified-by: bravebot_ui_bridge::host_process::a_write_is_not_put_to_a_client_that_may_not_confirm_it`
+`verified-by: bravebot_ui_bridge::answering_tests::narrowing_refuses_the_waiting_question_only_when_its_kind_is_left_out`
+`verified-by: bravebot_ui_bridge::answering_tests::narrowing_sets_who_can_answer_before_it_looks_for_a_question_to_refuse`
+`verified-by: bravebot_ui_bridge::control_tests::narrowing_to_kinds_without_the_waiting_question_refuses_it_and_does_not_stop_the_turn`
+`verified-by: bravebot_ui_bridge::control_tests::narrowing_to_kinds_that_cover_the_waiting_question_leaves_it_waiting`
+`verified-by: bravebot_ui_bridge::host_process::a_client_leaving_while_another_attached_can_answer_leaves_the_question_waiting`
+`verified-by: bravebot_ui_bridge::host_process::a_client_leaving_that_alone_could_answer_the_waiting_question_refuses_it`
 
 <a id="HOST-11"></a>
-### HOST-11: a client that takes a session over is told where it stands
+### HOST-11: a client that joins a session is told where it stands
 
-`session.attach` makes the connection the controller of an open session whose controller's connection has ended, and answers `{ "version": 1, "sequence": n, "omitted": k }`. A session that has a controller whose connection has not ended is not taken, by the controller itself or by another connection, and neither is a session that started no view, one that is closing or closed, or one the host does not hold.
+`session.attach` adds the connection to the attached set of an open session that has started its view ([HOST-7](#HOST-7)), whether or not other connections are attached, and answers `{ "version": 1, "sequence": n, "omitted": k }`. It is refused for a connection already attached, a session that started no view, one that is closing or closed, and one the host does not hold.
 
-Before it answers, the connection is sent `session.view.snapshot` ([RPCVIEW-9](session-view.md#RPCVIEW-9)): the session's current sequence, turn, turn target, status and pending question, its most recent rows including those produced while no client was connected, and `omitted`, how many earlier rows it leaves out. Events are switched to the new controller and the snapshot is written as one step with respect to every update, so each update the client receives has a sequence after the snapshot's, and none is missed or repeated. A session whose startup question is unanswered is still `awaiting_trust` in the snapshot, and the question is sent again after it to a controller given `trust`. A controller not given it is not sent the question, and neither is a client given `confirm` only that opens a session: its view says `awaiting_trust`. Trust is not answered by taking the session over, and no turn runs until a controller given `trust` answers it.
+Before it answers, the joining connection alone is sent `session.view.snapshot` ([RPCVIEW-9](session-view.md#RPCVIEW-9)): the session's current sequence, turn, turn target, status and pending question, its most recent rows including those produced while no client was connected, and `omitted`, how many earlier rows it leaves out. The connection is added to the set and the snapshot is written as one step with respect to every update, so each update the joining connection receives has a sequence after the snapshot's, each connection already attached receives every update once, and none is missed or repeated. A session whose startup question is unanswered is still `awaiting_trust` in the snapshot, and the question is sent again after it to the joining connection if it was given `trust`. A connection not given it is not sent the question, and neither is a client given `confirm` only that opens a session: its view says `awaiting_trust`. Trust is not answered by joining the session, and no turn runs until a connection given `trust` answers it.
 
-The new controller can answer the kinds of [HOST-10](#HOST-10) from the snapshot on. The question the previous controller was refused is resolved, and a later question has a number the earlier one did not. An answer naming the earlier question's number is refused with `no_such_request` and changes nothing, as is a cancel naming a target that has ended.
+The joining connection's answers count toward the kinds of [HOST-10](#HOST-10) from the snapshot on. A question refused because the last connection that could answer it left is resolved, and a later question has a number the earlier one did not. An answer naming the earlier question's number is refused with `no_such_request` and changes nothing, as is a cancel naming a target that has ended.
 
-`verified-by: bravebot_ui_bridge::host_process::a_question_waiting_when_the_controller_leaves_is_refused_and_its_number_answers_nothing`
-`verified-by: bravebot_ui_bridge::host_process::a_question_asked_after_the_controller_left_is_refused_and_the_turn_goes_on`
+`verified-by: bravebot_ui_bridge::host_process::a_question_waiting_when_the_last_attached_client_leaves_is_refused_and_its_number_answers_nothing`
+`verified-by: bravebot_ui_bridge::host_process::a_question_asked_after_the_last_attached_client_left_is_refused_and_the_turn_goes_on`
 `verified-by: bravebot_ui_bridge::host_process::a_session_left_with_its_startup_question_unanswered_asks_the_next_client`
-`verified-by: bravebot_ui_bridge::host_process::a_client_that_has_not_taken_a_session_over_cannot_act_on_it_and_may_close_it`
+`verified-by: bravebot_ui_bridge::host_process::a_client_not_attached_to_a_session_cannot_act_on_it_and_may_close_it_once_it_is_left`
 `verified-by: bravebot_ui_bridge::host_process::a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen`
-`verified-by: bravebot_ui_bridge::control_tests::taking_a_session_over_hands_it_over_between_the_last_update_and_the_snapshot`
+`verified-by: bravebot_ui_bridge::control_tests::joining_a_session_attaches_between_the_last_update_and_the_snapshot`
 `verified-by: bravebot_ui_bridge::host_process::a_client_that_returns_is_sent_the_rows_it_missed_and_each_update_after_them`
 `verified-by: bravebot_ui_bridge::control_tests::the_startup_question_is_asked_again_only_while_it_is_unanswered`
-`verified-by: bravebot_ui_bridge::control_tests::a_session_that_cannot_be_taken_over_is_not_handed_over`
-`verified-by: bravebot_ui_bridge::control_tests::a_hand_over_that_fails_sends_nothing_and_changes_who_can_answer_nothing`
-`verified-by: bravebot_ui_bridge::control_tests::updates_during_a_take_over_fall_on_one_side_of_the_snapshot`
-`verified-by: bravebot_ui_bridge::host::only_the_controller_acts_on_a_session_and_another_may_close_or_take_over_one_left`
+`verified-by: bravebot_ui_bridge::control_tests::a_session_that_cannot_be_joined_attaches_nobody`
+`verified-by: bravebot_ui_bridge::control_tests::a_hand_over_that_fails_sends_nothing_and_leaves_who_can_answer_as_it_was`
+`verified-by: bravebot_ui_bridge::control_tests::updates_during_a_join_fall_on_one_side_of_the_snapshot`
+`verified-by: bravebot_ui_bridge::host_process::a_join_between_two_updates_misses_none_and_repeats_none_for_either_client`
+`verified-by: bravebot_ui_bridge::host::an_attached_connection_acts_on_a_session_and_another_may_join_it_or_close_one_left`
 
 <a id="HOST-12"></a>
 ### HOST-12: the development relay hands the channel to one app on loopback, behind a code

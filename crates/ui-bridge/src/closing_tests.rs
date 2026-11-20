@@ -91,15 +91,15 @@ fn a_session_is_working_exactly_while_a_worker_runs() {
     assert!(!bridge.is_working("never-opened"));
 }
 
-/// Losing the controller of a session leaves the session open and touches nothing that is not
+/// The last client of a session leaving leaves the session open and touches nothing that is not
 /// waiting, and a session that is not open is not given a state of its own.
 #[test]
-fn losing_control_of_a_session_with_no_work_changes_nothing() {
+fn narrowing_a_session_with_no_work_changes_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let mut bridge = Bridge::new(Box::new(|_| {}));
     let handle = open_session(&mut bridge, directory.path());
-    bridge.lose_control(&handle);
-    bridge.lose_control("never-opened");
+    bridge.narrow_answerable(&handle, &[]);
+    bridge.narrow_answerable("never-opened", &[]);
     assert!(!bridge.answerers.contains_key("never-opened"));
     assert!(
         bridge.close(&handle).is_ok(),

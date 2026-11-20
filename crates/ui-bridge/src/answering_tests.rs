@@ -18,8 +18,8 @@ use std::time::Duration;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
-/// Every kind of question. A kind added to `Kind` must be added here, or the loss of a controller
-/// is not tested for it.
+/// Every kind of question. A kind added to `Kind` must be added here, or the loss of every client
+/// that could answer it is not tested for it.
 const KINDS: [Kind; 15] = [
     Kind::Write,
     Kind::Run,
@@ -165,10 +165,10 @@ fn a_question_nobody_can_answer_is_refused_before_it_is_shown_for_every_kind() {
     }
 }
 
-/// A controller that can answer writes and nothing else is asked about writes, and a fetch, a
-/// command and a question of a kind the host never offers are refused with it present.
+/// Attached clients that can answer writes and nothing else are asked about writes, and a fetch, a
+/// command and a question of a kind the host never offers are refused with them present.
 #[test]
-fn only_the_kinds_the_controller_can_answer_are_asked() {
+fn only_the_kinds_an_attached_client_can_answer_are_asked() {
     let answerers = Answerers::default();
     answerers.only(&[Kind::Write, Kind::Ask]).unwrap();
     let mut turn = a_turn(&answerers);
@@ -199,10 +199,11 @@ fn only_the_kinds_the_controller_can_answer_are_asked() {
     assert!(matches!(reply, Some(Reply::Write(Decision::Approve))));
 }
 
-/// The loss of the controller after a question is registered refuses that question in the shape
-/// its kind answers, whichever kind it is, and says which one so a display can resolve it.
+/// The loss of every client that could answer, after a question is registered, refuses that
+/// question in the shape its kind answers, whichever kind it is, and says which one so a display
+/// can resolve it.
 #[test]
-fn the_loss_of_a_controller_refuses_the_question_waiting_for_every_kind() {
+fn the_loss_of_every_answerer_refuses_the_question_waiting_for_every_kind() {
     for kind in KINDS {
         let answerers = Answerers::default();
         answerers.only(&KINDS).unwrap();
@@ -230,10 +231,10 @@ fn the_loss_of_a_controller_refuses_the_question_waiting_for_every_kind() {
     }
 }
 
-/// The display resolves a question the controller's loss refused, so a client that takes the
-/// session over is not shown a question nobody can answer.
+/// The display resolves a question refused because every client that could answer left, so a
+/// client that joins the session later is not shown a question nobody can answer.
 #[test]
-fn a_question_refused_by_the_loss_of_its_controller_is_shown_as_resolved() {
+fn a_question_refused_by_the_loss_of_its_answerers_is_shown_as_resolved() {
     let answerers = Answerers::default();
     answerers.only(&KINDS).unwrap();
     let mut turn = a_turn(&answerers);
@@ -255,6 +256,77 @@ fn a_question_refused_by_the_loss_of_its_controller_is_shown_as_resolved() {
     assert_eq!(last.data["pending"], Value::Null, "{}", last.data);
     assert_eq!(last.data["rows"][0]["resolved"], true, "{}", last.data);
     assert_ne!(last.data["status"], "waiting");
+}
+
+/// Narrowing who can answer leaves the question waiting when its kind is still among those that
+/// can be answered, and refuses it in its kind's shape when it is not, whichever kind it is.
+#[test]
+fn narrowing_refuses_the_waiting_question_only_when_its_kind_is_left_out() {
+    for kind in KINDS {
+        let answerers = Answerers::default();
+        answerers.only(&KINDS).unwrap();
+        let mut turn = a_turn(&answerers);
+        let asking = turn.ask(kind);
+        let request = turn.the_question_shown()["request"].as_u64().unwrap();
+
+        let mut refused = Vec::new();
+        crate::running::narrow(&answerers, Some(&turn.running), &[kind], |request| {
+            refused.push(request);
+        });
+        assert!(refused.is_empty(), "{kind:?} was refused while answerable");
+        assert_eq!(turn.waiting().map(|question| question.id), Some(request));
+
+        let others: Vec<Kind> = KINDS.into_iter().filter(|other| *other != kind).collect();
+        crate::running::narrow(&answerers, Some(&turn.running), &others, |request| {
+            refused.push(request);
+        });
+        let reply = turn.settled(asking);
+        assert_eq!(refused, [request], "{kind:?}");
+        assert_eq!(
+            format!("{:?}", reply.expect("a refusal")),
+            format!("{:?}", kind.refusal()),
+            "{kind:?} was refused in another shape"
+        );
+        assert!(turn.waiting().is_none(), "{kind:?}");
+        assert!(!answerers.can_answer(kind), "{kind:?}");
+    }
+}
+
+/// Narrowing changes who can answer before it takes the lock a question is registered under. A
+/// question held at that lock is then either refused when it is asked or registered where the
+/// narrowing finds it, and never left waiting for a kind nobody can answer.
+#[test]
+fn narrowing_sets_who_can_answer_before_it_looks_for_a_question_to_refuse() {
+    let answerers = Answerers::default();
+    answerers.only(&[Kind::Write, Kind::Run]).unwrap();
+    let mut turn = a_turn(&answerers);
+    let pending = Arc::clone(&turn.running.pending);
+    let held = pending.lock().unwrap();
+    // Held at the lock that registers it, before it checks who can answer.
+    let asking = turn.ask(Kind::Write);
+
+    std::thread::scope(|scope| {
+        let narrowing = scope.spawn(|| {
+            crate::running::narrow(&answerers, Some(&turn.running), &[Kind::Run], |_| {});
+        });
+        let deadline = std::time::Instant::now() + PATIENCE;
+        while answerers.can_answer(Kind::Write) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the narrowing waited for the question's lock before changing who can answer"
+            );
+            std::thread::yield_now();
+        }
+        drop(held);
+        narrowing.join().unwrap();
+    });
+
+    let reply = turn.settled(asking);
+    assert!(
+        matches!(reply, None | Some(Reply::Write(Decision::Reject))),
+        "{reply:?}"
+    );
+    assert!(turn.waiting().is_none(), "a question waits for nobody");
 }
 
 fn a_question(sentence: &str) -> bravebot_core::ask::Question {
