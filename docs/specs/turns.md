@@ -462,9 +462,14 @@ remember an answer by key, and the same figures can come back after a stop.
 **Recorded.** The trail gets a line with the round, the spent total, the limit and what the person
 chose, which carries no content ([TRACE-2](trace.md#TRACE-2)).
 
-**Only where a person is in front of it.** The terminal session sets the limit on the turns it
-starts. A one-shot run, a manifest run and the desktop window set none, for the reason
-[TURN-2](#TURN-2) gives, so none of them is asked.
+**Only where a person is in front of it.** The terminal session and the desktop window set the
+limit on the turns they start. Each reads it from the `limit` setting when a session is opened,
+created, forked or resumed. The terminal changes it with `/limit`, and the desktop window with the
+bridge's `session.limit` method ([HOST-3](local-host.md#HOST-3)). In the desktop window the question
+reaches the person as any question the planner asks does. A one-shot run and a manifest run set
+none, for the reason [TURN-2](#TURN-2) gives, so neither of them is asked. The session limit is not
+the round bound: the desktop window still passes no round bound ([TURN-2](#TURN-2)) and no run
+limit ([TURN-14](#TURN-14)).
 
 **Known costs.** The check comes before a request, so a limit is passed by the round that reached it
 and by whatever a delegate in flight spends before it is collected. A limit counted in tokens says
