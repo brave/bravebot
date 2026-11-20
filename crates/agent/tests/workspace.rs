@@ -4034,12 +4034,14 @@ fn a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding() {
     }
 }
 
-/// What a deferred read fills a slot with is written back to a file or handed to a program as the
-/// file, so a slot is filled from the file's own UTF-8 or not at all, and so is the page a plan
-/// reads into one. A decoding in its place would write U+FFFD over the byte it replaced, or a
-/// different encoding over the file.
+/// The whole read `edit_file` and a plain `read_file` work from, and the page a plan reads, both
+/// accept only text that is UTF-8 as it stands: neither is a slot, and neither holds a decoding in
+/// its place, unlike a deferred read into a slot, which does
+/// (`a_decoded_slot_is_read_by_a_processor_and_never_written_back`). A decoding here would write
+/// U+FFFD over the byte it replaced, or a different encoding over the file, with nothing recording
+/// that it had.
 #[test]
-fn a_slot_is_never_filled_from_a_decoding_of_another_encoding() {
+fn a_whole_page_and_a_plans_page_refuse_a_file_in_another_encoding() {
     let scratch = Scratch::new("slot-not-utf8");
     std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
     std::fs::write(
