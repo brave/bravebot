@@ -14860,6 +14860,130 @@ fn a_repo_map_says_when_the_file_cap_stopped_it() {
     assert_eq!(map.files, 5);
 }
 
+/// A project with `count` files in `first/` and a vouched `src/lib.rs` that declares `wanted`.
+/// `first/` sorts before `src/`, so a walk that spends the file cap on `first/` reaches `src/`
+/// last.
+fn a_directory_of_files_before_a_vouched_source(tag: &str, count: usize) -> Scratch {
+    let scratch = Scratch::new(tag);
+    std::fs::create_dir_all(scratch.path.join("first")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    for n in 0..count {
+        std::fs::write(
+            scratch.path.join(format!("first/f{n}.rs")),
+            format!("pub fn hidden_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(scratch.path.join("src/lib.rs"), "pub fn wanted() {}\n").unwrap();
+    scratch
+}
+
+/// What a distrusted directory holds must not decide which vouched files a map shows (MAP-1). The
+/// distrusted directory holds more files than the cap and sorts first, so a walk that charges its
+/// files to the cap stops before `src/`, shows nothing from it and reports a cut that no vouched
+/// file caused. The regression it rejects: counting a file against the cap before asking the trust
+/// map about it.
+#[test]
+fn a_repo_map_does_not_charge_files_nobody_vouched_for_to_the_file_cap() {
+    let scratch = a_directory_of_files_before_a_vouched_source("map-unvouched-cap", 11);
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+    let trust = trusting_all_but(&workspace, &["first"]);
+
+    let (map, integrity) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(map.body.contains("wanted"), "{}", map.body);
+    assert!(!map.body.contains("hidden"), "{}", map.body);
+    assert_eq!(
+        (map.files, map.unvouched, map.skipped),
+        (1, 11, 0),
+        "{map:?}"
+    );
+    assert!(
+        !map.truncated,
+        "a file nobody vouched for was reported as a cap on files: {map:?}"
+    );
+    assert_eq!(integrity, Integrity::Trusted);
+}
+
+/// A cap that vouched files reach is still reported, with an unvouched directory in the same tree.
+/// The regression it rejects: dropping the cap from a walk that holds a distrusted directory, which
+/// the test above alone does not catch, since its vouched files are far under the cap.
+#[test]
+fn a_repo_map_still_says_when_vouched_files_reach_the_file_cap_beside_unvouched_ones() {
+    let scratch = a_directory_of_files_before_a_vouched_source("map-vouched-cap", 4);
+    for n in 0..6 {
+        std::fs::write(
+            scratch.path.join(format!("src/more{n}.rs")),
+            format!("pub fn more_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(3), None);
+    let trust = trusting_all_but(&workspace, &["first"]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(
+        map.truncated,
+        "the cap was reached by vouched files and not reported: {map:?}"
+    );
+    assert_eq!(
+        map.unvouched, 4,
+        "the files nobody vouched for before the cap were not all counted: {map:?}"
+    );
+    assert!(
+        map.files >= 1 && map.files < 7,
+        "the vouched files shown were none, or not bounded by the cap: {map:?}"
+    );
+    assert!(!map.body.contains("hidden"), "{}", map.body);
+}
+
+/// MAP-4: a file a deny rule covers is not charged to the cap either, so eleven fenced files that
+/// sort first do not push `open.rs` past a cap of ten. The regression it rejects: charging a
+/// covered file to the cap. The walk asks the rules before the cap whether or not it sets
+/// unvouched files aside, so this test guards MAP-4 against a later change to that order and does
+/// not pin the unvouched filter.
+#[test]
+fn a_repo_map_does_not_charge_a_file_a_deny_rule_covers_to_the_file_cap() {
+    let scratch = Scratch::new("map-denied-cap");
+    for n in 0..11 {
+        std::fs::write(
+            scratch.path.join(format!("fenced{n}.rs")),
+            format!("pub fn fenced_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(scratch.path.join("open.rs"), "pub fn open_function() {}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(
+        &workspace,
+        trust,
+        Some(denying(&["Read(./fenced*.rs)"])),
+        ".",
+    )
+    .expect("map");
+
+    assert!(map.body.contains("open_function"), "{}", map.body);
+    assert!(!map.body.contains("fenced"), "{}", map.body);
+    assert_eq!(
+        (map.files, map.unvouched, map.skipped),
+        (1, 0, 0),
+        "{map:?}"
+    );
+    assert!(
+        !map.truncated,
+        "a denied file was charged to the cap: {map:?}"
+    );
+}
+
 /// A tree with a directory that cannot be opened is not the tree the map shows, and a map that says
 /// nothing reads as complete. The files beside the directory are still mapped.
 #[cfg(unix)]

@@ -252,10 +252,11 @@ declaration by the line that opens it, so a signature split over lines is shown 
 Java, C and C++ it finds types and macros, not functions or methods. A name is ranked by how many
 other files mention it, so the ranking is a guide, not a call graph.
 
-Only files you vouched for are read. Files you did not are counted and never named, a file holding
-what looks like a credential contributes nothing, and a file a `deny` rule covers is not mapped. A map
-that shows fewer declarations than it found, or stopped at a cap, says so: map a subdirectory, or raise
-`budget`.
+Only files you vouched for are read. Files you did not are counted and never named, and they do not
+count toward the cap on files, so what a directory you did not vouch for holds does not decide which
+of your files the map reaches. A file holding what looks like a credential contributes nothing, and a
+file a `deny` rule covers is not mapped or counted toward the cap. A map that shows fewer
+declarations than it found, or stopped at a cap, says so: map a subdirectory, or raise `budget`.
 
 ## `search`
 
