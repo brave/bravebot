@@ -86,7 +86,7 @@ impl InstallRequest {
         Self {
             name: staged.manifest.name.clone(),
             version: staged.manifest.version.clone(),
-            source: staged.source.display().to_string(),
+            source: staged.source.to_string(),
             skills,
             definitions: kinds,
         }

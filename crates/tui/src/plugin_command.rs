@@ -216,7 +216,7 @@ pub(crate) fn row(plugin: &Installed) -> String {
         plugin_list_row,
         name = printable(&plugin.name),
         version = printable(&plugin.version),
-        source = printable(&plugin.source.display().to_string()),
+        source = printable(&plugin.source.to_string()),
         digest = printable(&plugin.digest),
         state = match plugin.enabled {
             true => t!(plugin_list_enabled),
@@ -623,7 +623,7 @@ mod tests {
         for part in [
             "demo",
             "2.3.4",
-            &record.source.display().to_string(),
+            &record.source.to_string(),
             &record.digest,
             "enabled",
         ] {

@@ -11,6 +11,7 @@
 //! directory is made directly under it, on the same filesystem as `plugins/`, and never in the
 //! system temporary directory, which other accounts can write.
 
+use crate::plugin_source::Source;
 use bravebot_config::plugin::{self, Manifest, Part};
 use sha2::{Digest as _, Sha256};
 use std::io;
@@ -40,15 +41,15 @@ pub enum Refusal {
     /// is there and its record cannot be read.
     AlreadyInstalled {
         name: String,
-        installed: Option<PathBuf>,
-        new: PathBuf,
+        installed: Option<Source>,
+        new: Source,
     },
     /// Nobody can be asked (a one-shot run), so nothing is installed (PLUGIN-4).
     NobodyToAsk,
     /// The person answered no. Nothing was copied or recorded.
     Declined,
     /// The name is installed from this same source. Updating is not built (decision 1).
-    UpdateNotBuilt { name: String, source: PathBuf },
+    UpdateNotBuilt { name: String, source: Source },
     /// Another installed plugin, enabled or not, already offers a skill or definition of this
     /// name (PLUGIN-12). Both plugins are named and no prefix is added.
     NameOffered {
@@ -65,8 +66,8 @@ pub struct Staged {
     /// Owns the staging directory and removes it when the value is dropped.
     _holder: Holder,
     tree: PathBuf,
-    /// The source directory as a canonical absolute path.
-    pub source: PathBuf,
+    /// Where the plugin was read from. A local directory is its canonical absolute path.
+    pub source: Source,
     pub manifest: Manifest,
     /// Lowercase hex SHA-256 of the staged tree.
     pub digest: String,
@@ -266,7 +267,7 @@ pub fn stage(source_dir: &Path, home: &Path) -> Result<Staged, Refusal> {
     Ok(Staged {
         _holder: holder,
         tree,
-        source,
+        source: Source::Local(source),
         manifest,
         digest,
         skipped,
@@ -291,11 +292,8 @@ fn record_path(home: &Path, name: &str) -> PathBuf {
 /// The record's text: four `key = value` lines. The source and the version hold no control
 /// character (stage and the manifest reader refuse one), so a value is one line and is written as
 /// it is.
-fn record_text(source: &Path, version: &str, enabled: bool, digest: &str) -> String {
-    format!(
-        "source = {}\nversion = {version}\nenabled = {enabled}\ndigest = {digest}\n",
-        source.display()
-    )
+fn record_text(source: &Source, version: &str, enabled: bool, digest: &str) -> String {
+    format!("source = {source}\nversion = {version}\nenabled = {enabled}\ndigest = {digest}\n")
 }
 
 /// Reads the record beside an installed plugin. `None` when there is no record or it does not say
@@ -310,7 +308,7 @@ fn read_record_in(plugins: &Path, name: &str) -> Option<Installed> {
     for line in text.lines() {
         let (key, value) = line.split_once(" = ")?;
         match key {
-            "source" => source = Some(PathBuf::from(value)),
+            "source" => source = Some(Source::Local(PathBuf::from(value))),
             "version" => version = Some(value.to_string()),
             "enabled" => {
                 enabled = match value {
@@ -454,7 +452,7 @@ pub fn install_asked<A: Asker + ?Sized>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
     pub name: String,
-    pub source: PathBuf,
+    pub source: Source,
     pub version: String,
     pub enabled: bool,
     pub digest: String,
@@ -785,7 +783,10 @@ mod tests {
         let first = stage(&source, &home).unwrap();
         let second = stage(&source, &home).unwrap();
         assert_eq!(first.manifest.name, "demo");
-        assert_eq!(first.source, std::fs::canonicalize(&source).unwrap());
+        assert_eq!(
+            first.source,
+            Source::Local(std::fs::canonicalize(&source).unwrap())
+        );
         assert_eq!(first.digest.len(), 64);
         assert!(first.digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_eq!(first.digest, second.digest);
@@ -999,7 +1000,7 @@ mod tests {
             refused,
             Refusal::AlreadyInstalled {
                 name: "demo".to_string(),
-                installed: Some(std::fs::canonicalize(&first).unwrap()),
+                installed: Some(Source::Local(std::fs::canonicalize(&first).unwrap())),
                 new,
             }
         );
@@ -1023,7 +1024,7 @@ mod tests {
             refused,
             Refusal::UpdateNotBuilt {
                 name: "demo".to_string(),
-                source: std::fs::canonicalize(&source).unwrap(),
+                source: Source::Local(std::fs::canonicalize(&source).unwrap()),
             }
         );
         assert_eq!(snapshot(&home), before);
@@ -1091,7 +1092,10 @@ mod tests {
             listed.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             vec!["alpha", "beta"]
         );
-        assert_eq!(listed[1].source, std::fs::canonicalize(&one).unwrap());
+        assert_eq!(
+            listed[1].source,
+            Source::Local(std::fs::canonicalize(&one).unwrap())
+        );
         assert_eq!(listed[1].digest, digest);
         assert!(listed.iter().all(|p| p.enabled));
     }
@@ -1361,7 +1365,10 @@ mod tests {
         );
 
         let staged = stage(&lookalike, &home).unwrap();
-        assert_eq!(staged.source, std::fs::canonicalize(&lookalike).unwrap());
+        assert_eq!(
+            staged.source,
+            Source::Local(std::fs::canonicalize(&lookalike).unwrap())
+        );
         assert_eq!(staged.manifest.name, "demo");
     }
 
