@@ -46,7 +46,7 @@ use bravebot_agent::conversation::Snapshot;
 use bravebot_agent::links::{LinkKind, Reference};
 use bravebot_agent::workspace::Workspace;
 use bravebot_aichat::protocol::{Cached, Effort};
-use bravebot_core::command::Spelling;
+use bravebot_core::command::{Route, Spelling};
 use bravebot_core::label::Integrity;
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::todo::{self, Item, List, Row, Status};
@@ -1618,6 +1618,7 @@ fn stored_programs(programs: &TrustedPrograms, project: &Path) -> Vec<StoredComm
             directory: Some(StoredPath::of(
                 c.directory.strip_prefix(project).unwrap_or(&c.directory),
             )),
+            routes: c.routes.iter().map(StoredRoute::of).collect(),
         })
         .collect()
 }
@@ -1649,9 +1650,15 @@ fn restored_programs(programs: &[StoredCommand], root: &Path) -> TrustedPrograms
             Some(written) => written.to_path()?,
             None => program.clone(),
         };
+        let routes = c
+            .routes
+            .iter()
+            .map(StoredRoute::to_route)
+            .collect::<Option<Vec<_>>>()?;
         Some(
             bravebot_core::programs::Command::new(program, c.args.clone(), directory)
-                .started_as(started_as),
+                .started_as(started_as)
+                .routed(routes),
         )
     }))
 }
@@ -1899,6 +1906,65 @@ pub struct StoredCommand {
     /// session with exactly the grant it recorded rather than a wider one.
     #[serde(default)]
     pub directory: Option<StoredPath>,
+    /// Where the command's streams went, for an entry made at a line that sent one to the null
+    /// device or merged its streams. Absent in a record written before entries held routes, which
+    /// reads as no routes: the entry such a record held was the line with its streams as they were.
+    /// Written only where there are some, so an entry with none is spelled as it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<StoredRoute>,
+}
+
+/// One route of a vouched command as it is written down, the paths spelled as [`StoredPath`] does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StoredRoute {
+    Stdout { path: StoredPath, append: bool },
+    Stdin { path: StoredPath },
+    Stderr { path: StoredPath, append: bool },
+    Both { path: StoredPath },
+    StderrToStdout,
+}
+
+impl StoredRoute {
+    fn of(route: &Route) -> Self {
+        match route {
+            Route::Stdout { path, append } => Self::Stdout {
+                path: StoredPath::of(path),
+                append: *append,
+            },
+            Route::Stdin { path } => Self::Stdin {
+                path: StoredPath::of(path),
+            },
+            Route::Stderr { path, append } => Self::Stderr {
+                path: StoredPath::of(path),
+                append: *append,
+            },
+            Route::Both { path } => Self::Both {
+                path: StoredPath::of(path),
+            },
+            Route::StderrToStdout => Self::StderrToStdout,
+        }
+    }
+
+    /// The route read back, or `None` where a path has no spelling, which drops the whole entry.
+    fn to_route(&self) -> Option<Route> {
+        Some(match self {
+            Self::Stdout { path, append } => Route::Stdout {
+                path: path.to_path()?,
+                append: *append,
+            },
+            Self::Stdin { path } => Route::Stdin {
+                path: path.to_path()?,
+            },
+            Self::Stderr { path, append } => Route::Stderr {
+                path: path.to_path()?,
+                append: *append,
+            },
+            Self::Both { path } => Route::Both {
+                path: path.to_path()?,
+            },
+            Self::StderrToStdout => Route::StderrToStdout,
+        })
+    }
 }
 
 /// A path as the record spells it.
@@ -5600,12 +5666,14 @@ mod tests {
                 started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text("/work".to_string())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/bin/ls".to_string()),
                 started_as: None,
                 args: Vec::new(),
                 directory: Some(StoredPath::Text("/work/sub".to_string())),
+                routes: Vec::new(),
             },
         ];
         let vouched = record.trusted_programs(Path::new("/work"));
@@ -5725,18 +5793,21 @@ mod tests {
                 started_as: None,
                 args: vec!["check".to_string()],
                 directory: Some(StoredPath::Text("sub".to_string())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/git".to_string()),
                 started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/bin/ls".to_string()),
                 started_as: None,
                 args: Vec::new(),
                 directory: Some(StoredPath::Text("/elsewhere".to_string())),
+                routes: Vec::new(),
             },
         ];
 
@@ -5838,6 +5909,60 @@ mod tests {
         ));
     }
 
+    /// The routes of a vouched command come back with it (RUN-8), so a resumed session covers
+    /// `sh check.sh > /dev/null` and not the bare line. An entry with no route is written with no
+    /// such field, and a record from before entries held routes reads back as entries with none.
+    /// Rejects a record that drops the routes on the way out or on the way back, which would
+    /// restore an entry covering the bare line.
+    #[test]
+    fn the_routes_of_a_command_come_back_with_it() {
+        let root = Path::new("/work");
+        let program = Path::new("/bin/sh");
+        let args = ["check.sh".to_string()];
+        let discard = vec![bravebot_core::command::Route::Stdout {
+            path: "/dev/null".into(),
+            append: false,
+        }];
+        let written = stored_programs(
+            &TrustedPrograms::from_iter([
+                bravebot_core::programs::Command::new(program, args.to_vec(), root)
+                    .routed(discard.clone()),
+                bravebot_core::programs::Command::new("/usr/bin/git", vec!["log".into()], root),
+            ]),
+            root,
+        );
+
+        let json = serde_json::to_string(&written).expect("a record is written as JSON");
+        assert_eq!(
+            json.matches("routes").count(),
+            1,
+            "the route of the entry made at a line that discarded its output was not written, or an entry with no route was written with a routes field: {json}"
+        );
+        let read: Vec<StoredCommand> = serde_json::from_str(&json).expect("and read back");
+        let vouched = restored_programs(&read, root);
+        assert!(
+            vouched.contains_routed(program, program, &args, &discard, root),
+            "the entry made at the line that discarded its output did not come back"
+        );
+        assert!(
+            !vouched.contains(program, program, &args, root),
+            "the resumed session covers the bare line"
+        );
+
+        let earlier: Vec<StoredCommand> =
+            serde_json::from_str(r#"[{"program":"/bin/sh","args":["check.sh"],"directory":""}]"#)
+                .expect("a record from an earlier build reads");
+        let vouched = restored_programs(&earlier, root);
+        assert!(
+            vouched.contains(program, program, &args, root),
+            "an entry written before routes were kept did not read as one with none"
+        );
+        assert!(
+            !vouched.contains_routed(program, program, &args, &discard, root),
+            "an entry written before routes were kept covers the line that discards its output"
+        );
+    }
+
     /// A binary and a tree are written as bytes wherever they have no text spelling, so a resumed
     /// session vouches for the file its user vouched for and no other. `to_string_lossy` maps every
     /// byte it cannot read onto one replacement character, so a record holding a rendering came back
@@ -5890,12 +6015,14 @@ mod tests {
                 started_as: None,
                 args: vec!["check".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
+                routes: Vec::new(),
             },
             StoredCommand {
                 program: StoredPath::Text("/usr/bin/git".to_string()),
                 started_as: None,
                 args: vec!["log".to_string()],
                 directory: Some(StoredPath::Text(String::new())),
+                routes: Vec::new(),
             },
         ];
 

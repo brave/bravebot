@@ -1223,6 +1223,36 @@ mod tests {
         );
     }
 
+    /// RUN-19, RUN-6: a line that discards its output is its own record. `r` at
+    /// `make check > /dev/null` leaves the bare `make check` asked about, and a record made at the
+    /// bare line does not cover the discarding one. Rejects a record keyed on the program and
+    /// arguments alone, which is the shape the vouch key had before it held routes.
+    #[test]
+    fn discarding_the_output_makes_a_different_line() {
+        let discarding = plan_of(Steps::Pipeline(vec![Step {
+            routes: vec![Route::Stdout {
+                path: "/dev/null".into(),
+                append: false,
+            }],
+            ..step("make", &["check"])
+        }]));
+        let record = remembering(&discarding);
+        assert!(
+            record.covers(&discarding),
+            "the control line is not covered"
+        );
+        assert!(
+            !record.covers(&one("make", &["check"])),
+            "a record made at a line that discarded its output covered the bare line"
+        );
+
+        let record = remembering(&one("make", &["check"]));
+        assert!(
+            !record.covers(&discarding),
+            "a record made at the bare line covered the line that discards its output"
+        );
+    }
+
     /// RUN-19: a pipeline records every stage and is covered only where every stage is, the same
     /// requirement RUN-8 makes of a vouch.
     #[test]

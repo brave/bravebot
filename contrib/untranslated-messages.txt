@@ -175,6 +175,7 @@ fr:plugin-refused-unreadable
 fr:plugin-refused-update-not-built
 fr:plugin-removed
 fr:run-allow-and-remember-explained
+fr:run-kept-scope-not-remembered
 fr:run-not-confined-checkout-entry
 fr:run-write-lands-on
 fr:run-write-protected

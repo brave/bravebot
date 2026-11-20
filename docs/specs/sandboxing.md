@@ -3172,7 +3172,9 @@ run, in the words of the other reach, so there is nothing new to trust.
 **What is not built.** A path the planner proposes, and a reach attached to a command the planner
 has never run. Each puts a path or a shape the planner chose in front of a person to approve, and
 neither is decided here. The one key at the confirmation that remembers a reach is for a credential
-scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a directory.
+scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a directory. A line
+lent a remembered credential scope is asked about every time, and a line lent a remembered directory
+is not: a directory grant stays on the directory-trust road.
 
 `verified-by: bravebot_agent::reach::a_grant_covers_the_file_and_the_operation_it_was_made_for`
 `verified-by: bravebot_agent::reach::an_assignment_in_front_of_a_step_removes_every_grant`
@@ -3847,8 +3849,11 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
   carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
 - The trail records the names and the stage each was added to under `requested_scopes`, built from
-  menu words and stage numbers and nothing the plan chose. The desktop sends the names as
-  `requestedScopes`, beside the confinement it draws, and offers no standing answer for such a line.
+  menu words and stage numbers and nothing the plan chose. The credential scopes a person kept at an
+  earlier prompt that a stage is lent are recorded apart, under the gate `kept_scopes`, so the trail
+  never says the planner asked for what a person kept ([SANDBOX-27](#SANDBOX-27)). The desktop sends
+  the names as `requestedScopes`, beside the confinement it draws, and offers no standing answer for
+  such a line, nor for a line lent a kept scope.
 - A delegate's `run` has the same argument, the same refusals and the same question.
 
 **Why.** Scopes follow the operation an argv names, so a script that shells out to `gh` reaches
@@ -3901,6 +3906,7 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
 `verified-by: bravebot_agent::turn::a_scope_outside_the_menu_is_an_error`
 `verified-by: bravebot_ui_bridge::wire::a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent`
+`verified-by: bravebot_core::policy::a_kept_scope_leaves_a_trail_apart_from_a_requested_one`
 
 <a id="SANDBOX-27"></a>
 ### SANDBOX-27: a person may answer a request for a credential scope by remembering it as reach for the programs it was added to
@@ -3910,7 +3916,8 @@ runs the line and remembers each requested scope, read only, for the session, an
 for every session started in this checkout. What is remembered is what `/reach` writes
 ([SANDBOX-23](#SANDBOX-23)): one grant for each distinct program and operation word among the line's
 stages and each requested scope, so the next plan for those programs carries the scope as a row the
-person reads, and a session that asks for nothing is not asked about it.
+person reads. A later line for those programs is put to the person every time with that row shown,
+whether or not it asked for the scope, and its output is not trusted.
 
 - Offered only where a record of reach can be written (a session that keeps state and is not
   incognito) and every stage that was given the scope can be keyed: it has an operation word, or no
@@ -3923,6 +3930,16 @@ person reads, and a session that asks for nothing is not asked about it.
 - The line that asked is still asked about every time, with the remembered scope shown on it, and
   neither key vouches for a program, records the line or stops the asking; what it prints is
   quarantined as it was ([SANDBOX-26](#SANDBOX-26)).
+- A later line whose stage is lent a remembered credential scope is asked about every time as a line
+  that asked for it is, before any vouched entry, remembered line or rule is read
+  ([RUN-5](tools/run.md#RUN-5)). The prompt draws the remembered scope row, offers no `a` or `r`, and
+  records no entry and no line, and what the line prints is quarantined as an unvouched line's is
+  ([RUN-4](tools/run.md#RUN-4)). A grant counts only where it is lent to a stage: a grant for
+  another program or operation word, for another checkout or another session, and a stage with a
+  `NAME=value` in front of it, leave the line as it was. Only a credential scope counts. A directory
+  made reachable with `/reach <dir> -- <command>` does not change the question and is held to the
+  directory-trust road ([SANDBOX-23](#SANDBOX-23)). The mode that asks nothing approves such a line,
+  as it approves any run.
 - A grant for a program the scope table gives that scope to (`gh` and the remote scope) is for
   every checkout. Every other grant is bound to the checkout the answer was given in
   ([SANDBOX-23](#SANDBOX-23)). The prompt names the programs, the scopes, the lifetimes and the file
@@ -3947,6 +3964,21 @@ more than the person read.
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
 `verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
 `verified-by: bravebot_tui::confirm::run::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
+`verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
+`verified-by: bravebot_agent::turn::a_kept_scope_asks_about_a_remembered_line_in_a_later_session`
+`verified-by: bravebot_agent::turn::a_kept_scope_asks_about_a_line_an_allow_rule_answers`
+`verified-by: bravebot_agent::turn::a_grant_that_is_not_lent_to_a_vouched_line_does_not_ask_about_it`
+`verified-by: bravebot_agent::turn::a_standing_answer_to_a_line_lent_a_kept_scope_remembers_nothing`
+`verified-by: bravebot_agent::confine::a_remembered_scope_is_listed_only_for_a_line_it_is_lent_to`
+`verified-by: bravebot_agent::confine::a_scope_kept_in_another_checkout_is_not_listed_for_this_one`
+`verified-by: bravebot_agent::confine::a_global_scope_is_not_listed_for_an_argv_the_table_refuses`
+`verified-by: bravebot_agent::confine::remembered_scopes_leave_the_refusal_of_a_stage_lent_a_grant_in_place`
+`verified-by: bravebot_agent::confirm::a_line_lent_a_kept_scope_may_not_be_recorded_even_with_a_record_path`
+`verified-by: bravebot_core::policy::a_line_lent_a_kept_scope_is_asked_about_whatever_covers_the_line_without_it`
+`verified-by: bravebot_core::policy::the_approval_entry_for_a_kept_scope_names_the_menu_words_and_nothing_the_plan_chose`
+`verified-by: bravebot_tui::confirm::run::a_run_lent_a_kept_scope_offers_no_standing_permission_and_says_why`
+`verified-by: bravebot_ui_bridge::wire::a_run_prompt_lent_a_kept_scope_has_no_standing_answer_and_names_nothing_the_planner_asked`
+`verified-by: bravebot_cli::one_shot::a_run_lent_a_kept_scope_is_not_put_to_a_program_that_approves_everything`
 
 <a id="SANDBOX-28"></a>
 ### SANDBOX-28: a planner may ask for reach to one path, and the person is asked every time it is new

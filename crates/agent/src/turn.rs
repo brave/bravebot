@@ -4735,7 +4735,9 @@ where
                             reporter.inference_interval(interval);
                             state.spent.inference += interval.duration();
                         }
-                        state.account.add_check(released.usage, released.completed);
+                        state
+                            .account
+                            .add_unbudgeted_call(released.usage, released.completed);
                         // A stop during the check ends the turn once this run's result is
                         // recorded. The slot stays quarantined and unrefused, so the next turn
                         // can ask for it again.

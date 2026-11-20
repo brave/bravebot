@@ -169,6 +169,31 @@ impl Stage {
     }
 }
 
+/// The routes of a command spelled as a line writes them, each after a space, so that an entry
+/// made at `sh check.sh > /dev/null` is drawn with its redirection and not as the bare line.
+pub fn spelled_routes(routes: &[Route]) -> String {
+    let mut out = String::new();
+    for route in routes {
+        out.push(' ');
+        out.push_str(&match route {
+            Route::Stdout { path, append } => format!(
+                "{} {}",
+                if *append { ">>" } else { ">" },
+                quoted(&path.to_string_lossy())
+            ),
+            Route::Stdin { path } => format!("< {}", quoted(&path.to_string_lossy())),
+            Route::Stderr { path, append } => format!(
+                "{} {}",
+                if *append { "2>>" } else { "2>" },
+                quoted(&path.to_string_lossy())
+            ),
+            Route::Both { path } => format!("&> {}", quoted(&path.to_string_lossy())),
+            Route::StderrToStdout => "2>&1".to_string(),
+        });
+    }
+    out
+}
+
 /// A path a program starts by and the file it leads to, drawn as `ls -l` draws a link.
 ///
 /// The file alone where the two are one path.
@@ -280,7 +305,7 @@ pub enum Joiner {
 ///
 /// The paths are absolute and are not tidied. What is recorded is what will be opened, and
 /// rewriting a `..` away would make the two differ wherever a symlink is involved.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(
     verus_keep_ghost,
     verus_verify,
@@ -612,8 +637,10 @@ impl Step {
     /// directory and that is the one the prompt showed. An entry covers that tree and no other, so
     /// passing a tree the person was not shown would record a grant nobody gave.
     pub fn command(&self, directory: &Path) -> crate::programs::Command {
-        // Left out for the reasons `Policy::every_step_vouched` gives: an assignment is refused
-        // before an entry is offered, and a route is the write question's.
+        // An assignment is left out because `Plan::carries_an_assignment` refuses it before an
+        // entry is offered. The routes are in the entry: a line that sends a stream to the null
+        // device or merges its streams is not the line without them, and an entry made for one
+        // must not cover the other.
         let Step {
             program: _,
             resolved,
@@ -623,10 +650,11 @@ impl Step {
             matched: _,
             environment: _,
             expansions: _,
-            routes: _,
+            routes,
         } = self;
         crate::programs::Command::new(resolved.clone(), args.clone(), directory)
             .started_as(started_as.clone())
+            .routed(routes.clone())
     }
 }
 
@@ -1027,11 +1055,15 @@ impl Plan {
     /// the entry records the tree, so a line running outside the workspace root is a line an entry
     /// can hold exactly as written.
     ///
-    /// A redirection is among them, in both directions. An entry holds no destination any more than
-    /// it holds a source, so an entry made while output was redirected would cover the same program
-    /// with the redirection gone, which is a line nobody read. A line that writes is asked about
-    /// every time whatever is recorded, so the key stops no prompt for the line it was pressed on:
-    /// the only thing it could ever grant is the bare one.
+    /// A redirection that opens a file is among them, in both directions. An entry holds no file
+    /// to write or read, so an entry made while output was redirected to a file would cover the
+    /// same program with the redirection gone, which is a line nobody read. A line that writes is
+    /// asked about every time whatever is recorded, so the key stops no prompt for the line it was
+    /// pressed on: the only thing it could ever grant is the bare one.
+    ///
+    /// A route that opens no file, which is a stream sent to the null device or `2>&1`, can be
+    /// remembered, because the entry holds the routes: it covers that line and not the same
+    /// program without them.
     ///
     /// Nor is standard input fed from a reference, whatever the reference's label. An entry holds a
     /// program and its arguments and not the bytes it reads, so one made for `python3 -` fed one
@@ -1579,6 +1611,63 @@ mod tests {
                 "the plan alone stopped being rememberable"
             );
             assert!(line.vouch(asked).is_none(), "{asked:?} made a vouch");
+        }
+    }
+
+    /// A line that sends a stream to the null device can be remembered, and the entry it makes
+    /// holds the route: the plan of `sh check.sh > /dev/null` has entries unlike the plan of
+    /// `sh check.sh`, and an entry made at one covers only that one, in both directions, for a
+    /// discarded stream and for `2>&1` alike. Rejects an entry that ignores routes, which leaves
+    /// the bare line covered by an answer given at the line that discarded its output.
+    #[test]
+    fn an_entry_made_at_a_line_with_routes_does_not_cover_the_line_without_them() {
+        use crate::programs::TrustedPrograms;
+
+        let routed = |routes: Vec<Route>| {
+            let mut one = step("sh", &["check.sh"]);
+            one.routes = routes;
+            plan(Steps::Pipeline(vec![one]))
+        };
+        let discarding = || {
+            routed(vec![Route::Stdout {
+                path: PathBuf::from("/dev/null"),
+                append: false,
+            }])
+        };
+        let merging = || routed(vec![Route::StderrToStdout]);
+        let bare = || routed(Vec::new());
+
+        let line = discarding();
+        assert!(line.writes.is_empty(), "a discard line wrote a file");
+        assert!(
+            line.can_be_remembered(),
+            "a discard line was not rememberable"
+        );
+        assert!(line.vouch(Asked::default()).is_some());
+        assert_ne!(
+            line.entries(),
+            bare().entries(),
+            "the entry for a discard line is the entry for the bare line"
+        );
+        assert_ne!(merging().entries(), bare().entries());
+        assert_ne!(merging().entries(), discarding().entries());
+
+        for (made_at, other, said) in [
+            (discarding(), bare(), "a discard line covered the bare line"),
+            (bare(), discarding(), "the bare line covered a discard line"),
+            (merging(), bare(), "a merged line covered the bare line"),
+            (
+                discarding(),
+                merging(),
+                "a discard line covered a merged line",
+            ),
+        ] {
+            let programs: TrustedPrograms = made_at.entries().into_iter().collect();
+            assert!(
+                programs.covers_every_step(&made_at),
+                "an entry did not cover its own line"
+            );
+            assert!(!programs.covers_every_step(&other), "{said}");
         }
     }
 

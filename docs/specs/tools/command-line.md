@@ -513,6 +513,15 @@ route stays in the plan and at the prompt, but the path joins no write set, take
 gates, and enters no effect, because there is no file to confine, endorse or distrust. Any other
 spelling of the device, and any link to it, is an ordinary path and is held to all of the above.
 
+The route is still part of what `a` vouches for. A line that only discards is offered `a`, and the
+entry it makes holds the route ([RUN-8](run.md#RUN-8)), so it covers that line and not the same
+program and arguments with the stream left alone, which is a line whose output the planner would
+read. The prompt draws the entry with its route. A `2>&1` route is held the same way.
+
+`verified-by: bravebot_core::command::an_entry_made_at_a_line_with_routes_does_not_cover_the_line_without_them`
+`verified-by: bravebot_tui::confirm::run::a_run_discarding_its_output_draws_the_entry_with_its_route`
+`verified-by: bravebot_ui_bridge::wire::a_run_prompt_draws_the_entry_for_a_discarding_line_with_its_route`
+
 Immediately before a destination may be opened for writing, the shared file authority marks
 it untrusted and reserves that path until the process has stopped. Reads during execution cannot
 use the old grant. Other paths remain available, and no lock spans the process wait. Every early

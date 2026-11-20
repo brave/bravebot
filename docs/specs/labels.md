@@ -991,8 +991,8 @@ arrives at all.
   ([VET-4](tools/vet-content.md#VET-4)) is a path away from it instead. The number of tokens a
   check wrote is not on it either: a delegate's token budget does not count a check's tokens, so
   steering the length of a reply moves no figure a delegate is told and no point at which it loses
-  its tools ([DELEGATE-29](delegation.md#DELEGATE-29)). The size of what a processor wrote still
-  counts there, which is [#4013](https://github.com/brave/bravebot/issues/4013).
+  its tools ([DELEGATE-29](delegation.md#DELEGATE-29)). The same holds for the number of tokens a
+  processor wrote, which a delegate's token budget does not count either.
 
 - **The fourth is the search comparing its pattern against files nobody vouched for.** The search
   tool walks the files its directory and `include` select and tests each line against the pattern,

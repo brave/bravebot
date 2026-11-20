@@ -354,7 +354,9 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
                 reporter.inference_interval(interval);
                 state.spent.inference += interval.duration();
             }
-            state.account.add_check(released.usage, released.completed);
+            state
+                .account
+                .add_unbudgeted_call(released.usage, released.completed);
             if released.stopped.is_some() {
                 stopped = released.stopped;
             }
@@ -939,8 +941,9 @@ pub(super) fn ask_about_open_tasks(
 /// say so to the person and to the planner. Whether it did.
 ///
 /// The delegate's own total, from the usage its backend reported for its rounds and the delegates
-/// it has collected, and not from the checks it made over content nobody vouched for, against a
-/// figure its spec fixed: no reply or tool result is read, and no check's reply is counted
+/// it has collected, and not from the checks it made over content nobody vouched for or the
+/// processors it called, against a figure its spec fixed: no reply or tool result is read, and no
+/// check's or processor's reply is counted
 /// (DELEGATE-29). Not `spend_limit::hold`, which asks a person, and a delegate has none. Called
 /// after a round and again once a delegate's spend has been collected, so a child's spend counts
 /// against its parent before the parent's next request.
@@ -1001,7 +1004,8 @@ pub(super) fn token_budget_notice(budget: u64, tokens: u64) -> String {
 /// Warn a delegate once that it is near its token budget, after at least one round of its own.
 ///
 /// Compares the delegate's token total, its context size and the figure its spec fixed; no reply
-/// or tool result is read and no check's reply is counted (DELEGATE-29). Nothing is sent to a run
+/// or tool result is read and no check's or processor's reply is counted (DELEGATE-29). Nothing is
+/// sent to a run
 /// that is not a delegate, that has no budget, or that has no tools left.
 pub(super) fn warn_near_token_budget(
     may_call_tools: bool,
@@ -2214,14 +2218,16 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         .saturating_sub(waited);
     // Everything a call spent on the model is the turn's total, so a turn that did most of its work
     // in a processor, an advisor or a delegate does not report having cost almost nothing.
-    // A check over content nobody vouched for is the turn's spend and no part of what a delegate's
-    // budget counts: which usage it is comes from the tool that made it, never from what it said
-    // (DELEGATE-29). A processor's, an advisor's and a delegate's usage is counted in both, and
-    // what a processor reads is the same open question as a check's (#4013).
+    // A check over content nobody vouched for and a processor are the turn's spend and no part of
+    // what a delegate's budget counts: which usage it is comes from the tool that made it, never
+    // from what it said (DELEGATE-29, PROC-16). An advisor's and a delegate's usage is counted in
+    // both, since neither reads content nobody vouched for.
     // A request only where the call waited on the model and was not stopped; a tool that did not
     // call a model has no usage.
-    match output.usage_is_a_check {
-        true => state.account.add_check(output.usage, output.requested()),
+    match output.usage_is_unbudgeted {
+        true => state
+            .account
+            .add_unbudgeted_call(output.usage, output.requested()),
         false => state.account.add_call(output.usage, output.requested()),
     }
     reporter.spent(crate::outcome::Spent {

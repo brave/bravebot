@@ -401,17 +401,19 @@ included, is a definition that does not load, and the notice names its file, as 
 and keeps the lower, so a project file can lower a person's own budget and cannot remove it.
 
 The budget is spent when the tokens the delegate's backend reported, those of the delegates it
-collected included, reach it. The tokens of a check over content nobody vouched for are not
-counted: what a check writes depends on the content it read, which the delegate cannot, so its
-size must not decide what the delegate is told or when it loses its tools. They are still part of
-what the turn spent ([RUN-22](tools/run.md#RUN-22)). The driver keeps a second total. Check usage is
-never added to it, and the budget is compared with that total. A tool decides which usage is a
-check's, and the check's reply is not read to decide it. The delegate then loses its tools for
-its next request and answers with what it has, as it does on its limiting round
-([DELEGATE-6](#DELEGATE-6)). It is not asked the session limit's question
-([TURN-8](turns.md#TURN-8)): that question goes to a person, and a delegate has none. What a
-processor spends on content nobody vouched for is counted in both totals, because a processor is
-not a check; [#4013](https://github.com/brave/bravebot/issues/4013) tracks that.
+collected included, reach it. The tokens of a check over content nobody vouched for and of a
+processor are not counted: what a check or a processor writes depends on the content it read,
+which the delegate cannot, so its size must not decide what the delegate is told or when it loses
+its tools. They are still part of what the turn spent ([RUN-22](tools/run.md#RUN-22)). The driver
+keeps a second total. Check and processor usage is never added to it, and the budget is compared
+with that total. A tool decides which usage is a check's or a processor's, and the reply is not
+read to decide it. A processor request that failed after its service reported usage is a
+processor's usage as well. The delegate then loses its tools for its next request and answers
+with what it has, as it does on its limiting round ([DELEGATE-6](#DELEGATE-6)). It is not asked
+the session limit's question
+([TURN-8](turns.md#TURN-8)): that question goes to a person, and a delegate has none. What an
+advisor spends is counted in both totals, because the advisor is asked from the planner's own
+context and reads nothing the planner may not read.
 
 **The warning ahead of it.** A delegate with a budget is warned once, in the request after the
 first round at which its total is within a fifth of the budget, or leaves fewer tokens than two
@@ -442,16 +444,18 @@ both ended it.
 parent has left under its own budget when the child starts. The delegates of one fan-out divide
 what is left between them, so together they carry no more than the parent had. A parent with
 nothing left starts no delegate, and the refusal takes no number. What a child spends, its
-checks excluded, is added to its parent's budgeted total when the parent collects its report,
-and all of it to the parent's spend, so a parent cannot spend more than its budget by handing
-work down. A child still running when its parent's budget is reached keeps
+checks and processors excluded, is added to its parent's budgeted total when the parent collects
+its report, and all of it to the parent's spend, so a parent cannot spend more than its budget by
+handing work down. A child still running when its parent's budget is reached keeps
 running to its own figure, which is at most what the parent had left.
 
 **Known limits.** Tokens are known only after a request completes, so a delegate may pass its
 budget by one request. A backend that reports no usage is counted from the words of its replies
 ([TURN-5](turns.md#TURN-5)), and a budget is compared with that count. Credits are a session-wide
 counter and cannot be attributed to one delegate while its siblings run, so a budget is in tokens
-only.
+only. The tokens a delegate's checks and processors spend are not bounded by its budget either, so
+a delegate whose work is mostly checks or processor calls spends more than its budget names. They
+are in the turn's spend, which the person's own limits read ([TURN-8](turns.md#TURN-8)).
 
 **Why a call may set it though the call sets no round bound.** [DELEGATE-6](#DELEGATE-6) keeps
 the round bound out of the planner's call because a number that lengthens a bound is authority a
@@ -460,10 +464,9 @@ most it can do is stop its own delegate sooner, and the delegate's capabilities 
 reach are exactly what they were.
 
 **What the comparison reads.** Two counts the driver holds, the tokens its backends reported for
-requests that are not checks and a figure from a vouched definition or a public call field. It
-reads no reply or tool result, so no decision is taken from untrusted bytes
-([LABEL-5](labels.md#LABEL-5)). The size of what a processor wrote is the one exception: it still
-counts toward the budget ([#4013](https://github.com/brave/bravebot/issues/4013)).
+requests that are neither checks nor processors and a figure from a vouched definition or a public
+call field. It reads no reply or tool result, so no decision is taken from untrusted bytes
+([LABEL-5](labels.md#LABEL-5)).
 
 `verified-by: bravebot_core::delegate::a_later_definition_meets_the_budget_of_the_one_it_replaces`
 `verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
@@ -473,6 +476,13 @@ counts toward the budget ([#4013](https://github.com/brave/bravebot/issues/4013)
 `verified-by: bravebot_core::policy::a_child_is_never_given_more_than_its_parent_has_left`
 `verified-by: bravebot_core::policy::a_run_with_no_budget_left_starts_no_delegate`
 `verified-by: bravebot_agent::outcome::a_check_is_part_of_the_cost_and_not_of_the_budgeted_figure`
+`verified-by: bravebot_agent::outcome::a_processor_is_part_of_the_cost_and_not_of_the_budgeted_figure`
+`verified-by: bravebot_agent::turn::a_processors_document_size_does_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_that_marked_no_document_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_that_chose_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_request_that_failed_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::a_processors_tokens_do_not_end_a_delegate_that_called_it`
+`verified-by: bravebot_agent::turn::a_delegates_own_rounds_still_spend_its_budget_beside_a_processor`
 `verified-by: bravebot_agent::turn::a_checks_tokens_do_not_warn_a_delegate_that_read_its_command_output`
 `verified-by: bravebot_agent::turn::a_checks_tokens_do_not_warn_a_delegate_whose_run_read_its_own_output`
 `verified-by: bravebot_agent::turn::the_tools_a_delegate_is_left_after_a_round_do_not_depend_on_a_check`

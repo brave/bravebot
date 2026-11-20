@@ -505,7 +505,8 @@ pub struct Delegated {
     /// What it cost, so the turn can report the whole of what it spent.
     pub usage: Usage,
     /// Of that cost, what the parent counts against its own token budget: the delegate's total
-    /// less the checks it made, which its parent's budget does not count either (DELEGATE-29).
+    /// less the checks and processor calls it made, which its parent's budget does not count
+    /// either (DELEGATE-29).
     pub budgeted_tokens: u64,
     /// How many model requests made that cost, so the turn counts them with its own.
     pub requests: u64,
