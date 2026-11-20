@@ -788,7 +788,9 @@ fn permission_review_can_only_remove_existing_grants() {
         call(
             &mut bridge,
             "permissions.revoke",
-            json!({"session": session, "kind": "command", "command": {"program": "/bin/sh", "args": []}})
+            json!({"session": session, "kind": "command", "command": {
+                "program": "/bin/sh", "startedAs": "/bin/sh", "args": [], "directory": directory,
+            }})
         ),
         Err(ErrorCode::BadRequest)
     );

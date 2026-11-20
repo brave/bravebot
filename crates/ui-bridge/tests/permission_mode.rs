@@ -939,7 +939,7 @@ fn a_command_vouched_for_holds_for_later_turns_until_it_is_revoked() {
         "permissions.revoke",
         json!({"session": session, "kind": "command", "command": {
             "program": command["program"], "startedAs": command["startedAs"],
-            "args": command["args"],
+            "args": command["args"], "directory": command["directory"],
         }}),
     );
 

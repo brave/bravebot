@@ -2861,13 +2861,22 @@ impl Bridge {
                         .params
                         .get("command")
                         .ok_or_else(|| Failure::bad_request("Missing command"))?;
+                    // The tree is part of the entry's key, so a request that names none is
+                    // refused rather than matched on the other three fields, which would pick
+                    // whichever tree sorts first. It is compared as the text the list sent, and
+                    // only against an entry whose directory is that text.
+                    let directory = selected
+                        .get("directory")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Failure::bad_request("Missing command directory"))?;
                     let command = state
                         .answers
                         .programs
                         .iter()
                         .find(|command| {
-                            json!({"program": command.program, "startedAs": command.started_as, "args": command.args})
-                                == *selected
+                            command.directory.to_str() == Some(directory)
+                                && json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "directory": directory})
+                                    == *selected
                         })
                         .cloned()
                         .ok_or_else(|| {
@@ -2893,7 +2902,19 @@ impl Bridge {
         }
         let mut listed = json!({
             "paths": listed_rules(&state.answers.trust),
-            "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
+            // Each entry names the tree it was vouched in: two entries for one command in two
+            // trees are two grants, and a revoke is made with the tree it withdraws.
+            "commands": state.answers.programs.iter().map(|command| json!({
+                "program": command.program,
+                "startedAs": command.started_as,
+                "args": command.args,
+                // The tree as held. A tree with no text spelling is null, which no revoke
+                // matches, so a rendering never decides which entry is withdrawn.
+                "directory": command.directory.to_str(),
+                // The same tree spelled for the screen, and never compared.
+                "shownDirectory": shown_tree(&command.directory, &open.project),
+                "display": command.display(),
+            })).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
             "remembered": remembered_json(&open.project),
@@ -3768,6 +3789,23 @@ fn shown_path(path: &Path, project: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+/// The tree a remembered command was given in, spelled for the screen: relative to the workspace
+/// root where it is inside it, `.` for the root itself, and the absolute path otherwise. The home
+/// directory is not abbreviated.
+///
+/// For the screen only. Entries are keyed on the path, and a revoke never compares this.
+fn shown_tree(directory: &Path, project: &Path) -> String {
+    let resolved = std::fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+    match directory
+        .strip_prefix(&resolved)
+        .or_else(|_| directory.strip_prefix(project))
+    {
+        Ok(rest) if rest.as_os_str().is_empty() => ".".to_string(),
+        Ok(rest) => bravebot_agent::confirm::shown_path(rest),
+        Err(_) => bravebot_agent::confirm::shown_path(directory),
+    }
 }
 
 /// Run one turn to its end, whatever that end is.
@@ -4751,6 +4789,7 @@ mod coverage_tests {
             "permissions.revoke",
             json!({"session": handle, "kind": "command", "command": {
                 "program": command.program, "startedAs": command.started_as, "args": command.args,
+                "directory": command.directory,
             }}),
         );
 
@@ -5420,6 +5459,7 @@ mod permissions_tests {
                     "program": "/usr/bin/python3",
                     "startedAs": "/work/.venv/bin/python",
                     "args": ["-V"],
+                    "directory": "/work",
                 }
             }})
             .to_string(),
@@ -5435,6 +5475,206 @@ mod permissions_tests {
             after["commands"][0]["startedAs"], "/usr/bin/python3",
             "{after}"
         );
+    }
+
+    /// One command vouched for in two trees is two grants. The list names the tree of each, as the
+    /// path held and spelled relative to the workspace root (`.` for the root, absolute outside
+    /// it), and a revoke names the tree it withdraws, so the grant the person pressed Revoke on is
+    /// the one that goes.
+    #[test]
+    fn a_command_vouched_in_two_trees_is_listed_with_each_tree_and_revoked_by_it() {
+        use bravebot_core::programs::{Command, TrustedPrograms};
+        let seeded = || {
+            let root = Command::new("/bin/sh", vec!["check.sh".into()], "/work");
+            let sub = Command::new("/bin/sh", vec!["check.sh".into()], "/work/sub");
+            let outside = Command::new("/bin/sh", vec!["check.sh".into()], "/elsewhere");
+            let mut state = State::fresh(TrustStore::new("/work"));
+            state.answers.programs = TrustedPrograms::from_iter([root, sub, outside]);
+            let mut bridge = Bridge::new(Box::new(|_| {}));
+            let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
+            (bridge, handle)
+        };
+        let call = |bridge: &mut Bridge, method: &str, params: Value| {
+            let line = json!({"id": 1, "method": method, "params": params}).to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap()).unwrap()
+        };
+        let trees = |listed: &Value| {
+            listed["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|command| {
+                    (
+                        command["directory"].clone(),
+                        command["shownDirectory"].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let revoke = |bridge: &mut Bridge, handle: &str, directory: &str| {
+            call(
+                bridge,
+                "permissions.revoke",
+                json!({"session": handle, "kind": "command", "command": {
+                    "program": "/bin/sh", "startedAs": "/bin/sh",
+                    "args": ["check.sh"], "directory": directory,
+                }}),
+            )
+        };
+
+        let (mut bridge, handle) = seeded();
+        let listed = call(&mut bridge, "permissions.list", json!({"session": handle}));
+        assert_eq!(
+            trees(&listed),
+            [
+                (json!("/elsewhere"), json!("/elsewhere")),
+                (json!("/work"), json!(".")),
+                (json!("/work/sub"), json!("sub")),
+            ],
+            "{listed}"
+        );
+
+        let after = revoke(&mut bridge, &handle, "/work/sub");
+        assert_eq!(
+            trees(&after),
+            [
+                (json!("/elsewhere"), json!("/elsewhere")),
+                (json!("/work"), json!(".")),
+            ],
+            "revoking the row for /work/sub removed another tree: {after}"
+        );
+
+        let (mut bridge, handle) = seeded();
+        let after = revoke(&mut bridge, &handle, "/work");
+        assert_eq!(
+            trees(&after),
+            [
+                (json!("/elsewhere"), json!("/elsewhere")),
+                (json!("/work/sub"), json!("sub")),
+            ],
+            "revoking the row for /work removed another tree: {after}"
+        );
+    }
+
+    /// A tree that is not UTF-8 and the tree its replacement-character rendering spells are two
+    /// entries. The list sends the first with no text spelling, a revoke naming the lookalike
+    /// removes only the lookalike, and no string revokes the first, so a rendering never decides
+    /// which entry is withdrawn (PATH-003).
+    ///
+    /// The invalid byte is `0x80`, so the entry sorts before its lookalike and a revoke that
+    /// compares renderings would find it first.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_that_is_not_text_is_not_revoked_by_the_tree_that_renders_like_it() {
+        use bravebot_core::programs::{Command, TrustedPrograms};
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = OsStr::from_bytes(b"/work/t\x80");
+        let lookalike = "/work/t\u{FFFD}";
+        assert_eq!(invalid.to_string_lossy(), lookalike);
+        let mut state = State::fresh(TrustStore::new("/work"));
+        state.answers.programs = TrustedPrograms::from_iter([
+            Command::new("/bin/sh", vec!["check.sh".into()], invalid),
+            Command::new("/bin/sh", vec!["check.sh".into()], lookalike),
+        ]);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
+        let call = |bridge: &mut Bridge, method: &str, params: Value| {
+            let line = json!({"id": 1, "method": method, "params": params}).to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap())
+        };
+        let revoke = |bridge: &mut Bridge, directory: &str| {
+            call(
+                bridge,
+                "permissions.revoke",
+                json!({"session": handle, "kind": "command", "command": {
+                    "program": "/bin/sh", "startedAs": "/bin/sh",
+                    "args": ["check.sh"], "directory": directory,
+                }}),
+            )
+        };
+        let directories = |listed: &Value| {
+            listed["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|command| command["directory"].clone())
+                .collect::<Vec<_>>()
+        };
+
+        let listed = call(&mut bridge, "permissions.list", json!({"session": handle})).unwrap();
+        assert_eq!(
+            directories(&listed),
+            [Value::Null, json!(lookalike)],
+            "{listed}"
+        );
+        let shown = |at: usize| listed["commands"][at]["shownDirectory"].clone();
+        assert_ne!(shown(0), shown(1), "{listed}");
+
+        let after = revoke(&mut bridge, lookalike).unwrap();
+        assert_eq!(
+            directories(&after),
+            [Value::Null],
+            "revoking the lookalike did not remove it alone: {after}"
+        );
+        for directory in [lookalike, "/work/t", "/work/t\\x80", "/work/t\u{80}"] {
+            let refused = revoke(&mut bridge, directory).expect_err("refused");
+            assert_eq!(refused.code, ErrorCode::BadRequest, "{directory:?}");
+        }
+        let listed = call(&mut bridge, "permissions.list", json!({"session": handle})).unwrap();
+        assert_eq!(
+            directories(&listed),
+            [Value::Null],
+            "a string revoked the entry whose tree is not text: {listed}"
+        );
+    }
+
+    /// A revoke that names no tree, or one no entry was given in, changes nothing and does not
+    /// fall back to the entry that matches on the other three fields.
+    #[test]
+    fn revoking_a_command_without_its_tree_or_in_a_tree_not_held_changes_nothing() {
+        use bravebot_core::programs::{Command, TrustedPrograms};
+        let mut state = State::fresh(TrustStore::new("/work"));
+        state.answers.programs =
+            TrustedPrograms::from_iter([Command::new("/bin/sh", vec!["check.sh".into()], "/work")]);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
+        let attempt = |bridge: &mut Bridge, command: Value| {
+            let line = json!({"id": 1, "method": "permissions.revoke", "params": {
+                "session": handle, "kind": "command", "command": command,
+            }})
+            .to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap())
+        };
+        let held = json!({"program": "/bin/sh", "startedAs": "/bin/sh", "args": ["check.sh"]});
+        let with = |directory: Value| {
+            let mut command = held.clone();
+            command["directory"] = directory;
+            command
+        };
+        for command in [
+            held.clone(),
+            with(json!("/work/sub")),
+            with(json!("/work/")),
+            with(json!("work")),
+            with(json!(null)),
+            with(json!(7)),
+        ] {
+            let refused = attempt(&mut bridge, command.clone()).expect_err("refused");
+            assert_eq!(refused.code, ErrorCode::BadRequest, "{command}");
+        }
+        let list = Request::parse(
+            &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
+                .to_string(),
+        )
+        .unwrap();
+        let listed = bridge.dispatch(&list).unwrap();
+        assert_eq!(
+            listed["commands"].as_array().map(Vec::len),
+            Some(1),
+            "{listed}"
+        );
+        assert!(attempt(&mut bridge, with(json!("/work"))).is_ok());
     }
 
     /// PROMPT-1: the list sends each rule's name spelled beside the name as held. The name as held
