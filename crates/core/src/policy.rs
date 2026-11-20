@@ -590,6 +590,101 @@ pub enum Containment {
     Held,
 }
 
+/// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) struct WriteFacts {
+    /// The data being written is trusted.
+    pub(crate) data_trusted: bool,
+    /// The destination came out of a reference, so nobody has read it yet.
+    pub(crate) by_reference: bool,
+    /// The destination is a path where a write runs code later (PERM-9).
+    pub(crate) protected: bool,
+    /// What the settings file's `Edit` rules say about the destination.
+    pub(crate) rule: crate::permissions::Decision,
+    /// What the trust map says about the destination, or `None` where nobody has said.
+    pub(crate) in_force: Option<Integrity>,
+}
+
+/// Which question decided whether a write is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum WriteReason {
+    Reference,
+    Protected,
+    Ruled(crate::permissions::Ruling),
+    Undecided,
+    LowersTrust,
+    KeepsTrust,
+    RaisesTrust,
+    AlreadyUntrusted,
+}
+
+impl WriteReason {
+    /// Whether the write is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::write_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // Nobody has read the path, it runs code later, nobody has vouched for it, or the
+            // write would make a trusted path untrusted.
+            Self::Reference | Self::Protected | Self::Undecided | Self::LowersTrust => true,
+            Self::Ruled(ruling) => {
+                let write_allowed = ruling == crate::permissions::Ruling::Allow;
+                !write_allowed
+            }
+            Self::KeepsTrust | Self::RaisesTrust | Self::AlreadyUntrusted => false,
+        }
+    }
+}
+
+/// The question that decides whether a write is put to a person, in the order they are asked.
+///
+/// A destination out of a reference and a protected path are asked about before any rule is read,
+/// since no rule can put a path in front of somebody and no rule may answer for a path that runs
+/// code later. A rule is read before the trust map. The map asks where nobody has said anything
+/// about the path, and where untrusted data would make a trusted path untrusted.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::write_reason_is_sound(facts, r),
+))]
+fn write_reason(facts: WriteFacts) -> WriteReason {
+    if facts.by_reference {
+        return WriteReason::Reference;
+    }
+    if facts.protected {
+        return WriteReason::Protected;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = facts.rule {
+        return WriteReason::Ruled(ruling);
+    }
+    let Some(in_force) = facts.in_force else {
+        // Nobody has said anything about this path, so the first write is the moment to ask.
+        return WriteReason::Undecided;
+    };
+    let into_trusted = in_force == Integrity::Trusted;
+    if into_trusted && facts.data_trusted {
+        return WriteReason::KeepsTrust;
+    }
+    // The one irreversible case: a trusted path is about to stop being trusted.
+    if into_trusted {
+        return WriteReason::LowersTrust;
+    }
+    // Already untrusted. Trusted data only raises it; untrusted data changes nothing.
+    if facts.data_trusted {
+        return WriteReason::RaisesTrust;
+    }
+    WriteReason::AlreadyUntrusted
+}
+
+/// The reply [`Policy::record_answers`] records, in the words [`ask::describe_series`] gives it.
+#[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+fn describe_the_answers(asked: &crate::ask::Series, answers: &[Answer]) -> String {
+    ask::describe_series(asked, answers)
+}
+
 /// What [`Policy::plan_needs_approval_held`] knows about a line, gathered before it decides.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(verus_keep_ghost, verus_verify)]
@@ -1571,6 +1666,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// prompt, which a yes rewrites the declaration to, so a server's bytes become a url somebody
     /// wrote down only once somebody has read them. `(T,pub)`, so the url may be parsed, written
     /// and connected to from then on.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_granted(*old(self), "mcp_move"@, "alias"@, alias@),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_a_server_move(
         &mut self,
         alias: &str,
@@ -1581,15 +1681,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof =
             Declassification::authorise("a destination a person approved a server moving to");
         let url = destination.clone().declassify(&proof);
-        let label = Label::trusted_public();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let approved_move = Label::new(Integrity::Trusted, Confidentiality::Public);
         self.allow(
             "mcp_move",
             format!(
                 "where {alias} was redirected was {was}; the user approved it as where the server \
-                 now is, so it is declared at {label}"
+                 now is, so it is declared at {approved_move}"
             ),
         );
-        Ok(Labelled::new(url, label))
+        Ok(Labelled::new(url, approved_move))
     }
 
     /// Refuse a call to a server's tool a `deny` rule covers, before anybody is asked about it.
@@ -1901,6 +2002,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// server's reply besides: the client drew it, and dropped what was not a name, a sentence or
     /// an argument. `(T,pub)`, so the driver may name the tools from it: the list is what the
     /// server tells whoever connects, and nothing of the person's.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> spec_granted(*old(self), "mcp_tools"@, "alias"@, alias@),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+    ))]
     pub fn promote_a_tool_list(
         &mut self,
         alias: &str,
@@ -1911,15 +2017,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let was = list.label();
         let proof = Declassification::authorise("a tool list somebody vouched for as drawn");
         let text = list.clone().declassify(&proof);
-        let label = Label::trusted_public();
-        self.allow(
-            "mcp_tools",
-            format!(
-                "the tools {alias} offers were {was}; {}, so the planner is offered them at {label}",
-                by.describe()
-            ),
-        );
-        Ok(Labelled::new(text, label))
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let vouched_list = Label::new(Integrity::Trusted, Confidentiality::Public);
+        self.allow_a_tool_list(alias, was, vouched_list, &by);
+        Ok(Labelled::new(text, vouched_list))
     }
 
     /// Record that a capability produced an observation, returning the label it must
@@ -2888,6 +2989,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// One-way: [`Integrity::meet`] cannot raise it, so nothing shown later restores integrity
     /// already lost.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     fn absorb(&mut self, observed: Integrity) {
         let lowered = self.context.meet(observed);
         if lowered != self.context {
@@ -3258,6 +3360,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// It absorbs [`Integrity::Trusted`], which cannot raise a context that has already fallen,
     /// so answering a question never restores integrity the turn had lost.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::value::spec_label_of(series).integrity == Integrity::Trusted,
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of(
+                series,
+            ),
+    ))]
     pub fn record_answers(
         &mut self,
         tool: &str,
@@ -3265,7 +3374,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         answers: &[Answer],
     ) -> Gated<Labelled<String>> {
         let label = series.label();
-        if !label.is_trusted() {
+        // A person cannot vouch for a question they did not write.
+        let asked_from_trust = label.is_trusted();
+        if !asked_from_trust {
             return Err(self.deny(
                 "answer",
                 Principle::IntegrityGate,
@@ -3277,9 +3388,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
 
         let proof = Declassification::authorise("questions the user answered");
-        let asked = series.clone().declassify(&proof);
-        let text = ask::describe_series(&asked, answers);
+        let text = describe_the_answers(&series.clone().declassify(&proof), answers);
 
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
         let replied = Label::new(Integrity::Trusted, label.confidentiality);
         self.allow(
             "answer",
@@ -3304,6 +3415,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// offered an edit, and this is the second place that says so.
     ///
     /// The edited text is never given back to the planner, and nothing here reads it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r is Ok <==> crate::value::spec_label_of(proposed) == crate::spec::trusted_public(),
+            r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+            r is Ok ==> crate::value::spec_value_of(&r->Ok_0) == saved,
+    ))]
     pub fn adopt_edited_body(
         &mut self,
         tool: &str,
@@ -3311,7 +3428,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         saved: String,
     ) -> Gated<Labelled<String>> {
         let was = proposed.label();
-        if !was.is_trusted() || !was.is_public() {
+        // A body the person edits keeps what they read in it, so it is adopted only from (T,pub).
+        let editable = was.is_trusted() && was.is_public();
+        if !editable {
             return Err(self.deny(
                 "answer",
                 Principle::IntegrityGate,
@@ -3322,7 +3441,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         }
-        let edited = Label::trusted_public();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let edited = Label::new(Integrity::Trusted, Confidentiality::Public);
         self.allow(
             "answer",
             format!("{tool}: the person edited the proposed body, recorded {edited}"),
@@ -3378,8 +3498,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// So this must only ever be reached from a line a human typed. Never point it at argv the
     /// planner proposed, never at a line reconstructed from a transcript, and never at anything a
     /// processor produced: each of those is content, and this would launder it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == (Label {
+                integrity: Integrity::Trusted,
+                confidentiality: Confidentiality::Private,
+            }),
+    ))]
     pub fn label_user_command_output(&mut self, command: &str, text: String) -> Labelled<String> {
-        let label = Label::trusted_private();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let typed_output = Label::new(Integrity::Trusted, Confidentiality::Private);
+        let label = typed_output;
         self.allow(
             "provenance",
             format!(
@@ -3407,8 +3536,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// `~/.bravebot/skills` is trusted on the same footing as a configuration file someone pasted.
     /// Putting a file there is the grant. What this does not do is assume trust from silence,
     /// since an empty directory yields nothing at all.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == crate::spec::trusted_public(),
+    ))]
     pub fn label_user_configuration(&mut self, origin: &str, text: String) -> Labelled<String> {
-        let label = Label::trusted_public();
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let own_configuration = Label::new(Integrity::Trusted, Confidentiality::Public);
+        let label = own_configuration;
         self.allow(
             "provenance",
             format!("{origin}: labelled {label}, from the user's own configuration directory"),
@@ -3431,13 +3566,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// road to a label and never this one, which would trust it for sitting beside a fact.
     ///
     /// The trail records where the fact came from and the label it was given, and none of its words.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            crate::value::spec_label_of(&r) == (Label {
+                integrity: Integrity::Trusted,
+                confidentiality,
+            }),
+    ))]
     pub fn label_kept_fact(
         &mut self,
         origin: &str,
         text: String,
         confidentiality: Confidentiality,
     ) -> Labelled<String> {
-        let label = Label::new(Integrity::Trusted, confidentiality);
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let kept_fact = Label::new(Integrity::Trusted, confidentiality);
+        let label = kept_fact;
         self.allow(
             "provenance",
             format!("{origin}: labelled {label}, from a fact kept in the user's own memory"),
@@ -7486,6 +7630,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.deny(tool, Principle::Confinement, format!("{slot} {why}"))
     }
 
+    /// The trail line for [`Policy::promote_a_tool_list`].
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    fn allow_a_tool_list(
+        &mut self,
+        alias: &str,
+        was: Label,
+        label: Label,
+        by: &crate::vetting::Endorsed,
+    ) {
+        self.allow(
+            "mcp_tools",
+            format!(
+                "the tools {alias} offers were {was}; {}, so the planner is offered them at {label}",
+                by.describe()
+            ),
+        );
+    }
+
     /// The refusal of a release the plan did not name, to `destination` where one was asked for.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
     fn refuse_unplanned_release(&mut self, slot: &SlotId, destination: Option<&str>) -> Denial {
@@ -7694,74 +7856,50 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         contents: Label,
         destination: Destination,
     ) -> bool {
-        let data_trusted = contents.is_trusted();
-
-        // A destination taken out of a reference is shown whatever the table says, because the
-        // approval is the only moment the path exists anywhere a person can see it. The table
-        // below reasons about a path somebody named; this one nobody has.
-        if destination == Destination::Reference {
-            self.allow(
-                "approval",
-                format!("{path}: named only by a reference, so it is shown, asking"),
-            );
-            return true;
-        }
-
-        // A path where a write runs code later is put to the person whatever a rule or the trust
-        // map says. Read off the routing path alone, as a deny rule is (PERM-9, MODE-2).
-        if crate::protected::is_protected(path) {
-            self.allow(
-                "approval",
-                format!("{path}: a path where a write runs code later, asking"),
-            );
-            return true;
-        }
-
-        // A rule the user wrote in advance answers before the table below, which is what a rule
-        // is for. It cannot reach the case above: nothing a pattern says can put a path in front
-        // of somebody, and that prompt is the only place a reference's path is ever seen.
-        match self
-            .permissions
-            .for_path(crate::permissions::Subject::Edit, path)
-        {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "{path}: a rule in the settings file says {ruling}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                return needed;
-            }
-            crate::permissions::Decision::Unmatched => {}
-        }
-
-        let (needed, reason) = match self.integrity_in_force(path) {
-            // Nobody has said anything about this path, so the first write is the moment to ask.
-            None => (true, "a path nobody has vouched for either way"),
-            // The one irreversible case: a trusted path is about to stop being trusted.
-            Some(Integrity::Trusted) if !data_trusted => (
-                true,
-                "untrusted data into a trusted path, which it will make untrusted",
-            ),
-            Some(Integrity::Trusted) => (false, "trusted data to a trusted path"),
-            // Already untrusted. Trusted data only raises it; untrusted data changes nothing.
-            Some(Integrity::Untrusted) if data_trusted => (
-                false,
-                "trusted data into an untrusted path, which it will make trusted",
-            ),
-            Some(Integrity::Untrusted) => (false, "untrusted data to an already untrusted path"),
+        let facts = WriteFacts {
+            data_trusted: contents.is_trusted(),
+            by_reference: destination == Destination::Reference,
+            protected: crate::protected::is_protected(path),
+            rule: self
+                .permissions
+                .for_path(crate::permissions::Subject::Edit, path),
+            in_force: self.integrity_in_force(path),
         };
-
-        self.allow(
-            "approval",
-            format!(
-                "{path}: {reason}, {}",
+        let reason = write_reason(facts);
+        let needed = reason.asks();
+        let said = match reason {
+            // A destination taken out of a reference is shown whatever the table says, because the
+            // approval is the only moment the path exists anywhere a person can see it.
+            WriteReason::Reference => {
+                format!("{path}: named only by a reference, so it is shown, asking")
+            }
+            // A path where a write runs code later is put to the person whatever a rule or the
+            // trust map says. Read off the routing path alone, as a deny rule is (PERM-9, MODE-2).
+            WriteReason::Protected => {
+                format!("{path}: a path where a write runs code later, asking")
+            }
+            WriteReason::Ruled(ruling) => format!(
+                "{path}: a rule in the settings file says {ruling}, {}",
                 if needed { "asking" } else { "no prompt" }
             ),
-        );
+            WriteReason::Undecided => {
+                format!("{path}: a path nobody has vouched for either way, asking")
+            }
+            WriteReason::LowersTrust => format!(
+                "{path}: untrusted data into a trusted path, which it will make untrusted, asking"
+            ),
+            WriteReason::KeepsTrust => {
+                format!("{path}: trusted data to a trusted path, no prompt")
+            }
+            WriteReason::RaisesTrust => format!(
+                "{path}: trusted data into an untrusted path, which it will make trusted, no \
+                 prompt"
+            ),
+            WriteReason::AlreadyUntrusted => {
+                format!("{path}: untrusted data to an already untrusted path, no prompt")
+            }
+        };
+        self.allow("approval", said);
         needed
     }
 

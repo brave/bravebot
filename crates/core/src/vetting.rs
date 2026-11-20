@@ -32,6 +32,9 @@
 //! Content cannot end the block it is in. Do not "simplify" the encoding away: the fences are
 //! signposting for the reader on the other end, and the encoding is the containment.
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 use crate::policy::{PathAuthority, SpecAuthority};
 use crate::value::Labelled;
 
@@ -98,6 +101,7 @@ impl std::fmt::Display for Verdict {
 /// claiming a person read something nobody was shown. All three mint the same single-use
 /// endorsement and all three produce the same label; what differs is who answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub enum Endorsed {
     /// A person was shown the bytes and said the planner may read them.
     ByAPerson,

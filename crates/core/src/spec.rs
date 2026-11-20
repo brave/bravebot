@@ -7,7 +7,7 @@
 use crate::command::{Asked, Expansion, Plan, Route, Step, Steps, ValuePart};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::permissions::{Decision, Ruling};
-use crate::policy::{OutputFacts, RunFacts, RunReason};
+use crate::policy::{OutputFacts, RunFacts, RunReason, WriteFacts, WriteReason};
 use crate::programs::Command;
 use crate::remembered::{Remembered, RememberedArg, RememberedLine, RememberedStep, Shape};
 use std::path::PathBuf;
@@ -641,6 +641,49 @@ pub open spec fn the_planner_may_decide(label: Label, context: Integrity) -> boo
 /// decide anything, so a release of untrusted bytes is still untrusted (ROUTE-3).
 pub open spec fn released(from: Label) -> Label {
     Label { integrity: from.integrity, confidentiality: Confidentiality::Public }
+}
+
+/// A write goes unasked only on a trust map or a rule that answers it.
+pub(crate) open spec fn write_reason_asks(reason: WriteReason) -> bool {
+    match reason {
+        WriteReason::Ruled(ruling) => ruling != Ruling::Allow,
+        WriteReason::KeepsTrust | WriteReason::RaisesTrust | WriteReason::AlreadyUntrusted => false,
+        _ => true,
+    }
+}
+
+/// What deciding whether to ask about a write has to hold, whatever order the questions are asked
+/// in.
+///
+/// A destination nobody has read and a protected path are always asked about, whatever a rule
+/// says (PERM-9, MODE-2). An `ask` or `deny` rule is never overturned by the trust map. A path
+/// nobody has said anything about is asked about unless a rule allows it. And untrusted data never
+/// goes unasked into a path the map holds trusted unless a rule allows it, since that is the one
+/// write a later step cannot undo (TRUST-4). A write goes unasked only on an `allow` rule, or on
+/// the trust map where it answers.
+pub(crate) open spec fn write_reason_is_sound(facts: WriteFacts, reason: WriteReason) -> bool {
+    let WriteFacts { data_trusted, by_reference, protected, rule, in_force } = facts;
+    let unasked = !write_reason_asks(reason);
+    (by_reference || protected ==> !unasked)
+        && (rule == Decision::Ruled(Ruling::Ask) || rule == Decision::Ruled(Ruling::Deny)
+        ==> !unasked)
+        && (in_force is None && rule == Decision::Unmatched ==> !unasked)
+        && (in_force == Some(Integrity::Trusted) && !data_trusted && rule == Decision::Unmatched
+        ==> !unasked)
+        && (unasked ==> match reason {
+            WriteReason::Ruled(ruling) => rule == Decision::Ruled(ruling)
+                && ruling == Ruling::Allow,
+            WriteReason::KeepsTrust => rule == Decision::Unmatched && in_force == Some(
+                Integrity::Trusted,
+            ) && data_trusted,
+            WriteReason::RaisesTrust => rule == Decision::Unmatched && in_force == Some(
+                Integrity::Untrusted,
+            ) && data_trusted,
+            WriteReason::AlreadyUntrusted => rule == Decision::Unmatched && in_force == Some(
+                Integrity::Untrusted,
+            ) && !data_trusted,
+            _ => false,
+        })
 }
 
 } // verus!

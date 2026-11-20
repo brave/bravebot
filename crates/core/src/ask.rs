@@ -22,6 +22,9 @@
 //! [`crate::todo`]: shaping a question means looking at it, and the driver may not. Formatting
 //! the answer lives here too, so the driver never has to branch on what the person said.
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// One option the person may pick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
@@ -84,9 +87,21 @@ pub const MOST_AT_ONCE: usize = 4;
 ///
 /// A series rather than a loose vector so there is one value to gate, one value to shape, and
 /// one value to report against. Nothing may ask half of it: see [`canonical_series`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct Series {
     pub questions: Vec<Question>,
+}
+
+// Written out rather than derived, because Verus refuses a derived `Clone` on a type whose fields
+// it does not read.
+impl Clone for Series {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self {
+            questions: self.questions.clone(),
+        }
+    }
 }
 
 impl Series {
@@ -137,7 +152,8 @@ impl Asking {
 /// Not a label and not a gate, just the shape of a reply. Declining is a first-class answer
 /// rather than an error: a question nobody wants to answer is still answered, and the turn
 /// continues.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub enum Answer {
     /// Indices into the question's choices, in the order the person confirmed them.
     Chosen(Vec<usize>),
@@ -151,6 +167,19 @@ pub enum Answer {
     /// Apart from [`Answer::Declined`] because nobody refused: a person who is away has said
     /// nothing, and the planner reads the two differently.
     TimedOut,
+}
+
+// Written out rather than derived, for the reason `Series`' is.
+impl Clone for Answer {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Chosen(indices) => Self::Chosen(indices.clone()),
+            Self::Typed(text) => Self::Typed(text.clone()),
+            Self::Declined => Self::Declined,
+            Self::TimedOut => Self::TimedOut,
+        }
+    }
 }
 
 /// One option, shaped for a screen.
