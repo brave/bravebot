@@ -165,10 +165,16 @@ pub enum Home {
     /// document, or a document beside something else. It may be written nowhere until something
     /// says which.
     Unsaid,
+    /// The document named is a decoding of another encoding, so the answer is for no file: the
+    /// document's own bytes may hold a byte order mark or bytes UTF-8 does not allow, and an
+    /// answer is always UTF-8, so writing it back would put UTF-8 where the file held something
+    /// else. Taken from the slot's own bit ([`SlotStore::is_decoded`]), never from the answer's
+    /// text, so it holds whatever a processor was told to do with a decoding.
+    Decoded { path: String, named_by: SlotId },
 }
 
-/// Shows which kind of home this is and, for [`Home::Only`], the slot that named it. Never the
-/// path, which is the filename of the one document the answer may replace.
+/// Shows which kind of home this is and, for [`Home::Only`] and [`Home::Decoded`], the slot that
+/// named it. Never the path, which is the filename of the one document the answer may replace.
 impl fmt::Debug for Home {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -179,6 +185,10 @@ impl fmt::Debug for Home {
                 .finish_non_exhaustive(),
             Self::Scratch => f.write_str("Scratch"),
             Self::Unsaid => f.write_str("Unsaid"),
+            Self::Decoded { named_by, .. } => f
+                .debug_struct("Decoded")
+                .field("named_by", named_by)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -1474,6 +1484,15 @@ mod tests {
         assert!(!rendered.contains("secret-target"), "{rendered}");
         assert!(rendered.contains("ref:3"), "{rendered}");
         assert!(rendered.contains("Only"), "{rendered}");
+
+        let home = Home::Decoded {
+            path: "secret-target.md".to_string(),
+            named_by: sid("ref:3"),
+        };
+        let rendered = format!("{home:?}");
+        assert!(!rendered.contains("secret-target"), "{rendered}");
+        assert!(rendered.contains("ref:3"), "{rendered}");
+        assert!(rendered.contains("Decoded"), "{rendered}");
 
         for (home, word) in [
             (Home::Anywhere, "Anywhere"),

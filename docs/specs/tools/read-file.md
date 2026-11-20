@@ -124,7 +124,7 @@ UTF-8 over a UTF-16 file.
 `verified-by: bravebot_agent::workspace::a_utf8_file_pages_without_a_decoding`
 `verified-by: bravebot_agent::workspace::nulls_without_a_byte_order_mark_are_still_binary`
 `verified-by: bravebot_agent::workspace::a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding`
-`verified-by: bravebot_agent::workspace::a_slot_is_never_filled_from_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::workspace::a_whole_page_and_a_plans_page_refuse_a_file_in_another_encoding`
 `verified-by: bravebot_agent::manifest::a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding`
 `verified-by: bravebot_agent::workspace::a_deferred_read_of_a_file_in_another_encoding_is_reported_as_text`
 `verified-by: bravebot_agent::workspace::a_page_for_a_slot_decodes_a_file_in_another_encoding_without_a_note`

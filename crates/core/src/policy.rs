@@ -6117,19 +6117,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let home = if spec.reads().iter().all(|read| slots.is_no_file(read)) {
             crate::slot::Home::Scratch
         } else {
-            match about
-                .filter(|about| !slots.is_decoded(about))
-                .and_then(|about| {
-                    slots
-                        .path_of(about, &PathAuthority::mint())
-                        .map(|path| (path.to_string(), about.clone()))
-                }) {
+            match about.and_then(|about| {
+                slots
+                    .path_of(about, &PathAuthority::mint())
+                    .map(|path| (path.to_string(), about.clone()))
+            }) {
+                Some((path, named_by)) if slots.is_decoded(&named_by) => {
+                    crate::slot::Home::Decoded { path, named_by }
+                }
                 Some((path, named_by)) => crate::slot::Home::Only { path, named_by },
                 None => crate::slot::Home::Unsaid,
             }
         };
         let said = match &home {
             crate::slot::Home::Only { path, .. } => format!("{slot} answers for {path}"),
+            crate::slot::Home::Decoded { path, .. } => format!(
+                "{slot} answers for {path}, a decoding of another encoding, so it may be \
+                 written nowhere"
+            ),
             crate::slot::Home::Scratch => format!(
                 "{slot} answers for references that are no file, so it may be written only to a \
                  new file in the scratch directory"
@@ -6219,6 +6224,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     "{slot} came from a processor that was never told which document its answer \
                      is for, so it may be written nowhere. Ask about the one document you mean, \
                      and one answer will have one destination."
+                ),
+            )),
+            // Named by its reference, as Home::Only's own refusal is, and for the same reason:
+            // the planner may not be able to name the file, which this does not do either. Chosen
+            // from the slot's own bit (SlotStore::is_decoded), so the sentence is accurate however
+            // the processor's answer reads.
+            crate::slot::Home::Decoded { named_by, .. } => Err(self.deny(
+                "write",
+                Principle::IntegrityGate,
+                format!(
+                    "{slot} is the answer for {named_by}, a document that is a decoding of \
+                     another encoding, so the answer cannot be written over it."
                 ),
             )),
         }
@@ -11121,19 +11138,28 @@ five
             .write("the answer")
             .unwrap();
         policy.answers_for(&answer, &spec, &mut slots);
+        let refused = policy
+            .write_belongs_here(
+                "wide.txt",
+                &WriteSite {
+                    landing: "/work/wide.txt".to_string(),
+                    is_new: false,
+                },
+                &answer,
+                &slots,
+            )
+            .expect_err(
+                "an answer about a decoding may be written over the file it was decoded from",
+            );
         assert!(
-            policy
-                .write_belongs_here(
-                    "wide.txt",
-                    &WriteSite {
-                        landing: "/work/wide.txt".to_string(),
-                        is_new: false
-                    },
-                    &answer,
-                    &slots
-                )
-                .is_err(),
-            "an answer about a decoding may be written over the file it was decoded from"
+            !refused.message.contains("never told which document"),
+            "the decoded-document refusal borrowed Home::Unsaid's wording: {}",
+            refused.message
+        );
+        assert!(
+            refused.message.contains("another encoding"),
+            "unhelpful refusal: {}",
+            refused.message
         );
     }
 
