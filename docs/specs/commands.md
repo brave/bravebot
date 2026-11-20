@@ -800,6 +800,12 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
 `verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
 `verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_at_rest_is_answered_over_the_exchange_with_no_tools`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_in_the_record_when_the_session_is_opened_again`
+`verified-by: bravebot_ui_bridge::asking_aside::an_empty_btw_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_while_one_is_out_is_refused`
+`verified-by: bravebot_ui_bridge::aside::an_empty_question_is_refused`
 
 ## What a slash word is offered
 
