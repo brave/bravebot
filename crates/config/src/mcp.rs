@@ -290,6 +290,8 @@ pub enum Problem {
     Apply,
     /// `apply_arguments` names an argument to a server that asks about every call.
     ApplyWhileAsking,
+    /// `covered_tools` is not a list of tool words, or names a tool with no `apply_arguments`.
+    PlanCovers,
 }
 
 /// The arguments of a server's tools a declaration says take a choice, by tool (SERVERS-22). Each
@@ -301,6 +303,11 @@ pub type ChoiceArguments = BTreeMap<String, BTreeSet<String>>;
 /// of several entries of one list as an array; `new`, short text for a value the call sets; or
 /// `row`, the new text an earlier row of the step gave (`docs/design/manifest-apply.md`).
 pub type ApplyArguments = BTreeMap<String, BTreeMap<String, String>>;
+
+/// The tools a declaration marks plan-covered in an `apply` step: a step whose tools are all marked
+/// makes its calls on a person's approval of the plan, with no list put
+/// (`docs/design/manifest-apply.md`). Each is a tool with [`ApplyArguments`].
+pub type CoveredTools = BTreeSet<String>;
 
 /// The kinds an argument of [`ApplyArguments`] may take. A declaration may name several for one
 /// argument, joined by commas, and a row then gives whichever of them it chooses.
@@ -432,6 +439,8 @@ pub enum Declaration {
         /// The arguments of its tools a row of an `apply` step may fill, with their kinds. Empty
         /// where `ask_every_call` is set, since such a server keeps a question for each call.
         apply_arguments: ApplyArguments,
+        /// The tools of `apply_arguments` whose calls may run on a person's approval of the plan.
+        covered_tools: CoveredTools,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
@@ -471,6 +480,7 @@ impl std::fmt::Debug for Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -486,6 +496,7 @@ impl std::fmt::Debug for Declaration {
                 .field("choice_arguments", choice_arguments)
                 .field("backend", backend)
                 .field("apply_arguments", apply_arguments)
+                .field("covered_tools", covered_tools)
                 .finish(),
             Self::Http {
                 url,
@@ -532,6 +543,7 @@ pub enum Field {
     /// The backend, or the image an OpenShell backend is made from.
     Backend,
     ApplyArguments,
+    CoveredTools,
 }
 
 impl Field {
@@ -553,6 +565,7 @@ impl Field {
             Self::ChoiceArguments => "choice_arguments",
             Self::Backend => "backend",
             Self::ApplyArguments => "apply_arguments",
+            Self::CoveredTools => "covered_tools",
         }
     }
 }
@@ -585,6 +598,7 @@ impl Declaration {
             choice_arguments: ChoiceArguments::new(),
             backend: Backend::Native,
             apply_arguments: ApplyArguments::new(),
+            covered_tools: CoveredTools::new(),
         })
     }
 
@@ -606,6 +620,7 @@ impl Declaration {
             choice_arguments,
             backend,
             apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -639,6 +654,7 @@ impl Declaration {
             choice_arguments,
             backend,
             apply_arguments,
+            covered_tools,
         })
     }
 
@@ -657,6 +673,7 @@ impl Declaration {
             choice_arguments,
             backend,
             apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -688,6 +705,7 @@ impl Declaration {
             choice_arguments,
             backend,
             apply_arguments,
+            covered_tools,
         })
     }
 
@@ -707,6 +725,7 @@ impl Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -722,6 +741,7 @@ impl Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
             },
             Self::Http {
                 url,
@@ -780,6 +800,7 @@ impl Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -795,6 +816,7 @@ impl Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
             },
             Self::Http {
                 url,
@@ -848,6 +870,7 @@ impl Declaration {
             choice_arguments,
             backend,
             apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -885,6 +908,7 @@ impl Declaration {
             choice_arguments,
             backend,
             apply_arguments,
+            covered_tools,
         })
     }
 
@@ -945,6 +969,7 @@ impl Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -966,6 +991,10 @@ impl Declaration {
                 apply_arguments: match ask {
                     true => ApplyArguments::new(),
                     false => apply_arguments,
+                },
+                covered_tools: match ask {
+                    true => CoveredTools::new(),
+                    false => covered_tools,
                 },
             },
             Self::Http {
@@ -1021,6 +1050,7 @@ impl Declaration {
             ask_every_call,
             backend,
             apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -1054,6 +1084,7 @@ impl Declaration {
             choice_arguments: choices,
             backend,
             apply_arguments,
+            covered_tools,
         })
     }
 
@@ -1094,6 +1125,7 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            covered_tools,
             ..
         } = self
         else {
@@ -1128,7 +1160,68 @@ impl Declaration {
             choice_arguments,
             backend,
             apply_arguments: applies,
+            covered_tools,
         })
+    }
+
+    /// The tools whose calls may run on a person's approval of the plan. Empty for a remote
+    /// server.
+    pub fn covered_tools(&self) -> &CoveredTools {
+        static NONE: CoveredTools = BTreeSet::new();
+        match self {
+            Self::Stdio { covered_tools, .. } => covered_tools,
+            Self::Http { .. } => &NONE,
+        }
+    }
+
+    /// This declaration with `tools` marked plan-covered, checked as a file's entry is.
+    ///
+    /// A mark is taken only for a tool the declaration already gives `apply_arguments`, so it is
+    /// built with [`Declaration::applying`] before this. A remote server takes none.
+    pub fn marking_covered(self, tools: CoveredTools) -> Result<Self, Problem> {
+        if tools.is_empty() {
+            return Ok(self);
+        }
+        match self {
+            Self::Stdio {
+                ref apply_arguments,
+                ..
+            } if !tools.iter().all(|tool| apply_arguments.contains_key(tool)) => {
+                Err(Problem::PlanCovers)
+            }
+            Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools: offered,
+                exclude_tools,
+                allowed_hosts,
+                ask_every_call,
+                choice_arguments,
+                apply_arguments,
+                backend,
+                ..
+            } => Ok(Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools: offered,
+                exclude_tools,
+                allowed_hosts,
+                ask_every_call,
+                choice_arguments,
+                apply_arguments,
+                backend,
+                covered_tools: tools,
+            }),
+            Self::Http { .. } => Err(Problem::Remote("covered_tools")),
+        }
     }
 
     /// An HTTP declaration, checked as a file's entry is.
@@ -1311,6 +1404,7 @@ impl Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -1353,6 +1447,9 @@ impl Declaration {
                 }
                 if !apply_arguments.is_empty() {
                     form.push(serde_json::json!({ "apply_arguments": apply_arguments }));
+                }
+                if !covered_tools.is_empty() {
+                    form.push(serde_json::json!({ "covered_tools": covered_tools }));
                 }
                 serde_json::Value::Array(form)
             }
@@ -1419,6 +1516,7 @@ impl Declaration {
                     choice_arguments,
                     backend,
                     apply_arguments,
+                    covered_tools,
                     ..
                 },
                 Self::Stdio {
@@ -1434,6 +1532,7 @@ impl Declaration {
                     choice_arguments: other_choice_arguments,
                     backend: other_backend,
                     apply_arguments: other_apply_arguments,
+                    covered_tools: other_covered_tools,
                     ..
                 },
             ) => {
@@ -1465,6 +1564,7 @@ impl Declaration {
                         apply_arguments != other_apply_arguments,
                         Field::ApplyArguments,
                     ),
+                    (covered_tools != other_covered_tools, Field::CoveredTools),
                 ]
                 .into_iter()
                 .filter_map(|(changed, field)| changed.then_some(field))
@@ -1542,6 +1642,7 @@ impl Declaration {
                 choice_arguments,
                 backend,
                 apply_arguments,
+                covered_tools,
                 ..
             } => {
                 entry.insert("argv".into(), argv.clone().into());
@@ -1576,6 +1677,9 @@ impl Declaration {
                 }
                 if !apply_arguments.is_empty() {
                     entry.insert("apply_arguments".into(), serde_json::json!(apply_arguments));
+                }
+                if !covered_tools.is_empty() {
+                    entry.insert("covered_tools".into(), serde_json::json!(covered_tools));
                 }
             }
             Self::Http {
@@ -1616,7 +1720,7 @@ impl Declaration {
     /// The declaration an entry states, or what is wrong with it.
     fn from_value(value: &serde_json::Value) -> Result<Self, Problem> {
         let entry = value.as_object().ok_or(Problem::NotAnObject)?;
-        const LOCAL: [&str; 9] = [
+        const LOCAL: [&str; 10] = [
             "variables",
             "env",
             "reads",
@@ -1626,6 +1730,7 @@ impl Declaration {
             "backend",
             "image",
             "apply_arguments",
+            "covered_tools",
         ];
         let allowed: &[&str] = match entry.get("transport").and_then(|word| word.as_str()) {
             Some("stdio") => &[
@@ -1643,6 +1748,7 @@ impl Declaration {
                 "backend",
                 "image",
                 "apply_arguments",
+                "covered_tools",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -1796,6 +1902,15 @@ impl Declaration {
                 .collect::<Result<_, Problem>>()?,
             Some(_) => return Err(Problem::Apply),
         };
+        let covered = match entry.get("covered_tools") {
+            None => CoveredTools::new(),
+            Some(serde_json::Value::Array(tools)) => tools
+                .iter()
+                .map(|tool| tool.as_str().map(str::to_string))
+                .collect::<Option<CoveredTools>>()
+                .ok_or(Problem::PlanCovers)?,
+            Some(_) => return Err(Problem::PlanCovers),
+        };
         Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
             .reading(reads)?
@@ -1805,6 +1920,7 @@ impl Declaration {
             .choosing(choices)?
             .running_in(backend)?
             .applying(applies)?
+            .marking_covered(covered)?
             .timing(timeouts))
     }
 }
@@ -4187,6 +4303,49 @@ mod tests {
         let read = Declaration::from_value(&some.to_value()).expect("what was written reads back");
         assert_eq!(read, some);
         assert!(none.to_value().get("apply_arguments").is_none());
+    }
+
+    /// SERVERS-26. A tool is marked plan-covered only where the declaration gives it
+    /// `apply_arguments`, on a local server, and the mark is kept through the file and is part of
+    /// the digest. The regressions it rejects are a mark on a tool a row cannot fill, which would
+    /// run calls nobody declared, a mark on a remote server, and one an edit could add without
+    /// asking again.
+    #[test]
+    fn plan_covers_marks_only_a_tool_with_an_apply_declaration_on_a_local_server() {
+        let applies: ApplyArguments = BTreeMap::from([(
+            "move_bookmark".to_string(),
+            BTreeMap::from([("url".to_string(), "entry".to_string())]),
+        )]);
+        let marked = |tools: &[&str]| -> CoveredTools {
+            tools.iter().map(|tool| (*tool).to_string()).collect()
+        };
+        let built = weather()
+            .applying(applies.clone())
+            .and_then(|declaration| declaration.marking_covered(marked(&["move_bookmark"])))
+            .expect("a marked tool with apply arguments");
+        assert_eq!(built.covered_tools(), &marked(&["move_bookmark"]));
+        assert_ne!(
+            built.digest(),
+            weather().applying(applies.clone()).unwrap().digest(),
+            "the mark is not part of what the approval binds to"
+        );
+        assert_eq!(
+            weather()
+                .applying(applies)
+                .and_then(|declaration| declaration.marking_covered(marked(&["pin_tab"]))),
+            Err(Problem::PlanCovers)
+        );
+        let remote = Declaration::http("https://example.com/mcp".into()).unwrap();
+        assert_eq!(
+            remote.marking_covered(marked(&["move_bookmark"])),
+            Err(Problem::Remote("covered_tools"))
+        );
+        let text = r#"{"servers": {"b": {"transport": "stdio", "argv": ["b"],
+            "apply_arguments": {"move_bookmark": {"url": "entry"}},
+            "covered_tools": ["move_bookmark"]}}}"#;
+        let declarations = Declarations::parse(text).unwrap();
+        let read = declarations.get("b").unwrap().declaration.clone().unwrap();
+        assert_eq!(read.covered_tools(), &marked(&["move_bookmark"]));
     }
 
     /// SERVERS-22. The arguments are part of what an approval binds to only where there are any, so

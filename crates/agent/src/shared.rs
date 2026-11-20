@@ -536,6 +536,15 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn can_put_apply_lists(&mut self) -> bool {
+        // What the client behind the lock can draw, which no mode answers.
+        self.asked(
+            |_| None,
+            |held| held.can_put_apply_lists(),
+            |refuse| refuse.can_put_apply_lists(),
+        )
+    }
+
     fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
         self.asked(
             |unasked| unasked.path(),

@@ -2411,14 +2411,32 @@ fn installing(words: &[&str], manifests: &Path, directory: &Path) -> std::proces
     .unwrap()
 }
 
-/// The declarations `install` printed, one to a line.
+/// The declarations `install` printed, one to a line, before any suggestion of what a plan's
+/// approval may cover.
 fn declarations(output: &std::process::Output) -> Vec<String> {
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("bravebot mcp add"))
-        .map(str::to_string)
-        .collect()
+    printed_lines(output).0
+}
+
+/// The declarations `install` suggested, after the ones it printed, for a plan's approval to cover
+/// some of a group's tools.
+fn suggestions(output: &std::process::Output) -> Vec<String> {
+    printed_lines(output).1
+}
+
+/// The `bravebot mcp add` lines `install` printed, split at its first suggestion.
+fn printed_lines(output: &std::process::Output) -> (Vec<String>, Vec<String>) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (declared, suggested) = stdout
+        .split_once("To let approving a plan")
+        .unwrap_or((&stdout, ""));
+    let lines = |text: &str| {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("bravebot mcp add"))
+            .map(str::to_string)
+            .collect()
+    };
+    (lines(declared), lines(suggested))
 }
 
 /// The groups whose declaration says every call is asked about (SERVERS-21), written out here
@@ -2666,6 +2684,31 @@ fn installing_with_a_preset_prints_one_declaration_for_each_group_it_names() {
             .map(|group| declared(directory.path(), Some(group)))
             .collect();
         assert_eq!(declarations(&output), expected, "{preset}");
+        // SERVERS-26: no printed declaration says a plan's approval covers a tool. That is
+        // suggested apart, after them, as the same declaration with the marks before `--dir`.
+        let covering = |group: &str, tools: &[&str]| {
+            let marks: String = tools
+                .iter()
+                .map(|tool| format!(" --plan-covers {tool}"))
+                .collect();
+            declared(directory.path(), Some(group)).replacen(
+                " --dir ",
+                &format!("{marks} --dir "),
+                1,
+            )
+        };
+        let suggested: Vec<String> = groups
+            .iter()
+            .filter_map(|group| match *group {
+                "tabs-manage" => Some(covering(group, &["pin_tab"])),
+                "bookmarks-write" => Some(covering(
+                    group,
+                    &["create_bookmark_folder", "move_bookmark", "rename_bookmark"],
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(suggestions(&output), suggested, "{preset}");
     }
 }
 

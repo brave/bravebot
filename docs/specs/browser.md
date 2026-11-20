@@ -513,7 +513,8 @@ does. It returns the title and URL of each bookmark in the folder and the title 
 it. Where no folder is named it returns the title of each built-in folder and nothing else, no id and
 no URL, so a title can be learned in a browser set to another language. `list_recent_bookmarks`
 returns the newest bookmarks and `list_reading_list` the reading list, each newest first with the
-time it was added, and `list_reading_list` also whether the entry was read. Each of the three takes a
+time it was added, `list_recent_bookmarks` also the title of the folder each bookmark sits in, and
+`list_reading_list` also whether the entry was read. Each of the three takes a
 count, at most 100 and 20 where none is given, and `list_bookmark_folder` also the optional title of
 the folder; none takes another argument. `list_requests` names a tab by its exact URL and is described in
 [BROWSER-25](#BROWSER-25).
@@ -1316,6 +1317,16 @@ also has `--ask-every-call` ([SERVERS-22](mcp-servers.md#SERVERS-22)). No other 
 the pairs are written out in `crates/browser/src/install.rs`, and a test holds them to the tools whose
 schema has `element_number`.
 
+The lines for `bookmarks-write` and `tabs-manage` also have an `--apply <tool>:<argument>=<kind>`
+for each argument a row of a manifest's `apply` step may fill, before
+`--dir` ([SERVERS-26](mcp-servers.md#SERVERS-26)). No printed declaration has a `--plan-covers`.
+After the declarations, for each group named that has such tools, `install` prints a sentence
+naming them and the same declaration with a `--plan-covers <tool>` for each before `--dir`, to use
+in its place. It suggests `create_bookmark_folder`, `move_bookmark`, `rename_bookmark` and
+`pin_tab`: each acts only in this browser, deletes nothing, overwrites nothing its reply does not
+record, and adds no address. A plan's approval covers no call until the person declares it so
+([MANIFEST-17](manifest.md#MANIFEST-17)).
+
 The declaration for `held` is the plain one, with no `--ask-every-call`. `take_held` takes no
 argument, so the question before a call holds the alias and the tool and nothing a session chose, and
 what it returns is what the person held out and no more. A rule, a standing answer or a mode answers
@@ -1375,6 +1386,7 @@ approve.
 `verified-by: bravebot_browser::tools::a_tool_added_to_a_group_is_not_offered_with_no_group`
 `verified-by: bravebot_browser::install::install_with_no_group_asks_for_the_one_server_of_every_tool`
 `verified-by: bravebot_browser::install::groups_are_read_from_one_word_in_any_order_and_each_is_kept_once`
+`verified-by: bravebot_browser::install::what_a_plans_approval_may_cover_is_suggested_apart_from_the_declaration`
 `verified-by: bravebot_browser::install::a_preset_names_the_groups_that_have_a_tool`
 `verified-by: bravebot_browser::install::a_declaration_names_the_group_in_the_alias_and_in_the_program_words`
 `verified-by: bravebot_browser::install::the_declaration_of_a_group_asked_every_call_says_so_before_the_program`
@@ -1481,17 +1493,17 @@ so a session is never told a page is empty because the setting kept the extensio
 
 `focus_tab`, `pin_tab`, `mute_tab` and `move_tab` each take `url`, which names the open tab whose
 URL is that one, character for character, and act on that tab alone. `focus_tab` makes it the active
-tab of its window and brings the window forward. `pin_tab` takes an optional `pinned` and
-`mute_tab` an optional `muted`, each true where the call leaves it out, and a value that is not
-`true` or `false` fails without a tab being looked for. `move_tab` takes `index`, a whole number
-from -1 up, and moves the tab to that position in the window it is in, -1 being last, never to
-another window; any other value fails the same way. A URL at a listed site fails as
-[BROWSER-17](#BROWSER-17) says, and where no tab is at the URL the call fails and no tab is
-changed. The reply holds the URL asked for and, for the last three, the state the browser reports
-after the change: whether the tab is pinned, whether it is muted, or the position it was put at,
-which differs from the one asked for where the browser keeps pinned tabs ahead of the others. The
-tab is changed by its id once it is found, so a tab that navigates in between receives the change at
-its new page.
+tab of its window and brings the window forward. `pin_tab` takes an optional `pinned` and `mute_tab`
+an optional `muted`, each true where the call leaves it out, and a value that is not `true` or
+`false` fails without a tab being looked for. `pin_tab` answers whether the tab was pinned before
+the call and whether it is after. `move_tab` takes `index`, a whole number from -1 up, and moves the
+tab to that position in the window it is in, -1 being last, never to another window; any other value
+fails the same way. A URL at a listed site fails as [BROWSER-17](#BROWSER-17) says, and where no tab
+is at the URL the call fails and no tab is changed. The reply holds the URL asked for and, for the
+last three, the state the browser reports after the change: whether the tab is pinned, whether it is
+muted, or the position it was put at, which differs from the one asked for where the browser keeps
+pinned tabs ahead of the others. The tab is changed by its id once it is found, so a tab that
+navigates in between receives the change at its new page.
 
 `group_tabs` and `ungroup_tabs` take `urls`, a list of one or more URLs that each name an open tab as
 above, a URL given twice naming its tab once. `group_tabs` puts those tabs into a new tab group in
@@ -1740,7 +1752,9 @@ URL does not name one bookmark`. A folder is named by its title in the same way 
 and `create_bookmark_folder`, for the folder the new node goes in, and by `move_bookmark` for the
 folder the bookmark goes to: the call fails, creating and moving nothing, where no folder has the
 title or more than one does. The bookmark and the folder of `move_bookmark` are both found before
-anything is moved.
+anything is moved. The reply of `move_bookmark` names the folder the bookmark left as well as the
+one it is in, and that of `rename_bookmark` the title it replaced as well as the one it holds, so a
+change can be undone by hand.
 
 The built-in folders at the top of the tree, which the browser makes and titles in the person's
 language, are named by their title like any other folder, by `create_bookmark`,
