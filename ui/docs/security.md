@@ -84,17 +84,22 @@ it, are deleted only when their value contains a `/`, as in the terminal client 
 stays inside the directory it is joined to, and `XDG_CURRENT_DESKTOP` also tells `xdg-open` which
 desktop it is on). The other names are removed whatever they hold,
 which is stricter than the terminal client's check of the value, and a bridge started after an open is
-started without them. It does not delete `HOME`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, which the application and the agent it starts
-read and Electron uses to reach the session bus. Without `HOME`, `gio` reads the account's passwd
+started without them. It does not delete `HOME`, which the application and the agent it starts
+read. Without `HOME`, `gio` reads the account's passwd
 home, which is the same directory whenever the real home is a place the sandbox let a program write.
-So on Linux under a GNOME session the opener Electron starts can still read a `HOME`, a runtime directory or a bus address the
-sandbox let a program write, and for `HOME`, when a session was opened on the home directory, on
-`~/.config` or on `~/.local/share/applications`, a `mimeapps.list` or a `.desktop` file a program
-wrote there ([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30) gives the reasons and what a
-person can do; [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME`, and
-[#3940](https://github.com/brave/bravebot/issues/3940) tracks the other
-two, which the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
-"What a checked start does not cover" in SANDBOX-30 records).
+`XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` are where `gio open` finds the session bus. Electron
+reaches the session bus through them and the agent's proxy socket directory is under
+`XDG_RUNTIME_DIR`, so they are not deleted whatever they hold. Before each call the main process sends
+the two values it holds to the agent (`opener.judge`), which applies the terminal client's check to
+them, and deletes the ones the agent says lead to a socket a stage may write. When the agent cannot be
+asked, or does not answer within five seconds, it deletes both. The deletion lasts for the whole run of
+the application, so an agent started later has no `XDG_RUNTIME_DIR` and puts its proxy
+socket in the temporary directory. Whether Electron's own session bus calls and the agent's proxy directory still
+work after one of the two names is deleted was not run. For `HOME`, when a session was opened on the
+home directory, on `~/.config` or on `~/.local/share/applications`, a `mimeapps.list` or a `.desktop`
+file a program wrote there can still be read
+([SANDBOX-30](../../docs/specs/sandboxing.md#SANDBOX-30) gives the reasons and what a
+person can do; [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME`).
 `gio open` with `HOME` removed was run under a GNOME session (Ubuntu 25.10, GLib 2.86.0) and read
 the account's passwd home. The opener through Electron under a GNOME session with a file manager on
 the bus has not been run.

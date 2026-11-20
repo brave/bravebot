@@ -531,12 +531,12 @@ name the session bus that `gio open` connects to: `XDG_RUNTIME_DIR` is kept only
 directory outside every directory a stage may write, and `DBUS_SESSION_BUS_ADDRESS` only if every
 entry is a `unix:path=` socket path outside those directories (or `unix:runtime=yes`). An address of
 another transport, an abstract socket or a path that does not exist is removed whole. The same address
-check applies to the clipboard tool `wl-copy` on Linux, whose helper programs read it. `systemctl --user`
+check applies to the clipboard tool `wl-copy` on Linux, whose helper programs read it, and to the AWS CLI, `gcloud` and the programs of `doctor --push-identity`, which open a sign-in page or a credential helper's page through `xdg-open`. `systemctl --user`
 (used by `bravebot schedule`) and `systemd-inhibit` (used by `/caffeinate`) have neither
 `DBUS_SESSION_BUS_ADDRESS` nor `DBUS_SYSTEM_BUS_ADDRESS` whatever they hold, so no `unixexec:` address
 reaches them. The `make` that `doctor --sandbox-check` starts also has the variables and special
 targets that make it run a program removed, including `CPP`, `TARGET_MACH` and `.SHELLFLAGS`. The desktop app removes
-the five names above, and not these two, before it opens an address or a file.
+the five names above before it opens an address or a file, and asks the agent which of these two lead to a socket a stage may write and removes those.
 Every other variable reaches the opener unchanged. If your own `BROWSER` or `XDG_*` setting points
 into a directory a stage may write, the opener ignores it and uses the system default. `HOME` is
 removed for the AWS CLI and the opener, and also for an asdf or pyenv shim (a file directly in a

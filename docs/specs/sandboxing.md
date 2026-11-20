@@ -28,6 +28,7 @@ governs:
   - crates/sandbox/src/openshell.rs
   - crates/tui/src/status.rs
   - crates/tui/src/opener.rs
+  - crates/ui-bridge/src/opener_names.rs
   - crates/tui/src/powershell.rs
   - ui/scripts/host-card.test.mjs
   - ui/scripts/shown.test.mjs
@@ -4641,15 +4642,19 @@ file. A new spawn that looks a name up through
   `~/.local/share/applications` itself holds a row on that location and is not covered, which
   SANDBOX-18 records as a known cost. The generic table does not list `HOME`. The AWS CLI lists it as a directory (below), and gcloud, `ssh`
   and `git` keep it. The AWS CLI, the gcloud launcher and the `ssh-keygen`, `ssh` and `git` of
-  `doctor --push-identity` list `BROWSER` and the four `XDG_` directories,
+  `doctor --push-identity` list `BROWSER`, the four `XDG_` directories, `XDG_RUNTIME_DIR` and
+  `DBUS_SESSION_BUS_ADDRESS`, the last two as the opener judges them
+  (`selectors::XDG_RUNTIME_DIR` and `selectors::DBUS_SESSION_BUS_ADDRESS` in
+  `crates/sandbox/src/programs.rs`: 18 names for the AWS CLI, 18 for gcloud and 13 for
+  `doctor --push-identity`),
   since `aws sso login` and `gcloud auth application-default login` open the sign-in page through
   Python's `webbrowser`, which runs each entry of `BROWSER` and then `xdg-open`, and a credential
   helper that git's configuration names can do the same. `xdg-open` itself reads `BROWSER` only in
   its generic path, so under GNOME with `gio` installed it is not read. The desktop application
   deletes `BROWSER`, `GIO_LAUNCH_DESKTOP`, the four `XDG_` directories, `XDG_CACHE_HOME` and the GIO,
   Qt and KDE names of the opener's table below from its own environment (`OPENER_SELECTORS`, 16
-  names: the opener's 30 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the
-  application leaves set, and without the eleven Windows names, as `APPLICATION_EXCEPTIONS` in
+  names: the opener's 30 without `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which are
+  handled as described below, and without the eleven Windows names, as `APPLICATION_EXCEPTIONS` in
   `contrib/check-code-selectors.py` records), and `XDG_CURRENT_DESKTOP` and
   `XDG_MENU_PREFIX` when the value contains a `/` (`FILE_NAME_PREFIXES` in
   `ui/src/main/external-open.ts`, tested by `a file-name prefix is deleted only when it has a slash,
@@ -4657,12 +4662,33 @@ file. A new spawn that looks a name up through
   `Expected values to be strictly deep-equal: actual [] expected ['XDG_CURRENT_DESKTOP',
   'XDG_MENU_PREFIX']` when the `/` test never matches. Electron was not run for these two names),
   before it asks Electron to open an address or a file, since
-  it starts the opener through Electron and not through this start. It does not delete `HOME`,
-  `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`: the
-  application reads `HOME` itself, Electron reaches the session bus through the other two, the
-  agent's allowed-hosts proxy makes its socket directory under `XDG_RUNTIME_DIR`
-  ([SANDBOX-24](#SANDBOX-24)), `process.env` is shared with the agent it starts, and a value
-  put back after the call cannot be shown to follow the moment Electron starts `xdg-open`.
+  it starts the opener through Electron and not through this start. It does not delete `HOME`: the
+  application reads it itself and `process.env` is shared with the agent it starts.
+  `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` are not deleted whatever they hold, because
+  Electron reaches the session bus through them and the agent's allowed-hosts proxy makes its
+  socket directory under `XDG_RUNTIME_DIR` ([SANDBOX-24](#SANDBOX-24)). The directories a session
+  may write are recorded in the agent's process and not in the application's, so before each call
+  to `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` the application sends the
+  two values it holds to the agent (`opener.judge` in `crates/ui-bridge/src/opener_names.rs`, not
+  offered to a client of the host). The agent applies `may_be_run` to them, the check the opener
+  applies (`XDG_RUNTIME_DIR` as one directory and `DBUS_SESSION_BUS_ADDRESS` as a
+  `Names::BusAddress`), and answers which of the two to delete. A value that holds `U+FFFD` is
+  answered as one to delete, since Node renders bytes that are not UTF-8 that way and the path is
+  not read from the rendering. The application deletes those names from `process.env`, and its
+  caller awaits that before it calls Electron, so the names are deleted when Electron is called. The
+  wait for the agent's answer is bounded (`JUDGE_TIMEOUT_MS`, five seconds), and an agent that does
+  not answer in that time is treated as one that cannot be asked. When the agent cannot be asked, or its
+  answer is not a list of those two names, every one of the two the application holds is
+  deleted. A name that was deleted stays deleted for the rest of the process, as the names of
+  `OPENER_SELECTORS` do, so an agent started after an open and Electron's later calls to the
+  session bus are without it. This lasts for the whole run of the application: with the agent not
+  running, both names are deleted at the first open, and an agent started afterwards has no
+  `XDG_RUNTIME_DIR`, so its proxy socket directory is made in the temporary directory
+  (`socket_parents` in `crates/sandbox/src/proxy.rs`). That Electron's portal and file manager calls
+  still work without `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, and that the proxy socket
+  directory falls back as stated, was not run. For a person whose runtime directory and bus are
+  outside every directory a session
+  may write, nothing is deleted.
   For `HOME` there is a further reason. GLib takes the home directory from `HOME` and, when `HOME`
   is unset, from the account's passwd entry (`g_get_home_dir`, `g_get_user_data_dir` and
   `g_get_user_config_dir` of GLib 2.90.1 on macOS return the passwd home and its `.local/share` and
@@ -4670,8 +4696,8 @@ file. A new spawn that looks a name up through
   directories under the account's real home. The application's `HOME` comes from the person's login
   session, which a stage cannot change, so the opener reads a directory a stage may write only when
   the account's home is one, and removing `HOME` does not change that.
-  On Linux under a GNOME session the application's opener therefore reads a runtime
-  directory or a bus address that a stage may write. The opener does not read a handler a stage
+  On Linux under a GNOME session the application's opener reads a `HOME` that the sandbox let a
+  program write only where the account's home is one. The opener does not read a handler a stage
   wrote through `HOME`: `~/.config/mimeapps.list`, the `~/.config/<desktop>-mimeapps.list` files of the
   desktops named in [SANDBOX-18](#SANDBOX-18) and `~/.local/share/applications` are persistence
   locations, so a stage is refused writing them in a session opened on the home directory, on
@@ -4682,10 +4708,7 @@ file. A new spawn that looks a name up through
   with `HOME` removed was observed for `gio open` (see the run under a GNOME session below) and
   agrees with the GLib source, and the opener's start through Electron under a GNOME session with a
   file manager on the bus is not observed.
-  [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME` and
-  [#3940](https://github.com/brave/bravebot/issues/3940) tracks the other two, which are recorded
-  in the bullet "The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`" under
-  "What a checked start does not cover". The names another program
+  [#3904](https://github.com/brave/bravebot/issues/3904) is the issue for `HOME`. The names another program
   reads are added to its start when that program is audited. The usability suite's list
   (`CODE_SELECTORS` in `crates/agent/src/usability.rs`, 85 names) adds the names `git`, `make`
   (the programs and flags of its built-in rules, `MAKE_COMMAND`, `CPP`, `TARGET_MACH`, and `COMPILER_PATH` and
@@ -5065,7 +5088,8 @@ file. A new spawn that looks a name up through
   That is 30 names, the `CODE_SELECTORS` list in `crates/tui/src/opener.rs`. The desktop
   application's `OPENER_SELECTORS` in `ui/src/main/external-open.ts` holds the same names without
   `HOME`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS` and the eleven Windows names, 16, and
-  `make check-code-selectors` fails when the two differ in anything else.
+  `make check-code-selectors` fails when the two differ in anything else. The application judges
+  `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` through the agent instead of listing them.
 
   What was run and what was read for these names is in "What a checked start does not cover".
 
@@ -6128,33 +6152,44 @@ shown by running the program, or not entirely:
   the launchers read is therefore complete only for `xdg-open` and `xdg-mime` 1.2.1 and, for the
   files named above, `gio open` and `kde-open`.
   They are tracked by #3822.
-- **The starts that keep `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`.** The desktop
-  application, the AWS CLI (`crates/bedrock/src/credentials.rs`), the gcloud launcher
-  (`crates/agent/src/gcloud.rs`) and the programs of `doctor --push-identity`
-  (`crates/cli/src/push_identity.rs`) do not judge either name. The application cannot delete
-  them: Electron reaches the session bus through them, the agent's proxy directory is made under
-  `XDG_RUNTIME_DIR` and the agent is started with the application's environment. Deleting them for
-  the span of one call is not shown to reach the moment Electron starts `xdg-open`. The other three
-  start `xdg-open` through Python's `webbrowser` or a credential helper, so under a GNOME session
-  `gio open` connects to the bus the value names, and the run in the `gio open` text above shows
-  that a service there receives the address being opened, which for a sign-in is the sign-in page's.
-  The code gives one reason per start. The tests of the AWS start (`credentials.rs`) and the
-  gcloud start (`gcloud.rs`) say the sign-in or login is run to read `DISPLAY` and
-  `XDG_RUNTIME_DIR`, and the code does not say which program reads `XDG_RUNTIME_DIR` or why. The
-  test of `doctor --push-identity` (`push_identity.rs`) says `HOME`, `SSH_AUTH_SOCK`,
-  `XDG_RUNTIME_DIR` and `DISPLAY` are variables the programs started there are run to read, and
-  gives no reason specific to `XDG_RUNTIME_DIR`. None of the three judges
-  `DBUS_SESSION_BUS_ADDRESS` or says why it is passed on. The sandbox usability suite
-  (`crates/agent/src/usability.rs`) lists neither name, and its list has `BROWSER` for the
-  commands `cargo doc --open` opens the documentation with. The person's own runtime directory is
-  normally outside every directory a stage may write. The cost is that a person whose value leads
-  into such a directory
-  has the address received by a stage that listens there, and whether more than that can happen
-  was not shown. [#3940](https://github.com/brave/bravebot/issues/3940) tracks removing this
-  cost. The tests
-  `the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`,
-  `the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads` and
-  `the_variables_the_programs_started_here_are_run_to_read_are_kept` hold the kept names.
+- **The reach of the session bus judgment.** The terminal browser opener, the AWS CLI
+  (`crates/bedrock/src/credentials.rs`), the gcloud launcher (`crates/agent/src/gcloud.rs`), the
+  programs of `doctor --push-identity` (`crates/cli/src/push_identity.rs`) and the desktop
+  application judge `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` by where the socket is. The
+  four Rust starts share `selectors::XDG_RUNTIME_DIR` and `selectors::DBUS_SESSION_BUS_ADDRESS`, and
+  the application asks the agent for the same judgment (`opener.judge`), as described in the
+  browser opener bullet above. What is left:
+  - Which program reads these names on each start was not shown. The AWS and gcloud starts are run
+    to open a sign-in page through Python's `webbrowser`, which runs `xdg-open`, and a credential
+    helper that git's configuration names can do the same for `doctor --push-identity`. Under a
+    GNOME session `xdg-open` runs `gio open`, which reads both names (the run in the `gio open`
+    text above). That the real `aws`, `gcloud`, `ssh-keygen`, `ssh` or `git` read either name
+    themselves was not run or read from their source, and the tests of the starts say only that a
+    value outside every directory a stage may write is kept.
+  - What each removal costs. Without `DBUS_SESSION_BUS_ADDRESS`, `gio` finds the bus at
+    `$XDG_RUNTIME_DIR/bus`; without `XDG_RUNTIME_DIR` as well it has no session bus to find. A
+    Wayland client the sign-in starts that finds the compositor's socket through `XDG_RUNTIME_DIR`
+    cannot find it without that name. The values are removed only where they lead into a directory
+    a stage may write, or do not exist, or are not text, so a person whose runtime directory is
+    outside every such directory is unaffected. This cost was not run on Linux.
+  - Whether a service a stage runs on such a socket can make `gio open` run code or choose a
+    handler was not shown, as in the opener bullet.
+  - The desktop application deletes a name the agent lists from the shared `process.env`, and it
+    stays deleted. Whether Electron's own portal, file manager and notification calls, which are
+    made earlier in start-up, and the agent's proxy socket directory (`socket_parents` in
+    `crates/sandbox/src/proxy.rs`, which falls back to the temporary directory) are affected was
+    not run; no Linux host ran it. The Electron test (`ui/scripts/external-open-electron.test.mjs`)
+    stands in for the agent with a judge that keeps both names, so it shows the other sixteen
+    names and not these two.
+  - The sandbox usability suite (`crates/agent/src/usability.rs`) lists neither name, and its list
+    has `BROWSER` for the commands `cargo doc --open` opens the documentation with.
+
+  The tests
+  `the_aws_start_removes_a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write`,
+  `a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_the_one_the_gcloud_login_uses`
+  and
+  `a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_handed_to_the_programs_started_here`
+  hold the judgment of the three starts.
 - `osascript` was run on macOS 26.6 (arm64) with `/usr/bin/osascript` and `env -i
   PATH=/usr/bin:/bin`. A compiled script library `Marker3809.scpt` (built with `osacompile`) in
   `<home>/Library/Script Libraries`, whose handler appends to a marker file, was used with
@@ -6616,13 +6651,13 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_tui::opener::a_bus_socket_is_judged_by_where_it_leads_on_the_disk`
 `verified-by: bravebot_tui::opener::a_bus_address_that_is_not_text_is_removed_and_not_judged_by_its_lossy_rendering`
 `verified-by: bravebot_sandbox::programs::a_bus_address_that_is_not_text_is_not_judged_by_its_lossy_rendering`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are not in OPENER_SELECTORS and are still set after the deletion; make check-ui runs it)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open.test.mjs asserts that HOME is not in OPENER_SELECTORS and is still set after the deletion, that the two session bus names are asked about through opener.judge before each of the three calls and deleted only when the agent lists them or cannot be asked, that an agent that does not answer within the bound is one that cannot be asked, and that nothing else is deleted on the agent's word; make check-ui runs it)`
 `verified-by: bravebot_tui::opener::the_opener_removes_a_windows_name_that_selects_code_a_stage_may_write`
 `verified-by: bravebot_tui::opener::comspec_is_removed_for_a_program_a_stage_may_write_and_kept_for_an_installed_one`
 `verified-by: bravebot_tui::opener::a_windows_name_is_removed_in_whatever_case_it_is_set`
 `verified-by: bravebot_tui::opener::the_windows_start_given_names_that_point_at_a_stage_written_helper_does_not_run_it`
 `verified-by: bravebot_tui::opener::a_handler_that_expands_a_name_the_opener_removed_does_not_run_a_stage_written_helper`
-`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the sixteen names set and the same calls on Electron's shell start it with all sixteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the ten Windows names, which the application keeps)`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/external-open-electron.test.mjs starts Electron under xvfb-run with a logging xdg-open first on PATH and asserts that openExternal and openPath of external-open.ts start it with none of the sixteen names set and the same calls on Electron's shell start it with all sixteen; it runs only on Linux with Electron and xvfb-run installed and prints skipped elsewhere; make check-ui-build runs it; make check-code-selectors holds its list and OPENER_SELECTORS to the opener's apart from HOME, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS and the ten Windows names, which the application keeps; the run stands in for the agent with a judge that keeps both session bus names, so it does not cover them)`
 `verified-by: bravebot_tui::opener::a_browser_or_xdg_name_a_stage_may_write_is_not_read_by_the_program_xdg_open_hands_the_address_to_under_kde`
 `verified-by: bravebot_tui::opener::kde_open_run_with_each_name_set_to_a_marker_runs_the_marker_only_for_names_the_opener_removes`
 `verified-by: bravebot_tui::powershell::a_module_path_with_a_directory_a_stage_may_write_is_removed_whole_and_a_safe_one_is_kept`
@@ -6638,12 +6673,22 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_schedule::schedule::a_unixexec_session_bus_address_runs_a_helper_through_systemctl_unless_the_start_removes_it`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_browser_or_xdg_directory_that_names_a_file_a_stage_may_write`
 `verified-by: bravebot_bedrock::credentials::the_aws_start_keeps_the_variables_a_sign_in_is_run_to_read`
+`verified-by: bravebot_bedrock::credentials::the_aws_start_removes_a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write`
+`verified-by: bravebot_bedrock::credentials::an_aws_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes`
 `verified-by: bravebot_bedrock::credentials::an_aws_browser_entry_that_is_not_text_is_removed`
 `verified-by: bravebot_agent::gcloud::a_browser_or_xdg_directory_a_stage_may_write_is_not_the_one_the_gcloud_login_is_told_to_use`
 `verified-by: bravebot_agent::gcloud::a_gcloud_browser_entry_that_is_not_text_is_removed`
-`verified-by: bravebot_agent::gcloud::the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads`
+`verified-by: bravebot_agent::gcloud::the_gcloud_start_keeps_the_display_a_login_reads`
+`verified-by: bravebot_agent::gcloud::a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_the_one_the_gcloud_login_uses`
+`verified-by: bravebot_agent::gcloud::a_gcloud_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes`
 `verified-by: bravebot_cli::push_identity::a_browser_or_xdg_directory_a_stage_may_write_is_not_handed_to_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::the_variables_the_programs_started_here_are_run_to_read_are_kept`
+`verified-by: bravebot_cli::push_identity::a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_handed_to_the_programs_started_here`
+`verified-by: bravebot_cli::push_identity::a_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes_here`
+`verified-by: bravebot_ui_bridge::opener_names::a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_to_be_deleted`
+`verified-by: bravebot_ui_bridge::opener_names::a_runtime_directory_and_bus_address_outside_every_directory_a_stage_may_write_are_kept`
+`verified-by: bravebot_ui_bridge::opener_names::a_value_holding_a_replacement_character_is_deleted_whatever_it_spells`
+`verified-by: bravebot_ui_bridge::opener_names::the_directories_a_session_here_may_write_are_the_ones_judged`
 `verified-by: bravebot_cli::push_identity::a_browser_entry_that_is_not_text_is_removed_from_the_programs_started_here`
 `verified-by: bravebot_cli::push_identity::a_list_of_xdg_directories_outside_every_directory_a_stage_may_write_is_kept_for_the_programs_started_here`
 `verified-by: bravebot_bedrock::credentials::an_aws_xdg_list_of_directories_outside_every_directory_a_stage_may_write_is_kept`

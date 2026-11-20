@@ -116,13 +116,16 @@ test('a cancelled sheet writes nothing, and a session that keeps nothing fails',
   }
 })
 
-test('only the two named pages open, at their literal URLs', () => {
+test('only the two named pages open, at their literal URLs', async () => {
   const { main, seen } = load()
   assert.equal(main.openPage('releases'), true)
   assert.equal(main.openPage('new-issue'), true)
   for (const bad of ['https://example.com', 'toString', '__proto__', 'constructor', undefined, 7]) {
     assert.equal(main.openPage(bad), false, String(bad))
   }
+  // The address reaches electron after the main process has judged the session bus names, which is a
+  // later turn of the event loop than the call to `openPage`.
+  await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(seen.opened, [
     'https://github.com/brave/bravebot/releases/latest',
     'https://github.com/brave/bravebot/issues/new',

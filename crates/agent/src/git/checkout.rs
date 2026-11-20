@@ -61,8 +61,10 @@ pub enum Refused {
     Converts(Conversion),
     /// An attributes file a deny rule covers, so whether it has git convert a file is unknown.
     AttributesWithheld,
-    /// An attributes file the map does not trust, whose contents are therefore not read.
-    AttributesUntrusted,
+    /// The refusal was caused by an entry at or under a path the map does not trust. Which check
+    /// failed is not said, since the entry's name and size are content of that path
+    /// ([CHECKOUT-4](../../../../docs/specs/checkouts.md#CHECKOUT-4)).
+    Distrusted,
     /// More files than [`Bound::files`].
     TooManyFiles,
     /// More directories than [`Bound::files`], each name of one counted.
@@ -137,9 +139,9 @@ impl Refused {
                 "{made}: a deny rule covers a .gitattributes file in {named}, so whether git \
                  would convert a file is unknown."
             ),
-            Refused::AttributesUntrusted => format!(
-                "{made}: the trust map does not trust a .gitattributes file in {named}, so what \
-                 it sets was not read."
+            Refused::Distrusted => format!(
+                "{made}: the checkout of {named} was refused for an entry under a path the \
+                 trust map does not trust."
             ),
             Refused::TooManyFiles => {
                 format!("{made}: HEAD in {named} holds more files than a checkout writes.")
@@ -337,6 +339,30 @@ pub(super) fn check_name(name: &[u8], windows: bool) -> Result<(), Name> {
     Ok(())
 }
 
+/// `refused`, or [`Refused::Distrusted`] where the map does not trust `path`, the path of the entry
+/// the refusal is about (the tree's own path where it is about a tree). The choice rests on the
+/// map's answer for the path and on nothing the entry holds.
+fn refusal_at(trusted: &dyn Fn(&str) -> bool, path: &str, refused: Refused) -> Refused {
+    let asked = if path.is_empty() { "." } else { path };
+    if trusted(asked) {
+        refused
+    } else {
+        Refused::Distrusted
+    }
+}
+
+/// The path the map is asked about for the entry `name` of the tree at `prefix`: its own path where
+/// the name can be keyed, and the tree's where it cannot (empty, `.`, `..`, a separator, a NUL or
+/// bytes that are not UTF-8).
+fn keyed_path(prefix: &str, name: &[u8]) -> String {
+    match std::str::from_utf8(name) {
+        Ok(text) if !matches!(text, "" | "." | "..") && !text.contains(['/', '\0']) => {
+            join(prefix, text)
+        }
+        _ => prefix.to_owned(),
+    }
+}
+
 /// One entry of HEAD's tree that is not a tree.
 struct Planned {
     path: String,
@@ -360,43 +386,61 @@ fn plan(
     let mut dirs = 0usize;
     // Indexes into `planned` of the attributes files, which are read once the walk is over.
     let mut attributes = Vec::new();
+    // Whether any entry counted so far is at or under a path the map does not trust. A bound passed
+    // over such a tree is passed by the total, so the refusal is told as the fixed one.
+    let mut counted_distrusted = false;
     let mut pending = vec![(tree, String::new(), 0usize)];
     while let Some((tree, prefix, depth)) = pending.pop() {
         if depth > TREE_DEPTH {
-            return Err(Declined::Unreadable.into());
+            return Err(refusal_at(trusted, &prefix, Declined::Unreadable.into()));
         }
-        let data = repo.object(&tree, Kind::Tree)?;
-        let listed =
-            TreeRef::from_bytes(&data, HashKind::Sha1).map_err(|_| Declined::Unreadable)?;
+        let data = repo
+            .object(&tree, Kind::Tree)
+            .map_err(|e| refusal_at(trusted, &prefix, e.into()))?;
+        let listed = TreeRef::from_bytes(&data, HashKind::Sha1)
+            .map_err(|_| refusal_at(trusted, &prefix, Declined::Unreadable.into()))?;
         let mut names = HashSet::new();
         for entry in listed.entries {
             let name: &[u8] = entry.filename;
-            check_name(name, cfg!(windows)).map_err(Refused::Name)?;
+            let keyed = keyed_path(&prefix, name);
+            check_name(name, cfg!(windows))
+                .map_err(|why| refusal_at(trusted, &keyed, Refused::Name(why)))?;
             if !names.insert(name) {
-                return Err(Refused::Name(Name::Folded));
+                return Err(refusal_at(trusted, &keyed, Refused::Name(Name::Folded)));
             }
             let path = join(&prefix, std::str::from_utf8(name).unwrap_or_default());
+            counted_distrusted = counted_distrusted || !trusted(&path);
+            let told = |refused: Refused| match counted_distrusted {
+                true => Refused::Distrusted,
+                false => refused,
+            };
             let kind = entry.mode.kind();
             let id = entry.oid.to_owned();
             if kind == EntryKind::Tree {
                 dirs += 1;
                 if dirs > bound.files {
-                    return Err(Refused::TooManyDirectories);
+                    return Err(told(Refused::TooManyDirectories));
                 }
                 pending.push((id, path, depth + 1));
                 continue;
             }
             if planned.len() >= bound.files {
-                return Err(Refused::TooManyFiles);
+                return Err(told(Refused::TooManyFiles));
             }
             if kind != EntryKind::Commit {
-                let size = match repo.objects.header(&id)? {
+                let size = match repo
+                    .objects
+                    .header(&id)
+                    .map_err(|e| refusal_at(trusted, &path, e.into()))?
+                {
                     Some((Kind::Blob, size)) => size,
-                    _ => return Err(Declined::Unreadable.into()),
+                    _ => {
+                        return Err(refusal_at(trusted, &path, Declined::Unreadable.into()));
+                    }
                 };
                 bytes = bytes.saturating_add(size);
                 if bytes > bound.bytes {
-                    return Err(Refused::TooManyBytes);
+                    return Err(told(Refused::TooManyBytes));
                 }
             }
             let left_out = withheld(&path);
@@ -415,14 +459,16 @@ fn plan(
         }
     }
     // Second pass: the bounds have held for the whole tree, so an attributes file is read only
-    // from a tree the checkout may write.
+    // from a tree the checkout may write. The map is asked first, so that a file under a path it
+    // does not trust is the fixed refusal whether or not a deny rule also covers it: the
+    // withheld refusal says the file exists.
     for at in attributes {
         let file = &planned[at];
+        if !trusted(&file.path) {
+            return Err(Refused::Distrusted);
+        }
         if file.left_out {
             return Err(Refused::AttributesWithheld);
-        }
-        if !trusted(&file.path) {
-            return Err(Refused::AttributesUntrusted);
         }
         let blob = repo.object(&file.id, Kind::Blob)?;
         if let Some(found) = conversion(&blob, settings.text_converts()) {
@@ -436,7 +482,9 @@ fn plan(
 /// Make a checkout of the repository at `git_dir` at `target`, a directory that must not exist
 /// yet, registered as `worktrees/<id>`. `withheld` says, for a repository-relative path, whether
 /// a deny rule covers it; such a path is not written. `trusted` says whether the map trusts it;
-/// a `.gitattributes` file it does not trust refuses the checkout without being read.
+/// a `.gitattributes` file it does not trust refuses the checkout without being read, and a
+/// refusal caused by an entry at or under a path it does not trust is [`Refused::Distrusted`]
+/// whatever check failed.
 ///
 /// The repository is one [`super::survey`] has passed, as for [`Repository::open`]. Nothing is
 /// written until every refusal is decided, except that two paths the file system takes for one
@@ -477,6 +525,7 @@ pub fn make(
         repo: &repo,
         target,
         settings: &settings,
+        trusted,
         dirs: HashSet::new(),
     };
     if let Err(refused) = made.write(&planned, &admin, commit) {
@@ -1050,6 +1099,7 @@ struct Writing<'a> {
     repo: &'a Repository,
     target: &'a Path,
     settings: &'a Settings,
+    trusted: &'a dyn Fn(&str) -> bool,
     /// Directories this checkout created, as the tree spells them.
     dirs: HashSet<String>,
 }
@@ -1065,7 +1115,6 @@ struct Row<'a> {
 
 impl Writing<'_> {
     fn write(mut self, planned: &[Planned], admin: &Path, commit: ObjectId) -> Result<(), Refused> {
-        let folded = || Refused::Name(Name::Folded);
         let mut rows = Vec::with_capacity(planned.len());
         for entry in planned {
             let mode = match entry.kind {
@@ -1085,23 +1134,13 @@ impl Writing<'_> {
                 rows.push(row);
                 continue;
             }
-            self.parents(&entry.path)?;
-            let path = self.target.join(&entry.path);
-            match entry.kind {
-                EntryKind::Commit => create_dir(&path).map_err(|e| taken_or(e, folded()))?,
-                EntryKind::Link if self.settings.symlinks => {
-                    let blob = self.repo.object(&entry.id, Kind::Blob)?;
-                    create_link(&blob, &path).map_err(|e| taken_or(e, folded()))?;
-                }
-                kind => {
-                    let blob = self.repo.object(&entry.id, Kind::Blob)?;
-                    let executable = kind == EntryKind::BlobExecutable;
-                    create_file(&path, executable, &blob).map_err(|e| taken_or(e, folded()))?;
-                }
-            }
-            if entry.kind != EntryKind::Commit {
-                let meta = std::fs::symlink_metadata(&path).map_err(|_| Refused::Unwritable)?;
-                row.stat = Stat::of(&meta);
+            // A failure writing an entry is told as the fixed refusal where the entry's path is
+            // one the map does not trust: a name the file system takes for another, one it cannot
+            // hold and a size it cannot take are all facts about that entry.
+            match self.put(entry) {
+                Ok(Some(stat)) => row.stat = stat,
+                Ok(None) => {}
+                Err(refused) => return Err(refusal_at(self.trusted, &entry.path, refused)),
             }
             rows.push(row);
         }
@@ -1119,6 +1158,31 @@ impl Writing<'_> {
             format!("gitdir: {entry}\n").as_bytes(),
         )
         .map_err(unwritable)
+    }
+
+    /// Write one entry and the directories above it, answering the stat data of what was written,
+    /// or `None` for a submodule's empty directory.
+    fn put(&mut self, entry: &Planned) -> Result<Option<Stat>, Refused> {
+        let folded = || Refused::Name(Name::Folded);
+        self.parents(&entry.path)?;
+        let path = self.target.join(&entry.path);
+        match entry.kind {
+            EntryKind::Commit => create_dir(&path).map_err(|e| taken_or(e, folded()))?,
+            EntryKind::Link if self.settings.symlinks => {
+                let blob = self.repo.object(&entry.id, Kind::Blob)?;
+                create_link(&blob, &path).map_err(|e| taken_or(e, folded()))?;
+            }
+            kind => {
+                let blob = self.repo.object(&entry.id, Kind::Blob)?;
+                let executable = kind == EntryKind::BlobExecutable;
+                create_file(&path, executable, &blob).map_err(|e| taken_or(e, folded()))?;
+            }
+        }
+        if entry.kind == EntryKind::Commit {
+            return Ok(None);
+        }
+        let meta = std::fs::symlink_metadata(&path).map_err(|_| Refused::Unwritable)?;
+        Ok(Some(Stat::of(&meta)))
     }
 
     /// Create each directory above `path` not yet created, refusing one something already holds.

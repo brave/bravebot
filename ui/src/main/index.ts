@@ -9,7 +9,7 @@
 
 import { saveHooks } from './agent-settings'
 import { app, BrowserWindow, ipcMain, dialog, powerSaveBlocker } from 'electron'
-import { openExternal } from './external-open'
+import { openExternal, useOpenerJudge } from './external-open'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -563,6 +563,7 @@ function createWindow(): void {
     deliver(message)
   }, selectedSettings)
   useBotsBridge((method, params) => (bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running, so the bots cannot be reached.'))))
+  useOpenerJudge((method, params) => (bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running, so the opener cannot be judged.'))))
 
   if (watchClock) clearInterval(watchClock)
   watchClock = setInterval(() => {

@@ -2878,10 +2878,16 @@ struct Collected<'a> {
     per_directory: Option<usize>,
     /// Directories `per_directory` cut, each with how many of its files were left out.
     partly_listed: Vec<(String, usize)>,
+    /// How many files the walk met that the trust map does not vouch for, which
+    /// [`WalkRules::keeping_only_vouched`] sets aside instead of collecting.
+    ///
+    /// A number and never a name. It is not part of [`Collected::len`], so the cap is spent only on
+    /// files the caller may open.
+    unvouched: usize,
 }
 
 impl Collected<'_> {
-    /// How much of the cap has been spent.
+    /// How much of the cap has been spent. A file set aside as unvouched is not counted.
     fn len(&self) -> usize {
         self.files.len() + self.stopped_at.len() + self.partly_listed.len()
     }
@@ -2909,6 +2915,17 @@ struct WalkRules<'a, 'p, S: Sink> {
     /// whichever of its names it meets first.
     #[cfg(unix)]
     verdicts: std::cell::RefCell<HashMap<(u64, u64), bool>>,
+    /// Set for a walk whose caller opens only files the trust map vouches for.
+    vouched_only: Option<VouchedOnly<'a>>,
+}
+
+/// What a walk needs to ask the trust map about a file as a read of it is asked.
+struct VouchedOnly<'a> {
+    /// The directory the call typed.
+    typed: &'a str,
+    /// Where that directory resolved to, which the walk's paths are below.
+    root: &'a Path,
+    names: &'a other_names::WalkNames,
 }
 
 impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
@@ -2916,6 +2933,7 @@ impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
         #[cfg(not(unix))]
         let _ = names;
         Self {
+            vouched_only: None,
             policy,
             #[cfg(unix)]
             any_rule: policy.any_read_is_denied(),
@@ -2924,6 +2942,39 @@ impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
             #[cfg(unix)]
             verdicts: std::cell::RefCell::default(),
         }
+    }
+
+    /// Makes the walk set aside each file the trust map does not vouch for, counting it in
+    /// [`Collected::unvouched`] and leaving it out of what the walk reports and of its cap.
+    ///
+    /// For a caller that opens only vouched files, so the cap bounds the files it opens and what a
+    /// distrusted directory holds does not decide which of the others are reached (MAP-1). `typed`
+    /// is the directory the call named and `root` where it resolved to.
+    fn keeping_only_vouched(
+        mut self,
+        typed: &'a str,
+        root: &'a Path,
+        names: &'a other_names::WalkNames,
+    ) -> Self {
+        self.vouched_only = Some(VouchedOnly { typed, root, names });
+        self
+    }
+
+    /// Whether the walk is to set aside the file spelled `relative` because the trust map does not
+    /// vouch for it.
+    ///
+    /// Asked as a read of the file is: under the name the call typed joined with the file's path
+    /// below the root (TRUST-18) and under every other name it has, where a lookup that could not
+    /// finish reads as unvouched (TRUST-2). Always false where the walk was not asked to keep only
+    /// vouched files. Decided from the trust map and the file system's names, never from bytes.
+    fn leaves_out_unvouched(&self, workspace: &Workspace, relative: &str) -> bool {
+        let Some(only) = &self.vouched_only else {
+            return false;
+        };
+        let key = workspace.key_below(only.typed, only.root, relative);
+        let others = workspace.walked_other_keys(only.names, relative, &key, true);
+        self.policy
+            .read_is_quarantined_under_names(&key, &others.keys, others.complete)
     }
 
     /// Whether a rule covers reading the directory at `path`, spelled `relative`, under that name
@@ -3091,6 +3142,7 @@ impl Workspace {
                 // asked for every file, and keeps the one cap over the whole walk.
                 per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
                 partly_listed: Vec::new(),
+                unvouched: 0,
             };
             // The name the root is reported under if the per-directory cap cuts it: `.` for the
             // workspace root, whose relative name is empty, and its relative name otherwise. Taken
@@ -3186,6 +3238,8 @@ impl Workspace {
     /// which files those are is a question about the map, answered from the path alone, so no
     /// byte of an unvouched file is read and none can steer what is read. The map is labelled by
     /// the files it was built from, hence trusted, and the others are counted and not named.
+    /// The walk sets an unvouched file aside as it meets it, so the cap on files is spent only on
+    /// files the map may open and a distrusted directory cannot use it up (MAP-1).
     /// A file holding what looks like a credential contributes nothing (CRED-15), since a
     /// declaration can be a binding with the value on the same line.
     pub fn repo_map<S: Sink>(
@@ -3228,7 +3282,11 @@ impl Workspace {
             let mut paths = Vec::new();
             let mut ignored = Vec::new();
             let walk_names = other_names::WalkNames::of(self);
-            let rules = WalkRules::of(policy, &walk_names);
+            let rules = WalkRules::of(policy, &walk_names).keeping_only_vouched(
+                &relative,
+                &root,
+                &walk_names,
+            );
             let mut collected = Collected {
                 files: &mut paths,
                 stopped_at: &mut ignored,
@@ -3237,6 +3295,7 @@ impl Workspace {
                 links: 0,
                 per_directory: None,
                 partly_listed: Vec::new(),
+                unvouched: 0,
             };
             let hit_the_cap = self.walk_filtered(
                 &root,
@@ -3248,17 +3307,20 @@ impl Workspace {
                 &mut collected,
             )?;
             let unreadable = collected.unreadable;
+            let unvouched = collected.unvouched;
             paths.sort();
             // A name that is not UTF-8 is spelled with replacement characters, so it can spell
             // the same as a file that really holds them. Each is opened by that spelling, which
-            // reaches only the second, so the spelling is read and counted once.
+            // reaches only the second, so a vouched spelling is read and counted once. The walk
+            // counted `unvouched` for each directory entry before this, so two entries that spell
+            // alike and are both unvouched are counted twice.
             paths.dedup();
 
-            // Each file is asked about under the name a read of it by the typed spelling would be
-            // asked under, and not under the spelling it is opened by, which is where the walk
-            // landed (TRUST-18), and under every other name it has (TRUST-2): a file one of whose
-            // names is distrusted is not opened, as a read of it is not.
-            let keyed: Vec<(String, String, OtherKeys)> = paths
+            // The walk set aside every file the trust map does not vouch for, asked as a read of it
+            // is: under the name a read by the typed spelling would be asked under, and not under
+            // the spelling it is opened by, which is where the walk landed (TRUST-18), and under
+            // every other name it has (TRUST-2). What is left is labelled the same way.
+            let vouched: Vec<(String, String, OtherKeys)> = paths
                 .into_iter()
                 .map(|path| {
                     let key = self.key_below(&relative, &root, &path);
@@ -3266,10 +3328,6 @@ impl Workspace {
                     (path, key, others)
                 })
                 .collect();
-            let (vouched, unvouched): (Vec<_>, Vec<_>) =
-                keyed.into_iter().partition(|(_, key, others)| {
-                    !policy.read_is_quarantined_under_names(key, &others.keys, others.complete)
-                });
             let label = policy.observe_paths_under_names(
                 Capability::FileRead,
                 vouched.iter().map(|(_, key, others)| {
@@ -3323,7 +3381,7 @@ impl Workspace {
                     found: built.found,
                     shown: built.shown,
                     files: texts.len(),
-                    unvouched: unvouched.len(),
+                    unvouched,
                     skipped,
                     truncated,
                     unreadable,
@@ -3543,6 +3601,7 @@ impl Workspace {
                     links: 0,
                     per_directory: None,
                     partly_listed: Vec::new(),
+                    unvouched: 0,
                 };
                 let unvisited = self.walk_filtered(
                     &root,
@@ -4485,6 +4544,13 @@ impl Workspace {
     /// under it. A partial answer cannot be helped once the cap is reached. Which part it
     /// is can.
     ///
+    /// `limit` is spent on the entries the walk collects. A walk whose rules were built with
+    /// [`WalkRules::keeping_only_vouched`] sets a file the trust map does not vouch for aside and
+    /// counts it in [`Collected::unvouched`], so it spends none of `limit`. Such a walk is not
+    /// bounded by `limit` where the files it meets are unvouched: it asks the trust map about each
+    /// one and stops only at the end of the tree or when the files it collects pass `limit`
+    /// (MAP-5, Known costs).
+    ///
     /// `shown` is the name `directory` is reported under if the per-directory cap cuts it. The
     /// caller supplies it: the first call passes the root's name, and each recursive call passes
     /// the relative name it already built for the subdirectory. So the walk tests no name to tell
@@ -4563,6 +4629,14 @@ impl Workspace {
             // would tell the planner not to rewrite a glob that is the actual problem.
             if rules.covers_file(self, &path, &relative) {
                 collected.withheld = true;
+                continue;
+            }
+            // A caller that opens only vouched files has this one counted and set aside, and it
+            // spends none of the cap: what a distrusted directory holds must not decide which of
+            // the other files are reached. Asked after the rules, so a file a rule covers is not
+            // counted, which would say it exists.
+            if rules.leaves_out_unvouched(self, &relative) {
+                collected.unvouched += 1;
                 continue;
             }
             // Counted after the include and the rules, so the number left out is of files the

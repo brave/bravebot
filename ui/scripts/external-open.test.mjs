@@ -23,14 +23,18 @@ const NAMES = [
 ]
 
 const calls = []
+const buses = []
 const electron = {
   shell: {
-    openExternal: async (url) => { calls.push(['openExternal', url, still()]) },
-    openPath: async (path) => { calls.push(['openPath', path, still()]); return '' },
-    showItemInFolder: (path) => { calls.push(['showItemInFolder', path, still()]) },
+    openExternal: async (url) => { calls.push(['openExternal', url, still()]); buses.push(bus()) },
+    openPath: async (path) => { calls.push(['openPath', path, still()]); buses.push(bus()); return '' },
+    showItemInFolder: (path) => { calls.push(['showItemInFolder', path, still()]); buses.push(bus()) },
   },
 }
 function still() { return NAMES.filter((name) => name in process.env) }
+/** The session bus names still set, with their values, at the moment of a call. */
+function bus() { return Object.fromEntries(SESSION_BUS.filter((name) => name in process.env).map((name) => [name, process.env[name]])) }
+const SESSION_BUS = ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']
 
 const source = buildSync({
   entryPoints: ['src/main/external-open.ts'],
@@ -39,7 +43,7 @@ const source = buildSync({
 const module = { exports: {} }
 new Function('require', 'module', 'exports', source)(
   (id) => (id === 'electron' ? electron : require(id)), module, module.exports)
-const { OPENER_SELECTORS, FILE_NAME_PREFIXES, removeOpenerSelectors, openExternal, openPath, showItemInFolder } = module.exports
+const { OPENER_SELECTORS, FILE_NAME_PREFIXES, SESSION_BUS_NAMES, removeOpenerSelectors, useOpenerJudge, openExternal, openPath, showItemInFolder } = module.exports
 
 function planted() {
   for (const name of NAMES) process.env[name] = '/stage/' + name
@@ -63,7 +67,7 @@ test('each of the three calls reaches electron with the names already deleted', 
   await openPath('/work/notes.txt')
   assert.deepEqual(calls.pop(), ['openPath', '/work/notes.txt', []])
   process.env.XDG_DATA_DIRS = '/stage/share'
-  showItemInFolder('/work/notes.txt')
+  await showItemInFolder('/work/notes.txt')
   assert.deepEqual(calls.pop(), ['showItemInFolder', '/work/notes.txt', []])
 })
 
@@ -85,22 +89,167 @@ test('a variable that does not choose a program is left alone', () => {
   }
 })
 
-test('the home, runtime directory and session bus address are left set for the application', () => {
-  // The fault is deleting them here, which takes the session bus from Electron and the runtime
-  // directory from the agent it starts. The terminal client's opener judges them instead.
-  const kept = ['HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']
-  const before = kept.map((name) => process.env[name])
+test('the home is left set, and the session bus names are not in the list deleted whatever they hold', () => {
+  // The fault is deleting `HOME` here, which takes it from the agent this process starts, or listing
+  // the two session bus names with the others, which deletes the person's own bus whatever it holds
+  // and takes it from Electron. They are judged by the agent instead (the tests below).
+  const before = ['HOME', ...SESSION_BUS].map((name) => process.env[name])
   try {
     planted()
-    for (const name of kept) process.env[name] = '/stage/' + name
+    for (const name of ['HOME', ...SESSION_BUS]) process.env[name] = '/stage/' + name
     removeOpenerSelectors()
-    for (const name of kept) assert.equal(process.env[name], '/stage/' + name, `${name} was deleted`)
-    assert.deepEqual(OPENER_SELECTORS.filter((name) => kept.includes(name)), [])
+    for (const name of ['HOME', ...SESSION_BUS]) assert.equal(process.env[name], '/stage/' + name, `${name} was deleted`)
+    assert.deepEqual(OPENER_SELECTORS.filter((name) => ['HOME', ...SESSION_BUS].includes(name)), [])
+    assert.deepEqual([...SESSION_BUS_NAMES], SESSION_BUS)
   } finally {
-    kept.forEach((name, index) => {
+    ;['HOME', ...SESSION_BUS].forEach((name, index) => {
       if (before[index] === undefined) delete process.env[name]
       else process.env[name] = before[index]
     })
+  }
+})
+
+/** Run `body` with the two session bus names set to `values`, and put the environment back. */
+async function withBus(values, body) {
+  const before = SESSION_BUS.map((name) => process.env[name])
+  try {
+    for (const name of SESSION_BUS) delete process.env[name]
+    Object.assign(process.env, values)
+    calls.length = 0
+    buses.length = 0
+    await body()
+  } finally {
+    SESSION_BUS.forEach((name, index) => {
+      if (before[index] === undefined) delete process.env[name]
+      else process.env[name] = before[index]
+    })
+    useOpenerJudge(null)
+  }
+}
+
+const bothSet = { XDG_RUNTIME_DIR: '/stage/run', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/stage/run/bus' }
+const everyCall = [
+  () => openExternal('https://brave.com/'),
+  () => openPath('/work/notes.txt'),
+  () => showItemInFolder('/work/notes.txt'),
+]
+
+test('a session bus name the agent lists is deleted before each of the three calls and one it does not list is kept', async () => {
+  // The faults are a deletion that ignores the answer (both gone whatever they hold, or both kept),
+  // one that deletes after the call, and one that handles only `openExternal`.
+  await withBus(bothSet, async () => {
+    for (const call of everyCall) {
+      Object.assign(process.env, bothSet)
+      useOpenerJudge(async () => ({ remove: ['DBUS_SESSION_BUS_ADDRESS'] }))
+      await call()
+      assert.deepEqual(buses.pop(), { XDG_RUNTIME_DIR: '/stage/run' })
+      Object.assign(process.env, bothSet)
+      useOpenerJudge(async () => ({ remove: ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] }))
+      await call()
+      assert.deepEqual(buses.pop(), {})
+      Object.assign(process.env, bothSet)
+      useOpenerJudge(async () => ({ remove: [] }))
+      await call()
+      assert.deepEqual(buses.pop(), bothSet)
+    }
+  })
+})
+
+test('the agent is asked about the two session bus names and nothing else, and only when one is set', async () => {
+  // The fault is sending the whole environment, which hands the agent every variable the person
+  // has, or asking when nothing is held.
+  await withBus({ XDG_RUNTIME_DIR: '/run/user/1' }, async () => {
+    const asked = []
+    useOpenerJudge(async (method, params) => { asked.push([method, params]); return { remove: [] } })
+    process.env.EDITOR = 'vim'
+    await openExternal('https://brave.com/')
+    assert.deepEqual(asked, [['opener.judge', { XDG_RUNTIME_DIR: '/run/user/1' }]])
+    delete process.env.XDG_RUNTIME_DIR
+    await openExternal('https://brave.com/')
+    assert.equal(asked.length, 1, 'asked with nothing held')
+  })
+})
+
+test('a session bus name is deleted when the agent cannot be asked or its answer cannot be read', async () => {
+  // The fault is keeping a name nothing has judged, which is the case the check exists for.
+  const answers = [
+    null,
+    async () => { throw new Error('the agent is not running') },
+    () => { throw new Error('sync') },
+    async () => null,
+    async () => ({}),
+    async () => ({ remove: 'XDG_RUNTIME_DIR' }),
+    async () => ({ remove: [7] }),
+    async () => ({ remove: ['HOME'] }),
+  ]
+  await withBus(bothSet, async () => {
+    for (const answer of answers) {
+      Object.assign(process.env, bothSet)
+      useOpenerJudge(answer)
+      await openExternal('https://brave.com/')
+      assert.deepEqual(buses.pop(), {}, String(answer))
+    }
+  })
+})
+
+test('a session bus name is deleted when the agent does not answer in time, and the call still goes through', async () => {
+  // The fault is waiting on the agent without a bound, so one request that never answers stops every
+  // link and every show-in-folder behind it. The call must reach electron with both names deleted,
+  // and an answer that arrives after the bound must not put them back or throw.
+  await withBus(bothSet, async () => {
+    let late
+    useOpenerJudge(
+      () => new Promise((resolve) => { late = () => resolve({ remove: [] }) }),
+      20,
+    )
+    const started = Date.now()
+    for (const call of everyCall) {
+      Object.assign(process.env, bothSet)
+      // A call that is still waiting after a second fails the test and does not hang it.
+      let guard
+      const stuck = new Promise((_, reject) => {
+        guard = setTimeout(() => reject(new Error('a call waited for an agent that never answered')), 1000)
+      })
+      try {
+        await Promise.race([call(), stuck])
+      } finally {
+        clearTimeout(guard)
+      }
+      assert.deepEqual(buses.pop(), {})
+    }
+    assert.ok(Date.now() - started < 1000, 'a call waited for an agent that never answered')
+    late()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.deepEqual(buses.length, 0)
+  })
+})
+
+test('an answer inside the bound is used and the bound is not left running', async () => {
+  // The fault is a bound that fires after a prompt answer and deletes the names it kept, or that
+  // leaves a timer that holds the process open.
+  await withBus(bothSet, async () => {
+    useOpenerJudge(async () => ({ remove: [] }), 20)
+    await openExternal('https://brave.com/')
+    assert.deepEqual(buses.pop(), bothSet)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.deepEqual(bus(), bothSet)
+  })
+})
+
+test('a name the agent lists that is not a session bus name is not deleted from the environment', async () => {
+  // `HOME` stays set whatever the agent says, so a bad answer cannot take what the agent and
+  // Electron read.
+  const home = process.env.HOME
+  try {
+    await withBus({}, async () => {
+      process.env.HOME = '/stage/home'
+      useOpenerJudge(async () => ({ remove: ['HOME'] }))
+      await openExternal('https://brave.com/')
+      assert.equal(process.env.HOME, '/stage/home')
+    })
+  } finally {
+    if (home === undefined) delete process.env.HOME
+    else process.env.HOME = home
   }
 })
 

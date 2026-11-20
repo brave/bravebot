@@ -433,8 +433,8 @@ a test that keeps a safe value and a test that removes one a stage may write. It
 opener's, the `powershell` starts' or the usability suite's file has no `CODE_SELECTORS` list, so a deleted list is not read
 as an empty one. It also fails when `OPENER_SELECTORS` in `ui/src/main/external-open.ts` or `NAMES` in
 `ui/scripts/external-open-electron.test.mjs` names a variable the opener's list does not, or lacks one it
-does, except `HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application leaves set because it and the agent it starts
-read them and Electron reaches the session bus through the last two, and the eleven Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
+does, except `HOME`, which the desktop application leaves set because it and the agent it starts
+read it, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which the desktop application asks the agent to judge (`opener.judge`) and deletes only where they lead to a socket a stage may write, and the eleven Windows names of the `rundll32` start (`PATHEXT`, `COMSPEC`,
 `SystemRoot`, `windir`, `ProgramFiles`, `ProgramW6432`, `ProgramFiles(x86)`, `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, `PSModulePath`),
 which the desktop application leaves set (`APPLICATION_EXCEPTIONS` in the script). Without `HOME`, `gio` reads the account's
 passwd home, which is a further reason for `HOME`

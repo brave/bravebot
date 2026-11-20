@@ -1447,6 +1447,22 @@ arrives at all.
   count and no fact about which pattern matched. A change that spells the count, or a name, or
   chooses the sentence from either, is a violation of shape 1 or 3 and is not covered here.
 
+- **Whether a checkout is refused for an entry under a path nobody vouched for is one bit per call
+  about that path.** [CHECKOUT-4](checkouts.md#CHECKOUT-4) refuses a checkout with one fixed
+  sentence where the cause is an entry at or under a distrusted path, so the sentence names no
+  check, no name, no count and no size. The refusal itself is decided by comparing the names, the
+  file and directory counts and the sizes under that path with the checkout's rules and bounds, and
+  a spawn that is refused differs from one that is made. A planner that can place entries in a
+  repository learns from one spawn whether any of them failed a check, as it learns whether a path
+  exists from whether a read of it succeeds. Whether the sentence is the fixed one is chosen from
+  the map's answer for the entry's path and from nothing the entry holds. For a tree that holds
+  trusted and distrusted entries, a bound both pass together is the fixed sentence once a
+  distrusted entry has been counted, so which sentence a mixed tree gets depends on the order the
+  walk meets its entries. The bit is bounded by the spawns the planner makes, each of which a person
+  may be asked about, and no name or number is revealed. A change that names the check, the entry
+  or a count in the fixed sentence, or that chooses the sentence from the entry's name or size, is a
+  violation of shape 1 or 3 and is not covered here.
+
 - **Whether a `cell` edit of a file named by `path_ref` is refused as not a notebook is chosen from
   the extension of the name behind the reference, and only after a person vouched for the file.**
   [EDIT-8](tools/edit-file.md#EDIT-8) refuses a `cell` edit of a file nobody vouched for with the

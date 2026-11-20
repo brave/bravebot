@@ -67,6 +67,7 @@ pub mod language;
 pub mod manifest;
 pub mod mentions;
 pub mod models;
+pub mod opener_names;
 mod project_questions;
 pub mod protocol;
 pub mod rules;

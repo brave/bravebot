@@ -1728,6 +1728,12 @@ Still open:
   `turn_in_flight` while a turn runs and with `bad_request` before the session's first turn, when
   there is no record yet. `session.open` returns the record's `notes` in the same shape. A note is
   not part of the conversation and is never sent to the model.
+- `opener.judge` takes `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, each a string or null, and
+  returns `{ remove }`: the names among those two that lead to a socket a stage may write, judged
+  by the agent, which holds the directories the sessions may write (SANDBOX-30). A value that is
+  not a string or null is `bad_request`. Main-process-only: the main process asks before each call
+  to Electron's `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` and deletes the
+  names it is given from its own environment. It is not offered to a client of the host.
 - `session.folders.list` takes `{ session }` and returns `{ folders, busy }`: the canonical
   absolute paths of the folders open beside the project, in the order they were opened, and
   whether a turn is running. It is answered while a turn runs. `session.folders.add` takes

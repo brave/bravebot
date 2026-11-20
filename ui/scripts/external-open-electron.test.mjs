@@ -74,6 +74,9 @@ function started(root, mode, calls) {
   writeFileSync(main, `
 const { app, shell } = require('electron')
 const open = ${mode === 'through' ? "require('./external-open.cjs')" : 'shell'}
+// The agent is not running here, so the session bus names are judged by a stand-in that keeps both, which
+// leaves the run as it was before they were judged: the missing socket below still selects the fallback.
+if (open.useOpenerJudge) open.useOpenerJudge(async () => ({ remove: [] }))
 app.whenReady().then(async () => {
   // Set before each call: a deletion by the first call would otherwise hide a missing one in the second.
   const plant = () => { for (const [name, value] of ${JSON.stringify(Object.entries(values))}) process.env[name] = value }

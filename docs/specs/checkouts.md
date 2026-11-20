@@ -365,7 +365,21 @@ Git for Windows refuses: one holding a control character or one of `<>:"|?*`, wh
 drive prefix such as `C:x`, one ending in a dot or a space, or a device name such as `CON` or
 `LPT1`.
 
-Each refusal says which of these it was.
+Each refusal says which of these it was, except one caused by an entry at or under a path the map
+does not trust. That refusal is one fixed sentence, the same whichever check the entry failed: its
+name, a name held twice, a name the file system takes for another or cannot hold, a count of files or
+directories, a size in bytes, or an object that cannot be read. An entry's name and size are content
+of its path, so saying which check failed would tell the planner something the map does not let it
+read ([GIT-3](tools/read-git.md#GIT-3)). Whether the sentence is the fixed one is decided from the
+map's answer for the entry's path, never from the name or size. A name that cannot be keyed (empty,
+`.`, `..`, one holding a separator or a NUL, or one that is not UTF-8) is asked about under the path
+of the tree that holds it. A bound passed by a tree that holds trusted and distrusted entries
+together is the fixed sentence once any distrusted entry has been counted, since the trusted entries
+alone may not pass it. A `.gitattributes` file the map does not trust is the fixed sentence too,
+including one a deny rule also covers, since the sentence for a covered file would say that the
+file exists. A failure while writing an entry, whatever its cause (a name too long, a full disk, a
+permission error), is the fixed sentence where the entry's path is not trusted, so that the sentence
+does not say which kind of failure it was.
 
 **Why all of `.git`.** Writing a tree means following ids: a ref names a commit, the commit its
 tree, the tree its entries. Following them over bytes nobody vouched for is the driver branching on
@@ -388,6 +402,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::an_attributes_file_a_deny_rule_covers_refuses_the_checkout`
 `verified-by: bravebot_agent::git::an_attributes_file_the_map_does_not_trust_refuses_the_checkout_unread`
 `verified-by: bravebot_agent::workspace::an_attributes_file_the_map_does_not_trust_refuses_a_checkout`
+`verified-by: bravebot_agent::workspace::a_spawn_refused_for_an_entry_under_a_distrusted_path_gets_one_fixed_sentence`
 `verified-by: bravebot_agent::git::a_tree_past_the_bound_refuses_the_checkout`
 `verified-by: bravebot_agent::git::a_name_git_refuses_to_check_out_refuses_the_checkout`
 `verified-by: bravebot_agent::git::two_paths_the_file_system_takes_for_one_refuse_the_checkout`
@@ -397,6 +412,14 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::an_attributes_file_past_the_byte_bound_is_not_read`
 `verified-by: bravebot_agent::git::a_tree_past_a_bound_is_refused_for_it_before_an_attributes_file_is_read`
 `verified-by: bravebot_agent::git::an_attributes_file_named_in_another_case_is_taken_for_one`
+`verified-by: bravebot_agent::git::a_refusal_caused_by_an_entry_under_a_distrusted_path_does_not_say_which_check_failed`
+`verified-by: bravebot_agent::git::a_bound_passed_over_trusted_and_distrusted_entries_together_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::an_unreadable_object_under_a_distrusted_path_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::a_refusal_while_writing_under_a_distrusted_path_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::a_refused_name_is_asked_about_under_its_own_path_or_its_trees`
+`verified-by: bravebot_agent::git::a_tree_nested_past_the_depth_bound_is_the_fixed_refusal_under_a_distrusted_path`
+`verified-by: bravebot_agent::git::a_distrusted_attributes_file_a_deny_rule_also_covers_is_the_fixed_refusal`
+`verified-by: bravebot_agent::git::the_fixed_refusal_names_no_check_and_differs_from_the_ones_that_do`
 `verified-by: bravebot_agent::git::a_setting_in_config_worktree_does_not_refuse_the_checkout`
 
 <a id="CHECKOUT-5"></a>
@@ -1276,6 +1299,18 @@ Built.
 - **Checkouts share one stash.** A `git stash pop` a delegate runs in one can apply an entry the
   person or another checkout stashed, and drop it ([CHECKOUT-5](#CHECKOUT-5)). Each delegate is
   told not to use `git stash` ([CHECKOUT-7](#CHECKOUT-7)), and nothing stops one stashing anyway.
+- **A checkout refused for an entry under a distrusted path still tells the planner one bit.** The
+  fixed sentence says the checkout was refused and not why, and the refusal decision reads names,
+  counts and sizes under that path. Whether a spawn is refused or made is therefore one bit per call
+  about those entries, as the planner learns whether a path exists from whether a read of it
+  succeeds. The choice between the fixed sentence and a sentence that names a check for a tree that
+  holds trusted and distrusted entries depends on the order the walk meets them: a distrusted entry
+  met earlier gives the fixed sentence for a bound the trusted entries alone would also pass. The
+  bit is listed in [labels.md](labels.md#known-costs).
+- **A write failure under a distrusted path is reported as the fixed sentence.** A full disk or a
+  permission error while writing an entry the map does not trust reads as a refusal for an entry
+  under a distrusted path, and the person has to look at the disk to find the cause
+  ([CHECKOUT-4](#CHECKOUT-4)).
 - **A repository with a filter or an end-of-line conversion gets no checkout**, and that includes
   every repository using LFS.
 - **A worker's first build is asked about.** A command vouched for in the working directory is not

@@ -158,7 +158,10 @@ drops each file the include pattern does not match or a permission rule covers, 
 200 of the rest. Which 200 are kept is decided by that name order, which is the order that already
 decides what the cap over the whole walk keeps. The count of files left out is taken after the
 include pattern and the rules, which the walk applies to every file it reports whether or not a cap
-applies. A cut directory is recorded under the name its caller passes to `walk_filtered`.
+applies. A walk made for `repo_map` also sets aside each file the trust map does not vouch for and
+counts it as unvouched, without adding it to the files held against the cap. That is decided from
+the trust map's answer for the file's path alone and no byte of the file is read. A cut directory is
+recorded under the name its caller passes to `walk_filtered`.
 `Workspace::list` passes the walk root's name once, `.` when the resolved directory argument is the
 workspace root and its relative name otherwise, and each recursive call passes the relative name it
 built for the subdirectory. No name read from a directory entry is tested to tell the root from a
