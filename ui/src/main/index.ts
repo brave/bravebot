@@ -673,6 +673,9 @@ const ALLOWED = new Set([
   // Whether the one-time notice about it is due, and recording that it was shown.
   'usage_ping.notice_due',
   'usage_ping.mark_notice_shown',
+  // Whether the one-time crash-report notice is due, and recording that it was shown.
+  'crash_reports.notice_due',
+  'crash_reports.mark_notice_shown',
   'connectors.list',
   'connectors.preview',
   'connectors.connect',

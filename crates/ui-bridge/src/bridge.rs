@@ -486,6 +486,8 @@ impl Bridge {
                 crate::usage_ping::start(self.settings.as_deref());
                 Ok(json!({"shown": bravebot_session::store::usage_ping_notice_shown()}))
             }
+            "crash_reports.notice_due" => Ok(crate::crash_notice::due()),
+            "crash_reports.mark_notice_shown" => Ok(crate::crash_notice::mark_shown()),
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
             "caffeinate.confirmed" => {

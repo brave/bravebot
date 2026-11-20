@@ -90,7 +90,8 @@ const TAKES_NO_DIRECTORY = [
   'folder.reply',
   'permissions.list', 'permissions.revoke',
   'doctor', 'changelog.read', 'schedule.command', 'hooks.inspect', 'language.get', 'language.set', 'usage_ping.get', 'usage_ping.set',
-  'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
+  'usage_ping.notice_due', 'usage_ping.mark_notice_shown', 'crash_reports.notice_due',
+  'crash_reports.mark_notice_shown', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
   'accounts.list', 'accounts.signOut', 'effort.set',
 ]

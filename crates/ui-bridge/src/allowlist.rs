@@ -257,6 +257,10 @@ pub const DENIED: &[&str] = &[
     "usage_ping.set",
     "usage_ping.notice_due",
     "usage_ping.mark_notice_shown",
+    // The crash-report notice belongs to the window, not to a client of the host. Such a client has
+    // no screen to show it on, and whether reports are on in this process is the host's own.
+    "crash_reports.notice_due",
+    "crash_reports.mark_notice_shown",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",
@@ -388,7 +392,14 @@ mod tests {
 
     #[test]
     fn a_method_the_host_does_not_name_is_refused_whether_or_not_the_bridge_has_it() {
-        for method in ["session.list", "settings.select", "no.such.method", ""] {
+        for method in [
+            "session.list",
+            "settings.select",
+            "crash_reports.notice_due",
+            "crash_reports.mark_notice_shown",
+            "no.such.method",
+            "",
+        ] {
             let failure = check(&request(method, json!({}))).err().expect("refused");
             assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
         }

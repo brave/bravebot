@@ -33,6 +33,7 @@ import { About, type AboutInfo } from './components/About'
 import { BugReport } from './components/BugReport'
 import { UpdateBanner } from './components/UpdateBanner'
 import { UsagePingNotice } from './components/UsagePingNotice'
+import { CrashReportNotice } from './components/CrashReportNotice'
 import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
 import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
 import { canSend } from './can-send'
@@ -142,6 +143,15 @@ export function App(): React.JSX.Element {
       if (answer.due !== true) return
       setUsagePingNoticeShown(true)
       void call('usage_ping.mark_notice_shown').catch(() => {})
+    }).catch(() => {})
+  }, [])
+  /** Whether to say that crash reports are sent. The bridge records it in the file the terminal also reads. */
+  const [crashNoticeShown, setCrashNoticeShown] = useState(false)
+  useEffect(() => {
+    void call<{ due?: boolean }>('crash_reports.notice_due').then((answer) => {
+      if (answer.due !== true) return
+      setCrashNoticeShown(true)
+      void call('crash_reports.mark_notice_shown').catch(() => {})
     }).catch(() => {})
   }, [])
   // The composer's text lives here rather than in `Transcript` because the Send menu item
@@ -901,6 +911,13 @@ export function App(): React.JSX.Element {
     ? <UsagePingNotice onSettings={() => { setUsagePingNoticeShown(false); openSettingsPage('general') }}
       onDismiss={() => setUsagePingNoticeShown(false)} />
     : null, [usagePingNoticeShown, openSettingsPage])
+  const crashReportNotice = useMemo(() => crashNoticeShown
+    ? <CrashReportNotice onDismiss={() => setCrashNoticeShown(false)} />
+    : null, [crashNoticeShown])
+  // `Transcript` has one notice slot, so the first-launch banners share it.
+  const startupNotices = useMemo(() => usagePingNotice || crashReportNotice
+    ? <>{usagePingNotice}{crashReportNotice}</>
+    : null, [usagePingNotice, crashReportNotice])
 
   useCommandRouter({
     create: (directory) => { void (directory ? create(directory) : newChat()) },
@@ -1058,7 +1075,7 @@ export function App(): React.JSX.Element {
           knowing. */}
       <div className="workspace">
       <Transcript
-        notice={usagePingNotice}
+        notice={startupNotices}
         onAudit={openAudit}
         onTurnDisclosure={discloseTurn}
         backendReady={backendReady}

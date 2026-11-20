@@ -9,6 +9,8 @@ governs:
   - crates/backtrace/src/send.rs
   - crates/backtrace/src/store.rs
   - crates/tui/src/crash_notice.rs
+  - crates/ui-bridge/src/crash_notice.rs
+  - ui/src/renderer/components/CrashReportNotice.tsx
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/security/security.md
@@ -227,19 +229,30 @@ somebody else edited is sent as it is, to the person who owns the project, and d
 `verified-by: by-construction (the manifest depends on bravebot-net and on no crate that speaks to a network, and the layering test holds the manifest to this crate's row in layering.md)`
 
 <a id="CRASH-9"></a>
-### CRASH-9: the terminal says once that reports are sent
+### CRASH-9: the terminal and the desktop window say once that reports are sent
 
-The first launch of the terminal interface that is reporting says so on its startup screen: what a
-report holds, that it goes to Brave, and the two ways to turn it off. No launch after it says it
-again, and a launch that is not reporting says nothing. The line is a catalog message with no
-argument.
+The first launch of the terminal interface that is reporting says so on its startup screen, and the
+first desktop window whose `bravebot-rpc` is reporting shows it as a banner: what a report holds,
+that it goes to Brave, and the two ways to turn it off. The window asks `crash_reports.notice_due`
+and, when the answer is due, calls `crash_reports.mark_notice_shown` as it draws the banner. Both
+front ends record the notice in the one `crash-reports/notice` file in the state directory, so a
+person told by one is not told again by the other or by a later launch of either. A launch that is
+not reporting says nothing and answers that the notice is not due. A client of `bravebot-host` may
+call neither method. The line is a catalog message with no argument.
 
 **Why.** Reports are on by default, so the person is told when the first one could be written, not
 after one is sent. A launch that is not reporting has nothing to disclose, and a line about it
-would read as though something was happening.
+would read as though something was happening. A client of the host has no screen to show the
+notice on, and whether the host process reports is decided in the host's process, not the client's.
 
 `verified-by: bravebot_tui::crash_notice::the_first_launch_that_reports_says_so_once_and_a_launch_that_does_not_says_nothing`
 `verified-by: bravebot_backtrace::store::the_notice_is_recorded_once_and_is_not_a_report`
+`verified-by: bravebot_backtrace::lib::with_nothing_started_no_notice_is_recorded`
+`verified-by: bravebot_ui_bridge::crash_notice::the_window_is_told_once_only_while_reporting`
+`verified-by: bravebot_ui_bridge::crash_notice::a_record_left_by_the_terminal_stops_the_window`
+`verified-by: bravebot_ui_bridge::crash_notice::the_bridge_says_nothing_while_it_is_not_reporting`
+`verified-by: bravebot_ui_bridge::allowlist::a_method_the_host_does_not_name_is_refused_whether_or_not_the_bridge_has_it`
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/crash-report-notice.test.mjs asserts that the banner names what a report holds, Brave, crashReports and BRAVEBOT_CRASH_REPORTS=0, that App.tsx asks crash_reports.notice_due before it marks the notice shown and marks nothing unless the answer is due, and that the main process allows both methods; make check-ui runs it)`
 
 <a id="CRASH-10"></a>
 ### CRASH-10: nothing identifies an installation across reports
@@ -277,10 +290,11 @@ that the project's count of distinct `guid`s is a count of reports.
   held to calling it by reading their sources. What an executable does with a baked address once
   it has called the function is what the child processes show.
 
-- **The desktop application and the editor integration send without saying so.** `bravebot-host`,
-  `bravebot-rpc` and `bravebot-acp` have no startup screen, and the one-shot and `--plain` modes
-  print nothing there either. The README and the documentation say it, and the terminal says it
-  once, but a person who only uses the desktop application reads it nowhere in the product.
+- **Clients of the host and the editor integration send without saying so.** A client of
+  `bravebot-host` and an editor using `bravebot-acp` have no startup screen, and the one-shot and
+  `--plain` modes print nothing there either. The README and the documentation say it, and the
+  terminal and the desktop window say it once, but a person who only uses one of these reads it
+  nowhere in the product.
 
 - **The service sees the sender's network address.** Nothing in a report holds it, and what the
   service keeps of the connection is the service's.
