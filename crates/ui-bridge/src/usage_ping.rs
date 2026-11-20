@@ -6,6 +6,7 @@
 use crate::protocol::{Failure, Request};
 use bravebot_config::usage_ping::UsagePing;
 use bravebot_session::store;
+use bravebot_usage_ping::{Backend, Surface};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -13,16 +14,16 @@ use std::path::Path;
 ///
 /// Called when the bridge starts and again when the window has shown the notice, since the first
 /// start of a new home is before the notice and sends nothing. The crate sends one a day between
-/// them. The window picks a session's model later, so the ping names the configured default, and a
-/// configuration that does not load sends nothing.
+/// them. The ping describes the configured default model when the configuration loads.
 pub fn start(selected: Option<&Path>) {
-    if let Ok(config) = crate::settings::config(None, selected) {
-        bravebot_usage_ping::at_startup(
-            bravebot_usage_ping::Surface::Desktop,
+    let (backend, premium) = match crate::settings::config(None, selected) {
+        Ok(config) => (
             bravebot_usage_ping::backend(&config, None),
             bravebot_usage_ping::premium(&config),
-        );
-    }
+        ),
+        Err(_) => (Backend::None, false),
+    };
+    bravebot_usage_ping::at_startup(Surface::Desktop, backend, premium);
 }
 
 /// Whether the ping is on, whether the switch may change that, and what holds it when it may not.

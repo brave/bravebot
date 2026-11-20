@@ -52,6 +52,9 @@ command line run starts first that day. A ping that fails is tried again by the 
 an hour later. A scheduled or triggered run sends none, and neither does a session started with
 `--incognito`.
 
+The desktop app sends `backend=none` and `premium=false` when it starts without a usable model
+configuration.
+
 ## Turning it off
 
 Any one of these is enough:
