@@ -4,6 +4,7 @@
 import contextlib
 import importlib.util
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,11 @@ def world(root, signed=False):
     return lambda here=clone: pr_fix.pull(9, view, here, remotes), seed, fork
 
 
+# The command a person or a session runs next names the file that is running, by its absolute path, so a
+# session whose directory is a pull request's worktree does not run that worktree's copy of the script.
+RUNNING = f"python3 {shlex.quote(str(HERE / 'pr-fix.py'))}"
+
+
 def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
@@ -77,6 +83,7 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
         code, out = quietly(pr_fix.start, pr())
         assert code == 1, out
         assert "  a.txt:1-5" in out and "main moves" in out, out
+        assert f"resolve each range, then: {RUNNING} continue 9\n" in out, out
         tree = pr().tree
         assert tree == root / "bravebot" / ".worktrees" / "pr-9", tree
 
@@ -85,7 +92,7 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
 
         (tree / "a.txt").write_text("from main and the pull request\n")
         code, out = quietly(pr_fix.resume, pr())
-        assert code == 0 and "push 9" in out, out
+        assert code == 0 and f"next: {RUNNING} push 9\n" in out, out
         assert pr_fix.resolved(tree) == ["a.txt"], "a resolved file is what a check is chosen from"
 
         code, out = quietly(pr_fix.check, pr(), [])
@@ -98,6 +105,71 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
 
         code, out = quietly(pr_fix.start, pr())
         assert code == 0 and "nothing to push" in out, out
+
+
+def test_every_command_a_step_prints_names_the_running_file_by_absolute_path():
+    assert pr_fix.SCRIPT == RUNNING, pr_fix.SCRIPT
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, seed, _ = world(root)
+        quietly(pr_fix.start, pr())
+        for step in (lambda: pr_fix.check(pr(), []), lambda: pr_fix.push(pr())):
+            code, out = quietly(step)
+            assert code == 1 and f"finish the rebase first: `{RUNNING} continue 9`" in out, out
+
+        (pr().tree / "a.txt").write_text("resolved\n")
+        quietly(pr_fix.resume, pr())
+        (seed / "c.txt").write_text("later\n")
+        git("add", "c.txt", cwd=seed)
+        git("commit", "-q", "-m", "main moves again", cwd=seed)
+        git("push", "-q", "origin", "main", cwd=seed)
+        git("fetch", "-q", "upstream", cwd=root / "bravebot")
+        code, out = quietly(pr_fix.push, pr())
+        assert code == 1 and f"`{RUNNING} start 9`" in out, out
+
+
+def test_a_pull_request_whose_fork_has_no_remote_names_the_running_file_to_add_one():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        view = {
+            "url": "https://github.com/brave/bravebot/pull/9", "state": "OPEN", "baseRefName": "main",
+            "headRefName": "feature", "headRepository": {"name": "bravebot"},
+            "headRepositoryOwner": {"login": "someone"},
+        }
+        remotes = {"brave/bravebot": ("upstream", str(root / "brave.git"))}
+        code, out = quietly(pr_fix.pull, 9, view, root / "bravebot", remotes)
+        assert code == 1 and f"`{RUNNING} start 9` adds one" in out, out
+
+
+def test_the_issue_steps_name_the_running_file_in_what_they_tell_the_session_to_run_next():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        body = root / "body.md"
+        body.write_text(GOOD_BODY)
+        _, patched = gh_calls(lambda args: json.dumps({"pull_request": {}}) if args[1] == "api" else "[]")
+        with patched:
+            code, out = quietly(pr_fix.issue_report, 5, remotes)
+            assert code == 1 and f"use `{RUNNING} start 5`" in out, out
+
+            code, out = quietly(pr_fix.open_pull, 5, None, "t", body, clone, remotes)
+            assert code == 1 and f"`{RUNNING} issue 5 --branch fix-<name>` makes one" in out, out
+
+            code, out = quietly(pr_fix.open_pull, 5, "fix-nowhere", "t", body, clone, remotes)
+            assert code == 1 and f"`{RUNNING} issue 5 --branch fix-nowhere`" in out, out
+
+
+def test_a_wait_that_ends_on_a_review_names_the_running_file_that_prints_it():
+    looks = []
+
+    def feedback():
+        looks.append(1)
+        return feedback_answer(500, 501) if len(looks) >= 3 else feedback_answer(500)
+
+    code, out, _, _ = wait_on(still_open(), feedback=feedback)
+    assert code == 3 and f"`{RUNNING} comments 7` prints them" in out, out
 
 
 def test_a_push_made_since_start_is_refused_rather_than_overwritten():

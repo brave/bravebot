@@ -762,7 +762,9 @@ migration.
 
 A session whose pull request or issue link is empty takes one from the planner's own commands. A
 `run` call whose line is `gh pr create`, `gh issue create` or `pr-fix.py open`, that ran and exited
-with status 0, makes the session wait for an item of that kind. The first later call whose arguments
+with status 0, makes the session wait for an item of that kind. The script is read by its file name,
+so `pr-fix.py` named by a relative path or by an absolute one, which the scripts print, is the same
+step. The first later call whose arguments
 name an item of that kind by its words, with the kind stated and not assumed ([PANEL-16](#PANEL-16)),
 is the session's link of that kind, as the address of that item. A `--help` or `-h` in the same
 command segment is not a creation. A call is read against the creations before it and then, if it

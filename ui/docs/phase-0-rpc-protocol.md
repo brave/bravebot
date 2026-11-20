@@ -952,12 +952,30 @@ kept answer about the session's directory as §9 has it, read when the list is a
 and tells the project root by an empty `path`. Both also carry `rulesQuestion`, `folderQuestion`,
 `foldersRefused` and `folders` as §9.1 has them, so a client whose reply was refused with
 `no_such_request` can read which question, if any, is out now.
+Each `commands` entry is `{ program, startedAs, args, directory, shownDirectory, display }`.
+`directory` is the tree the command was vouched in, as held, and is null where the tree has no
+text spelling. `shownDirectory` is the same tree spelled for the screen as `/status` spells it,
+by the one function `bravebot_agent::confirm::shown_tree` (`.` for the workspace root, relative to
+it inside it, absolute elsewhere, a byte that is not text written `\xNN`), without the `~` for the
+home directory that `/status` adds, and is only drawn. Two entries for one command
+in two trees are two grants, so a client keys rows on all four of `program`, `startedAs`, `args`
+and `directory`.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
-`kind: "command"` and `command: { program, startedAs, args }`, or `kind: "remembered"`, which removes
-every answer kept about the directory so the next session there is asked, and leaves this
-session's map as it is. It returns the updated lists, and refuses `kind: "remembered"` with
-`bad_request` where nothing is kept. These methods refuse with `turn_in_flight` while the
-session is running. Revocation can reduce existing grants; it cannot add trust.
+`kind: "command"` and `command: { program, startedAs, args, directory }`, or
+`kind: "remembered"`, which removes every answer kept about the directory so the next session
+there is asked, and leaves this session's map as it is. It returns the updated lists, and refuses
+`kind: "remembered"` with `bad_request` where nothing is kept. It also refuses `kind: "command"`
+with `bad_request` when `directory` is not a string or names a tree the session holds no such
+entry in, and then removes nothing; it removes only the entry held in that tree. These methods
+refuse with `turn_in_flight` while the session is running. Revocation can reduce existing grants;
+it cannot add trust.
+
+**Known cost.** A command vouched for in a tree with no text spelling is listed with `directory`
+null, and no `permissions.revoke` can name it, so the window disables its Revoke button and draws
+a reason beside it. Another client has no way to name it either; it stays in the list until the
+session record is edited. The alternative is to match a rendering of the tree, which would let a
+revoke for one tree remove the entry for another that renders alike
+([RUN-9](../../docs/specs/tools/run.md#RUN-9)).
 
 ### 7.3 Trust and diagnostics
 

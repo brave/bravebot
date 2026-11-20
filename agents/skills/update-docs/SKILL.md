@@ -7,7 +7,7 @@ description:
   belongs on, records how far it got, and builds the site cleanly. Triggers on:
   update docs, /update-docs, sync docs with specs, docs drift.'
 argument-hint: '[rev-range] [dry-run]'
-allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(gh pr create *), Bash(gh pr view *), Bash(grep *), Bash(rg *), Read, Edit, Write
+allowed-tools: Bash(make -C docs/website *), Bash(python3 agents/skills/update-docs/docs-ref.py *), Bash(git *), Bash(gh pr create *), Bash(gh pr view *), Bash(grep *), Bash(rg *), Read, Edit, Write
 ---
 
 # Bring the Documentation Site Up to Date With Brave Bot
@@ -112,7 +112,7 @@ A change to this skill is a separate pull request from its own worktree, never p
 
 ### Waiting for the checks and the review
 
-The pull request is not finished when it is opened. It is finished when its checks have passed and netzenbot-reviewer has reviewed the current head and asks for nothing, or one of the limits below ends the wait. Use [pr-fix](../pr-fix/SKILL.md) for each step, from the worktree. Below, `...` stands for `python3 agents/skills/pr-fix/pr-fix.py`, and the `run` arguments are the ones pr-fix gives for each step.
+The pull request is not finished when it is opened. It is finished when its checks have passed and netzenbot-reviewer has reviewed the current head and asks for nothing, or one of the limits below ends the wait. Use [pr-fix](../pr-fix/SKILL.md) for each step, from the worktree. Below, `...` stands for `python3 <clone>/agents/skills/pr-fix/pr-fix.py`, where `<clone>` is the main clone, as pr-fix says. The `run` arguments are the ones pr-fix gives for each step.
 
 1. `... review <pr>` asks netzenbot-reviewer for a review of the head.
 2. `... ci <pr> --wait` with `deadline_seconds: 600`. Repeat it until no check is pending. Exit 3 means a reviewer wrote feedback while it waited: run `... comments <pr>` and do a fix round before waiting again.

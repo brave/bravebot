@@ -632,8 +632,23 @@ Empty at the start of every session, written into the session record, restored b
 never inherited by a fresh session in the same directory. `/status` lists every entry it holds
 rather than a count of them, and names the tree each one covers ([RUN-8](#RUN-8)): two entries for
 one command in two directories are two grants, and a report drawing them as one line twice says
-nothing about which of the two is held. A line somebody asked to be remembered past the session is a
-separate record holding less, which [RUN-19](#RUN-19) governs, and it puts no entry in this list.
+nothing about which of the two is held. The desktop's permissions list reads each entry back the
+same way: each entry is sent and drawn with the tree it covers, and revoking one names that tree
+and removes the entry for it alone, never the first entry of the same command in another tree. A
+revoke that names no tree, or one this session does not hold, changes nothing. A tree with no text
+spelling is listed with the directory null, since no string names it, and no revoke matches it:
+the window disables its Revoke button and says why, which is a Known cost
+([Known costs](#known-costs)). A line
+somebody asked to be remembered past the session is a separate record holding less, which
+[RUN-19](#RUN-19) governs, and it puts no entry in this list.
+
+The tree is spelled by one function, `bravebot_agent::confirm::shown_tree`, which `/status` and the
+desktop's list both call: `.` for the workspace root, the path relative to it inside it, and the
+whole path outside it, each spelled as a path is in a prompt ([PROMPT-1](../prompting.md#PROMPT-1)),
+so a byte that is not text is written `\xNN` in both. The one difference is the home directory:
+`/status` writes a tree outside the root from `~`, as it does every other path it draws, and the
+window passes no home directory and writes it in full. The spelling is only drawn and a revoke
+never compares it.
 
 A tree inside the project is written into the record relative to it and comes back under the
 directory the resumed session works in, as a rewind's paths and the trust map's rules are
@@ -658,6 +673,13 @@ does not appear, so it has to be readable back.
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 `verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
 `verified-by: bravebot_tui::status::the_report_names_the_tree_each_vouched_command_runs_unasked_in`
+`verified-by: bravebot_tui::status::the_report_spells_a_tree_that_is_not_text_with_its_byte`
+`verified-by: bravebot_agent::confirm::a_tree_is_spelled_relative_to_the_root_and_whole_outside_it`
+`verified-by: bravebot_agent::confirm::a_tree_that_is_not_text_is_spelled_with_its_bytes_in_every_position`
+`verified-by: bravebot_ui_bridge::bridge::a_command_vouched_in_two_trees_is_listed_with_each_tree_and_revoked_by_it`
+`verified-by: bravebot_ui_bridge::bridge::revoking_a_command_without_its_tree_or_in_a_tree_not_held_changes_nothing`
+`verified-by: bravebot_ui_bridge::bridge::a_tree_that_is_not_text_is_not_revoked_by_the_tree_that_renders_like_it`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the remembered command list is pinned instead by ui/scripts/remembered-command-list.test.mjs, which renders the real list row through react-dom and asserts that it draws the tree the bridge spelled, that two rows for one command in two trees are keyed apart, that Revoke sends the tree of the row it is on, and that a row whose tree has no text spelling has a disabled Revoke button and a reason beside it; make check-ui runs it)`
 `verified-by: bravebot_session::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
 `verified-by: bravebot_session::sessions::a_tree_inside_the_project_is_written_down_relative`
 `verified-by: bravebot_session::sessions::a_tree_written_down_relative_comes_back_under_the_resumed_root`
@@ -2718,6 +2740,14 @@ show that a model follows them.
 
 ## Known costs
 
+- **A command vouched for in a tree with no text spelling cannot be revoked from the desktop
+  window.** A tree whose path is not UTF-8 is listed with `directory` null ([RUN-9](#RUN-9)), since
+  a revoke compares the text the list sent and no text names that tree. The window draws such a row
+  with its Revoke button disabled and a reason beside it. No client revokes one entry of that kind
+  by name today. It stays in the list until the session record is edited. Matching a rendering
+  instead would let a revoke for one tree remove the entry for another that renders alike
+  ([PATH-003](../../best-practices/paths.md#PATH-003)). The list is pinned by
+  `bravebot_ui_bridge::bridge::a_tree_that_is_not_text_is_not_revoked_by_the_tree_that_renders_like_it`.
 - **A stage cannot use the terminal, and a stop by a signal is found by asking the leader.** Every
   stage starts in a session with no controlling terminal ([RUN-11](#RUN-11)), so a program that
   prompts on `/dev/tty` fails where it would have prompted. A stage is found stopped only when its

@@ -1306,11 +1306,11 @@ fn environment(endpoint: &str) -> &'static str {
 /// person opened by name is not under the root and has no relative spelling, so it keeps its
 /// absolute one.
 fn within(root: &Path, path: &Path) -> String {
-    match path.strip_prefix(root) {
-        Ok(rest) if rest.as_os_str().is_empty() => ".".to_string(),
-        Ok(rest) => rest.display().to_string(),
-        Err(_) => abbreviate(path),
-    }
+    bravebot_agent::confirm::shown_tree(
+        path,
+        &[root],
+        std::env::var_os("HOME").as_deref().map(Path::new),
+    )
 }
 
 /// A path with the home directory written as `~`, which is shorter and less personal.
@@ -4315,6 +4315,27 @@ mod tests {
         assert_eq!(tokens(940), "940 tokens");
         assert_eq!(tokens(1), "1 token");
         assert_eq!(tokens(12_400), "12.4k tokens");
+    }
+
+    /// RUN-9: a tree that is not text is spelled in `/status` as the window spells it, with the byte
+    /// written out, and not as the replacement character it would otherwise draw as.
+    #[cfg(unix)]
+    #[test]
+    fn the_report_spells_a_tree_that_is_not_text_with_its_byte() {
+        use std::os::unix::ffi::OsStrExt;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let vouched = TrustedPrograms::from_iter([bravebot_core::programs::Command::new(
+            "/usr/bin/make",
+            vec!["check".to_string()],
+            std::ffi::OsStr::from_bytes(b"/tmp/project/t\xff"),
+        )]);
+        let mut facts = facts(&config, &trust);
+        facts.programs = &vouched;
+
+        let shown = rendered(&report(&facts));
+        assert!(shown.contains("\"t\\xff\""), "{shown}");
+        assert!(!shown.contains('\u{fffd}'), "{shown}");
     }
 
     /// The home directory is both longer and more personal than `~`, and a status panel is pasted

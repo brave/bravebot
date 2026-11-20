@@ -44686,6 +44686,10 @@ mod mode_trail_tests;
 #[path = "kept_jobs_tests.rs"]
 mod kept_jobs_tests;
 
+#[cfg(test)]
+#[path = "manifest_answer_tests.rs"]
+mod manifest_answer_tests;
+
 #[cfg(all(test, unix))]
 #[path = "suspend_tests.rs"]
 mod suspend_tests;

@@ -397,7 +397,10 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'session.import': return ok({ found: [], copied: [] })
     case 'permissions.list': return ok({
       paths: [{ path: '', shownPath: '""', integrity: 'trusted' }, { path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }],
-      commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }],
+      commands: [
+        { program: '/usr/bin/git', startedAs: '/usr/bin/git', args: ['status'], directory: '/work', shownDirectory: '.', display: 'git status' },
+        { program: '/usr/bin/git', startedAs: '/usr/bin/git', args: ['status'], directory: '/work/sub', shownDirectory: 'sub', display: 'git status' },
+      ],
       remembered: {
         at: Math.floor(Date.now() / 1000) - 86400,
         path: '/Users/example/Library/Application Support/bravebot-ui-b/trusted',
