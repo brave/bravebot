@@ -786,6 +786,84 @@ fn shown_to_the_planner(label: Label, picture: bool) -> bool {
     trusted && !picture
 }
 
+/// Which question decided whether a fetch is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchReason {
+    Ruled(crate::permissions::Ruling),
+    Unanswered,
+}
+
+impl FetchReason {
+    /// Whether the fetch is put to a person.
+    fn asks(self) -> bool {
+        match self {
+            Self::Ruled(ruling) => ruling != crate::permissions::Ruling::Allow,
+            Self::Unanswered => true,
+        }
+    }
+}
+
+/// The question that decides whether a fetch from a host is put to a person: a rule about the
+/// host, and where none matched, the default question. A `deny` rule has refused the fetch before
+/// this is asked ([`Policy::before_fetch_rules`]).
+fn fetch_reason(rule: crate::permissions::Decision) -> FetchReason {
+    match rule {
+        crate::permissions::Decision::Ruled(ruling) => FetchReason::Ruled(ruling),
+        crate::permissions::Decision::Unmatched => FetchReason::Unanswered,
+    }
+}
+
+/// Which question decided whether a call to a server's tool is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum McpReason {
+    AskedEveryCall,
+    Private,
+    Ruled(crate::permissions::Ruling),
+    PlanApproved,
+    StoppedAsking,
+    Unanswered,
+}
+
+impl McpReason {
+    /// Whether the call is put to a person.
+    fn asks(self) -> bool {
+        match self {
+            Self::AskedEveryCall | Self::Private | Self::Unanswered => true,
+            Self::Ruled(ruling) => ruling != crate::permissions::Ruling::Allow,
+            Self::PlanApproved | Self::StoppedAsking => false,
+        }
+    }
+}
+
+/// The question that decides whether a call to a server's tool is put to a person, in the order
+/// they are asked.
+///
+/// A declaration that every call is asked about is read first, and private arguments next, before
+/// any rule or standing answer (SERVERS-21, SERVERS-7, PERM-9). A rule then decides, and only where
+/// none matched does a standing answer: an approved plan or having said to stop asking.
+fn mcp_reason(
+    standing: McpStanding,
+    public_arguments: bool,
+    rule: crate::permissions::Decision,
+) -> McpReason {
+    if standing == McpStanding::AskedEveryCall {
+        return McpReason::AskedEveryCall;
+    }
+    if !public_arguments {
+        return McpReason::Private;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        return McpReason::Ruled(ruling);
+    }
+    if standing == McpStanding::PlanApproved {
+        return McpReason::PlanApproved;
+    }
+    if standing == McpStanding::StoppedAsking {
+        return McpReason::StoppedAsking;
+    }
+    McpReason::Unanswered
+}
+
 /// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(verus_keep_ghost, verus_verify)]
@@ -1678,23 +1756,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return true;
         };
 
-        match self.permissions.for_host(&host) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for {host}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                needed
-            }
-            crate::permissions::Decision::Unmatched => {
-                self.allow("approval", format!("nothing says who {host} is, asking"));
-                true
-            }
-        }
+        let reason = fetch_reason(self.permissions.for_host(&host));
+        let needed = reason.asks();
+        let said = match reason {
+            FetchReason::Ruled(ruling) => format!(
+                "a rule in the settings file says {ruling} for {host}, {}",
+                if needed { "asking" } else { "no prompt" }
+            ),
+            FetchReason::Unanswered => format!("nothing says who {host} is, asking"),
+        };
+        self.allow("approval", said);
+        needed
     }
 
     /// Record that a person approved fetching this exact URL.
@@ -1907,60 +1979,48 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         arguments: Label,
         standing: McpStanding,
     ) -> bool {
-        if standing == McpStanding::AskedEveryCall {
-            self.allow(
+        let reason = mcp_reason(
+            standing,
+            arguments.is_public(),
+            self.permissions.for_mcp(alias, tool),
+        );
+        let needed = reason.asks();
+        match reason {
+            McpReason::AskedEveryCall => self.allow(
                 "approval",
                 format!(
                     "the declaration of {alias} says every call is asked about, so {alias}:{tool} \
                      asks whatever a rule or an earlier answer says"
                 ),
-            );
-            return true;
-        }
-        if !arguments.is_public() {
-            self.allow(
+            ),
+            McpReason::Private => self.allow(
                 "approval",
                 format!(
                     "private arguments to {alias}:{tool}, which releases them to a server past \
                      this policy, asking"
                 ),
-            );
-            return true;
+            ),
+            McpReason::Ruled(ruling) => self.allow(
+                "approval",
+                format!(
+                    "a rule in the settings file says {ruling} for {alias}:{tool}, {}",
+                    if needed { "asking" } else { "no prompt" }
+                ),
+            ),
+            McpReason::PlanApproved => self.record_plan_covered_call(alias, tool),
+            McpReason::StoppedAsking => self.allow(
+                "approval",
+                format!(
+                    "the user said to stop asking for {alias}:{tool} in this project, no \
+                     prompt"
+                ),
+            ),
+            McpReason::Unanswered => self.allow(
+                "approval",
+                format!("nothing answers for {alias}:{tool}, asking"),
+            ),
         }
-        match self.permissions.for_mcp(alias, tool) {
-            crate::permissions::Decision::Ruled(ruling) => {
-                let needed = ruling != crate::permissions::Ruling::Allow;
-                self.allow(
-                    "approval",
-                    format!(
-                        "a rule in the settings file says {ruling} for {alias}:{tool}, {}",
-                        if needed { "asking" } else { "no prompt" }
-                    ),
-                );
-                needed
-            }
-            crate::permissions::Decision::Unmatched if standing == McpStanding::PlanApproved => {
-                self.record_plan_covered_call(alias, tool);
-                false
-            }
-            crate::permissions::Decision::Unmatched if standing == McpStanding::StoppedAsking => {
-                self.allow(
-                    "approval",
-                    format!(
-                        "the user said to stop asking for {alias}:{tool} in this project, no \
-                         prompt"
-                    ),
-                );
-                false
-            }
-            crate::permissions::Decision::Unmatched => {
-                self.allow(
-                    "approval",
-                    format!("nothing answers for {alias}:{tool}, asking"),
-                );
-                true
-            }
-        }
+        needed
     }
 
     /// Record that a person's approval of the plan answered this call to `tool` of `alias`, so
