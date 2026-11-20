@@ -149,7 +149,7 @@ async function command(line: string): Promise<boolean> {
     const held = await client.instance()
     answers = held.answers
     say(`answers ${held.answers.join(',') || 'none'}`)
-    for (const one of held.sessions) say(`held ${one.session} ${one.state} attached ${one.attached}`)
+    for (const one of held.sessions) say(`held ${one.session} ${one.state} attached ${one.attached} working ${one.working}`)
     return true
   }
   if (verb === 'new') {
