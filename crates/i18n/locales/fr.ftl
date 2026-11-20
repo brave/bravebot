@@ -3906,6 +3906,7 @@ manifest-needs-a-task = /manifest prend la tâche à planifier, comme /manifest 
 manifest-began = la tâche entière est planifiée d'abord ; la session attend ici jusqu'à la fin de l'exécution
 manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
 manifest-failed = l'exécution s'est arrêtée : { $problem }
+manifest-run-result = le résultat de l'exécution
 manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
 # Ce que /init dit quand le projet a déjà le fichier qu'il écrirait.
 init-already-there = { $file } existe déjà ici, donc /init n'y touche pas

@@ -353,13 +353,40 @@ pub(super) fn say_how_a_manifest_run_ended(
     stopped_by_the_person: bool,
 ) {
     match outcome {
-        Ok(finished) => say_what_a_manifest_run_replied(session, finished.reply_for_display()),
+        // The branch is on the reply's label, which is metadata the run settled, and never on its
+        // words. An answer that is not trusted is a file's or a page's text, and drawing it as
+        // the assistant's reply would let it read as bravebot's own (MANIFEST-11, VIEW-3). It goes
+        // behind the quarantine bar as an entry of its own, and `reasoning::spoken`, which reads
+        // the text, is not run on it.
+        Ok(finished) => say_what_a_manifest_run_answered(
+            session,
+            finished.reply.label(),
+            finished.reply_for_display(),
+        ),
         // Stopped by the person, so there is nothing to report. The transcript already holds the
         // steps that ran, and a complaint about a run they turned off themselves is noise.
         Err(_) if stopped_by_the_person => {}
         Err(failure) => {
             session.note(t!(manifest_failed, problem = failure.to_string()));
         }
+    }
+}
+
+/// Draw a manifest run's reply according to its label.
+///
+/// The branch is on the label's integrity, which the run settled, and never on the words. A trusted
+/// reply is the assistant's; any other is drawn behind the quarantine bar as an entry of its own
+/// (MANIFEST-11). Apart from [`say_how_a_manifest_run_ended`] so a test can give it each label,
+/// since an outcome cannot be built outside the agent crate.
+pub(super) fn say_what_a_manifest_run_answered(
+    session: &mut Session,
+    label: bravebot_core::label::Label,
+    reply: &str,
+) {
+    if label.is_trusted() {
+        say_what_a_manifest_run_replied(session, reply);
+    } else {
+        session.show_a_runs_answer(label.to_string(), reply);
     }
 }
 

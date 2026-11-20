@@ -655,8 +655,10 @@ call are written as they are drawn: a step of a manifest, which names the planne
 a call read back from a stored session, which was made from the planner's own arguments. A
 quarantined block is headed with its origin as the planner was given it, and keeps its label. A task
 in a turn's task list is written as the model wrote it, with a reference left as a reference. An
-answer a manifest run released to the person is written as one sentence saying an answer was shown
-and how many lines it had, never its words. What a `!!` command printed and the rows of a command
+answer a manifest run released to the person is written, for a trusted reply, as one sentence saying
+an answer was shown and how many lines it had, never its words. An answer whose label is untrusted
+is written as the note of a quarantined block, with the run's result as its origin and the label,
+with no line count and none of its words. What a `!!` command printed and the rows of a command
 that was stopped ([SHELL-6](shell-mode.md#SHELL-6), [SHELL-7](shell-mode.md#SHELL-7)) were kept for
 the screen alone, so they are written the same way, as one sentence with the number of lines. The
 line the person typed is written, because the person typed it. A file the person chose to preview
@@ -685,9 +687,11 @@ and how the turn ended rather than in place of any of them.
 `verified-by: bravebot_tui::app::export_at_rest_says_where_it_wrote_and_refuses_a_name_that_is_taken`
 `verified-by: bravebot_tui::app::export_at_rest_leaves_out_what_was_released_for_the_screen_alone`
 `verified-by: bravebot_tui::app::a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_not_written_to_an_export`
 `verified-by: bravebot_tui::sessions::a_resumed_task_list_is_exported_as_the_model_wrote_it`
 `verified-by: bravebot_tui::render::export::an_answer_released_for_the_screen_is_exported_as_its_length_and_a_reply_whole`
 `verified-by: bravebot_tui::render::export::a_call_and_a_block_are_exported_as_the_planner_had_them_and_not_as_the_person_read_them`
+`verified-by: bravebot_tui::render::export::a_call_and_a_block_with_nothing_to_substitute_are_exported_as_drawn`
 `verified-by: bravebot_tui::render::export::a_task_is_exported_as_the_model_wrote_it_and_not_as_the_person_read_it`
 `verified-by: bravebot_tui::app::an_export_leaves_out_what_a_private_or_stopped_command_printed`
 `verified-by: bravebot_tui::undo_tests::an_export_writes_a_hunk_by_its_number_and_not_by_its_file`

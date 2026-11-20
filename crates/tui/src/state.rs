@@ -2385,6 +2385,34 @@ impl Session {
         }
     }
 
+    /// Show the answer a manifest run ended with, behind the quarantine bar, as an entry of its
+    /// own.
+    ///
+    /// Not [`Session::show`], which attaches to the last call's line and would put the answer
+    /// under a step; and not an assistant entry, which draws markdown, link marks and copy words,
+    /// and which `/copy`, `/open` and an export take for the assistant's own words. The entry is
+    /// `Entry::system("")` with `shown` set: its text is empty, so an export writes only the
+    /// quarantine note for the block and none of the answer. The whole text is held: the block is
+    /// the only place the person can read it, so nothing is left out. A text with no lines gives a
+    /// block with a heading and no body.
+    ///
+    /// The origin is a sentence of the catalog and the label is the answer's own, so the heading
+    /// and an export's note hold nothing the text wrote.
+    pub fn show_a_runs_answer(&mut self, label: String, text: &str) {
+        let preview: Vec<String> = text.lines().map(str::to_string).collect();
+        self.hold(Entry {
+            shown: Some(Shown {
+                origin: t!(manifest_run_result).to_string(),
+                as_the_planner_had_it: None,
+                reach: bravebot_agent::report::Reach::NotThePlanner,
+                label,
+                lines: preview.len(),
+                preview,
+            }),
+            ..Entry::system("")
+        });
+    }
+
     /// Replace the call in flight with how it turned out.
     ///
     /// Matched by position, not by name: only one call runs at a time, so the running entry in

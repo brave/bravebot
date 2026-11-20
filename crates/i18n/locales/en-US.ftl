@@ -4949,6 +4949,7 @@ manifest-needs-a-task = /manifest takes the task to plan, as in /manifest summar
 manifest-began = planning the whole task first; the session waits here until the run ends
 manifest-ended-unexpectedly = the run ended unexpectedly
 manifest-failed = the run stopped: { $problem }
+manifest-run-result = the run's result
 manifest-recorded = recorded as { $id }; read it again with bravebot --resume { $id }
 
 # What /init says when the project already has the file it would write.

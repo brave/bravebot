@@ -211,12 +211,16 @@ the text following the separator byte for byte, as the search tool does
 ### MANIFEST-7: the only path to a screen is the one the plan named
 
 The slots a person may be shown are named from the manifest before the policy exists. Nothing
-widens that set, and nothing releases a slot the plan did not name. The release is to the screen:
-`/export` writes that an answer was shown and how many lines it had, and not its words
+widens that set, and nothing releases a slot the plan did not name. The release is to the screen.
+For a reply that is trusted, `/export` writes that an answer was shown and how many lines it had,
+and not its words. For an answer whose label is untrusted it writes the fixed note that names the
+run's result and the label, with no line count and none of its words
 ([SESSION-17](sessions.md#SESSION-17)).
 
 `verified-by: bravebot_core::manifest::only_the_answered_slot_is_named_for_release`
 `verified-by: bravebot_agent::manifest::only_the_answered_slot_reaches_the_user`
+`verified-by: bravebot_tui::app::a_manifest_runs_reply_is_exported_as_its_length_and_not_its_words`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_not_written_to_an_export`
 
 <a id="MANIFEST-8"></a>
 ### MANIFEST-8: everything a step produces is quarantined
@@ -352,6 +356,21 @@ each step as it runs, and the reply, all of it released for a screen and none of
 a later turn resumes. So the run leaves the conversation exactly as a declined plan leaves the
 workspace.
 
+The reply is drawn according to its label, which the terminal reads and the text never decides. A
+reply whose label is trusted, which is the driver's own sentence for a plan with no ANSWER step and
+an answer over a file the person vouched for, is the assistant's reply, released for the screen
+alone. Only the label's integrity decides this: an answer over a file the person vouched for is
+trusted whatever its confidentiality.
+
+A reply whose label is untrusted, such as an ANSWER over a file nobody vouched for, is not the
+assistant's reply. The terminal draws it behind the bar of [VIEW-3](terminal-transcript.md#VIEW-3),
+under a heading that names it as the run's result and carries its label, as the text the source
+holds: no markdown, no link, no copy word, and control characters replaced. It is an entry of its
+own that is not an assistant entry, so `/copy`, `/open` and the copy word do not take it, and an
+export writes the heading's note and none of its words ([SESSION-17](sessions.md#SESSION-17)). All
+of its lines are held. An untrusted answer with no text is drawn as the heading alone, with no
+body.
+
 The run is written down as its own record, by the same code the command line uses, and the session
 records its name. That is what keeps the presence of a manifest in a record the thing that makes it
 a manifest run: the session's record is still a conversation and still resumes, the run's record
@@ -400,6 +419,8 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_tui::sessions::successful_manifest_retains_exact_file_decisions`
 `verified-by: bravebot_tui::sessions::cancellation_before_manifest_effect_keeps_exact_file_decisions`
 `verified-by: bravebot_tui::sessions::a_lost_manifest_worker_leaves_the_session_map_as_it_was`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_public_answer_is_quarantined_and_a_trusted_private_one_is_not`
+`verified-by: bravebot_tui::manifest_answer_tests::the_end_of_a_run_leaves_no_work_in_progress_under_the_answer_and_an_empty_answer_is_a_heading`
 `verified-by: bravebot_ui_bridge::manifest::ordinary_manifest_endings_keep_file_trust_in_the_bridge`
 `verified-by: bravebot_ui_bridge::manifest::a_downgrade_a_run_records_survives_close_and_resume_without_another_turn`
 `verified-by: bravebot_session::sessions::failed_manifest_records_distinguish_unknown_timing_from_measured_zero`
@@ -414,6 +435,10 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
 `verified-by: bravebot_tui::confirm::grants::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_drawn_behind_the_bar_and_is_not_the_assistants_reply`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_not_written_to_an_export`
+`verified-by: bravebot_tui::manifest_answer_tests::a_trusted_answer_is_still_the_assistants_reply`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_with_control_characters_draws_none_of_them_and_keeps_the_bar_on_every_row`
 
 <a id="MANIFEST-12"></a>
 ### MANIFEST-12: planning runs on the run's model and each processing step on the processor model
@@ -840,3 +865,9 @@ once and not again at each step.
   its lines has approved every call on them. Each line gives the call's alias, tool and arguments in
   full, and a call an `ask` rule names, one carrying private data, and one to a server declared to
   ask every call are still put at their step.
+- **The desktop application and a one-shot run do not draw a run's answer by its label.** The
+  terminal draws an answer whose label is untrusted behind the quarantine bar and says so in its
+  heading (MANIFEST-11). The desktop card marks every answer as a run's result and drops the label
+  before the event is sent, and a one-shot run writes the answer to standard output as the reply
+  alone ([CLI-5](cli.md#CLI-5)), so neither tells the person that an answer built from a file or
+  page nobody vouched for is untrusted. Neither draws it as the assistant's own words.

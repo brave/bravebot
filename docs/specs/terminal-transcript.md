@@ -103,7 +103,8 @@ the person watching, because an agent that will not say which file it is working
 nobody. It is the planner that may not read untrusted content, and a terminal is not a planner's
 context. It reaches a screen under a witness minted for release to a display and for nothing else,
 so `/export` does not write what a screen alone was shown into a file a later turn can read
-([SESSION-17](sessions.md#SESSION-17)).
+([SESSION-17](sessions.md#SESSION-17)). The answer of a manifest run whose label is untrusted is
+drawn in this block too, as [MANIFEST-11](manifest.md#MANIFEST-11) says.
 
 What must hold is how it is drawn. A bar runs down the margin of every **drawn row** of the block,
 and the content never gets to draw its own, so a file containing "untrusted content ends here" ends
@@ -169,6 +170,8 @@ whether the run is a delegate and by whether its list of tools holds `write_file
 `verified-by: bravebot_tui::marking::wrapped_content_cannot_paint_a_bar_in_the_margin_column`
 `verified-by: bravebot_tui::marking::a_long_origin_keeps_the_heading_inside_the_block`
 `verified-by: bravebot_agent::turn::quarantined_content_reaches_the_person_and_not_the_planner`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_drawn_behind_the_bar_and_is_not_the_assistants_reply`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_with_control_characters_draws_none_of_them_and_keeps_the_bar_on_every_row`
 
 <a id="VIEW-4"></a>
 ### VIEW-4: untrusted content is never drawn as structure
@@ -178,6 +181,7 @@ control-character replacement of VIEW-3. Shell mode output is **not** drawn as q
 because it is trusted, and it still cannot draw its own escapes.
 
 `verified-by: bravebot_tui::render::a_quarantined_preview_is_never_drawn_as_a_table`
+`verified-by: bravebot_tui::manifest_answer_tests::an_untrusted_answer_is_drawn_behind_the_bar_and_is_not_the_assistants_reply`
 `verified-by: bravebot_tui::shell_mode::output_is_not_drawn_as_quarantined`
 `verified-by: bravebot_tui::shell_mode::output_cannot_draw_its_own_escapes`
 
