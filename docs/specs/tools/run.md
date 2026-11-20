@@ -220,6 +220,14 @@ about whatever is vouched for ([RUN-3](#RUN-3)).
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_the_same_plan_fed_something_else`
 `verified-by: bravebot_core::command::a_plan_fed_a_reference_encodes_apart_from_the_same_plan_fed_nothing`
 
+A line a stage of which is lent a credential scope a person kept at an earlier prompt
+([SANDBOX-27](../sandboxing.md#SANDBOX-27)) is asked about whatever is vouched for, and what it prints
+has the first label, `(U,priv)`, as the output of a line that asked for the scope has
+([SANDBOX-26](../sandboxing.md#SANDBOX-26)). The scope is read from the person's own record of reach and
+the compiled plan, never from what a program printed.
+
+`verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
+
 A file-dependent output label must also account for overlapping effects. If shared file state
 changes between the run gate and output capture, apart from the command's own guarded effect
 entries, that output is untrusted. This includes background output when polled. This conservative
@@ -268,7 +276,8 @@ settings and the person's answer and never from what a stage wrote or printed:
   ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back
   (the auto mode's classifier is kept from a line with such a stage as well, on every platform,
   [AUTO-3](../auto-mode.md#AUTO-3));
-- nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
+- nothing the earlier questions above put to a person: a credential scope, a credential scope kept at
+  an earlier prompt that a stage is lent ([SANDBOX-27](../sandboxing.md#SANDBOX-27)), a toolchain list, `unconfined`
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
   `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),
   or a rule that says ask ([permissions.md](../permissions.md));
@@ -347,6 +356,9 @@ into a trusted one is written unasked.
 A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
 remembered line hold the program, its arguments and a tree, and not what the line was lent.
+The same holds for a line a stage of which is lent a credential scope a person kept at an earlier
+prompt ([SANDBOX-27](../sandboxing.md#SANDBOX-27)): it is asked about whatever answers the same line
+without the scope, and no answer to it is kept.
 The same holds for a line whose call asks to run with no sandbox ([SANDBOX-29](../sandboxing.md#SANDBOX-29)).
 
 **Why.** An unprompted write is worse than an unwanted prompt, so nothing that could be wrong about
@@ -366,6 +378,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_line_lent_a_kept_scope_is_asked_about_whatever_covers_the_line_without_it`
+`verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
 `verified-by: bravebot_core::policy::a_held_line_in_a_directory_whose_yes_said_so_does_not_ask`
 `verified-by: bravebot_core::policy::only_a_line_the_trust_of_the_directory_let_through_is_said_to_be_answered_by_it`
 `verified-by: bravebot_agent::confined_lines_open_network::a_line_let_through_by_directory_trust_runs_with_the_network_closed_and_an_approved_line_does_not`

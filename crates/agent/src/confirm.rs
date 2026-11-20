@@ -469,6 +469,22 @@ pub struct Remembered {
 }
 
 impl Confined {
+    /// The credential scopes a person kept at an earlier prompt that a stage carries, each once, by
+    /// their menu names. A directory a person named with `/reach` is not a credential scope.
+    pub fn kept_scopes(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = Vec::new();
+        for stage in &self.carried {
+            for remembered in &stage.remembered {
+                if let crate::reach::Reached::Scope(scope) = &remembered.reached
+                    && !names.contains(&scope.name())
+                {
+                    names.push(scope.name());
+                }
+            }
+        }
+        names
+    }
+
     /// What a credential scope brings to `program`, in the one wording both a scope the argv names
     /// and one a person remembered use.
     fn scope_sentence(&self, scope: bravebot_sandbox::scope::Scope, program: &str) -> String {
@@ -795,17 +811,30 @@ impl RunRequest {
         }
     }
 
-    /// Whether the planner asked this line to carry a credential scope or a toolchain list.
+    /// Whether the planner asked this line to carry a credential scope or a toolchain list, or a
+    /// stage of it is lent a credential scope a person kept at an earlier prompt.
     ///
     /// The fifth reason, and the one nothing recorded can account for: an entry and a remembered
     /// line hold a program, its arguments and a tree, so `a` made for a line with `aws` asked for
     /// would cover the same line with none, and one made for a line without would cover it with.
+    /// A scope kept with `m` or `e` is lent to a later line the same way, so such a line is held to
+    /// the same answer (SANDBOX-27). Both are read from the plan's own confinement and never from
+    /// anything a program printed.
     /// Asked apart from [`RunRequest::can_be_remembered`] for the reason
     /// [`RunRequest::carries_an_assignment`] is.
     pub fn asks_for_scopes(&self) -> bool {
+        self.confined.as_ref().is_some_and(|confined| {
+            !confined.requested.is_empty() || !confined.kept_scopes().is_empty()
+        })
+    }
+
+    /// The credential scopes a person kept at an earlier prompt that a stage of this line is lent,
+    /// each once, by their menu names. Empty for a line that carries none.
+    pub fn kept_scopes(&self) -> Vec<&'static str> {
         self.confined
             .as_ref()
-            .is_some_and(|confined| !confined.requested.is_empty())
+            .map(|confined| confined.kept_scopes())
+            .unwrap_or_default()
     }
 
     /// The names the planner asked for, each once, in the menu's order.
@@ -897,9 +926,10 @@ impl RunRequest {
         }
     }
 
-    /// Whether the prompt may offer to record this answer past the session.
+    /// Whether the prompt may offer to record this answer past the session. Not for a line a stage
+    /// of which is lent a kept credential scope (SANDBOX-27): such a line is asked about every time.
     pub fn may_record(&self) -> bool {
-        self.record.is_some() && !self.unconfined
+        self.record.is_some() && !self.unconfined && self.kept_scopes().is_empty()
     }
 
     /// The scope the prompt may also offer to record: it may record at all, and the line is one
@@ -4226,6 +4256,63 @@ mod tests {
             request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offered_scope(),
             None
         );
+    }
+
+    /// SANDBOX-27: a request built with a record path still offers no recording for a line a stage
+    /// of which is lent a kept credential scope, so a front end cannot bind `r` for it. A kept
+    /// directory does not change the answer.
+    #[test]
+    fn a_line_lent_a_kept_scope_may_not_be_recorded_even_with_a_record_path() {
+        let confined = |reached| Confined {
+            reads_the_machine: true,
+            directories: Vec::new(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: vec![Carried {
+                program: "make".into(),
+                toolchain: None,
+                scope: None,
+                reaches: Vec::new(),
+                identity: None,
+                network: false,
+                remembered: vec![Remembered {
+                    reached,
+                    write: false,
+                    allowed: "2026-10-07".into(),
+                }],
+            }],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            writes_git_directories: false,
+        };
+        let request = |confined| RunRequest {
+            plan: a_listed_line(),
+            record: Some(std::path::PathBuf::from(
+                "/home/.bravebot/remembered/work.jsonl",
+            )),
+            pattern: None,
+            stdin: None,
+            confined,
+            reach_record: None,
+            unconfined: false,
+            key_choice: None,
+            classified: Classified::NotAsked,
+            protected: false,
+            destinations: Vec::new(),
+        };
+        let kept = request(Some(confined(crate::reach::Reached::Scope(
+            bravebot_sandbox::scope::Scope::Aws,
+        ))));
+        assert_eq!(kept.kept_scopes(), vec!["aws"]);
+        assert!(!kept.may_record());
+        assert_eq!(kept.offered_scope(), None);
+
+        let directory = request(Some(confined(crate::reach::Reached::Directory(
+            std::path::PathBuf::from("/tmp/data"),
+        ))));
+        assert!(directory.kept_scopes().is_empty());
+        assert!(directory.may_record());
+        assert!(request(None).may_record());
     }
 
     fn a_series() -> Asking {

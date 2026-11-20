@@ -2604,6 +2604,8 @@ run-unconfined-not-remembered =
     a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
 run-scopes-not-remembered =
     a line the planner asked to carry a credential scope, toolchain list or loopback is asked every time, so it cannot be remembered
+run-kept-scope-not-remembered =
+    a line lent { $scopes }, which was kept at an earlier prompt, is asked about every time, so it cannot be remembered
 # Said only where the plan asked for a credential scope and a record of reach can be written. The
 # lines under it are the programs, each with its operation word, as `/reach` lists them.
 run-keep-reach-explained = m: also remember the requested reach for these commands, so the next plan for them carries it

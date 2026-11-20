@@ -11103,6 +11103,9 @@ struct Settled {
     unasked_writes: bool,
     asking: bool,
     covered_by_record: bool,
+    /// A stage is lent a credential scope a person kept at an earlier prompt, so the line is
+    /// labelled as one that asked for the scope is.
+    lent_a_kept_scope: bool,
 }
 
 /// The other names each file a `run` line's audited steps read has, by the operand as the line
@@ -11221,6 +11224,17 @@ fn settle_the_confinement<S: Sink>(
             .is_some_and(|confinement| confinement.writes_without_a_request());
 
     let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
+    // The credential scopes the person's own record attaches to the stages of this line, from the
+    // grants and the compiled steps and nothing a program printed. Asked of the confinement as
+    // built here, before a directory's trust replaces it below, and empty for a line run with no
+    // profile, which carries no grant.
+    let kept: Vec<&'static str> = confinement
+        .as_ref()
+        .map(|confinement| confinement.remembered_scopes(&plan.steps()))
+        .unwrap_or_default()
+        .into_iter()
+        .map(bravebot_sandbox::scope::Scope::name)
+        .collect();
     // How the sandbox holds the line, said from the compiled steps and the session's own settings:
     // the person's trust of the directory answers only for a line it holds (RUN-5).
     //
@@ -11239,7 +11253,7 @@ fn settle_the_confinement<S: Sink>(
         });
     let asking = match unconfined {
         true => policy.plan_needs_approval_unconfined(),
-        false => policy.plan_needs_approval_held(plan, &names, containment),
+        false => policy.plan_needs_approval_lent(plan, &names, &kept, containment),
     };
     // A line the person's trust of the directory let through runs as it was judged: with the
     // network closed for this line, where the session's is open. A line any other road answered
@@ -11263,6 +11277,7 @@ fn settle_the_confinement<S: Sink>(
         unasked_writes,
         asking,
         covered_by_record,
+        lent_a_kept_scope: !kept.is_empty(),
     })
 }
 
@@ -11482,6 +11497,16 @@ fn run_call<S: Sink>(
     })
 }
 
+/// Whether a stage of `plan` is lent a credential scope the person's own record holds, worked out
+/// from the confinement the run is started with and the compiled steps, never from the line's
+/// words (SANDBOX-27).
+fn is_lent_a_kept_scope(
+    confinement: Option<&crate::confine::Confinement>,
+    plan: &bravebot_core::command::Plan,
+) -> bool {
+    confinement.is_some_and(|confinement| !confinement.remembered_scopes(&plan.steps()).is_empty())
+}
+
 /// What the sandbox does to the stages of a line, as far as the auto mode's classifier is
 /// concerned (AUTO-3).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -11538,11 +11563,11 @@ fn consult_about_a_run<S: Sink>(
     requested: &[bravebot_sandbox::scope::Requested],
     stdin: bool,
     unconfined: bool,
-    profile: Profile,
+    confinement: Option<&crate::confine::Confinement>,
     protected: bool,
 ) -> crate::confirm::Classified {
     if unconfined
-        || profile != Profile::Holding
+        || profile_of(confinement, plan) != Profile::Holding
         || tools.permission_mode.get() != crate::PermissionMode::Auto
     {
         return crate::confirm::Classified::NotAsked;
@@ -11553,8 +11578,14 @@ fn consult_about_a_run<S: Sink>(
         return crate::confirm::Classified::NotAsked;
     }
     // Only a line it can be shown whole: nothing fed to it from a reference, no name in `scopes`
-    // (a credential scope, a toolchain list, `loopback` or `ssh-key`), nothing private released.
-    if !requested.is_empty() || stdin || plan.releases_private() {
+    // (a credential scope, a toolchain list, `loopback` or `ssh-key`), nothing private released,
+    // and no stage lent a credential scope a person kept at an earlier prompt: the classifier is
+    // shown the words of the line, which do not say what the stage is lent (SANDBOX-27).
+    if !requested.is_empty()
+        || is_lent_a_kept_scope(confinement, plan)
+        || stdin
+        || plan.releases_private()
+    {
         return crate::confirm::Classified::NotAsked;
     }
     let Some(classifying) = tools.classifying.as_ref() else {
@@ -11630,6 +11661,9 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // argument list, so the order is a matter of reading rather than of correctness.
     let varied = policy.arguments_have_varied(plan);
     policy.asked_about(plan);
+    // Whether a stage is lent a credential scope the person's own record holds, worked out from
+    // the confinement the prompt is drawn from and the compiled steps, as the policy was told.
+    let lent_a_kept_scope = is_lent_a_kept_scope(confinement.as_ref(), plan);
     let classified = consult_about_a_run(
         policy,
         tools,
@@ -11638,7 +11672,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         requested,
         stdin.is_some(),
         unconfined,
-        profile_of(confinement.as_ref(), plan),
+        confinement.as_ref(),
         protected,
     );
     let request = crate::confirm::RunRequest {
@@ -11650,7 +11684,12 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         // still one of its refusals. The path is what the prompt shows, since a person cannot
         // endorse a record they were not shown.
         record: record
-            .filter(|_| policy.may_remember(plan) && requested.is_empty() && !unconfined)
+            .filter(|_| {
+                policy.may_remember(plan)
+                    && requested.is_empty()
+                    && !lent_a_kept_scope
+                    && !unconfined
+            })
             .filter(|_| crate::remembered::may_be_added_to())
             .map(|store| store.path().to_path_buf()),
         // Said only where a key at this prompt will not finish the asking, only where a rule
@@ -11664,7 +11703,11 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         pattern: tools
             .home
             .filter(|_| {
-                varied && policy.a_rule_could_answer(plan) && requested.is_empty() && !unconfined
+                varied
+                    && policy.a_rule_could_answer(plan)
+                    && requested.is_empty()
+                    && !lent_a_kept_scope
+                    && !unconfined
             })
             .map(bravebot_config::user_settings_file),
         // The reference, so the person reads what is going in as well as that something is.
@@ -11777,17 +11820,31 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
                 .map(|confinement| confinement.with_chosen_key(chosen));
         }
     }
-    remember_the_answer(policy, tools, plan, record, requested, unconfined, &answer);
+    remember_the_answer(
+        policy,
+        tools,
+        plan,
+        record,
+        requested,
+        lent_a_kept_scope,
+        unconfined,
+        &answer,
+    );
     Ok(())
 }
 
 /// Write down what a run's answer asked to have remembered, where the policy allows it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy is an exclusive borrow and the rest is the line's own structure and the answer, so none of them can share a bundle"
+)]
 fn remember_the_answer<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &Tools<'_>,
     plan: &bravebot_core::command::Plan,
     record: Option<&crate::remembered::Store>,
     requested: &[bravebot_sandbox::scope::Requested],
+    lent_a_kept_scope: bool,
     unconfined: bool,
     answer: &crate::confirm::RunDecision,
 ) {
@@ -11800,6 +11857,7 @@ fn remember_the_answer<S: Sink>(
     // RUN-20 is asked of the table again by `scope_to_record`.
     if policy.may_remember(plan)
         && requested.is_empty()
+        && !lent_a_kept_scope
         && !unconfined
         && let (Some(store), Some(session)) = (record, tools.remembering)
     {
@@ -12288,6 +12346,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         unasked_writes,
         asking,
         covered_by_record,
+        lent_a_kept_scope,
     } = match settle_the_confinement(
         policy,
         tools,
@@ -12325,7 +12384,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     let authority = policy.file_authority();
     // A vouch was for the programs as they ran under their profile with nothing added, so what a
     // line prints that was lent a credential, or run with no sandbox, is not trusted on its account.
-    let requesting = !requested.is_empty() || unconfined;
+    // That includes a credential a person kept at an earlier prompt (SANDBOX-27).
+    let requesting = !requested.is_empty() || unconfined || lent_a_kept_scope;
 
     // Shared: the revision and the label `before_plan` reads from the map have to be of one state,
     // which an effect entering would break, and nothing here enters one. The gates (capability,
@@ -12408,6 +12468,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         .and_then(|confinement| confinement.requested_for_the_trail(&plan.steps()))
     {
         policy.record_requested_scopes(detail);
+    }
+    if let Some(detail) = confinement
+        .as_ref()
+        .and_then(|confinement| confinement.kept_for_the_trail(&plan.steps()))
+    {
+        policy.record_kept_scopes(detail);
     }
 
     // A program opens files the line never names, so nothing tells the authority which it rewrites.

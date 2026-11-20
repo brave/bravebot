@@ -721,6 +721,56 @@ mod tests {
         assert_eq!(gates, ["run", "run"]);
     }
 
+    /// CLI-36, SANDBOX-27: a run lent a credential scope a person kept at an earlier prompt is
+    /// never put to the program either, though the planner asked for nothing, so its approving
+    /// answer cannot run the line with a credential nobody was shown for it. A plain run is put
+    /// first as the control, and a line holding a kept directory, which is not a credential scope,
+    /// is put as a second control. A fault that read only what the planner asked for
+    /// (`asks_for_scopes`) would put the line to the program.
+    #[test]
+    fn a_run_lent_a_kept_scope_is_not_put_to_a_program_that_approves_everything() {
+        let carrying = |reached| {
+            let mut request = a_run();
+            let mut confined = confined_asking_for(Vec::new());
+            confined.carried = vec![bravebot_agent::confirm::Carried {
+                program: "git".to_string(),
+                toolchain: None,
+                scope: None,
+                reaches: Vec::new(),
+                identity: None,
+                network: false,
+                remembered: vec![bravebot_agent::confirm::Remembered {
+                    reached,
+                    write: false,
+                    allowed: "2026-10-07".to_string(),
+                }],
+            }];
+            request.confined = Some(confined);
+            request
+        };
+        let kept_directory = carrying(bravebot_agent::reach::Reached::Directory(
+            "/tmp/data".into(),
+        ));
+        let kept_scope = carrying(bravebot_agent::reach::Reached::Scope(Scope::Aws));
+        assert!(!kept_directory.asks_for_scopes());
+        assert!(kept_scope.asks_for_scopes());
+        assert!(kept_scope.requested_scopes().is_empty());
+
+        let (mut one_shot, said, program) = approving_over_lines(1);
+        let control = one_shot.confirm_run(&a_run());
+        let directory = one_shot.confirm_run(&kept_directory);
+        let scoped = one_shot.confirm_run(&kept_scope);
+        program.leaves();
+
+        assert!(control.approved(), "the control was not approved");
+        assert!(directory.approved(), "a kept directory was refused");
+        assert!(!scoped.approved(), "a run lent a kept scope proceeded");
+        let asked = said.permissions();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        let gates: Vec<_> = one_shot.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["run"]);
+    }
+
     /// CLI-36, MODE-2, PERM-9: a run that redirects into a protected path is never put to the
     /// program, so an approving answer cannot let it through. A plain run is put first as the
     /// control. A fault that put every run, as `confirm_run` did before it read `protected`, would

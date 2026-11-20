@@ -820,7 +820,19 @@ fn always_rows(request: &RunRequest, offers_always: bool) -> Vec<Line<'static>> 
         if request.feeds_a_reference() {
             why.push(t!(run_stdin_not_remembered));
         }
-        if request.asks_for_scopes() {
+        if !request.kept_scopes().is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  {}",
+                    t!(
+                        run_kept_scope_not_remembered,
+                        scopes = request.kept_scopes().join(", ")
+                    )
+                ),
+                Style::default().fg(theme::muted()),
+            )));
+        }
+        if !request.requested_scopes().is_empty() {
             why.push(t!(run_scopes_not_remembered));
         }
         if request.unconfined {
@@ -2328,6 +2340,172 @@ mod tests {
                 "`{key}` answered a prompt that does not offer it"
             );
         }
+    }
+
+    /// A confinement for `a_run(false)` whose stages carry `remembered` and that asks for
+    /// `requested`, as the agent builds it for a line after a person kept a reach with `m` or `e`.
+    fn confined_with(
+        requested: Vec<(String, bravebot_sandbox::scope::Requested)>,
+        remembered: Vec<bravebot_agent::confirm::Remembered>,
+    ) -> bravebot_agent::Confined {
+        bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec!["/home/someone/project".into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested,
+            requested_reaches: Vec::new(),
+            carried: vec![bravebot_agent::confirm::Carried {
+                program: "git".into(),
+                toolchain: None,
+                scope: None,
+                reaches: Vec::new(),
+                identity: None,
+                network: false,
+                remembered,
+            }],
+            writes_git_directories: false,
+        }
+    }
+
+    fn remembered_reach(
+        reached: bravebot_agent::reach::Reached,
+    ) -> bravebot_agent::confirm::Remembered {
+        bravebot_agent::confirm::Remembered {
+            reached,
+            write: false,
+            allowed: "2026-10-07".into(),
+        }
+    }
+
+    /// SANDBOX-27, SANDBOX-26: a line whose stage is lent a credential scope a person kept at an
+    /// earlier prompt asks every time though the planner asked for nothing, so `a` and `r` are
+    /// unbound, the prompt says the scope was kept, and it does not say the planner asked for it.
+    /// The record path is withheld the way the agent withholds it for such a line. The controls
+    /// are the same line with nothing kept (`a` and `r` answer), a kept directory (not a
+    /// credential scope, so `a` answers), and a scope the planner asked for (which keeps its own
+    /// reason). The regressions it rejects: `asks_for_scopes` reading only what the planner asked
+    /// for, which leaves `a` bound, and the kept row drawn with the sentence about the planner's
+    /// request.
+    #[test]
+    fn a_run_lent_a_kept_scope_offers_no_standing_permission_and_says_why() {
+        let kept = |reached| {
+            let mut request = RunRequest {
+                reach_record: Some("/home/someone/.bravebot/reach.jsonl".into()),
+                ..a_recordable_run()
+            };
+            request.confined = Some(confined_with(Vec::new(), vec![remembered_reach(reached)]));
+            request
+        };
+        let aws = || {
+            kept(bravebot_agent::reach::Reached::Scope(
+                bravebot_sandbox::scope::Scope::Aws,
+            ))
+        };
+
+        let mut control = RunRequest {
+            reach_record: Some("/home/someone/.bravebot/reach.jsonl".into()),
+            ..a_recordable_run()
+        };
+        control.confined = Some(confined_with(Vec::new(), Vec::new()));
+        let directory = kept(bravebot_agent::reach::Reached::Directory(
+            "/home/someone/data".into(),
+        ));
+        for (label, request) in [("nothing kept", &control), ("a kept directory", &directory)] {
+            assert!(
+                !request.asks_for_scopes(),
+                "{label}: the control asks for scopes, so the rows below prove nothing"
+            );
+            for key in ['a', 'r'] {
+                assert!(
+                    run_answer_for(press(KeyCode::Char(key)), request).is_some(),
+                    "{label}: `{key}` did not answer the control"
+                );
+            }
+            let drawn = fully_rendered_run(request);
+            assert!(
+                !drawn.contains("kept at an earlier prompt"),
+                "{label}: the prompt named a kept scope the line is not lent: {drawn}"
+            );
+        }
+
+        // What the agent hands the prompt for such a line: no record path, since it builds one
+        // only where `requested` is empty and nothing is kept.
+        let mut request = aws();
+        request.record = None;
+        assert!(request.asks_for_scopes());
+        assert_eq!(request.kept_scopes(), vec!["aws"]);
+        assert!(request.requested_scopes().is_empty());
+        for key in ['a', 'A', 'r', 'R'] {
+            assert_eq!(
+                run_answer_for(press(KeyCode::Char(key)), &request),
+                None,
+                "`{key}` answered a line lent a kept scope"
+            );
+        }
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('y')), &request),
+            Some(RunResponse::Answer(RunAnswer::Approve)),
+            "the line cannot be approved once"
+        );
+        // `a` is withheld by the request's own answer and not by the missing record path.
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('a')), &aws()),
+            None,
+            "`a` answered a line lent a kept scope when a record path was present"
+        );
+        let drawn = fully_rendered_run(&request);
+        assert!(
+            drawn.contains("lent aws, which was kept at an earlier prompt"),
+            "the prompt did not say which kept scope the line is lent: {drawn}"
+        );
+        assert!(
+            !drawn.contains("the planner asked to carry"),
+            "the prompt said the planner asked for a scope it did not: {drawn}"
+        );
+        assert!(
+            !drawn.contains("stop asking about this exact line"),
+            "the prompt explained a key it does not offer: {drawn}"
+        );
+
+        // The control for the other reason: a scope the planner asked for keeps its sentence and
+        // does not borrow the kept one.
+        let mut asked = a_run(false);
+        asked.confined = Some(confined_with(
+            vec![(
+                "git".into(),
+                bravebot_sandbox::scope::Requested::Scope(bravebot_sandbox::scope::Scope::Aws),
+            )],
+            Vec::new(),
+        ));
+        assert!(asked.kept_scopes().is_empty());
+        let drawn = fully_rendered_run(&asked);
+        assert!(
+            drawn.contains("the planner asked to carry a credential scope"),
+            "the requested-scope reason was not drawn: {drawn}"
+        );
+        assert!(
+            !drawn.contains("kept at an earlier prompt"),
+            "a requested scope was drawn as a kept one: {drawn}"
+        );
+
+        // Both at once: each reason is drawn, so a person who removes one still sees the other.
+        let mut both = a_run(false);
+        both.confined = Some(confined_with(
+            vec![(
+                "git".into(),
+                bravebot_sandbox::scope::Requested::Scope(bravebot_sandbox::scope::Scope::Docker),
+            )],
+            vec![remembered_reach(bravebot_agent::reach::Reached::Scope(
+                bravebot_sandbox::scope::Scope::Aws,
+            ))],
+        ));
+        let drawn = fully_rendered_run(&both);
+        assert!(drawn.contains("lent aws, which was kept"), "{drawn}");
+        assert!(
+            drawn.contains("the planner asked to carry a credential scope"),
+            "{drawn}"
+        );
     }
 
     /// A compiled plan that redirects its output to a file, as `sh check.sh > out.txt` compiles.

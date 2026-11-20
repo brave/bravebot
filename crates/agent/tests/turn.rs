@@ -36914,6 +36914,567 @@ fn keeping_a_request_for_every_session_is_read_by_another_session() {
     );
 }
 
+/// Two `uname` lines in one turn, in a session that keeps state: the first asks for `aws` and is
+/// answered with `first`, the second asks for nothing and is answered with `second`. `vouch` is
+/// what the session has vouched for before the turn.
+fn a_kept_scope_then_a_bare_line(
+    name: &str,
+    state: &std::path::Path,
+    first: bravebot_agent::RunDecision,
+    second: bravebot_agent::RunDecision,
+    vouch: impl FnOnce(&std::path::Path) -> bravebot_core::programs::TrustedPrograms,
+) -> (ScopedRun, Vec<bravebot_agent::RunRequest>) {
+    let mut person = AskedAboutRuns::answering_in_turn(vec![first, second]);
+    let seen = person.seen.clone();
+    let result = scoped_run_after(
+        name,
+        &[serde_json::json!({ "command": "uname", "scopes": ["aws"] })],
+        serde_json::json!({ "command": "uname" }),
+        bravebot_sandbox::SandboxMode::Strict,
+        bravebot_agent::PermissionMode::default(),
+        trusting_the_workspace(),
+        vouch,
+        &mut person,
+        Some(state),
+    );
+    let seen = seen.lock().unwrap().clone();
+    (result, seen)
+}
+
+/// The result of the last `run` in the planner's final request.
+fn last_run_result(second: &str) -> &str {
+    let last = second.rfind("Result of run").expect("a result");
+    message_from(&second[last..], "Result of run")
+}
+
+/// SANDBOX-26, SANDBOX-27: a line whose stage is lent a credential scope the person kept with `m`
+/// is put to the person even where a vouched entry covers it, shows the remembered scope, and what
+/// it prints is quarantined. The regressions it rejects: asking nothing because the vouched entry
+/// answers (the ask is fixed and the label is not, or the label is fixed and the ask is not).
+#[test]
+fn a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output() {
+    if strict_cannot_run_here() {
+        return;
+    }
+    let state = Scratch::new("kept-scope-vouched-state");
+    let (result, seen) = a_kept_scope_then_a_bare_line(
+        "kept-scope-vouched",
+        &state.path,
+        bravebot_agent::RunDecision::approve_and_keep_reach(
+            bravebot_agent::reach::Lasting::ThisSession,
+        ),
+        bravebot_agent::RunDecision::approve(),
+        |tree| {
+            bravebot_core::programs::TrustedPrograms::from_iter([vouched_in("uname", &[], tree)])
+        },
+    );
+    assert_eq!(
+        result.reach.len(),
+        1,
+        "the scope was not kept, so the second line proves nothing: {:?}",
+        result.reach
+    );
+    assert_eq!(
+        seen.len(),
+        2,
+        "a line lent a kept credential scope was not asked about"
+    );
+    assert!(
+        seen[1]
+            .confined
+            .as_ref()
+            .is_some_and(|confined| confined.carried.iter().any(|carried| carried
+                .remembered
+                .iter()
+                .any(|kept| kept.reached
+                    == bravebot_agent::reach::Reached::Scope(
+                        bravebot_sandbox::scope::Scope::Aws
+                    )))),
+        "the prompt did not show the remembered scope"
+    );
+    let said = last_run_result(&result.second);
+    assert!(said.contains("It exited 0."), "{said}");
+    assert!(
+        said.contains("[ref:") && said.contains("Quarantined") && said.contains("(U,priv)"),
+        "the output of a line lent a kept scope was shown: {said}"
+    );
+    assert!(
+        !said.contains("Darwin") && !said.contains("Linux"),
+        "{said}"
+    );
+    assert_eq!(
+        labels_stated_for_runs(&result.trail),
+        vec![Label::untrusted_private().to_string(); 2],
+        "the trail names a label the planner was not given"
+    );
+}
+
+/// What one session of `uname` lines left behind, for the tests of a scope kept in an earlier one.
+struct SessionRan {
+    /// The planner's last request, which holds the result of the last line.
+    last: String,
+    /// Every question the person was put, in order.
+    seen: Vec<bravebot_agent::RunRequest>,
+    trail: Vec<Event>,
+    /// Programs the session's answers vouched for.
+    vouched: usize,
+    /// Whether the record of remembered lines holds anything for the workspace afterwards.
+    recorded: bool,
+    /// The reach `session` reads in the workspace afterwards.
+    reach: Vec<bravebot_agent::reach::Grant>,
+}
+
+/// One session named `session`, under `state`, running each of `calls` in `scratch` as a workspace
+/// and answering the questions in order (a line past the answers is refused). `vouching` vouches
+/// for a bare `uname` in the workspace first, and `allow` is a list of allow rules in the settings.
+/// The same `scratch` and `state` across calls make them earlier and later sessions of one checkout.
+fn a_session_of_runs(
+    scratch: &Scratch,
+    state: &std::path::Path,
+    session: &str,
+    vouching: bool,
+    allow: &[&str],
+    calls: &[serde_json::Value],
+    answers: Vec<bravebot_agent::RunDecision>,
+) -> SessionRan {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<String> = calls
+        .iter()
+        .map(|call| tool_request("run", &call.to_string()))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let programs = match vouching {
+        true => bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            "uname",
+            &[],
+            &scratch.path,
+        )]),
+        false => bravebot_core::programs::TrustedPrograms::new(),
+    };
+    let mut task = Task::new("run it")
+        .with_profile(Some(
+            bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+        ))
+        .with_permission_mode(bravebot_agent::PermissionMode::default())
+        .with_confined_runs(true)
+        .with_sandbox_mode(bravebot_sandbox::SandboxMode::Strict)
+        .with_home(Some(state.to_path_buf()))
+        .remembering(Some(session.to_string()));
+    if !allow.is_empty() {
+        task = task.with_permissions(rules(&[], &[], allow));
+    }
+    let mut person = AskedAboutRuns::answering_in_turn(answers);
+    let seen = person.seen.clone();
+    let mut sink = RecordingSink::new();
+    let outcome = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut person,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.outcome.as_ref().expect("the turn runs");
+    for _ in 0..calls.len() {
+        let _ = received.recv().expect("a request before the last");
+    }
+    let last = received.recv().expect("the last request");
+    let seen = seen.lock().unwrap().clone();
+    SessionRan {
+        last,
+        seen,
+        trail: sink.events().to_vec(),
+        vouched: outcome.decisions.programs.len(),
+        recorded: !bravebot_agent::remembered::Store::new(state, workspace.root())
+            .read()
+            .is_empty(),
+        reach: bravebot_agent::reach::Store::new(state).read(Some(session), workspace.root()),
+    }
+}
+
+/// Whether the question put to the person for a line shows the aws scope as one it already holds.
+fn shows_a_kept_aws(request: &bravebot_agent::RunRequest) -> bool {
+    request.confined.as_ref().is_some_and(|confined| {
+        confined.carried.iter().any(|carried| {
+            carried.remembered.iter().any(|kept| {
+                kept.reached
+                    == bravebot_agent::reach::Reached::Scope(bravebot_sandbox::scope::Scope::Aws)
+            })
+        })
+    })
+}
+
+fn a_bare_uname() -> serde_json::Value {
+    serde_json::json!({ "command": "uname" })
+}
+
+fn uname_with_aws() -> serde_json::Value {
+    serde_json::json!({ "command": "uname", "scopes": ["aws"] })
+}
+
+/// SANDBOX-26, SANDBOX-27, RUN-19: a line the person recorded with `r` and lent a scope with `e` in
+/// an earlier session is put to the person in a later one, shows the scope, offers no standing
+/// answer, and what it prints is quarantined. The regression it rejects: a fix of the vouched road
+/// that leaves the remembered-line road to cover the line, which runs it unasked with the
+/// credential rows. The control is the recorded line with no scope kept, which still runs unasked.
+#[test]
+fn a_kept_scope_asks_about_a_remembered_line_in_a_later_session() {
+    if strict_cannot_run_here() {
+        return;
+    }
+    let scratch = Scratch::new("kept-scope-remembered");
+    let state = Scratch::new("kept-scope-remembered-state");
+    let first = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "first-session",
+        false,
+        &[],
+        &[a_bare_uname(), uname_with_aws()],
+        vec![
+            bravebot_agent::RunDecision::approve_and_record(),
+            bravebot_agent::RunDecision::approve_and_keep_reach(
+                bravebot_agent::reach::Lasting::EverySession,
+            ),
+        ],
+    );
+    assert!(
+        first.recorded,
+        "the line was not recorded, so the test proves nothing"
+    );
+    assert_eq!(
+        first.reach.len(),
+        1,
+        "the scope was not kept, so the test proves nothing: {:?}",
+        first.reach
+    );
+    assert_eq!(
+        first.reach[0].lifetime,
+        bravebot_agent::reach::Lifetime::Always
+    );
+
+    let later = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "later-session",
+        false,
+        &[],
+        &[a_bare_uname()],
+        vec![bravebot_agent::RunDecision::approve()],
+    );
+    assert_eq!(
+        later.seen.len(),
+        1,
+        "a recorded line lent a kept scope in a later session was not asked about"
+    );
+    assert!(
+        shows_a_kept_aws(&later.seen[0]),
+        "the prompt did not show the scope"
+    );
+    assert!(!later.seen[0].can_be_remembered());
+    assert!(later.seen[0].would_vouch_for().is_empty());
+    assert!(later.seen[0].record.is_none(), "a record was offered");
+    let said = last_run_result(&later.last);
+    assert!(
+        said.contains("[ref:") && said.contains("(U,priv)"),
+        "the output of the line was shown: {said}"
+    );
+    assert!(
+        !said.contains("Darwin") && !said.contains("Linux"),
+        "{said}"
+    );
+    assert_eq!(
+        labels_stated_for_runs(&later.trail),
+        [Label::untrusted_private().to_string()]
+    );
+
+    let scratch = Scratch::new("kept-scope-remembered-control");
+    let state = Scratch::new("kept-scope-remembered-control-state");
+    let first = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "first-session",
+        false,
+        &[],
+        &[a_bare_uname()],
+        vec![bravebot_agent::RunDecision::approve_and_record()],
+    );
+    assert!(first.recorded);
+    let control = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "later-session",
+        false,
+        &[],
+        &[a_bare_uname()],
+        vec![],
+    );
+    assert!(
+        control.seen.is_empty(),
+        "the recorded line with no scope kept was asked about, so the test above proves nothing"
+    );
+    assert!(
+        last_run_result(&control.last).contains("It exited 0."),
+        "{}",
+        control.last
+    );
+}
+
+/// SANDBOX-26, SANDBOX-27, PERM-5: a line a settings allow rule answers is put to the person once
+/// a scope kept with `e` is lent to it, shows the scope, and what it prints is quarantined. The
+/// regression it rejects: a fix of the vouched road that leaves the allow rule to answer the
+/// question, which lends the credential rows to a line nobody was asked about. The control is the
+/// same rule with no scope kept, which still answers without a question.
+#[test]
+fn a_kept_scope_asks_about_a_line_an_allow_rule_answers() {
+    if strict_cannot_run_here() {
+        return;
+    }
+    let rule = ["Bash(uname)"];
+    let scratch = Scratch::new("kept-scope-rule");
+    let state = Scratch::new("kept-scope-rule-state");
+    let first = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "first-session",
+        false,
+        &rule,
+        &[uname_with_aws()],
+        vec![bravebot_agent::RunDecision::approve_and_keep_reach(
+            bravebot_agent::reach::Lasting::EverySession,
+        )],
+    );
+    assert_eq!(
+        first.seen.len(),
+        1,
+        "the line asking for a scope was not asked about under the rule"
+    );
+    assert_eq!(
+        first.reach.len(),
+        1,
+        "the scope was not kept: {:?}",
+        first.reach
+    );
+
+    let later = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "later-session",
+        false,
+        &rule,
+        &[a_bare_uname()],
+        vec![bravebot_agent::RunDecision::approve()],
+    );
+    assert_eq!(
+        later.seen.len(),
+        1,
+        "a line an allow rule answers, lent a kept scope, was not asked about"
+    );
+    assert!(
+        shows_a_kept_aws(&later.seen[0]),
+        "the prompt did not show the scope"
+    );
+    assert!(!later.seen[0].can_be_remembered());
+    let said = last_run_result(&later.last);
+    assert!(
+        said.contains("[ref:") && said.contains("(U,priv)"),
+        "the output of the line was shown: {said}"
+    );
+    assert!(
+        !said.contains("Darwin") && !said.contains("Linux"),
+        "{said}"
+    );
+
+    let state = Scratch::new("kept-scope-rule-control-state");
+    let control = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "later-session",
+        false,
+        &rule,
+        &[a_bare_uname()],
+        vec![],
+    );
+    assert!(
+        control.seen.is_empty(),
+        "the rule did not answer the line with no scope kept, so the test above proves nothing"
+    );
+    assert!(
+        last_run_result(&control.last).contains("It exited 0."),
+        "{}",
+        control.last
+    );
+}
+
+/// SANDBOX-23, SANDBOX-27: a vouched line is not asked about because of a grant that is not lent
+/// to it, and its output stays trusted. Each stored grant differs from the line in one thing: the
+/// operation word, the program, the checkout. The regression it rejects: asking whenever the
+/// record holds any scope, which puts every vouched line to the person. The control is the grant
+/// that is lent to the line, which is asked about.
+#[test]
+fn a_grant_that_is_not_lent_to_a_vouched_line_does_not_ask_about_it() {
+    if strict_cannot_run_here() {
+        return;
+    }
+    let scratch = Scratch::new("kept-scope-distractors");
+    let state = Scratch::new("kept-scope-distractors-state");
+    let elsewhere = Scratch::new("kept-scope-distractors-elsewhere");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let uname = bravebot_agent::programs::find("uname", &scratch.path)
+        .expect("uname exists")
+        .resolved;
+    let store = bravebot_agent::reach::Store::new(&state.path);
+    let grant = |binary: std::path::PathBuf, operation: Option<&str>, root: &std::path::Path| {
+        bravebot_agent::reach::Grant {
+            binary,
+            operation: operation.map(str::to_string),
+            reached: bravebot_agent::reach::Reached::Scope(bravebot_sandbox::scope::Scope::Aws),
+            write: false,
+            allowed: "2026-10-07".to_string(),
+            lifetime: bravebot_agent::reach::Lifetime::Always,
+            workspace: bravebot_agent::reach::Workspace::of(root),
+        }
+    };
+    for distractor in [
+        grant(uname.clone(), Some("check"), workspace.root()),
+        grant(uname.clone(), Some("deploy"), workspace.root()),
+        grant(
+            std::path::PathBuf::from("/usr/bin/cmake"),
+            None,
+            workspace.root(),
+        ),
+        grant(uname.clone(), None, elsewhere.path.as_path()),
+    ] {
+        assert!(store.allow(&distractor), "a grant was not written");
+    }
+    assert_eq!(
+        store.read(Some("a-session"), workspace.root()).len(),
+        3,
+        "the grants of this checkout were not read, and the one of another was"
+    );
+
+    let control = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "a-session",
+        true,
+        &[],
+        &[a_bare_uname()],
+        vec![],
+    );
+    assert!(
+        control.seen.is_empty(),
+        "a grant that is not lent to the line asked about it"
+    );
+    let said = last_run_result(&control.last);
+    assert!(
+        said.contains("Darwin") || said.contains("Linux"),
+        "the vouched line's output was not shown: {said}"
+    );
+    assert_eq!(
+        labels_stated_for_runs(&control.trail),
+        [Label::trusted_private().to_string()]
+    );
+
+    assert!(
+        store.allow(&grant(uname, None, workspace.root())),
+        "the grant lent to the line was not written"
+    );
+    let lent = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "a-session",
+        true,
+        &[],
+        &[a_bare_uname()],
+        vec![bravebot_agent::RunDecision::approve()],
+    );
+    assert_eq!(
+        lent.seen.len(),
+        1,
+        "the grant lent to the line was not asked about, so the test above proves nothing"
+    );
+}
+
+/// SANDBOX-26, SANDBOX-27: `a` and `r` answered at the prompt of a line lent a kept scope vouch for
+/// nothing and record nothing, whatever a front end sent, so the same line is asked about again.
+/// The regression it rejects: a prompt that withholds the keys while the tool side still acts on
+/// them, which vouches for the program or records the line and lets the next identical line run
+/// with the credential unasked.
+#[test]
+fn a_standing_answer_to_a_line_lent_a_kept_scope_remembers_nothing() {
+    if strict_cannot_run_here() {
+        return;
+    }
+    let scratch = Scratch::new("kept-scope-standing");
+    let state = Scratch::new("kept-scope-standing-state");
+    let first = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "first-session",
+        false,
+        &[],
+        &[uname_with_aws()],
+        vec![bravebot_agent::RunDecision::approve_and_keep_reach(
+            bravebot_agent::reach::Lasting::EverySession,
+        )],
+    );
+    assert_eq!(
+        first.reach.len(),
+        1,
+        "the scope was not kept: {:?}",
+        first.reach
+    );
+
+    let later = a_session_of_runs(
+        &scratch,
+        &state.path,
+        "later-session",
+        false,
+        &[],
+        // The same line three times. The middle call names no scope, which is the same line to
+        // the tool but not the same call to the repeated-call guard (TURN-9), which would hold a
+        // third identical call in a row before the person is asked.
+        &[
+            a_bare_uname(),
+            serde_json::json!({ "command": "uname", "scopes": [] }),
+            a_bare_uname(),
+        ],
+        vec![
+            bravebot_agent::RunDecision::approve_always(),
+            bravebot_agent::RunDecision::approve_and_record(),
+            bravebot_agent::RunDecision::approve(),
+        ],
+    );
+    assert_eq!(
+        later.seen.len(),
+        3,
+        "an identical line was not asked about again after `a` or `r`: {}",
+        later.last
+    );
+    assert!(later.seen.iter().all(shows_a_kept_aws));
+    assert!(
+        later
+            .seen
+            .iter()
+            .all(|request| !request.can_be_remembered())
+    );
+    assert_eq!(later.vouched, 0, "`a` vouched for the program");
+    assert!(!later.recorded, "`r` recorded the line");
+    assert!(
+        last_run_result(&later.last).contains("[ref:"),
+        "{}",
+        later.last
+    );
+}
+
 /// A profile directory outside the temporary directory, which the plan may write, holding the
 /// public halves of a key at one of ssh's default names and of `work`, which the ssh configuration
 /// names: two keys ssh could offer.

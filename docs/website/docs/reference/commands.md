@@ -490,8 +490,10 @@ there and adds nothing, and says so. The record is `reach.jsonl` in `~/.bravebot
 When the planner asks a `run` for a credential scope by name and the question is drawn, `m` runs the
 line and remembers each scope it asked for, read only, for the programs of the line, for this
 session. `e` does the same until it is removed, in this checkout or, for a program the scope belongs to such as `git` for remote, in every checkout. It is the row `/reach` would
-have made, listed by `/reach` and taken away by `/reach remove`. The line is still asked about every
-time, with the scope shown on it, and neither key trusts what it prints. A toolchain list the
+have made, listed by `/reach` and taken away by `/reach remove`. The line that asked is still asked about every
+time, with the scope shown on it, and neither key trusts what it prints. A later line for those programs is also asked about
+every time, with the scope shown as a row, whether or not it asked for the scope. It offers no `a` or `r`, and what it prints is not trusted. Only a
+credential scope does this: a directory you made reachable with `/reach <dir> -- <command>` does not. A toolchain list the
 planner asked for is not remembered, and neither is the `signing` scope, `loopback` or `ssh-key`, which are asked about every time. A line with a `NAME=value` in front of a program, or a
 program started with an option such as `git -C dir push`, is not offered either key. The desktop app
 does not offer them.

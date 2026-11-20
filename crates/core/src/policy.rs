@@ -695,7 +695,8 @@ fn describe_the_answers(asked: &crate::ask::Series, answers: &[Answer]) -> Strin
 pub(crate) struct RunFacts {
     /// Private input is fed to a program (RUN-6).
     pub(crate) releases_private: bool,
-    /// The planner asked for a credential scope or a toolchain list (SANDBOX-26).
+    /// The planner asked for a credential scope or a toolchain list, or a stage is lent a scope a
+    /// person kept at an earlier prompt (SANDBOX-26, SANDBOX-27).
     pub(crate) requested: bool,
     /// The line names a file to write.
     pub(crate) writes: bool,
@@ -812,7 +813,8 @@ fn run_reason(facts: RunFacts) -> RunReason {
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) struct OutputFacts {
-    /// The line asked for `scopes` or `unconfined` (SANDBOX-26, SANDBOX-29).
+    /// The line asked for `scopes` or `unconfined`, or a stage is lent a scope a person kept at an
+    /// earlier prompt (SANDBOX-26, SANDBOX-27, SANDBOX-29).
     pub(crate) requesting: bool,
     /// The label the audited table proves, where it proves a trusted one.
     pub(crate) proven: Option<Label>,
@@ -8845,12 +8847,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         requested: &[&str],
         containment: Containment,
     ) -> bool {
+        self.plan_needs_approval_lent(plan, requested, &[], containment)
+    }
+
+    /// [`Policy::plan_needs_approval_held`] for a line a stage of which is also lent the credential
+    /// scopes `remembered` names, each a word of the fixed menu, because a person kept them at an
+    /// earlier prompt (SANDBOX-27).
+    ///
+    /// A remembered scope is asked about as a requested one is, before any rule and any standing
+    /// answer is read, because a vouched entry and a remembered line hold a program, its arguments
+    /// and a tree and were made for the line without the credential. The caller works the scopes out
+    /// from the person's own record and the compiled steps, never from what a program printed.
+    pub fn plan_needs_approval_lent(
+        &mut self,
+        plan: &crate::command::Plan,
+        requested: &[&str],
+        remembered: &[&str],
+        containment: Containment,
+    ) -> bool {
         self.answered_by_directory_trust = false;
         let at_root = self.runs_at_the_root(plan);
         let vouched = self.every_step_vouched(plan);
         let facts = RunFacts {
             releases_private: plan.releases_private(),
-            requested: !requested.is_empty(),
+            requested: !requested.is_empty() || !remembered.is_empty(),
             writes: !plan.writes.is_empty(),
             at_root,
             vouched,
@@ -8874,10 +8894,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "private input into a program, which releases it past this policy, asking"
                     .to_string()
             }
-            RunReason::Requested => format!(
+            RunReason::Requested if requested.is_empty() => format!(
+                "a stage of this line is lent {}, which a person kept at an earlier prompt and \
+                 which no vouched entry, remembered line or rule records, asking",
+                remembered.join(", ")
+            ),
+            RunReason::Requested if remembered.is_empty() => format!(
                 "the planner asked for {} on this line, which no vouched entry, remembered line or rule \
                  records, asking",
                 requested.join(", ")
+            ),
+            RunReason::Requested => format!(
+                "the planner asked for {} on this line and a stage is lent {}, which a person kept at an \
+                 earlier prompt, which no vouched entry, remembered line or rule records, asking",
+                requested.join(", "),
+                remembered.join(", ")
             ),
             RunReason::Writes => {
                 "the line names files to write, which is a destination of its own, asking"
@@ -9109,6 +9140,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// program wrote.
     pub fn record_requested_scopes(&mut self, detail: String) {
         self.allow("requested_scopes", detail);
+    }
+
+    /// Record the credential scopes a person kept at an earlier prompt that stages of a `run` are
+    /// lent, and the stages each was lent to, apart from what the planner asked for.
+    ///
+    /// `detail` is built from menu words and stage numbers, so it holds nothing the plan or a
+    /// program wrote.
+    pub fn record_kept_scopes(&mut self, detail: String) {
+        self.allow("kept_scopes", detail);
     }
 
     /// Record the permission mode a turn begins with, by its name.
@@ -16832,6 +16872,137 @@ five
                 }
             )),
             "{events:?}"
+        );
+    }
+
+    /// SANDBOX-27: a line a stage of which is lent a scope a person kept at an earlier prompt is
+    /// asked about whatever covers the same line without it: a vouched entry, a remembered line and
+    /// an allow rule. Each control is the same line with no remembered scope, which the road
+    /// answers, so the line is asked because of the scope and not because the road does not cover
+    /// it. The regression it rejects: the kept scope read for the prompt and the label but not
+    /// passed to the question, so the vouched entry made for the line without it answers.
+    #[test]
+    fn a_line_lent_a_kept_scope_is_asked_about_whatever_covers_the_line_without_it() {
+        let held = Containment::Unknown;
+        let plan = plan_of(vec![step_named("git", &["apply"])]);
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_programs(crate::programs::TrustedPrograms::from_iter([vouched(
+                "/usr/bin/git",
+                &["apply"],
+            )]));
+        assert!(
+            !policy.plan_needs_approval_lent(&plan, &[], &[], held),
+            "the vouched control was asked about, so the line below proves nothing"
+        );
+        assert!(
+            policy.plan_needs_approval_lent(&plan, &[], &["aws"], held),
+            "a vouched line lent a kept scope was not asked about"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.recall(recalling(&plan));
+        assert!(
+            !policy.plan_needs_approval_lent(&plan, &[], &[], held),
+            "the remembered control was asked about, so the line below proves nothing"
+        );
+        assert!(
+            policy.plan_needs_approval_lent(&plan, &[], &["aws"], held),
+            "a remembered line lent a kept scope was not asked about"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(git *)"]));
+        assert!(
+            !policy.plan_needs_approval_lent(&plan, &[], &[], held),
+            "the allow-rule control was asked about, so the line below proves nothing"
+        );
+        assert!(
+            policy.plan_needs_approval_lent(&plan, &[], &["aws"], held),
+            "a line an allow rule covers, lent a kept scope, was not asked about"
+        );
+    }
+
+    /// SANDBOX-27: the trail says why a kept scope was asked about, and when the planner also asked
+    /// for a scope it names both sets apart, each by menu words. The line's own words are not in
+    /// the message: the plan's `line` holds a marker the message must not carry.
+    #[test]
+    fn the_approval_entry_for_a_kept_scope_names_the_menu_words_and_nothing_the_plan_chose() {
+        let approval = |requested: &[&str], remembered: &[&str]| -> String {
+            let mut plan = plan_of(vec![step_named("git", &["apply"])]);
+            plan.line = "git apply MARKER-FROM-THE-PLAN".to_string();
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+            assert!(policy.plan_needs_approval_lent(
+                &plan,
+                requested,
+                remembered,
+                Containment::Unknown
+            ));
+            drop(policy);
+            sink.events()
+                .iter()
+                .find_map(|event| match event {
+                    Event::GatePassed {
+                        gate: "approval",
+                        detail,
+                    } => Some(detail.clone()),
+                    _ => None,
+                })
+                .expect("an approval entry")
+        };
+
+        let kept = approval(&[], &["aws", "docker"]);
+        assert!(
+            kept.contains("aws, docker") && kept.contains("kept at an earlier prompt"),
+            "{kept}"
+        );
+        assert!(
+            !kept.contains("planner asked"),
+            "a kept scope was said to be asked for by the planner: {kept}"
+        );
+
+        let both = approval(&["kubernetes"], &["aws"]);
+        assert!(
+            both.contains("planner asked for kubernetes") && both.contains("lent aws"),
+            "{both}"
+        );
+        for said in [&kept, &both] {
+            assert!(!said.contains("MARKER-FROM-THE-PLAN"), "{said}");
+        }
+    }
+
+    /// SANDBOX-27: the scopes lent from the record are recorded under their own gate, apart from
+    /// `requested_scopes`, so the trail does not say the planner asked for what a person kept. The
+    /// regression it rejects: a kept scope recorded as a requested one.
+    #[test]
+    fn a_kept_scope_leaves_a_trail_apart_from_a_requested_one() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.record_kept_scopes("a person kept aws at an earlier prompt".to_string());
+        drop(policy);
+        let events = sink.events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "kept_scopes", detail } if detail.contains("aws")
+            )),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::GatePassed {
+                    gate: "requested_scopes",
+                    ..
+                }
+            )),
+            "a kept scope was recorded as one the planner asked for: {events:?}"
         );
     }
 
