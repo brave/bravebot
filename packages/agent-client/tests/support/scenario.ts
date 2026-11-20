@@ -97,7 +97,6 @@ export async function runScenario(scenario: Scenario, chunking: Chunking): Promi
   const calls: Record<string, (args: Args, target: () => AgentSession) => Promise<unknown>> = {
     describe: () => client.describe(),
     createSession: (args) => client.createSession({ workspace: args.workspace }),
-    unsupported: (args) => client.unsupported(args.operation),
     raw: (args) => rawRequest(client, args.method, args.params),
     answerTrust: (args, target) => target().answerTrust(args.trusted),
     send: (args, target) => target().send(args.text),

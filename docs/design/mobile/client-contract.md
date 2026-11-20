@@ -91,7 +91,7 @@ released content.
 - answer startup trust when asked to, after which the question is no longer offered;
 - send, cancel, and close;
 - approve or reject a `confirm`, `run` or `fetch` question, and answer an `ask` question;
-- against `bravebot-host`, list the host's run and the sessions it holds, and take over one whose controller's connection ended, starting its view from the snapshot the host sends ([RPCVIEW-12](../../specs/session-view.md#RPCVIEW-12)).
+- against `bravebot-host`, list the host's run and the sessions it holds, and join one, whether or not another client is attached to it, starting its view from the snapshot the host sends ([RPCVIEW-12](../../specs/session-view.md#RPCVIEW-12)).
 
 Raw dispatch of arbitrary bridge methods is not part of the package. The entry points export no `raw`, no connection class, and no way to reach the client's connection, because dispatch is not confined to configured workspaces and could answer a question the client never offered. Tests reach it through an internal module that the package's `exports` map does not expose.
 
@@ -104,7 +104,7 @@ duplicate or late one, which the client reports with its code. A decision other 
 `reject`, answers that are not typed text, chosen indexes or `null`, and a second reply to a request
 while the first is being sent are refused locally.
 
-`instance` and `attach` need `bravebot-host`; `bravebot-rpc` alone refuses them. An `attach` of a session this client holds is refused without sending. `takeControl` fails locally; stage 5a removes it, because every attached client may act and there is no takeover step. A send that may have reached the bridge fails with `UnknownSendError` carrying its message id. `messageStatus` looks the id up with `turn.lookup`, and `resend` sends it again under the same id only after this session's latest lookup of it answered `not_received`, once per such answer ([RPCVIEW-13](../../specs/session-view.md#RPCVIEW-13)). The client never resends on its own. A question a turn asks appears in the
+`instance` and `attach` need `bravebot-host`; `bravebot-rpc` alone refuses them. An `attach` of a session this client holds is refused without sending. The client has no takeover operation, because every attached client may act. A send that may have reached the bridge fails with `UnknownSendError` carrying its message id. `messageStatus` looks the id up with `turn.lookup`, and `resend` sends it again under the same id only after this session's latest lookup of it answered `not_received`, once per such answer ([RPCVIEW-13](../../specs/session-view.md#RPCVIEW-13)). The client never resends on its own. A question a turn asks appears in the
 view, and cancelling the turn refuses it.
 
 A runtime without version 1 of the capability is refused before any session is created. A close
