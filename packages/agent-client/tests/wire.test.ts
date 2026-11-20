@@ -88,6 +88,17 @@ test('a view update whose omitted count is not a count is refused, and an absent
   assert.equal('omitted' in decodeUpdate(update), false)
 })
 
+test('a view update names the client that acted as a string or null, and refuses another type', () => {
+  assert.equal(decodeUpdate(contract.update).actor, 'desktop')
+  assert.equal(decodeUpdate({ ...(contract.update as object), actor: null }).actor, null)
+  for (const actor of [3, true, {}, ['a']]) {
+    assert.throws(() => decodeUpdate({ ...(contract.update as object), actor }), ProtocolError, String(actor))
+  }
+  const update = structuredClone(contract.update) as Record<string, unknown>
+  delete update.actor
+  assert.equal('actor' in decodeUpdate(update), false)
+})
+
 test('an absent capability, or one that is not version 1, is not read as supported', () => {
   assert.equal(readSessionViewCapability({}), null)
   assert.equal(readSessionViewCapability({ capabilities: {} }), null)

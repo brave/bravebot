@@ -219,6 +219,7 @@ fn shutting_down_refuses_a_waiting_question_rather_than_only_cancelling_its_turn
         target: 1,
         finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         interjections: None,
+        actors: Default::default(),
     };
     let _handle = bridge.mint(Open {
         running: Some(running),

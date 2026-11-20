@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::turn::{Pending, Question};
+use crate::view::Acting;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 type Said = Arc<Mutex<Vec<Event>>>;
@@ -58,6 +59,7 @@ fn waiting_on_a_write(request: u64) -> (Running, mpsc::Receiver<Reply>) {
         target: 7,
         finished: Arc::new(AtomicBool::new(false)),
         interjections: None,
+        actors: Default::default(),
     };
     (running, receiver)
 }
@@ -93,6 +95,91 @@ fn narrowing_to_kinds_without_the_waiting_question_refuses_it_and_does_not_stop_
         "a question asked after the client left would be shown to nobody"
     );
     assert!(answerers.can_answer(Kind::Run));
+}
+
+/// An answer that arrives once the turn is being cancelled is refused. The worker throws such an
+/// answer away, so it is neither credited to its client nor recorded as given.
+#[test]
+fn an_answer_after_a_cancel_is_refused_and_credits_nobody() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut bridge, said) = a_bridge();
+    let (running, receiver) = waiting_on_a_write(3);
+    let cancel = running.cancel.clone();
+    let actors = running.actors.clone();
+    let handle = open(&mut bridge, directory.path(), true, Some(running));
+    bridge.emitter.start_view(&handle, true).unwrap();
+    let before = names(&said).len();
+    cancel.cancel();
+
+    let line = json!({"id": 1, "method": "confirm.reply", "params": {
+        "session": handle, "request": 3, "decision": "approve"}})
+    .to_string();
+    let refused = bridge
+        .dispatch_as("phone", &Request::parse(&line).unwrap())
+        .expect_err("the answer was taken");
+
+    assert_eq!(refused.code, ErrorCode::NoSuchRequest);
+    assert!(receiver.try_recv().is_err(), "the answer reached the turn");
+    assert_eq!(names(&said).len(), before, "the view was changed");
+    assert!(actors.take_for_test().is_empty(), "the answer was recorded");
+}
+
+/// The last client that could answer a question leaves just after another cancelled the turn. The
+/// cancel refuses the question, so the update that resolves it still names the client that cancelled.
+#[test]
+fn a_client_leaving_after_a_cancel_does_not_clear_the_name_of_the_canceller() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut bridge, said) = a_bridge();
+    let (running, _receiver) = waiting_on_a_write(3);
+    let handle = open(&mut bridge, directory.path(), true, Some(running));
+    bridge.emitter.start_view(&handle, true).unwrap();
+    bridge
+        .set_answerable(&handle, &[Kind::Write, Kind::Run])
+        .unwrap();
+    bridge
+        .emitter
+        .view_started(&handle, 1, 7, json!({"text": "go"}), Acting::Client("a"));
+    bridge.emitter.send(Event::new(
+        "confirm.request",
+        &handle,
+        json!({"request": 3}),
+    ));
+    let line = json!({"id": 1, "method": "turn.cancel", "params": {
+        "session": handle, "target": 7}})
+    .to_string();
+    bridge
+        .dispatch_as("b", &Request::parse(&line).unwrap())
+        .unwrap();
+
+    bridge.narrow_answerable(&handle, &[Kind::Run]);
+
+    let updates = said.lock().unwrap();
+    let last = updates
+        .iter()
+        .rfind(|event| event.name == "session.view.update")
+        .expect("the question was shown as resolved");
+    assert!(last.data["pending"].is_null(), "{}", last.data);
+    assert_eq!(last.data["actor"], "b", "{}", last.data);
+}
+
+/// A cancel of a running turn is recorded for the trail whether or not the session has a view, as
+/// a send is.
+#[test]
+fn a_cancel_is_recorded_for_the_trail_in_a_session_with_no_view() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut bridge, _) = a_bridge();
+    let (running, _receiver) = waiting_on_a_write(3);
+    let actors = running.actors.clone();
+    let handle = open(&mut bridge, directory.path(), true, Some(running));
+    let line = json!({"id": 1, "method": "turn.cancel", "params": {
+        "session": handle, "target": 7}})
+    .to_string();
+
+    bridge
+        .dispatch_as("b", &Request::parse(&line).unwrap())
+        .unwrap();
+
+    assert_eq!(actors.take_for_test(), ["client b cancelled the turn"]);
 }
 
 /// A client leaving while another that can answer the waiting question stays leaves the question
@@ -152,7 +239,7 @@ fn joining_a_session_attaches_between_the_last_update_and_the_snapshot() {
     bridge.emitter.start_view(&handle, true).unwrap();
     bridge
         .emitter
-        .view_started(&handle, 1, 9, json!({"text": "go"}));
+        .view_started(&handle, 1, 9, json!({"text": "go"}), Acting::Nobody);
     bridge.set_answerable(&handle, &[]).unwrap();
     let marks: Arc<Mutex<Vec<usize>>> = Arc::default();
     let (watched, seen) = (Arc::clone(&said), Arc::clone(&marks));
@@ -378,7 +465,7 @@ fn updates_during_a_join_fall_on_one_side_of_the_snapshot() {
         bridge.emitter.start_view(&handle, true).unwrap();
         bridge
             .emitter
-            .view_started(&handle, 1, 1, json!({"text": "go"}));
+            .view_started(&handle, 1, 1, json!({"text": "go"}), Acting::Nobody);
         let emitter = bridge.emitter.clone();
         let session = handle.clone();
         let (go, started) = mpsc::channel::<()>();
@@ -446,7 +533,7 @@ fn a_client_that_applies_the_updates_after_a_snapshot_holds_what_a_later_snapsho
         bridge.emitter.start_view(&handle, true).unwrap();
         bridge
             .emitter
-            .view_started(&handle, 1, 1, json!({"text": "go"}));
+            .view_started(&handle, 1, 1, json!({"text": "go"}), Acting::Nobody);
         let emitter = bridge.emitter.clone();
         let session = handle.clone();
         let (go, started) = mpsc::channel::<()>();

@@ -84,7 +84,9 @@ impl Client {
             }
         });
         let served = std::thread::spawn(move || {
-            let ended = host.serve(far, answers).expect("the channel serves");
+            let ended = host
+                .serve(far, "test", answers)
+                .expect("the channel serves");
             (host, ended)
         });
         Self {
@@ -395,7 +397,9 @@ fn a_client_that_never_reads_does_not_wedge_the_host() {
     let host = a_host(Vec::new());
     let (ended, ending) = mpsc::channel();
     std::thread::spawn(move || {
-        let outcome = host.serve(far, &Answer::ALL).expect("the channel serves");
+        let outcome = host
+            .serve(far, "test", &Answer::ALL)
+            .expect("the channel serves");
         let _ = ended.send(outcome);
     });
     let mut writer = near.try_clone().unwrap();
@@ -426,8 +430,10 @@ fn a_client_that_never_reads_does_not_wedge_the_host() {
 fn a_last_line_with_no_newline_is_not_run() {
     let (near, far) = UnixStream::pair().unwrap();
     let host = a_host(Vec::new());
-    let served =
-        std::thread::spawn(move || host.serve(far, &Answer::ALL).expect("the channel serves"));
+    let served = std::thread::spawn(move || {
+        host.serve(far, "test", &Answer::ALL)
+            .expect("the channel serves")
+    });
     let mut writer = near.try_clone().unwrap();
     write!(
         writer,

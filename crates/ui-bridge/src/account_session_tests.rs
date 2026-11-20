@@ -84,6 +84,7 @@ fn take_a_turn_at(
         answers: receiver,
         finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         interjections: Default::default(),
+        actors: Default::default(),
     });
 }
 

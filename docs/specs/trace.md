@@ -391,6 +391,13 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_core::policy::deciding_to_offer_a_vouch_writes_nothing_and_asks_once`
 `verified-by: bravebot_core::policy::a_vouch_a_mode_answered_is_not_spent_on_a_version_nobody_was_shown`
 
+A turn that a host client acts on ([HOST-7](local-host.md#HOST-7)) also has one entry under `actor` for each send that began it, answer that landed on one of its questions and cancel that stopped it. A cancel counts only while the turn is still running, the first cancel is the one recorded, and an answer that arrives after a cancel is refused and not recorded. The entry names the client by the name the person gave it on the host's command line, as in `client phone answered question 4`, and holds nothing of what the client sent or the question said. It is written before the next entry the turn records, or at the end of the turn if none follows, and it is the turn's own entry even where a delegate is recording. A question refused because nobody who could answer it was left has no `actor` entry, and a trust answer, which is given before any turn, has none either; the view names its client ([RPCVIEW-14](session-view.md#RPCVIEW-14)). A manifest run is not offered to a host client, and a session not run by the host has no `actor` entries.
+
+`verified-by: bravebot_ui_bridge::host_process::the_trail_names_the_client_that_sent_and_the_client_that_answered`
+`verified-by: bravebot_ui_bridge::host_process::the_trail_names_the_client_that_cancelled`
+`verified-by: bravebot_ui_bridge::control_tests::an_answer_after_a_cancel_is_refused_and_credits_nobody`
+`verified-by: bravebot_ui_bridge::answering_tests::an_actor_note_is_recorded_for_the_turn_and_not_for_the_delegate_recording`
+
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why
 

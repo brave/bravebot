@@ -11,6 +11,7 @@
 use super::*;
 use crate::answerers::Answerers;
 use crate::running::Running;
+use crate::view::Acting;
 use bravebot_core::cancel::Cancel;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
@@ -76,6 +77,7 @@ fn a_turn(answerers: &Answerers) -> Turn {
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
             interjections: None,
+            actors: Default::default(),
         },
         emitter,
         said,
@@ -239,13 +241,14 @@ fn a_question_refused_by_the_loss_of_its_answerers_is_shown_as_resolved() {
     answerers.only(&KINDS).unwrap();
     let mut turn = a_turn(&answerers);
     turn.emitter.start_view("s1", true).unwrap();
-    turn.emitter.view_started("s1", 1, 1, json!({"text": "go"}));
+    turn.emitter
+        .view_started("s1", 1, 1, json!({"text": "go"}), Acting::Nobody);
     let asking = turn.ask(Kind::Write);
     turn.the_question_shown();
 
     let emitter = turn.emitter.clone();
     turn.running
-        .refuse_pending_with(|request| emitter.view_answered("s1", request));
+        .refuse_pending_with(|request| emitter.view_answered("s1", request, Acting::Nobody));
     turn.settled(asking);
 
     let updates: Vec<Event> = turn.said.try_iter().collect();
@@ -618,4 +621,31 @@ fn a_later_turn_with_the_sessions_memo_is_not_asked_what_an_earlier_one_was() {
         waiting.try_recv().is_err(),
         "a confirmer with no session memo remembered"
     );
+}
+
+/// A note about the client that acted is recorded for the turn, even when a delegate is the run
+/// whose events are arriving, and the delegate keeps recording afterwards.
+#[test]
+fn an_actor_note_is_recorded_for_the_turn_and_not_for_the_delegate_recording() {
+    use bravebot_core::delegate::DelegateId;
+    use bravebot_core::event::Event as Recorded;
+    use bravebot_core::event::Sink;
+    let emitter = Emitter::new(Box::new(|_| {}));
+    let actors = crate::turn::ActorNotes::default();
+    let mut sink = crate::turn::BridgeSink::new(emitter, "s1", 1).noting(actors.clone());
+    let delegate = DelegateId::nth(1);
+    sink.recording_for(Some(delegate));
+    actors.note("client phone cancelled the turn".into());
+    sink.emit(Recorded::GatePassed {
+        gate: "read",
+        detail: "a delegate read a file".into(),
+    });
+
+    let events = sink.trail().events();
+    let noted = events
+        .iter()
+        .find(|stamped| matches!(&stamped.event, Recorded::GatePassed { gate: "actor", .. }))
+        .expect("the note was recorded");
+    assert_eq!(noted.from, None, "the note was credited to the delegate");
+    assert_eq!(events.last().unwrap().from, Some(delegate));
 }

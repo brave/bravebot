@@ -18,6 +18,7 @@ use crate::project_questions::Questions;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
+use crate::view::Acting;
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::conversation::Address;
@@ -225,6 +226,9 @@ pub struct Bridge {
     /// The last request id given to one of those questions. Never reused, so a reply meant for
     /// one cannot answer a later one.
     project_questions: u64,
+    /// The name of the host client whose request is being dispatched, for the view to credit
+    /// (RPCVIEW-14). Set only for the duration of [`Bridge::dispatch_as`].
+    acting: Option<String>,
 }
 
 impl Bridge {
@@ -244,6 +248,7 @@ impl Bridge {
             sign_ins: crate::accounts::SignIns::default(),
             putting_project_questions: true,
             project_questions: 0,
+            acting: None,
         }
     }
 
@@ -288,6 +293,21 @@ impl Bridge {
     pub fn ready(&mut self) {
         let info = self.info();
         self.emitter.send(Event::global("agent.ready", info));
+    }
+
+    /// Route one request on behalf of the host client named `actor`, so the view names that client
+    /// for the send, answer or cancel it makes (RPCVIEW-14). The name is the one the person gave
+    /// the client on the host's command line.
+    pub fn dispatch_as(&mut self, actor: &str, request: &Request) -> Result<Value, Failure> {
+        self.acting = Some(actor.to_string());
+        let outcome = self.dispatch(request);
+        self.acting = None;
+        outcome
+    }
+
+    /// The client the request being dispatched is credited to.
+    fn acting(&self) -> Acting<'_> {
+        Acting::from(self.acting.as_deref())
     }
 
     /// Route one request.
@@ -1537,8 +1557,16 @@ impl Bridge {
         }
         let answerers = self.answerers_of(handle);
         let running = self.open.get(handle).and_then(|open| open.running.as_ref());
+        // A turn being cancelled has its question refused by the cancel, and the view keeps the
+        // name of the client that cancelled it.
+        let acting = if running.is_some_and(|running| running.cancel.is_cancelled()) {
+            Acting::Same
+        } else {
+            // Nobody answered it: the clients that could have are gone.
+            Acting::Nobody
+        };
         crate::running::narrow(&answerers, running, kinds, |request| {
-            self.emitter.view_answered(handle, request);
+            self.emitter.view_answered(handle, request, acting);
         });
     }
 
@@ -1891,7 +1919,13 @@ impl Bridge {
             finished,
             target,
             interjections,
+            actors,
         } = Running::start();
+        if let Some(client) = &self.acting {
+            actors.note(format!(
+                "client {client} sent the message that began this turn"
+            ));
+        }
 
         let emitter = self.emitter.clone();
         let session = handle.clone();
@@ -1915,6 +1949,7 @@ impl Bridge {
                     })
                     .as_ref(),
             ),
+            self.acting(),
         );
         self.emitter.send(Event::new(
             "turn.started",
@@ -1968,6 +2003,7 @@ impl Bridge {
                 answers: answers_rx,
                 finished,
                 interjections,
+                actors: actors.clone(),
             });
         });
 
@@ -2150,6 +2186,7 @@ impl Bridge {
             finished,
             target,
             interjections: _,
+            actors: _,
         } = Running::start();
         // A run plans before anything is read and asks nothing between rounds, so a line typed
         // into it would be taken by nobody.
@@ -2468,6 +2505,17 @@ impl Bridge {
             None => open.running.as_ref(),
         };
         if let Some(running) = stopping {
+            // Credited to the first cancel of work still running: a second one stops nothing more,
+            // and one that arrives after the work has ended is no part of how it ended.
+            if !running.cancel.is_cancelled()
+                && !running.is_finished()
+                && self.emitter.view_cancelled(&handle, self.acting())
+                && let Some(client) = &self.acting
+            {
+                running
+                    .actors
+                    .note(format!("client {client} cancelled the turn"));
+            }
             running.cancel.cancel();
         }
         if let Ok(mut watches) = open.watches.lock() {
@@ -2550,7 +2598,24 @@ impl Bridge {
             ));
         };
 
-        if running.answer_with(id, reply, || self.emitter.view_answered(&handle, id)) {
+        // A turn that is being stopped throws away what arrives, so an answer now is neither
+        // credited nor recorded as given.
+        if running.cancel.is_cancelled() {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                format!("request {id} is not waiting for an answer"),
+            ));
+        }
+        let acting = self.acting();
+        if running.answer_with(id, reply, || {
+            // Noted before the worker is woken, so the entry that records the answer follows it.
+            if let Some(client) = &self.acting {
+                running
+                    .actors
+                    .note(format!("client {client} answered question {id}"));
+            }
+            self.emitter.view_answered(&handle, id, acting);
+        }) {
             Ok(json!({}))
         } else {
             // Unknown, or already used. An approval is single-use and bound to the one
@@ -2568,6 +2633,7 @@ impl Bridge {
     /// no never is.
     fn reply_trust(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
+        let actor = self.acting.clone();
         let trusted = request
             .params
             .get("trusted")
@@ -2610,7 +2676,8 @@ impl Bridge {
             }
         }
         open.answered_trust = true;
-        self.emitter.view_trusted(&handle);
+        self.emitter
+            .view_trusted(&handle, Acting::from(actor.as_deref()));
         // The question is answered, so what it offered is spent. Offered only where the answer may
         // be written and later honoured, so a directory it may not be kept about writes nothing.
         let keeping = open.keeping.take();
@@ -3633,6 +3700,7 @@ struct Work {
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
     interjections: crate::running::Interjections,
+    actors: crate::turn::ActorNotes,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -3743,6 +3811,7 @@ fn work(work: Work) {
         answers,
         finished,
         interjections,
+        actors,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -3875,7 +3944,7 @@ fn work(work: Work) {
     } else {
         bravebot_agent::watch::Arming::Allowed { free }
     });
-    let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
+    let mut sink = BridgeSink::new(emitter.clone(), &session, turn).noting(actors);
     let egress = Egress::new();
 
     // Cloned out before the call, because the conversation is borrowed mutably for the
@@ -4004,6 +4073,7 @@ fn work(work: Work) {
             }
 
             state.answered_by_mode |= permission_mode.has_bypassed();
+            sink.write_notes();
             let archived = save(&project, &mut state, turn, sink.trail());
 
             let rules = rules_json(&state.answers.trust);
@@ -4085,6 +4155,7 @@ fn work(work: Work) {
                 began_at.elapsed(),
             );
             state.answered_by_mode |= permission_mode.has_bypassed();
+            sink.write_notes();
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let notices = [
@@ -5940,6 +6011,7 @@ mod watch_tests {
             target: 1,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             interjections: None,
+            actors: Default::default(),
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open {
