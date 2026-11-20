@@ -40,6 +40,7 @@ pub mod acp_loop;
 pub mod allowlist;
 mod answerers;
 pub mod arguments;
+pub mod aside;
 pub mod attached;
 pub mod bots;
 pub mod bridge;
