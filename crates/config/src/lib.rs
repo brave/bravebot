@@ -29,6 +29,7 @@ pub mod env_var {
 
 pub mod brave_key;
 pub mod connectors;
+pub mod crash_reports;
 pub mod embeddings;
 pub mod embeddings_key;
 pub mod git_identities;

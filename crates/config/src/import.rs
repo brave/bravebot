@@ -1782,6 +1782,19 @@ impl Destination {
         names.len() != before
     }
 
+    /// Set `crashReports`, which the settings reader takes from the person's own file as a boolean
+    /// and nothing else (CRASH-4). Every other key in the file is kept.
+    ///
+    /// A value the key held that is not a boolean is replaced, since the reader ignores it and the
+    /// person has just chosen an answer. `true` is written as `true`, which the reader treats as
+    /// saying nothing, so it turns back on nothing that a stronger layer turned off.
+    pub fn set_crash_reports(&mut self, enabled: bool) {
+        self.root.0.insert(
+            crate::settings::CRASH_REPORTS_KEY.to_string(),
+            Value::Bool(enabled),
+        );
+    }
+
     /// Set `retrieval.enabled`, making the block where there is none, and say whether it went in.
     ///
     /// Not where `retrieval` is something other than a block: the settings reader ignores it, and

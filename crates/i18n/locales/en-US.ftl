@@ -5995,6 +5995,13 @@ ui-settings-usage-ping-locked-admin = Turned off by your administrator.
 ui-settings-usage-ping-locked-incognito = Off in an incognito session, which records nothing.
 ui-settings-usage-ping-unread = Couldn't read the usage ping setting.
 ui-settings-usage-ping-unsaved = Couldn't save the usage ping setting. Try again.
+ui-settings-crash-reports = Send crash reports to Brave
+ui-settings-crash-reports-explained = If BraveBot crashes, a report with the version, your operating system and the line of source that failed is sent the next time it starts. Nothing is sent while this is off.
+ui-settings-crash-reports-locked-environment = Turned off by { $variable } in the environment.
+ui-settings-crash-reports-locked-admin = Turned off by your administrator.
+ui-settings-crash-reports-locked-incognito = Off in an incognito session, which keeps no reports.
+ui-settings-crash-reports-unread = Couldn't read the crash reports setting.
+ui-settings-crash-reports-unsaved = Couldn't save the crash reports setting. Try again.
 ui-accounts-heading = Accounts
 ui-accounts-signed-in = Signed in
 ui-accounts-key-stored = Key stored
@@ -6092,14 +6099,15 @@ ui-usage-ping-notice-more = More…
 ui-usage-ping-notice-less = Less
 ui-usage-ping-notice-settings = Open settings
 ui-usage-ping-notice-dismiss = Dismiss usage ping notice
-# Shown once in the window, on the first launch whose bridge sends crash reports (CRASH-9). The key
-# crashReports and the variable BRAVEBOT_CRASH_REPORTS=0 are the two ways of turning it off, and are
-# not a translator's to reword.
-ui-crash-reports-notice = If BraveBot crashes, a report is sent to Brave on the next launch. It holds the version, your operating system and the line of BraveBot's source that failed, and never your prompts, files or keys. To turn this off, set crashReports to false in your settings file, or set BRAVEBOT_CRASH_REPORTS=0.
-ui-crash-reports-notice-short = If BraveBot crashes, a report is sent to Brave on the next launch. It never holds your prompts, files or keys.
+# Shown once, docked like the usage ping notice, by a launch that is sending crash reports (CRASH-9).
+# The variable and the setting are the ways of turning it off, and are not a translator's to
+# reword.
+ui-crash-reports-notice = If BraveBot crashes, it sends Brave a report the next time it starts. The report holds the version, your operating system and the line of BraveBot's source that failed. It never holds your prompts, files or keys. You can turn this off in Settings, under General, or by setting BRAVEBOT_CRASH_REPORTS=0 in the environment.
+ui-crash-reports-notice-short = If BraveBot crashes, it sends Brave a report the next time it starts. It never holds your prompts, files or keys.
 ui-crash-reports-notice-more = More…
 ui-crash-reports-notice-less = Less
-ui-crash-reports-notice-dismiss = Dismiss crash report notice
+ui-crash-reports-notice-settings = Open settings
+ui-crash-reports-notice-dismiss = Dismiss crash reports notice
 # The Folders section of the Files tab, and the More menu item that adds one: folders open beside the
 # project in one chat, as /add-dir opens them in the terminal. $name is a folder's own name.
 ui-folders-heading = Folders

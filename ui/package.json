@@ -58,6 +58,7 @@
     "drive:tree": "pnpm run bridge && electron-vite build && node scripts/drive-tree.mjs",
     "drive:theme": "pnpm run bridge && electron-vite build && node scripts/drive-theme.mjs",
     "drive:language": "pnpm run bridge && electron-vite build && node scripts/drive-language.mjs",
+    "drive:crash-reports": "BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 BACKTRACE_SUBMIT_URL=https://127.0.0.1:1/x cargo build -p bravebot-ui-bridge --bin bravebot-rpc && electron-vite build && node scripts/drive-crash-reports.mjs",
     "drive:bots": "pnpm run bridge && electron-vite build && node scripts/drive-bots.mjs",
     "drive:bot-turn": "pnpm run bridge && electron-vite build && node scripts/drive-bot-turn.mjs",
     "drive:bot-memory": "pnpm run bridge && electron-vite build && node scripts/drive-bot-memory.mjs",

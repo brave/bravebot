@@ -1156,8 +1156,17 @@ key, and a managed `false` turns reports off whatever your file says. A `.braveb
 checkout can neither turn reports off nor turn them on again after you did, and a build made without
 a submission address, which is every build from source that did not have one set, sends nothing. A
 session started with `--incognito` has no state directory to leave a report in, so it leaves and
-sends none. The terminal says once, on the startup screen, that reports are sent. The desktop
-application does not, so this page and the README are where it is said for that. See
+sends none.
+
+The desktop app writes this key from **Settings → General → Privacy**, under **Send crash reports to
+Brave**. It writes `true` or `false` into your own file and keeps every other key. The switch shows as
+off and cannot be changed while `BRAVEBOT_CRASH_REPORTS=0`, the managed file's `false` or an incognito
+session holds reports off, and says which one does. Nothing asks you before the first report. The
+terminal, the desktop app and the editor integration each say once that reports are sent, at the
+first launch that is reporting, and share one record in `~/.bravebot/crash-reports/notice`, so the
+first one you use tells you and the others do not repeat it. The editor integration says it as a
+message in the session at your first prompt. `bravebot-host`, `-p` and `--plain` say nothing, so this
+page and the README are where it is said for those. See
 [Crash reports](../security/security.md#crash-reports) for what leaves the process.
 
 ### `usagePing`

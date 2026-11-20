@@ -257,8 +257,11 @@ pub const DENIED: &[&str] = &[
     "usage_ping.set",
     "usage_ping.notice_due",
     "usage_ping.mark_notice_shown",
-    // The crash-report notice belongs to the window, not to a client of the host. Such a client has
-    // no screen to show it on, and whether reports are on in this process is the host's own.
+    // The machine's crash report switch and the one-time notice about it. The notice belongs to the
+    // window, not to a client of the host: such a client has no screen to show it on, and whether
+    // reports are on in this process and the switch are the person's at the host.
+    "crash_reports.get",
+    "crash_reports.set",
     "crash_reports.notice_due",
     "crash_reports.mark_notice_shown",
     // The machine's recorded effort level, which the terminal shares.
@@ -519,6 +522,30 @@ mod tests {
     fn no_method_is_both_offered_and_denied() {
         for operation in OFFERED {
             assert!(!DENIED.contains(&operation.method), "{}", operation.method);
+        }
+    }
+
+    /// CRASH-9: the crash report switch and its notice are the person's at the host, so a client of
+    /// the host may call none of the four methods. The faults this rejects are a method moved to
+    /// the offered list, which would let a client turn reports off or mark the notice shown, and a
+    /// method dropped from both lists.
+    #[test]
+    fn the_crash_report_methods_are_denied_to_a_client_of_the_host() {
+        for method in [
+            "crash_reports.get",
+            "crash_reports.set",
+            "crash_reports.notice_due",
+            "crash_reports.mark_notice_shown",
+        ] {
+            assert!(DENIED.contains(&method), "{method} is not denied");
+            assert!(
+                OFFERED.iter().all(|operation| operation.method != method),
+                "{method} is offered"
+            );
+            let failure = check(&request(method, json!({"enabled": false})))
+                .err()
+                .expect("refused");
+            assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
         }
     }
 }

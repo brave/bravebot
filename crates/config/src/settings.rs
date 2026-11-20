@@ -154,7 +154,7 @@ const RETENTION_KEY: &str = "retentionDays";
 ///
 /// Named as a constant because the read of the home layer's value and the list of keys this build
 /// reads both spell it here.
-const CRASH_REPORTS_KEY: &str = "crashReports";
+pub(crate) const CRASH_REPORTS_KEY: &str = "crashReports";
 
 /// The key that turns the daily usage ping off, which only the person's own settings file is asked.
 ///

@@ -70,14 +70,18 @@ const folderQuestion = (page) => page.getByRole('dialog', { name: 'Open a folder
 const waiting = (page) => page.locator('[data-test="question-waiting"]')
 
 /**
- * Open the folded note above the chat and return it. The usage ping's notice is put away first,
- * in this world's profile, so the transcript has the room to show the note.
+ * Open the folded note above the chat and return it. The usage ping's notice and the crash
+ * reports' notice are put away first, in this world's profile, so the transcript has the room to
+ * show the note. The crash reports' notice is drawn only by a bridge built with a submission
+ * address, so it is usually absent here.
  */
 async function unfoldNote(page) {
-  const ping = page.locator('[data-test="usage-ping-notice-dismiss"]')
-  if (await ping.isVisible().catch(() => false)) {
-    await ping.click()
-    await page.locator('[data-test="usage-ping-notice"]').waitFor({ state: 'detached' })
+  for (const name of ['usage-ping-notice', 'crash-reports-notice']) {
+    const dismiss = page.locator(`[data-test="${name}-dismiss"]`)
+    if (await dismiss.isVisible().catch(() => false)) {
+      await dismiss.click()
+      await page.locator(`[data-test="${name}"]`).waitFor({ state: 'detached' })
+    }
   }
   const note = page.locator('[data-test="rules-note"]')
   await note.waitFor()

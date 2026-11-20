@@ -727,8 +727,11 @@ deleted. The service sees the network address a request came from, as any server
 
 Reports are on in a released build and off in a build from source that was not given an address.
 `BRAVEBOT_CRASH_REPORTS=0` or `"crashReports": false` in your own `~/.bravebot/settings.json` turns
-them off, a checkout's settings file is not consulted, and an incognito session leaves and sends none.
-See [`crashReports`](../customize/configuration.md#crashreports).
+them off, as does **Settings → General → Privacy** in the desktop app, which writes that key. A
+checkout's settings file is not consulted, and an incognito session leaves and sends none. Nothing
+asks you before the first report: the terminal, the desktop app and the editor integration each say
+once that reports are sent, and what a report holds, at the first launch that is reporting. See
+[`crashReports`](../customize/configuration.md#crashreports).
 
 The terminal interface and the desktop window each say once, on the first launch that reports, what a
 report holds, that it goes to Brave and how to turn reports off. The two share one record of it, so

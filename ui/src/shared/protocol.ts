@@ -518,6 +518,24 @@ export interface UsagePingSaved extends UsagePingReport {
   saved: boolean
 }
 
+/** What keeps crash reports off where their switch cannot: `variable` is set for `environment`. */
+export interface CrashReportsReason {
+  code: 'environment' | 'admin' | 'incognito'
+  variable?: string
+}
+
+/** `crash_reports.get`: whether reports are on, and `reason` when the switch cannot change that. */
+export interface CrashReportsReport {
+  enabled: boolean
+  changeable: boolean
+  reason: CrashReportsReason | null
+}
+
+/** `crash_reports.set`: the report after the change, and whether `crashReports` was written. */
+export interface CrashReportsSaved extends CrashReportsReport {
+  saved: boolean
+}
+
 /**
  * A session begun from part of another one.
  *

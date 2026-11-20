@@ -51,6 +51,7 @@ pub mod crash_notice;
 #[cfg(unix)]
 #[doc(hidden)]
 pub mod control_link;
+pub mod crash_reports;
 pub mod definitions;
 pub mod effort;
 pub mod emit;

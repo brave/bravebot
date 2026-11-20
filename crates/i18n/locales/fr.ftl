@@ -4816,11 +4816,19 @@ ui-usage-ping-notice-more = Plus…
 ui-usage-ping-notice-less = Moins
 ui-usage-ping-notice-settings = Ouvrir les réglages
 ui-usage-ping-notice-dismiss = Fermer l'avis sur le signal d'utilisation
-ui-crash-reports-notice = Si BraveBot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version, votre système d'exploitation et la ligne du code source de BraveBot qui a échoué, jamais vos invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
-ui-crash-reports-notice-short = Si BraveBot plante, un rapport est envoyé à Brave au lancement suivant. Il ne contient jamais vos invites, vos fichiers ni vos clés.
+ui-crash-reports-notice = Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Le rapport contient la version, votre système d'exploitation et la ligne du code source de BraveBot qui a échoué. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général, ou en définissant BRAVEBOT_CRASH_REPORTS=0 dans l'environnement.
+ui-crash-reports-notice-short = Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Il ne contient jamais vos invites, vos fichiers ni vos clés.
 ui-crash-reports-notice-more = Plus…
 ui-crash-reports-notice-less = Moins
+ui-crash-reports-notice-settings = Ouvrir les réglages
 ui-crash-reports-notice-dismiss = Fermer l'avis sur les rapports de plantage
+ui-settings-crash-reports = Envoyer les rapports de plantage à Brave
+ui-settings-crash-reports-explained = Si BraveBot plante, un rapport avec la version, votre système d'exploitation et la ligne de code source qui a échoué est envoyé au démarrage suivant. Rien n'est envoyé tant que cette option est désactivée.
+ui-settings-crash-reports-locked-environment = Désactivé par { $variable } dans l'environnement.
+ui-settings-crash-reports-locked-admin = Désactivé par votre administrateur.
+ui-settings-crash-reports-locked-incognito = Désactivé dans une session privée, qui ne garde aucun rapport.
+ui-settings-crash-reports-unread = Impossible de lire le réglage des rapports de plantage.
+ui-settings-crash-reports-unsaved = Impossible d'enregistrer le réglage des rapports de plantage. Réessayez.
 ui-folders-heading = Dossiers
 ui-folders-about = Dossiers ouverts à côté du projet dans cette conversation. L'agent peut lire et modifier leurs fichiers jusqu'à ce que vous les fermiez.
 ui-folders-empty = Seul le projet est ouvert.
