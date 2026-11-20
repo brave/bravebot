@@ -279,8 +279,9 @@ pub uninterp spec fn spec_slot_name(slot: SlotId) -> Seq<char>;
 }
 
 // What a contract may say about a policy: the integrity of the context the planner writes from,
-// which is the integrity of what it writes. `Policy` is opaque to Verus, so this is uninterpreted
-// and `Policy::context_integrity` is assumed to return it.
+// which is the integrity of what it writes. `Policy` is opaque to Verus, so this is uninterpreted:
+// `Policy::context_integrity` is assumed to return it, and `Policy::absorb` to meet it, each by
+// handing the call to its `Context`, whose functions Verus proves.
 #[cfg(verus_keep_ghost)]
 verus! {
 pub uninterp spec fn spec_context<'sink, S: Sink>(policy: Policy<'sink, S>) -> Integrity;
@@ -588,6 +589,103 @@ pub enum Containment {
     Unknown,
     /// Every stage is held as above.
     Held,
+}
+
+/// What the planner's context has met and what it holds.
+///
+/// The integrity is the meet of everything [`Policy::present`] let through, so it starts trusted
+/// and falls the moment the planner is shown something untrusted (LABEL-9). The confidentiality
+/// starts public and rises when private content is let out of quarantine. Neither ever goes back:
+/// [`Context::absorb`] and [`Context::hold`] are the only ways to change either, and each only
+/// degrades, so nothing shown later restores what was already lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+struct Context {
+    integrity: Integrity,
+    confidentiality: Confidentiality,
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+impl Context {
+    /// A turn's start: the task is the person's own words, and nothing private has been shown.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r.integrity == Integrity::Trusted,
+            r.confidentiality == Confidentiality::Public,
+    ))]
+    fn fresh() -> Self {
+        Self {
+            integrity: Integrity::Trusted,
+            confidentiality: Confidentiality::Public,
+        }
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.integrity,
+    ))]
+    fn integrity(&self) -> Integrity {
+        self.integrity
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == self.confidentiality,
+    ))]
+    fn confidentiality(&self) -> Confidentiality {
+        self.confidentiality
+    }
+
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r.integrity == self.integrity,
+            r.confidentiality == self.confidentiality,
+    ))]
+    fn label(&self) -> Label {
+        Label::new(self.integrity, self.confidentiality)
+    }
+
+    /// Meet what the context has met with `observed`, and say whether that lowered it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(lowered =>
+        ensures
+            final(self).integrity == crate::spec::meet(old(self).integrity, observed),
+            final(self).confidentiality == old(self).confidentiality,
+            lowered == (final(self).integrity != old(self).integrity),
+    ))]
+    fn absorb(&mut self, observed: Integrity) -> bool {
+        let met = self.integrity.meet(observed);
+        let lowered = met != self.integrity;
+        self.integrity = met;
+        lowered
+    }
+
+    /// Join what the context holds with `shown`, and say whether that raised it.
+    #[cfg_attr(verus_keep_ghost, verus_spec(raised =>
+        ensures
+            final(self).confidentiality == crate::spec::join(old(self).confidentiality, shown),
+            final(self).integrity == old(self).integrity,
+            raised == (final(self).confidentiality != old(self).confidentiality),
+    ))]
+    fn hold(&mut self, shown: Confidentiality) -> bool {
+        let joined = self.confidentiality.join(shown);
+        let raised = joined != self.confidentiality;
+        self.confidentiality = joined;
+        raised
+    }
+}
+
+/// Whether [`Policy::present`] puts content in front of the planner rather than a reference to it.
+///
+/// Decided from the label alone, and only trusted content is shown (LABEL-3). A picture is never
+/// shown however it is labelled, because the planner is never shown a picture it did not receive
+/// from a person (VET-4).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::shown_to_the_planner(label, picture),
+))]
+fn shown_to_the_planner(label: Label, picture: bool) -> bool {
+    let trusted = label.integrity == Integrity::Trusted;
+    trusted && !picture
 }
 
 /// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
@@ -1079,25 +1177,8 @@ pub struct Policy<'sink, S: Sink> {
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
     told: Option<Labelled<String>>,
-    /// The integrity of every observation this turn has made, met together.
-    ///
-    /// Starts trusted, since the task is the user's own words, and drops to untrusted the moment
-    /// the turn observes anything untrusted. It never recovers: a later trusted read does not
-    /// un-see what was already read.
-    ///
-    /// This is not a way to make untrusted data trusted. It is the record of what the model's
-    /// context contains, which is the only thing that can say whether text the model produced
-    /// is derived from trusted input. See [`Policy::label_model_output`].
-    context: Integrity,
-    /// Whether the planner's context holds private content that was let out of quarantine.
-    ///
-    /// Starts public and only ever rises, like [`Policy::context`] only ever falls. What raises it
-    /// is private bytes a person or a check let through to the planner: `vet_content`,
-    /// `read_output`, and a delegate that was given or reported such bytes. A workspace file or a
-    /// vouched program's output the planner is shown does not, though both are private: that is
-    /// the project's own data, and counting it would make the context private at the first read
-    /// and every call to a server ask from then on.
-    holds: Confidentiality,
+    /// What the planner's context has met and holds, which only ever degrades ([`Context`]).
+    context: Context,
 }
 
 /// Everything a person has vouched for, taken together.
@@ -1121,8 +1202,8 @@ impl<S: Sink> fmt::Debug for Policy<'_, S> {
             .field("routing_fields", &self.routing.keys().collect::<Vec<_>>())
             .field("pending_grants", &self.grants.len())
             .field("refusals", &self.refusals.len())
-            .field("context", &self.context)
-            .field("holds", &self.holds)
+            .field("context", &self.context.integrity())
+            .field("holds", &self.context.confidentiality())
             .finish_non_exhaustive()
     }
 }
@@ -1215,8 +1296,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             calling_socket: None,
             server_hop: None,
             told: None,
-            context: Integrity::Trusted,
-            holds: Confidentiality::Public,
+            context: Context::fresh(),
         })
     }
 
@@ -2162,7 +2242,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // A note belongs to the one answer it was typed at, so a branch starts with none.
             told: None,
             context: self.context,
-            holds: self.holds,
         }
     }
 
@@ -2825,7 +2904,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             r == spec_context(*self),
     ))]
     pub fn context_integrity(&self) -> Integrity {
-        self.context
+        self.context.integrity()
     }
 
     /// Begin holding what an earlier turn's context held, for the reason [`Policy::resuming`]
@@ -2844,12 +2923,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::promote_vetted`], [`Policy::promote_vetted_picture`], [`Policy::read_output`]
     /// and a delegate raise it.
     pub fn context_confidentiality(&self) -> Confidentiality {
-        self.holds
+        self.context.confidentiality()
     }
 
     /// Both axes of the context together, for a conversation recording what this run met.
     pub fn context_label(&self) -> Label {
-        Label::new(self.context, self.holds)
+        self.context.label()
     }
 
     /// Say that the run is not offered `vet_content`, so a reference made from here on does not
@@ -2969,9 +3048,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// One way: [`Confidentiality::join`] cannot lower it, so nothing shown later makes a
     /// context public again.
     fn hold(&mut self, shown: Confidentiality, how: &str) {
-        let raised = self.holds.join(shown);
-        if raised != self.holds {
-            self.holds = raised;
+        if self.context.hold(shown) {
             self.allow(
                 "context",
                 format!("{how}; what the planner writes is private from here"),
@@ -2992,10 +3069,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// One-way: [`Integrity::meet`] cannot raise it, so nothing shown later restores integrity
     /// already lost.
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_context(*final(self)) == crate::spec::meet(spec_context(*old(self)), observed),
+    ))]
     fn absorb(&mut self, observed: Integrity) {
-        let lowered = self.context.meet(observed);
-        if lowered != self.context {
-            self.context = lowered;
+        if self.context.absorb(observed) {
             self.allow(
                 "context",
                 "untrusted data entered the context; output is untrusted from here".to_string(),
@@ -3895,14 +3974,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::observe`], the planner's context is this, and conflating the two is how a
     /// design like this stops being able to describe itself.
     pub fn before_planning(&mut self, round: &str) -> Gated<()> {
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "planning",
                 Principle::IntegrityGate,
                 format!(
                     "{round}: the planner's context is {:?}, and nothing that has been shown \
                      untrusted content may be asked to plan",
-                    self.context
+                    self.context.integrity()
                 ),
             ));
         }
@@ -4807,6 +4886,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         picture: Option<&str>,
     ) -> Gated<crate::reference::Presentation> {
         let label = content.label();
+        let shown = shown_to_the_planner(label, picture.is_some());
 
         if picture.is_some() {
             self.allow(
@@ -4818,7 +4898,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
         }
 
-        if label.is_trusted() && picture.is_none() {
+        if shown {
             self.allow(
                 "present",
                 format!("{tool}: {origin} is {label}, so the planner may read it"),
@@ -5043,7 +5123,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         target: &Labelled<String>,
         text: &Labelled<String>,
     ) -> Gated<crate::message::SessionMessage> {
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "message",
                 Principle::IntegrityGate,
@@ -5373,7 +5453,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "delegate",
                 Principle::IntegrityGate,
@@ -5656,7 +5736,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
 
         let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds, place)
-            .holding(self.holds)
+            .holding(self.context.confidentiality())
             .limited_to(limits)
             .started_without(without)
             .budgeted_to(asked)
@@ -10007,7 +10087,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 format!("{tool}.{field} cannot name a reference from {label}"),
             ));
         }
-        if self.context != Integrity::Trusted {
+        if self.context.integrity() != Integrity::Trusted {
             return Err(self.deny(
                 "reference",
                 Principle::IntegrityGate,

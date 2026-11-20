@@ -464,3 +464,23 @@ replace: let own_configuration = Label::new(Integrity::Trusted, Confidentiality:
 mutation: label_kept_fact labels a private fact public
 file: crates/core/src/policy.rs
 replace: let kept_fact = Label::new(Integrity::Trusted, confidentiality); => let kept_fact = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: shown_to_the_planner shows untrusted content
+file: crates/core/src/policy.rs
+replace: let trusted = label.integrity == Integrity::Trusted; => let trusted = true;
+
+mutation: shown_to_the_planner shows a picture
+file: crates/core/src/policy.rs
+replace: trusted && !picture => trusted
+
+mutation: Context::absorb lets a trusted observation restore integrity already lost
+file: crates/core/src/policy.rs
+replace: let met = self.integrity.meet(observed); => let met = observed;
+
+mutation: Context::hold lets a public observation make a private context public again
+file: crates/core/src/policy.rs
+replace: let joined = self.confidentiality.join(shown); => let joined = shown;
+
+mutation: Context::fresh starts a turn's context private
+file: crates/core/src/policy.rs
+replace: confidentiality: Confidentiality::Public, => confidentiality: Confidentiality::Private,
