@@ -57,7 +57,8 @@ import { useExperience, conversationPreferences, setConversation, setExperience,
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
-import { contextNotice, costNotice, type ContextReport, type CostReport } from './reports'
+import { contextNotice, costNotice, type ContextReport, type CostReport, type RequestReport } from './reports'
+import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
@@ -120,6 +121,7 @@ export function App(): React.JSX.Element {
   }, [live?.handle])
   useEffect(() => { void checkBackend() }, [checkBackend])
   const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string } | null>(null)
+  const [requestReport, setRequestReport] = useState<RequestReport | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   const [bugReportOpen, setBugReportOpen] = useState(false)
   /** What the last update check found (UPDATE-12). Asked once at start and again when About opens. */
@@ -625,6 +627,16 @@ export function App(): React.JSX.Element {
       setProblem(String(error))
     }
   }, [])
+  // The desktop's /request (TRACE-9), answered from the same store.
+  const lastRequest = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setRequestReport(await call<RequestReport>('session.report.request', { session }))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
 
   // Plain text, not Markdown: the notes link every issue, and the agent has already written each
   // link as its label, so nothing in this dialog opens anything.
@@ -963,6 +975,7 @@ export function App(): React.JSX.Element {
     doctor: () => void doctor(),
     cost: () => void cost(),
     context: () => void contextBreakdown(),
+    request: () => void lastRequest(),
     bugReport: () => setBugReportOpen(true),
     openSession,
     closeNamed,
@@ -1221,6 +1234,7 @@ export function App(): React.JSX.Element {
       {notice && (
         <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} onClose={() => setNotice(null)} />
       )}
+      {requestReport && <RequestDialog report={requestReport} onClose={() => setRequestReport(null)} />}
       {projectAction?.kind === 'purge' && (
         <PurgeProject directory={projectAction.directory} opened={projectAction.opened} onClose={leaveProjectAction}
           onConfirm={(ids) => void purgeProject(projectAction.directory, ids)} />

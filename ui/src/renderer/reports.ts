@@ -25,7 +25,17 @@ export interface ContextReport {
   sections: { section: ContextSection; tokens: number; share: number }[]
 }
 
-export type ContextSection = 'system' | 'instructions' | 'skills' | 'tools' | 'typed' | 'planner' | 'results' | 'other'
+/**
+ * What `session.report.request` answers (TRACE-9). Every string is already drawn by the bridge's
+ * `printable_spelled`, so a control character arrives as its picture; the window shows it as text.
+ */
+export interface RequestReport {
+  none: boolean
+  instructionFiles: { path: string; bytes: number }[]
+  spans: { role: string; label: string; text: string }[]
+}
+
+export type ContextSection ='system' | 'instructions' | 'skills' | 'tools' | 'typed' | 'planner' | 'results' | 'other'
 
 export interface ReportNotice {
   title: string

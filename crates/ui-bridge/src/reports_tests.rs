@@ -286,7 +286,7 @@ fn the_request_report_is_none_before_a_turn() {
 }
 
 /// TRACE-9: the request report lists the instruction files with their bytes, then each span under
-/// its provenance's label, with the span's text as it was sent.
+/// its provenance's label, with the span's text as it was sent drawn by `printable_spelled`.
 #[test]
 fn the_request_report_names_the_instruction_files_and_labels_each_span() {
     let (mut bridge, handle) = a_session(|held| held.request_built(a_request()));
@@ -301,9 +301,26 @@ fn the_request_report_names_the_instruction_files_and_labels_each_span() {
     for (span, from) in spans.iter().zip(&a_request().spans) {
         assert_eq!(span["role"], from.role);
         assert_eq!(span["label"], from.provenance.label());
-        assert_eq!(span["text"], from.text);
+        assert_eq!(
+            span["text"],
+            from.text.replace('\x1b', "␛").replace('\x07', "␇")
+        );
     }
     assert_eq!(spans[3]["label"], "ref:1");
+}
+
+/// TRACE-9 and TRACE-11: an escape and a bell in a span reach the window as their pictures, so
+/// the window never draws a raw control character, and the span's line breaks are kept.
+#[test]
+fn the_request_report_pictures_the_control_characters_in_a_span() {
+    let mut request = a_request();
+    request.spans[2].text = "list \x1b[31mthe\x07 files\nthen\tstop\r\n".into();
+    let (mut bridge, handle) = a_session(|held| held.request_built(request));
+    let answer = ask(&mut bridge, "session.report.request", &handle);
+    assert_eq!(
+        answer["spans"][2]["text"], "list ␛[31mthe␇ files\nthen\tstop␍\n",
+        "{answer}"
+    );
 }
 
 /// CMD-19: nothing measured is said as such.

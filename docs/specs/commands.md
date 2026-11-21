@@ -1190,6 +1190,11 @@ prompt (CMD-2). It reads what the session already holds in memory, so it is carr
 typed while a turn runs (CMD-8), and it starts no turn and sends nothing. It is a command, so only a
 line a person typed reaches it (CMD-1).
 
+The desktop window's Chat › Last Request… shows the same request through the bridge's
+`session.report.request`, in a read-only dialog. The bridge answers it from the session's report
+store, which the turn writes the request into, and not from the state the turn holds, so the item is
+offered and answered while a turn runs. Before any turn has sent a request the dialog says so.
+
 **Why.** The view answers what the planner was just sent, which is most worth asking while a turn is
 running.
 
@@ -1197,6 +1202,9 @@ running.
 `verified-by: bravebot_tui::app::words_after_the_request_command_make_a_prompt`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::remote_confirm::the_request_a_turn_built_travels_to_the_thread_that_draws_it`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_is_none_before_a_turn`
+`verified-by: bravebot_ui_bridge::reports_tests::the_reports_are_answered_while_a_turn_holds_the_session`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Last Request… is offered on an open chat during a turn and after it and is routed to its own action, and ui/scripts/reports.test.mjs that the dialog says no request has been sent before any turn; make check-ui runs both)`
 
 <a id="CMD-16"></a>
 ### CMD-16: `/recap` asks for a short account of the session, in the way `/btw` asks a question

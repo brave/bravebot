@@ -469,6 +469,14 @@ key that exports the transcript is inert in it, and an incognito session is unch
 closing it puts the transcript back where it was. Before any turn has sent a request the command
 says so.
 
+The desktop window's Chat › Last Request… ([CMD-15](commands.md#CMD-15)) shows the same view in a
+read-only dialog: the instruction files with their bytes, then each span under its role and label.
+The bridge's `session.report.request` draws every string with
+`bravebot_agent::confirm::printable_spelled`, a span's text line by line so its line breaks are
+kept, and the dialog shows those words as plain text, never as Markdown or HTML. A control character
+in a span is shown as its picture with the one definition above, and the window holds no list of
+the characters to picture.
+
 **Why.** What the planner was sent is the question behind every "why did it do that", and a view
 reconstructed from the transcript would answer it with what the transcript says was sent. The
 label is a claim about authority, so it comes from where the text was composed.
@@ -493,6 +501,10 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::render::the_request_view_says_so_when_no_instruction_file_loaded`
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
 `verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_names_the_instruction_files_and_labels_each_span`
+`verified-by: bravebot_ui_bridge::reports_tests::the_request_report_pictures_the_control_characters_in_a_span`
+`verified-by: bravebot_ui_bridge::reports_tests::a_reporter_keeps_the_turns_request_and_not_a_delegates`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/reports.test.mjs renders the Last Request… dialog and asserts the instruction files with their bytes come before the spans, each span under its role and label, and a span holding the pictures of an escape and a bell shows them and its markup as text; make check-ui runs it)`
 
 <a id="TRACE-10"></a>
 ### TRACE-10: the trail names the model each processor call asked for

@@ -7,6 +7,7 @@
 //! when a turn ends and whenever the state is replaced.
 
 use crate::running::State;
+use bravebot_agent::confirm::printable_spelled;
 use bravebot_agent::request_view::{RequestView, Section};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -231,8 +232,10 @@ impl Held {
 
     /// The `session.report.request` answer: the instruction files the last request's system
     /// prompt was built from, with their bytes, and each span under the label its provenance gives
-    /// (TRACE-9). The text of a span is carried to the window as it was sent and nothing here reads
-    /// it.
+    /// (TRACE-9). Every string is drawn by `printable_spelled`, as the audit inspector's words are
+    /// (TRACE-11), a span's text line by line, so the window pictures a control character with the
+    /// terminal's one definition and holds no list of its own. That is a map from characters to characters, and nothing here
+    /// branches on a span's text.
     pub fn request(&self) -> Value {
         let Some(view) = self.last_request.as_ref() else {
             return json!({ "none": true, "instructionFiles": [], "spans": [] });
@@ -240,21 +243,30 @@ impl Held {
         let files: Vec<Value> = view
             .instruction_files()
             .into_iter()
-            .map(|(path, bytes)| json!({ "path": path, "bytes": bytes }))
+            .map(|(path, bytes)| json!({ "path": printable_spelled(path), "bytes": bytes }))
             .collect();
         let spans: Vec<Value> = view
             .spans
             .iter()
             .map(|span| {
                 json!({
-                    "role": span.role,
-                    "label": span.provenance.label(),
-                    "text": span.text,
+                    "role": printable_spelled(&span.role),
+                    "label": printable_spelled(&span.provenance.label()),
+                    "text": printable_lines(&span.text),
                 })
             })
             .collect();
         json!({ "none": false, "instructionFiles": files, "spans": spans })
     }
+}
+
+/// `text` drawn line by line with `printable_spelled`, keeping its line breaks, as the terminal's
+/// request view draws a span (TRACE-9). Every other control character is pictured.
+fn printable_lines(text: &str) -> String {
+    text.split('\n')
+        .map(printable_spelled)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `part` as a whole percentage of `whole`, rounded down as the terminal's rows are.
