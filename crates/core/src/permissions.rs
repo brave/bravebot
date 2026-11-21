@@ -3432,7 +3432,7 @@ mod tests {
     /// path with whitespace at an end.
     #[test]
     fn brackets_holding_only_whitespace_are_empty_in_every_family() {
-        for family in ["Read", "Edit", "Bash", "WebFetch", "Mcp"] {
+        for family in ["Read", "Edit", "Bash", "WebFetch", "WebSearch", "Mcp"] {
             for blank in ["", " ", "\t", "\n", "\u{a0}", "\u{3000}"] {
                 let written = format!("{family}({blank})");
                 let rejected = Rule::parse(&written, &anchors()).expect_err(&written);

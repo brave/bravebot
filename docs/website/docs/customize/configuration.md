@@ -1431,7 +1431,7 @@ a path no rule covers; these two state a standing refusal instead, and are descr
 the file `--settings` names; a project's own entries are proposed to you in a box when
 the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
-A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
+A rule is `Tool` or `Tool(specifier)`, and names one of six **families**:
 
 | Family | Covers |
 |---|---|

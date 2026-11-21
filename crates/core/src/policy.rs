@@ -895,6 +895,56 @@ fn mcp_reason(
     McpReason::Unanswered
 }
 
+/// Which question decided whether a web search is put to a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+pub(crate) enum SearchReason {
+    Private,
+    Ruled(crate::permissions::Ruling),
+    Unanswered,
+}
+
+impl SearchReason {
+    /// Whether the search is put to a person.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::search_reason_asks(self),
+    ))]
+    fn asks(self) -> bool {
+        match self {
+            // The planner's context holds private content, or nothing answers for a search.
+            Self::Private | Self::Unanswered => true,
+            Self::Ruled(ruling) => {
+                let search_allowed = ruling == crate::permissions::Ruling::Allow;
+                !search_allowed
+            }
+        }
+    }
+}
+
+/// The question that decides whether a web search is put to a person, in the order they are asked.
+///
+/// A context that holds private content is read first, before any rule: a query is the planner's
+/// own words and may carry that content, and an `allow` rule is a person agreeing in advance to
+/// searches nobody has read (WEBSEARCH-2). A rule about the family then decides, and where none
+/// matched the default question does. A `deny` rule has refused the search before this is asked
+/// ([`Policy::before_search_rules`]).
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        crate::spec::search_reason_is_sound(public_context, rule, r),
+))]
+fn search_reason(public_context: bool, rule: crate::permissions::Decision) -> SearchReason {
+    // Private content is the person's data, which a rule about searching is not consent to send.
+    let private_context = !public_context;
+    if private_context {
+        return SearchReason::Private;
+    }
+    if let crate::permissions::Decision::Ruled(ruling) = rule {
+        return SearchReason::Ruled(ruling);
+    }
+    SearchReason::Unanswered
+}
+
 /// What [`Policy::write_needs_approval`] knows about a write, gathered before it decides.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(verus_keep_ghost, verus_verify)]
@@ -1929,21 +1979,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// agreeing in advance to searches nobody has read, so it does not cover a search made then. Which
     /// of the two holds is the context's label and nothing the query says.
     pub fn search_needs_approval(&mut self) -> bool {
-        let ruling = self.permissions.for_search();
-        let private_context = !self.context_label().is_public();
-        let allowed = ruling
-            == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Allow)
-            && !private_context;
-        let said = match (allowed, private_context) {
-            (true, _) => "a rule in the settings file says allow for web searches, no prompt",
-            (false, true) => {
+        let reason = search_reason(
+            self.context_label().is_public(),
+            self.permissions.for_search(),
+        );
+        let needed = reason.asks();
+        let said = match reason {
+            SearchReason::Ruled(crate::permissions::Ruling::Allow) => {
+                "a rule in the settings file says allow for web searches, no prompt"
+            }
+            SearchReason::Private => {
                 "the planner has been shown private content, which a query may carry, so the \
                  search asks whatever a rule says"
             }
-            (false, false) => "nothing says a web search is allowed, asking",
+            SearchReason::Ruled(_) | SearchReason::Unanswered => {
+                "nothing says a web search is allowed, asking"
+            }
         };
         self.allow("approval", said.to_string());
-        !allowed
+        needed
     }
 
     /// Record that a person approved this exact request, or that a rule answered for it.

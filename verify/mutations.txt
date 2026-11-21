@@ -545,3 +545,15 @@ replace: let call_allowed = ruling == crate::permissions::Ruling::Allow; => let 
 mutation: McpReason::asks lets a call with private arguments through
 file: crates/core/src/policy.rs
 replace: // answers for the tool. => Self::Private => false,
+
+mutation: search_reason lets a rule answer for a search made after private content was shown
+file: crates/core/src/policy.rs
+replace: let private_context = !public_context; => let private_context = false;
+
+mutation: SearchReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let search_allowed = ruling == crate::permissions::Ruling::Allow; => let search_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: SearchReason::asks lets a search after private content through
+file: crates/core/src/policy.rs
+replace: // The planner's context holds private content, or nothing answers for a search. => Self::Private => false,
