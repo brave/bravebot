@@ -33,7 +33,6 @@ export async function callBot(request: {
   session: string
   slug: string
   prompt: string
-  grounded: boolean
   model: string | null
   attachments?: string[]
   drops?: string[]

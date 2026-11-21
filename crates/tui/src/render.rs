@@ -38,7 +38,7 @@ mod transcript;
 mod watching;
 
 pub use self::export::{as_drawn_at, as_last_drawn, as_markdown, as_text};
-pub(crate) use self::hint::{cache_hit_rate, context_reading};
+pub(crate) use self::hint::{cache_hit_rate, context_reading, noted_at_the_right};
 pub(crate) use self::transcript::{
     EntryLines, ReplyLines, Rows, links_of_the_latest_reply, opening_screen, place_top_of_view,
     plan_item_row, reply_as_text, rows_of, top_of_view,
@@ -47,7 +47,7 @@ pub(crate) use self::transcript::{
 use self::beneath::{
     first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks, queue_words,
 };
-use self::hint::draw_hint;
+use self::hint::{draw_hint, draw_line_beside_the_note};
 use self::prompt::{draw_input, draw_status, input_height, status_height};
 use self::scroller::draw_scroller;
 use self::transcript::draw_transcript;
@@ -928,6 +928,10 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         );
     }
 
+    if session.without_a_session() {
+        return draw_without_a_session(frame, session);
+    }
+
     // A different screen rather than the same one with a different footer: nothing below the
     // transcript is reachable while the scroller is open, so nothing below it is drawn.
     if session.scrolling() {
@@ -959,17 +963,29 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .areas(frame.area());
-    let (left, panel) = if crate::panel::drawn(session, frame.area().width) {
-        let [left, panel] = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(session.panel_columns(frame.area().width)),
-            ])
-            .areas(body);
-        (left, Some(panel))
-    } else {
-        (body, None)
+    let (left, panel, panes) = match session
+        .interface_layout()
+        .right_column(session, frame.area().width)
+    {
+        Some(crate::layout::RightColumn::InfoPanel { columns }) => {
+            let [left, panel] = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(1), Constraint::Length(columns)])
+                .areas(body);
+            (left, Some(panel), None)
+        }
+        Some(crate::layout::RightColumn::Panes { columns }) => {
+            let [left, border, panes] = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                    Constraint::Length(columns.saturating_sub(1)),
+                ])
+                .areas(body);
+            (left, None, Some((border, panes)))
+        }
+        None => (body, None, None),
     };
     let width = left.width;
 
@@ -997,9 +1013,15 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .saturating_sub(status_height)
         .saturating_sub(input_height + 1)
         .saturating_sub(1);
-    let beneath = lines_beneath_the_box(session, width, &offered);
-    let (beneath, offered_first) =
-        fit_to_room(session, width, &offered, beneath, usize::from(room));
+    let beneath = lines_beneath_the_box(session, width, &offered, frame.area().width);
+    let (beneath, offered_first) = fit_to_room(
+        session,
+        width,
+        frame.area().width,
+        &offered,
+        beneath,
+        usize::from(room),
+    );
     let offered_height = (beneath.len() as u16).min(room);
 
     // Thumbnails of the pictures the line carries, between the box and the rows that describe
@@ -1039,14 +1061,20 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     ]
     .into_iter()
     .chain(panel.map(|rect| (crate::select::Pane::Panel, rect)))
+    .chain(panes.map(|(_, rect)| (crate::select::Pane::Bots, rect)))
     .filter(|(_, rect)| !rect.is_empty())
     .collect();
     draw_status(frame, areas[1], session);
     laid.targets.extend(draw_input(frame, areas[2], session));
     draw_previews(frame, areas[3], &thumbs);
     frame.render_widget(Paragraph::new(beneath), areas[4]);
-    laid.targets
-        .extend(queued_prompts(session, width, offered_height, areas[4]));
+    laid.targets.extend(queued_prompts(
+        session,
+        width,
+        frame.area().width,
+        offered_height,
+        areas[4],
+    ));
     // Where the frame drew the button that returns to the tail it took a row from the transcript, which
     // is a row more below the view than the session counted before the frame, so the line says the
     // count the button does and the two never differ (VIEW-27, VIEW-45).
@@ -1063,6 +1091,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     laid.targets.extend(offered_picks(
         session,
         width,
+        frame.area().width,
         &offered,
         offered_first,
         areas[4],
@@ -1070,6 +1099,20 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     if let Some(panel) = panel {
         laid.targets
             .extend(crate::panel::draw(frame.buffer_mut(), panel, session));
+    }
+    if let Some((border, panes)) = panes {
+        frame.render_widget(
+            Block::default()
+                .borders(ratatui::widgets::Borders::LEFT)
+                .border_style(Style::default().fg(theme::muted())),
+            border,
+        );
+        crate::bots_pane::draw(
+            frame.buffer_mut(),
+            panes,
+            session.bots(),
+            session.panes_have_the_keys(),
+        );
     }
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and
@@ -1085,10 +1128,11 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 fn queued_prompts(
     session: &Session,
     width: u16,
+    columns: u16,
     offered_height: u16,
     area: Rect,
 ) -> Vec<crate::state::Target> {
-    let Some(first) = first_waiting_row(session, width) else {
+    let Some(first) = first_waiting_row(session, width, columns) else {
         return Vec::new();
     };
     let mut recorded = Vec::new();
@@ -1126,6 +1170,68 @@ fn queued_prompts(
         }
     }
     recorded
+}
+
+fn draw_without_a_session(frame: &mut Frame, session: &Session) -> Laid {
+    let columns = frame.area().width;
+    let [body, hint_row] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .areas(frame.area());
+    let input_height = input_height(session, body.width, body.height);
+    let offered = session.offered();
+    let room = body.height.saturating_sub(input_height + 1);
+    let beneath = lines_beneath_the_box(session, body.width, &offered, columns);
+    let offered_height = u16::try_from(beneath.len()).unwrap_or(room).min(room);
+    let [list, input, offered_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(input_height),
+            Constraint::Length(offered_height),
+        ])
+        .areas(body);
+
+    let list_pane = crate::bots_pane::drawn(columns).then_some(list);
+    match list_pane {
+        Some(area) => crate::bots_pane::draw(
+            frame.buffer_mut(),
+            area,
+            session.bots(),
+            session.panes_have_the_keys(),
+        ),
+        None => frame.render_widget(
+            Paragraph::new(crate::bots_pane::lines_without_the_list(
+                session.bots(),
+                usize::from(list.width),
+            )),
+            list,
+        ),
+    }
+    draw_input(frame, input, session);
+    frame.render_widget(Paragraph::new(beneath), offered_area);
+    let hint = if list_pane.is_some() {
+        t!(bots_hint, chord = session.bindings().panes_name())
+    } else {
+        t!(bots_hint_without_panes).to_string()
+    };
+    draw_line_beside_the_note(frame, hint_row, session, &hint);
+
+    let laid = Laid {
+        columns,
+        panes: [
+            (crate::select::Pane::Bots, list_pane.unwrap_or_default()),
+            (crate::select::Pane::Input, input),
+            (crate::select::Pane::Offered, offered_area),
+            (crate::select::Pane::Hint, hint_row),
+        ]
+        .into_iter()
+        .filter(|(_, rect)| !rect.is_empty())
+        .collect(),
+        ..Laid::default()
+    };
+    highlight_selection(frame, session, &laid);
+    laid
 }
 
 /// Paint the selection, where there is one, over what the frame already holds, passing over the
@@ -8508,7 +8614,7 @@ mod tests {
         });
 
         let width = 120;
-        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered(), width)
             .iter()
             .map(|line| {
                 line.spans
@@ -8554,7 +8660,7 @@ mod tests {
             }]
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered(), 120)
             .iter()
             .map(|line| {
                 line.spans
@@ -8583,7 +8689,7 @@ mod tests {
     #[test]
     fn a_servers_prompt_row_names_its_server_and_what_it_takes() {
         let session = typed_with_prompts("/mcp__w");
-        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered(), 100)
             .iter()
             .map(|line| {
                 line.spans
@@ -8658,7 +8764,7 @@ mod tests {
                 .to_vec()
         });
 
-        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered(), 120)
             .iter()
             .map(|line| {
                 line.spans

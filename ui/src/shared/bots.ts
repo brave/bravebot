@@ -38,9 +38,9 @@ export interface Bot {
    * The name every file belonging to this bot is named after.
    *
    * Restricted to `[a-z0-9-]` and composed from the name once, at creation. Both matter: this
-   * becomes a path segment in three places (the ground file under `userData`, the home folder
-   * under `userData`, and the memory file inside each folder the bot works in), and a path segment
-   * that arrived as free text is a path segment that can be `..`.
+   * becomes a path segment (the home folder under `userData`, and the memory file a bot made
+   * before definitions keeps in each folder it works in), and a path segment that arrived as free
+   * text is a path segment that can be `..`.
    */
   slug: string
   /** What the bot is called, as somebody wrote it. Free text, and renamable. */
@@ -92,27 +92,9 @@ export interface Bot {
    * How much compaction had taken out of that session, last time anyone looked.
    *
    * The length of the conversation's archive, which the agent reports and which only ever rises.
-   * A bot is re-grounded when this has gone up since the last turn, because that is the moment its
-   * purpose stopped being in the conversation. Main-written.
+   * Main-written.
    */
   archived: number
-  /**
-   * The modification time its memory file had, last time a turn of its finished.
-   *
-   * Not a copy of the memory and not a judgement about it — only the answer to "has it changed
-   * since I last looked", which is the one question `quiet` below needs asked. Zero means nobody
-   * has looked yet. Main-written, and read off the filesystem rather than off anything a model
-   * said: the file's mtime is the only claim here nothing can be talked into.
-   */
-  remembered: number
-  /**
-   * How many of its turns have finished since that mtime last moved.
-   *
-   * The whole of the nudge: a bot keeping its memory current sits at zero forever and is never
-   * reminded, and one that has stopped writing is handed its briefing again once this reaches
-   * `QUIET_MAX` rather than waiting for a compaction. Main-written.
-   */
-  quiet: number
   /**
    * When it was archived, in milliseconds, or `0` for a bot still in use.
    *
@@ -169,13 +151,6 @@ export function parseBotServers(value: unknown): BotServers | null {
   }
 }
 
-/** Model IDs are opaque provider identifiers, never paths or commands. */
-export function isBotModel(value: unknown): value is string | null {
-  return value === null || (
-    typeof value === 'string' && value.trim().length > 0 && value.length <= 512 && !value.includes('\0')
-  )
-}
-
 /** A conversation a bot has had, and the folder it ran in. */
 export interface BotConversationRef {
   id: string
@@ -227,32 +202,6 @@ const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
  */
 export function isSlug(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 64 && SLUG.test(value)
-}
-
-/**
- * A slug for a name somebody typed.
- *
- * Lossy on purpose. It is not a rendering of the name and is never shown — the name is shown, and
- * this is what the files are called. A name with nothing usable in it at all still gets a slug,
- * because refusing to make a bot called `???` would be a validator making a product decision.
- *
- * The cut comes before the trailing trim: a name whose 48th character falls on a word break would
- * otherwise end in a dash, which is not a slug and which the agent refuses as a definition name.
- */
-export function slugFor(name: string, taken: ReadonlySet<string> = new Set()): string {
-  const base =
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+/, '')
-      .slice(0, 48)
-      .replace(/-+$/, '') || 'bot'
-  if (!taken.has(base)) return base
-  for (let n = 2; n < 1000; n++) {
-    const tried = `${base}-${n}`
-    if (!taken.has(tried)) return tried
-  }
-  return `${base}-${Date.now()}`
 }
 
 /** The one with this slug, or `null`. */

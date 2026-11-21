@@ -7,6 +7,16 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod operations;
+
+pub use operations::{
+    Changes, NewBot, Noted, Saved, archive, archive_in, delete, delete_in, edit, edit_in,
+    ensure_home, ensure_home_in, forget_conversation, forget_conversation_in, make, make_in,
+    migrate, owes_carry_over, record_archived, record_archived_in, record_conversation,
+    record_conversation_in, release_session, release_session_in, restore, restore_in, set_model,
+    set_model_in, works_in,
+};
+
 pub const CEILING: usize = 100;
 
 pub const APPLICATION_FOLDER: &str = "bravebot-ui";
@@ -17,6 +27,7 @@ const OLD_FILE: &str = "bravebot-ui.json";
 const LOCK_WAIT: Duration = Duration::from_secs(5);
 const LOCK_POLL: Duration = Duration::from_millis(20);
 const MODEL_MAX: usize = 512;
+const AVATAR_MAX: usize = 128;
 const SLUG_MAX: usize = 64;
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
@@ -206,14 +217,26 @@ pub enum Refused {
     OldFile(Problem),
     Locked(PathBuf),
     Io(Problem),
+    History(Problem),
+    Name,
+    Purpose,
+    Model,
+    Avatar,
+    NoSuchBot(String),
+    DataFolder(PathBuf),
+    Definition(String),
+    DefinitionIo(Problem),
+    Conversation,
 }
 
 impl Refused {
     pub fn problem(&self) -> Option<Problem> {
         match self {
-            Self::Unreadable(problem) | Self::OldFile(problem) | Self::Io(problem) => {
-                Some(problem.clone())
-            }
+            Self::Unreadable(problem)
+            | Self::OldFile(problem)
+            | Self::Io(problem)
+            | Self::History(problem)
+            | Self::DefinitionIo(problem) => Some(problem.clone()),
             Self::Locked(path) => Some(Problem::new(path, self)),
             _ => None,
         }
@@ -255,6 +278,41 @@ impl fmt::Display for Refused {
                 path.display()
             ),
             Self::Io(problem) => write!(out, "the bots could not be saved ({problem})"),
+            Self::History(problem) => {
+                write!(
+                    out,
+                    "the bot's history folder could not be removed ({problem})"
+                )
+            }
+            Self::Name => out.write_str("the name is blank or holds a null character"),
+            Self::Purpose => out.write_str("the purpose is blank or holds a null character"),
+            Self::Model => write!(
+                out,
+                "the model must be one line of at most {MODEL_MAX} characters with no space around it, and not `inherit`"
+            ),
+            Self::Avatar => write!(
+                out,
+                "the avatar is blank, holds a null character or is longer than {AVATAR_MAX} characters"
+            ),
+            Self::NoSuchBot(slug) => write!(out, "there is no bot {slug}"),
+            Self::DataFolder(path) => write!(
+                out,
+                "the data folder {} is not an absolute path that can be written into a row as text",
+                path.display()
+            ),
+            Self::Definition(reason) => {
+                write!(
+                    out,
+                    "the bot's definition was refused, so nothing was saved ({reason})"
+                )
+            }
+            Self::DefinitionIo(problem) => write!(
+                out,
+                "the bot's definition could not be written, so nothing was saved ({problem})"
+            ),
+            Self::Conversation => out.write_str(
+                "the conversation was not recorded: the session is not an identifier, or the directory is not an absolute path",
+            ),
         }
     }
 }
@@ -358,7 +416,11 @@ pub fn is_identifier(value: &str) -> bool {
 }
 
 fn is_text(value: &str) -> bool {
-    !value.trim_matches(is_blank).is_empty() && !value.contains('\0')
+    !is_blank_text(value) && !value.contains('\0')
+}
+
+pub fn is_blank_text(value: &str) -> bool {
+    value.trim_matches(is_blank).is_empty()
 }
 
 fn is_blank(character: char) -> bool {
@@ -428,6 +490,15 @@ fn parse_entries(entries: &[Value], reading: &Reading) -> Parsed {
     Parsed { rows, dropped }
 }
 
+fn composed_home(data_folder: &Path, slug: &str) -> Option<String> {
+    data_folder
+        .join("bot-homes")
+        .join(slug)
+        .to_str()
+        .filter(|composed| is_absolute_path(composed))
+        .map(str::to_string)
+}
+
 fn read_entry(entry: &Value, reading: &Reading, seen: &HashSet<String>) -> Result<Row, Reason> {
     let fields = entry.as_object().ok_or(Reason::NotAnObject)?;
     let text_of = |name: &str| fields.get(name).and_then(Value::as_str);
@@ -446,14 +517,7 @@ fn read_entry(entry: &Value, reading: &Reading, seen: &HashSet<String>) -> Resul
     };
     let home = match text_of("home").filter(|home| is_absolute_path(home)) {
         Some(home) => home.to_string(),
-        None => reading
-            .data_folder
-            .join("bot-homes")
-            .join(slug)
-            .to_str()
-            .filter(|composed| is_absolute_path(composed))
-            .ok_or(Reason::NoHome)?
-            .to_string(),
+        None => composed_home(reading.data_folder, slug).ok_or(Reason::NoHome)?,
     };
     let legacy_directory = text_of("directory").filter(|directory| is_absolute_path(directory));
     let session = match fields.get("session") {
@@ -741,8 +805,12 @@ enum OldRows {
     Unconvertible(Problem),
 }
 
+pub fn old_file(data_folder: &Path) -> PathBuf {
+    data_folder.join(OLD_FILE)
+}
+
 fn old_rows(data_folder: &Path) -> OldRows {
-    let path = data_folder.join(OLD_FILE);
+    let path = old_file(data_folder);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return OldRows::Nothing,

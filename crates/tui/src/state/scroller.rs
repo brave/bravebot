@@ -776,6 +776,10 @@ impl Session {
         self.keep_selection_within(&laid);
         self.laid = laid;
         self.follow_the_hover();
+        if self.interface_layout == crate::layout::Layout::Bots {
+            let columns = self.laid.columns;
+            self.bots.apply_frame_width(columns);
+        }
     }
 
     /// Hold a selection to what it began on as that is now drawn, and drop it when that is gone or

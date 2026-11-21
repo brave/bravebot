@@ -91,7 +91,7 @@ try {
   await page.waitForTimeout(250);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance)
   await app.evaluate(({BrowserWindow},session)=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:bots:consolidating',{session,slug:'review-bot'}),'s-'+idA);await snap('37-memory-maintenance-queue')
   await emit('turn.done',{id:idA,turn:5,reply:'Memory updated.',model:'sample/deep',steps:1,clean:true,tokens:10,outputTokens:10,notices:[],trust:{rules:[]},archived:1,consolidating:true});await page.waitForTimeout(250);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance)
-  await app.evaluate(({BrowserWindow},session)=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:bots:consolidated',{session,slug:'review-bot',delivered:true}),'s-'+idA)
+  await app.evaluate(({BrowserWindow},session)=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:bots:consolidated',{session,slug:'review-bot'}),'s-'+idA)
   await page.waitForFunction(()=>document.querySelector('.queued-messages')===null);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance+1);await done()
   // Opening a bot opens its conversation in its home folder. Its earlier conversations are a page
   // reached from that conversation's header: the list in the middle, its details and memory on the right.

@@ -113,7 +113,5 @@ export function rewoundLive(old: Live, rewound: RewoundSession): Live {
     focus: null,
     // Held, so the prompt going back in the composer is not overtaken by one queued before it.
     queuePaused: old.queued?.length ? true : old.queuePaused,
-    // The turn that carried the briefing may be one of those undone.
-    bot: old.bot ? { ...old.bot, grounded: false } : null,
   }
 }

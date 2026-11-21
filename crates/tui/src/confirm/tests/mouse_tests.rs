@@ -583,6 +583,11 @@ const READERS: &[(&str, usize, &str)] = &[
     ("theme_prompt.rs", 1, "a list to pick from, not a question"),
     ("sessions_view.rs", 2, "a list to read, not a question"),
     ("app.rs", 7, "the loops of a session, which ask nothing"),
+    (
+        "app/bots_screen.rs",
+        2,
+        "the loop of the phase with no session, which asks nothing",
+    ),
 ];
 
 /// The calls to read or poll the terminal in the code of `source` that ships: every line before a

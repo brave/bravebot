@@ -99,8 +99,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
   const send = useCallback(async (prompt: string, target?: string, selectedFiles?: FileAttachment[], queuedStaged?: Staged[]) => {
     const handle = target ?? handleRef.current
     if (!handle) return
-    // Read before the state below is changed, because that is what clears it: this is the turn
-    // that carries the briefing, and by the time it has been sent the session is grounded again.
+    // Read before the state below is changed, because that update clears the attachments and the staging.
     const sending = openedLives.current.get(handle)
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
@@ -154,8 +153,6 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
             awaitingOrdinal: said.id,
             running: true,
             queuePaused: old.queued?.length ? old.queuePaused : false,
-            // A summoned turn carries no briefing of this conversation's bot.
-            bot: old.bot ? { ...old.bot, grounded: summoned ? old.bot.grounded : true } : null,
           }
         : old,
     )
@@ -167,9 +164,8 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
         // A bot's turn never goes through `call`. It needs files attached, and the main process
         // strips those from anything a window sends — a window that could name a file to read
         // would be a window that could have the planner read any file on the machine. So this
-        // names the bot and says whether the briefing is due, and the paths are composed over
-        // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
+        // names the bot. The main process addresses the turn from the row.
+        await callBot({ session: handle, slug: bot.slug, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
       } else {
         // A new id for each Send, which the agent requires on every send (RPCVIEW-10).
         await call('turn.send', { session: handle, prompt, model, messageId: crypto.randomUUID(), attachments: attachments.map((file) => file.id), ...grants })
@@ -191,9 +187,6 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
               // coming for it. Left standing, it would take the ordinal of the next turn to
               // finish, which may be one nobody in this window asked for.
               awaitingOrdinal: null,
-              // Put back. Nothing was sent, so nothing was said — a briefing marked delivered by a
-              // turn that failed would be one the bot never received.
-              bot: old.bot ? { ...old.bot, grounded: bot?.grounded ?? false } : null,
             }
           : old,
       )

@@ -1,121 +1,17 @@
-import { readProjectText, seedProjectMemory } from './project-files'
+import { randomUUID } from 'node:crypto'
+import { readProjectText } from './project-files'
 /**
- * Where a bot's definition is kept, and where the two files it speaks through are made.
+ * The desktop's bots: the bridge calls that read and write a row, where a memory file sits, and
+ * the prompts this process composes.
  *
- * The same arrangement as the forks and the recents next door: the list lives under its own key in
- * `state.ts`, and the half of it that reports what the agent did — the session id, the compaction
- * watermark — is written here from what the agent *answered*, never from anything a window asked
- * for. What is different is that the other half is a preference somebody types, so unlike those
- * two this module does take dictation. It takes it four fields at a time.
- *
- * ## Why there are two files, and why only one of them is handed to a turn
- *
- * The agent has no persona field. `Task` offers a prompt, some files, and a home directory, and
- * the system prompt belongs to the build — so the only way to put a standing purpose in front of
- * it is to give it something to read. Two candidates exist and this uses both, for different
- * halves of the job:
- *
- * - **The ground file**, `<userData>/bots/<slug>/ground.md`, is composed here from the bot's name
- *   and its purpose. It is handed to a turn as `dropped`, which is the read that is deliberately
- *   *not* confined to the workspace. It lives outside the checkout precisely so the planner cannot
- *   rewrite the thing that defines it: the agent may write inside the workspace and nowhere else,
- *   and this is nowhere else.
- * - **The memory file**, `<folder>/.bravebot-ui/bots/<slug>.md`, is inside the folder the
- *   conversation runs in because that is the only place the agent can write. A bot keeps one in
- *   each folder it works in: its home folder for conversations with no project, and each project
- *   it is sent into. That is the whole mechanism by which memory is
- *   appended: the bot is told where its memory is and asked to keep it current, and it edits the
- *   file with its ordinary write tool. Nothing here parses what a model said; the change the agent
- *   applied is the record. What that write is *gated* on is below, and is not what it looks like.
- *
- * Only the ground file is handed over, and it quotes no byte of the memory. `ground` below says
- * why: a path this app names is a path the agent records as vouched for, so the only ones it may
- * name are ones whose every byte it wrote.
- *
- * ## What a memory write is actually gated on
- *
- * A memory write does **not** always stop and ask. It goes through the agent's ordinary write gate
- * (`Policy::write_needs_approval` upstream), whose rule is about *integrity* rather than about
- * which file it is: trusted data going to a trusted path is written without a prompt, because for
- * data to be trusted the turn must have observed nothing untrusted, and the destination only gains
- * trust by it.
- *
- * Both halves are true of a bot's memory in the ordinary case. The destination is trusted because
- * the person vouched for the checkout the memory sits in, and a turn that only read that checkout
- * has observed nothing untrusted. So a bot exploring its project and writing down what it found
- * does so silently, and the record of it is the `Update` line in the transcript and the row in the
- * Writes panel rather than a card somebody pressed.
- *
- * The prompt appears exactly where it matters: a turn that *has* touched untrusted content — a
- * fetched page, a command's output, a quarantined file — is asked before it may write to memory,
- * because that write would turn a trusted path untrusted. The gate is on prompt injection reaching
- * the memory, not on the memory changing.
- *
- * And the path stays untrusted afterwards, which is the half this app used to undo: it named the
- * memory on every grounded turn, and naming is what `policy.vouch_for_named_path` records, so the
- * rule the write had written was overwritten by a grant nobody was asked for. It no longer names
- * it. See `ground`.
- *
- * This was written the other way round first, and the briefing handed to the model said every edit
- * would be shown as a diff before it happened. That was false, and a false promise in a briefing is
- * worse than none: it is the model telling somebody something the app does not do. Tightening it is
- * not available from here — there is no "always ask about this path" upstream, and adding one would
- * be a change to a repository this app does not modify. So the briefing now says what is true: the
- * edit is on the record rather than in front of a card.
- *
- * ## When a bot is asked to write
- *
- * Nothing above makes a bot *remember*; it only makes remembering cheap once it decides to. The
- * instruction to do it lives in one place — the ground file — and the ground file reaches a turn
- * only when that turn is grounded, which is the first of a session and the first after each
- * compaction. Everything between those carried no reminder at all, and in practice a memory only
- * changed when somebody asked for it in so many words.
- *
- * Two things close that, and neither of them attaches anything to an ordinary turn:
- *
- * - **A compaction is answered with a turn of this app's own.** A rise in `archived` is the one
- *   moment memory is unambiguously *for*, since it is the only thing that survived it. The main
- *   process sends a grounded turn saying so — see `consolidationPrompt` — instead of waiting for
- *   the user's next prompt to carry the briefing. That prompt would have carried it anyway, so
- *   what this costs is a round trip and not an extra attachment.
- * - **A bot that has stopped writing is grounded early.** `quiet` counts turns since the memory
- *   file's mtime last moved, and at `QUIET_MAX` the next turn is grounded whether the window
- *   thought so or not, with one extra paragraph in the briefing. It resets on the nudge as well as
- *   on a write, so ignoring it buys silence rather than a briefing on everything.
- *
- * Both are honest about what they can do. Neither checks that a model wrote anything, because
- * checking would mean parsing what it said, and the one rule this file has is that the change the
- * agent applied is the record.
- *
- * One file goes to the turn rather than two, and the trust argument in `ground` is not the only
- * reason. Every attached file is pushed into the conversation as its own user message, and the
- * agent's compaction keeps only the last two of those verbatim — so handing over two would mean
- * the window a compaction preserves is spent entirely on this app's own injections. The memory is
- * read by the bot instead, which costs a call and spends none of that window.
- *
- * ## Why the files are re-made before every turn
- *
- * A memory file removed by a `git clean`, or a checkout switched to a branch that never had one,
- * leaves the bot with nothing where its memory should be. So `ground` runs on the way into every
- * send and makes the missing file, rather than once when the bot was made, and the making is the
- * helper's rather than this process's: see `seedProjectMemory`.
- *
- * Only the missing file. A memory that is there is left exactly as it is, including one an editor
- * saved over with bytes that are not text: that used to fail the turn, because the memory was a
- * path the turn *named* and a named file that cannot be read is a `?` all the way out, and now it
- * is a read the bot makes and a paragraph it does without. Replacing somebody's file to save a
- * paragraph is not a trade worth making.
+ * The session id and the compaction watermark are written from what the agent answered, never from
+ * anything a window asked for. The form says a name, a purpose, a model and an avatar.
  */
 
-import { app } from 'electron'
-import { randomUUID } from 'node:crypto'
-import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { type Bot, type BotServers, botFolders, botOf, isBotModel, isSlug, parseBotServers, slugFor, withBot, withoutBot } from '../shared/bots'
+import { type Bot, type BotServers, botFolders, botOf, isSlug, parseBotServers, withBot } from '../shared/bots'
 import { newAvatarSeed } from '../shared/avatar'
-import { isOpenedDirectory } from './opened'
-import { readBots, updateBots, usableBots } from './bot-store'
-import { botHome } from './state'
+import { chosenDirectories } from './opened'
+import { type BotRow, type BridgeWrite, bridgeRequest, oneAtATime, readBots, updateBots, writeThroughBridge } from './bot-store'
 
 /** Where a bot's files live inside the checkout it works in, relative to that checkout. */
 const HOME = '.bravebot-ui'
@@ -130,21 +26,6 @@ const HOME = '.bravebot-ui'
  */
 const MEMORY_MAX = 64 * 1024
 
-/**
- * How many of a bot's turns may finish without its memory changing before it is reminded.
- *
- * A briefing costs one attachment, and every attachment stays in the conversation and is counted
- * against the two a compaction keeps verbatim — so this cannot be one. It also cannot be very
- * large, because the thing it guards against is a bot that has quietly stopped writing anything
- * down, and by the time a conversation is thirty turns old the material worth keeping has already
- * gone past. Six is roughly a working exchange: long enough that a bot doing the job is never
- * interrupted, short enough that one that has stopped is caught inside the same sitting.
- *
- * It is a nudge and not a demand. Nothing here can make a model write, and nothing here checks
- * that it did — what the reminder buys is the instruction being in front of it again.
- */
-const QUIET_MAX = 6
-
 /** Every bot defined. Never throws; an unreadable file is no bots. */
 export const bots = readBots
 
@@ -153,178 +34,38 @@ export async function bot(slug: unknown): Promise<Bot | null> {
   return isSlug(slug) ? botOf(await bots(), slug) : null
 }
 
-/**
- * The bot a window's form describes, or `null` if what it sent is not a bot this app may keep.
- *
- * Four fields cross from a window (a name, a purpose, a model and a face), and none of them is
- * a path. The home folder is composed here from the slug, so no field a window sends decides where
- * on the disk this app writes. Which project a conversation runs in is decided per conversation,
- * by `worksIn`.
- *
- * An existing bot keeps everything this road cannot say: its id, its watermark, its home, its
- * conversations, when it was made. Its seed changes only when the window sends a new one. A new one is given a slug composed here from the
- * name, so the thing that becomes a path segment is never a string that arrived as one.
- */
-export async function botFromForm(value: unknown): Promise<Bot | null> {
+const FORM_FIELDS = ['name', 'purpose', 'model', 'avatar'] as const
+
+async function writeBot(prepare: () => Promise<BridgeWrite> | BridgeWrite): Promise<Bot> {
+  const answer = (await writeThroughBridge(prepare)) as { bot: BotRow }
+  return answer.bot
+}
+
+export async function saveForm(value: unknown): Promise<Bot | null> {
   if (typeof value !== 'object' || value === null) return null
   const sent = value as Record<string, unknown>
-  const { slug, avatar, model } = sent
-  if (model !== undefined && !isBotModel(model)) return null
-  const held = isSlug(slug) ? await bot(slug) : null
-  // An edit of a bot that is kept names only what it changes. A new bot needs both.
-  const name = sent.name === undefined && held ? held.name : sent.name
-  const purpose = sent.purpose === undefined && held ? held.purpose : sent.purpose
-  if (typeof name !== 'string' || typeof purpose !== 'string') return null
-  if (!name.trim() || !purpose.trim()) return null
-  if (avatar !== undefined && (typeof avatar !== 'string' || !avatar.trim() || avatar.length > 128)) {
-    return null
-  }
-
-  // A new face is kept only when the window asks for one; a rename leaves the face as it was.
-  if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model, avatar: typeof avatar === 'string' ? avatar : held.avatar }
-  const made = slugFor(name, new Set((await bots()).map((each) => each.slug)))
-  return {
-    slug: made,
-    name,
-    purpose,
-    model: typeof model === 'string' ? model : null,
-    // Use the draft's preview seed so creation keeps the face already shown. Older callers may
-    // omit it; either way it is stored and survives a rename.
-    avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
-    home: botHome(made),
-    // Named once the agent has written the definition, in the handler that calls this.
-    definition: null,
-    session: null,
-    conversations: [],
-    lastHome: null,
-    archived: 0,
-    // Nothing has been remembered and nothing has gone unremembered, so a new bot starts owing no
-    // nudge. See `noteBotMemory`, which takes its first reading when its first turn ends.
-    remembered: 0,
-    quiet: 0,
-    // In use, which is what a bot somebody just filled in a form for is.
-    retired: 0,
-    created: Date.now(),
-    updated: Date.now(),
-  }
-}
-
-/** The agent request that writes or rewrites a bot's definition (MEMORY-8, MEMORY-9). */
-export type DefineRequest = (method: 'bot.define' | 'bot.redefine', params: Record<string, unknown>) => Promise<unknown>
-
-/**
- * Save the bot a form described. A new bot is first defined by the agent (MEMORY-8), which names
- * what it wrote; that name is kept as `definition`. An existing bot with a definition has the
- * description, the body and the model of that file rewritten (MEMORY-9), and nothing else in it.
- * A refusal, an absent agent or an answer that is not a slug throws and saves nothing, so the row
- * and the file never disagree about what the bot is for.
- */
-export async function saveFormBot(next: Bot, define: DefineRequest | null): Promise<Bot> {
-  const stored = await bot(next.slug)
-  if (!stored) {
-    if (!define) throw new Error('The agent is not running, so a bot cannot be made.')
-    await usableBots()
-    const made = (await define('bot.define', {
-      slug: next.slug,
-      purpose: next.purpose,
-      ...(next.model === null ? {} : { model: next.model }),
-    })) as { name?: unknown } | null
-    if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
-    return saveBot({ ...next, definition: made.name })
-  }
-  if (stored.definition !== null) {
-    if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
-    await redefine(stored.definition, next, define)
-    // The agent call took time, and the row may have moved on meanwhile: a conversation recorded,
-    // a session released. Only the fields the form carries are laid over it.
-    return (await changeBot(next.slug, (held) => ({
-      ...held, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar,
-    }))) ?? stored
-  }
-  return (await changeBot(next.slug, (held) => ({
-    ...held, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar,
-  }))) ?? stored
-}
-
-let saving: Promise<unknown> = Promise.resolve()
-
-/**
- * Save what a window's form sent, one save at a time.
- *
- * Each save reads the bot as the one before left it, so a face chosen while a rename is being
- * written to the agent is not undone by the rename finishing, nor the rename by the face.
- */
-export function saveForm(value: unknown, define: DefineRequest | null): Promise<Bot | null> {
-  const run = saving.then(async () => {
-    const form = await botFromForm(value)
-    return form ? saveFormBot(form, define) : null
+  return writeBot(async () => {
+    const fields = Object.fromEntries(FORM_FIELDS.filter((key) => sent[key] !== undefined).map((key) => [key, sent[key]]))
+    if (isSlug(sent.slug) && (await bot(sent.slug))) return { method: 'bot.edit', params: { slug: sent.slug, ...fields } }
+    return { method: 'bot.make', params: { avatar: newAvatarSeed(randomUUID()), ...fields } }
   })
-  saving = run.catch(() => undefined)
-  return run
 }
 
-/**
- * The folder a bot made before definitions kept its old memory in.
- *
- * A bot that old was pinned to one folder, which is where its conversations were put when the
- * store was read, so the first of them names it. One with no conversation has no memory to record
- * and names its home.
- */
-function oldMemoryFolder(held: Bot): string {
-  return held.conversations[0]?.directory ?? held.home
+export async function carryStillOwed(slug: string, folder: string): Promise<boolean> {
+  const answer = (await bridgeRequest('bot.owes_carry_over', { slug, folder })) as { owes?: unknown } | null
+  if (typeof answer?.owes !== 'boolean') throw new Error('the agent did not say whether a carry-over is owed')
+  return answer.owes
 }
 
-/**
- * Whether a turn about to be sent in `folder` is the first for a bot that still has no definition,
- * in the one folder whose old notes `migrateBot` records as untrusted (MEMORY-11).
- *
- * The record holds that folder's path alone, so a turn told to read the old notes in any other
- * folder would read a file the trust map has not recorded.
- */
-export function owesCarryOver(held: Bot, folder: string): boolean {
-  return held.definition === null && folder === oldMemoryFolder(held)
+export async function definitionForTurn(slug: string): Promise<Bot> {
+  const answer = (await writeThroughBridge(() => ({ method: 'bot.migrate', params: { slug } }))) as { bot?: BotRow } | null
+  const row = answer?.bot
+  if (!row || !isSlug(row.definition)) throw new Error('The agent did not name the bot’s definition.')
+  return row
 }
 
-/**
- * Give a bot made before definitions one, the first time it is opened (MEMORY-11).
- *
- * The agent writes the definition and records the bot's old memory, `.bravebot-ui/bots/<slug>.md`
- * in its folder, as untrusted in every later session. Nothing here reads that file: this process
- * sends the slug, the purpose, the model and the folder it holds for the bot, and keeps only the
- * name the agent answers with. A refusal, an absent agent or an answer that is not a slug throws
- * and the bot stays as it was, so it is tried again on the next open. A bot that has a definition
- * is returned as it is and the agent is not asked.
- */
-export async function migrateBot(
-  held: Bot,
-  migrate: ((method: 'bot.migrate', params: Record<string, unknown>) => Promise<unknown>) | null,
-): Promise<Bot> {
-  if (held.definition !== null) return held
-  if (!migrate) throw new Error('The agent is not running, so this bot cannot be opened.')
-  const made = (await migrate('bot.migrate', {
-    slug: held.slug,
-    purpose: held.purpose,
-    directory: oldMemoryFolder(held),
-    ...(held.model === null ? {} : { model: held.model }),
-  })) as { name?: unknown } | null
-  const name = made?.name
-  if (!isSlug(name)) throw new Error('The agent did not name the bot’s definition.')
-  return (await changeBot(held.slug, (current) => ({ ...current, definition: name })))
-    ?? { ...held, definition: name }
-}
-
-/**
- * Change a bot's model, in its definition as well where it has one.
- *
- * The same rule as an edit from the form: the file is written first and the row only if that
- * worked, so a bot's turns, which run under the file, never run on a model the row no longer names.
- */
-export async function saveBotModel(held: Bot, model: string | null, define: DefineRequest | null): Promise<Bot> {
-  if (held.definition !== null) {
-    if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
-    await redefine(held.definition, { ...held, model }, define)
-  }
-  return (await changeBot(held.slug, (current) => ({ ...current, model }))) ?? { ...held, model }
+export function saveBotModel(slug: string, model: string | null): Promise<Bot> {
+  return writeBot(() => ({ method: 'bot.set_model', params: { slug, model } }))
 }
 
 /** The agent requests that read and rewrite a bot's `mcpServers:` line. */
@@ -347,7 +88,7 @@ export async function readBotServers(held: Bot, request: ServersRequest | null):
  * a rewrite of the same file's purpose or model. `null` removes the line.
  */
 export function saveBotServers(held: Bot, servers: string[] | null, request: ServersRequest | null): Promise<BotServers> {
-  const run = saving.then(async () => {
+  return oneAtATime(async () => {
     const definition = (await bot(held.slug))?.definition ?? null
     if (definition === null) throw new Error('This bot has no definition yet. Open it once, then try again.')
     if (!request) throw new Error('The agent is not running, so this bot cannot be edited.')
@@ -355,17 +96,6 @@ export function saveBotServers(held: Bot, servers: string[] | null, request: Ser
     if (answer?.name !== definition) throw new Error('The agent did not rewrite the bot’s definition.')
     return readBotServers({ ...held, definition }, request)
   })
-  saving = run.catch(() => undefined)
-  return run
-}
-
-async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<void> {
-  const answer = (await define('bot.redefine', {
-    name,
-    purpose: bot.purpose,
-    ...(bot.model === null ? {} : { model: bot.model }),
-  })) as { name?: unknown } | null
-  if (answer?.name !== name) throw new Error('The agent did not rewrite the bot’s definition.')
 }
 
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */
@@ -374,62 +104,39 @@ export async function saveBot(next: Bot): Promise<Bot> {
   return written.find((each) => each.slug === next.slug) ?? next
 }
 
-/**
- * Make a bot's home folder if it is not there yet.
- *
- * Called when a bot is made and when a conversation is started in its home, so a home deleted by
- * hand is back before anything runs in it. `false` when it cannot be made.
- */
-export function ensureHome(held: Bot): boolean {
+export async function ensureBotHome(slug: string): Promise<boolean> {
   try {
-    mkdirSync(held.home, { recursive: true, mode: 0o700 })
-    return true
+    const answer = (await bridgeRequest('bot.ensure_home', { slug })) as { homeMade?: unknown }
+    return answer.homeMade === true
   } catch {
     return false
   }
 }
 
-/**
- * Whether a bot may work in this folder: its home, a folder it has already worked in, or one the
- * picker handed over in this run.
- *
- * The folder becomes the directory a confined helper seeds the memory in, so the same rule
- * `isOpenedDirectory` gives applies. A folder the window can name by opening a session there is
- * not one somebody chose for this bot.
- */
-export function worksIn(held: Bot, directory: string | undefined): directory is string {
+export async function worksIn(held: Bot, directory: string | undefined): Promise<boolean> {
   if (directory === undefined) return false
-  return botFolders(held).includes(directory) || isOpenedDirectory(directory)
+  const answer = (await bridgeRequest('bot.works_in', {
+    slug: held.slug,
+    directory,
+    opened: chosenDirectories(),
+  })) as { allowed?: unknown }
+  return answer.allowed === true
 }
 
 /**
  * Record a durable conversation and the folder it ran in, without discarding any earlier ones.
  *
  * A turn that ended in the home folder at a prompt the agent numbered also moves `lastHome` there,
- * which is where a summon elsewhere places its card (MEMORY-14).
+ * which is where a summon elsewhere places its card (MEMORY-14). The module records both.
  */
 export async function noteBotSession(slug: string, id: string, directory: string, prompt?: number): Promise<void> {
-  await changeBot(slug, (held) => {
-    const known = held.conversations.some((each) => each.id === id && each.directory === directory)
-    const home = directory === held.home && typeof prompt === 'number' && Number.isInteger(prompt) && prompt >= 0
-    return {
-      ...held,
-      session: id,
-      conversations: known ? held.conversations : [...held.conversations, { id, directory }],
-      lastHome: home ? { id, prompt } : held.lastHome,
-    }
-  })
+  const numbered = typeof prompt === 'number' && Number.isInteger(prompt) && prompt >= 0 ? prompt : null
+  await writeThroughBridge(() => ({ method: 'bot.record_conversation', params: { slug, id, directory, prompt: numbered } }))
 }
 
-/**
- * Note how much compaction has taken out of a bot's session.
- *
- * Monotonic, and treated as such: a lower figure than the one already stored describes a
- * conversation this is not looking at, and adopting it would ask for a re-grounding that nothing
- * happened to justify.
- */
+/** Note how much compaction has taken out of a bot's session. The module raises the stored length only when the new figure is greater. */
 export async function noteBotArchived(slug: string, archived: number): Promise<void> {
-  await changeBot(slug, (held) => (Number.isInteger(archived) && archived > held.archived ? { ...held, archived } : null))
+  await writeThroughBridge(() => ({ method: 'bot.record_archived', params: { slug, archived } }))
 }
 
 /**
@@ -444,7 +151,7 @@ export async function noteBotArchived(slug: string, archived: number): Promise<v
  */
 export async function releaseBotSession(slug: unknown): Promise<void> {
   if (!isSlug(slug)) return
-  await changeBot(slug, (held) => (held.session === null ? null : { ...held, session: null, archived: 0 }))
+  await writeThroughBridge(() => ({ method: 'bot.release_session', params: { slug } }))
 }
 
 /**
@@ -452,52 +159,40 @@ export async function releaseBotSession(slug: unknown): Promise<void> {
  * pointer was that conversation starts a new one on its next turn.
  */
 export async function forgetBotConversation(directory: string, id: string): Promise<void> {
-  await updateBots((all) => {
-    let changed = false
-    const next = all.map((held) => {
-      const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
-      const pointed = held.session === id
-      if (conversations.length === held.conversations.length && !pointed) return held
-      changed = true
-      return { ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived, updated: Date.now() }
-    })
-    return changed ? next : null
-  })
+  await writeThroughBridge(() => ({ method: 'bot.forget_conversation', params: { id, directory } }))
 }
 
 /**
  * Put a bot away, or take it back out.
  *
- * Nothing moves. The ground file is where this process left it, the memory file is where the
- * agent left it, the session is where the agent keeps every session — and that is the whole
- * reason coming back is one field changing rather than a bot being rebuilt. A rebuilt bot would
- * be a different bot wearing the same name: a new slug, so a different memory file, and a new
- * seed, so a different face.
+ * Nothing moves. The memory file stays where the agent left it and the session stays where the
+ * agent keeps every session, which is why coming back is one field changing rather than a bot
+ * being rebuilt. A rebuilt bot would be a different bot wearing the same name: a new slug, so a
+ * different memory file, and a new seed, so a different face.
  *
  * The window may ask for this and cannot say what the field becomes, which is the arrangement
  * `releaseBotSession` above has and for the same reason.
  */
-export async function retireBot(slug: unknown, retired: boolean): Promise<Bot | null> {
+export async function retireBot(slug: unknown, retired: unknown): Promise<Bot | null> {
+  if (typeof retired !== 'boolean' || !isSlug(slug)) return null
+  const method = retired ? 'bot.archive' : 'bot.restore'
+  const answer = (await writeThroughBridge(async () => {
+    const held = await bot(slug)
+    if (!held) return null
+    return { method, params: { slug: held.slug } }
+  })) as { bot: BotRow } | null
+  return answer === null ? null : answer.bot
+}
+
+export async function removeBot(slug: unknown, turnInProgress: boolean): Promise<string | null> {
   if (!isSlug(slug)) return null
-  return changeBot(slug, (held) => ({ ...held, retired: retired ? Date.now() : 0 }))
-}
-
-export async function removeBot(slug: string): Promise<void> {
-  await updateBots((all) => withoutBot(all, slug))
-}
-
-async function changeBot(slug: string, change: (held: Bot) => Bot | null): Promise<Bot | null> {
-  const written = await updateBots((all) => {
-    const held = botOf(all, slug)
-    const next = held && change(held)
-    return next ? withBot(all, { ...next, updated: Date.now() }) : null
+  if (turnInProgress) throw new Error('Stop this bot’s running conversations before deleting it.')
+  const removed = await writeThroughBridge(async () => {
+    const held = await bot(slug)
+    if (!held) return null
+    return { method: 'bot.delete', params: { slug: held.slug } }
   })
-  return written.find((each) => each.slug === slug) ?? null
-}
-
-/** Where this app keeps its own files for a bot. Composed from a slug that has been judged. */
-function ownDirectory(slug: string): string {
-  return join(app.getPath('userData'), 'bots', slug)
+  return removed === null ? null : slug
 }
 
 /**
@@ -505,7 +200,7 @@ function ownDirectory(slug: string): string {
  *
  * A bot with a definition keeps its memory where the agent keeps every definition's, which the run
  * is told about and reads itself (MEMORY-4). A bot made before definitions existed has none until
- * `migrateBot` gives it one (MEMORY-11), and is named at the file this app made for it.
+ * it is given one (MEMORY-11), and until then is named at the file this app made for it.
  */
 export function memoryPath(bot: Pick<Bot, 'slug' | 'definition'>): string {
   return bot.definition === null ? `${HOME}/bots/${bot.slug}.md` : definitionMemoryPath(bot.definition)
@@ -515,108 +210,16 @@ export function memoryPath(bot: Pick<Bot, 'slug' | 'definition'>): string {
  * Where the memory of a bot's definition is, relative to its checkout (MEMORY-2).
  *
  * Made from the definition's name, which the agent chose and this process judged to be a slug. Once
- * a bot has a definition this is the only memory path a briefing or a composed turn names. The old
- * path is never named then, since the agent records it as untrusted and a run told to read it would
- * ask a person about notes they were already going to be asked about (MEMORY-11).
+ * a bot has a definition this is the only memory path a composed turn names. The old path is never
+ * named then, since the agent records it as untrusted and a run told to read it would ask a person
+ * about notes they were already going to be asked about (MEMORY-11).
  */
 export function definitionMemoryPath(definition: string): string {
   return `.bravebot/memory/${definition}.md`
 }
 
-/** The same, absolutely, in one of the folders the bot works in, for this process to read and seed. */
-function memoryFile(directory: string, bot: Pick<Bot, 'slug' | 'definition'>): string {
-  return join(directory, memoryPath(bot))
-}
-
-/**
- * When a bot's memory file last changed, in milliseconds, or `0` if there is nothing to look at.
- *
- * Deliberately the mtime and not the contents. Whether the memory has moved is a question about
- * the file, and answering it by reading and comparing 64K of text on the end of every turn would
- * be paying a great deal to learn something the filesystem already knows. A file that has been
- * rewritten with the same words counts as changed, which is the harmless direction to be wrong in:
- * it costs one nudge that was not needed.
- */
-function memoryStamp(bot: Bot, directory: string): number {
-  try {
-    // `lstat`, so a link at the memory path reports on itself rather than on whatever it aims at.
-    // Nothing here would act on the answer, but a figure about a file outside the checkout has no
-    // business being read at all, and the difference is one letter.
-    return lstatSync(memoryFile(directory, bot)).mtimeMs
-  } catch {
-    return 0
-  }
-}
-
-/**
- * Note whether a bot's memory moved during the turn that has just finished.
- *
- * Called from the one place that sees a bot's turn end. Two outcomes and no third: the file is
- * newer than the mark, so the bot wrote and the count goes back to nothing — or it is not, and one
- * more turn has gone by without it.
- *
- * A stamp that has gone *backwards* is adopted rather than ignored, unlike `archived` above. That
- * is a different kind of figure: an archive only rises, so a fall means somebody is describing
- * another conversation, where an mtime falls perfectly ordinarily when a file is restored from a
- * checkout or a branch is switched. What matters is only that it differs from the mark.
- */
-export async function noteBotMemory(slug: string, directory: string): Promise<void> {
-  // A bot with a definition is told where its memory is by the agent on every turn (MEMORY-4), so
-  // there is no briefing for a quiet spell to bring back and nothing to count (MEMORY-10).
-  await changeBot(slug, (held) => {
-    if (held.definition !== null) return null
-    const stamp = memoryStamp(held, directory)
-    return stamp !== held.remembered
-      ? { ...held, remembered: stamp, quiet: 0 }
-      : { ...held, quiet: held.quiet + 1 }
-  })
-}
-
-/**
- * Run a change this app makes to a bot's memory without it counting as the bot having written.
- *
- * `noteBotMemory` reads a newer file than the mark as the bot writing, which would put off its next
- * reminder. The mark follows the change only when it was current before it.
- */
-export async function keepingMemoryMark(slug: string, directory: string, change: () => void): Promise<void> {
-  const before = await bot(slug)
-  if (!before) {
-    change()
-    return
-  }
-  const stamp = memoryStamp(before, directory)
-  change()
-  const moved = memoryStamp(before, directory)
-  await changeBot(slug, (held) => (held.remembered === stamp ? { ...held, remembered: moved } : null))
-}
-
-/**
- * Whether this bot has gone long enough without writing to be handed its briefing again.
- *
- * Asked on the way into a send, of a turn the window did not think needed grounding. Never true
- * for a bot with a definition, whose turns are addressed to it and carry no briefing (MEMORY-10).
- */
-export function nudgeDue(bot: Bot): boolean {
-  return bot.definition === null && bot.quiet >= QUIET_MAX
-}
-
-/**
- * Note that a bot has just been reminded, so it is not reminded again on the next turn.
- *
- * Reset on the *nudge* rather than on a write, which is what makes this self-quieting in both
- * directions. A bot that takes the hint resets through `noteBotMemory` and never comes back here;
- * one that ignores it gets another `QUIET_MAX` turns of peace rather than a briefing attached to
- * everything it is ever asked, which is the failure that would make this worse than nothing.
- */
-export async function noteBotNudged(slug: string): Promise<void> {
-  await changeBot(slug, (held) => (held.quiet === 0 ? null : { ...held, quiet: 0 }))
-}
-
 /**
  * What this app says to a bot when it sends a turn nobody typed.
- *
- * Written as one short instruction rather than as a briefing, because the briefing is attached
- * alongside it and saying the same thing twice in one turn is how a model learns to skim both.
  *
  * Nothing in it says what it is. What tells it apart, in this run's transcript or in one reopened
  * next year, is the `composed` tag the send carries, which rides beside the message rather than
@@ -670,15 +273,6 @@ export const AFTER_COMPACTION =
   'Your conversation has just been summarised, and the detail behind that summary is now the only' +
   ' thing your memory can still be written from.'
 
-/**
- * The longest a bot's name may be inside a file this composes.
- *
- * The form takes free text of any length, and the seed the helper writes is bounded at 64 KB, so
- * without this a name nobody would type is a bot whose every turn is refused. Far past a name and
- * far short of the bound.
- */
-const NAME_MAX = 200
-
 /** What every memory file says about itself, at the top. */
 const MEMORY_NOTE =
   'Written by the bot itself, and shown in the transcript each time it changes. Anything here is carried into every conversation it has; anything not here is forgotten when the conversation is compacted.'
@@ -696,167 +290,6 @@ const WRAPPED_MEMORY_NOTE = [
  */
 export function unwrapMemoryNote(text: string): string | null {
   return text.includes(WRAPPED_MEMORY_NOTE) ? text.replace(WRAPPED_MEMORY_NOTE, () => MEMORY_NOTE) : null
-}
-
-/** What a memory file says before anything has been remembered in it. */
-function emptyMemory(bot: Bot): string {
-  return [
-    `# ${bot.name.slice(0, NAME_MAX)} — memory`,
-    '',
-    MEMORY_NOTE,
-    '',
-    'Nothing remembered yet.',
-    '',
-  ].join('\n')
-}
-
-/**
- * What the bot is handed at the top of a grounded turn.
- *
- * Written as a briefing rather than as a set of commands, because that is what it will arrive as.
- * The agent shows an attached file to the planner under a line saying whose contents these are, so
- * this is read as a document somebody handed over — which is the strongest framing available
- * without changing the agent, and an honest one: it *is* a document somebody handed over.
- */
-function groundText(bot: Bot, nudge: boolean, fresh: boolean): string {
-  return [
-    `# ${bot.name}`,
-    '',
-    'You are working as this bot for the whole of this session. What follows is who that is.',
-    '',
-    '## Purpose',
-    '',
-    bot.purpose.trim(),
-    '',
-    '## Memory',
-    '',
-    `Your memory is the file \`${memoryPath(bot)}\` in this folder. It is the only thing`,
-    'about you that survives a compaction, so when you learn something durable — a decision and',
-    'why, a constraint, how something here is arranged — edit that file to say so as you go, in',
-    'the same turn you learnt it, rather than waiting to be asked. Keep it short enough to stay',
-    'worth reading: prune what has stopped being true rather than only appending.',
-    '',
-    // What this document deliberately does not do is quote the memory. The words in it are the
-    // model's own writing, and a copy of them inside a file the app vouches for would be the app
-    // answering, on the user's behalf and without asking, a question the agent is there to decide.
-    // So the file is read rather than quoted, and what the read comes back as is the trust map's
-    // answer about that path.
-    //
-    // `fresh` is the one case where there is nothing to read: the file was made a moment ago by
-    // the walk that prepared this briefing, so sending the model to open a template it would
-    // learn nothing from costs a call for no answer.
-    ...(fresh
-      ? ['It is new and holds nothing yet, so there is nothing to read back.']
-      : [
-          'Read that file now, before anything else. It is not quoted here: what is in it is your',
-          'own writing rather than anything this window wrote, so you read it on the same terms as',
-          'any other file in this folder. If it comes back withheld, say so and carry on without',
-          'it rather than guessing at what it used to say. If nothing is there yet, nothing is kept.',
-        ]),
-    '',
-    // Said plainly because it is true, where the sentence this replaced — that every edit would be
-    // shown as a diff first — was not. The write gate is about integrity rather than about which
-    // file it is, so an ordinary memory write goes through without a card. A briefing that tells a
-    // model the app will ask first is the model telling somebody something the app does not do.
-    'Editing it does not usually stop to ask, though every edit is on the record: the transcript',
-    'draws it and the Writes panel lists it. Write it as something the user would want to read',
-    'back, because they will.',
-    ...(nudge
-      ? [
-          '',
-          'You have not changed it in a while. Before going further, consider whether anything you',
-          'have learnt since is worth keeping — and leave it alone if it is not.',
-        ]
-      : []),
-    '',
-  ].join('\n')
-}
-
-/** What a checkout's `.bravebot-ui` says about itself, so it does not become somebody's diff. */
-const GITIGNORE = [
-  '# Written by bravebot-ui. This folder holds the memory of the bots that work in this',
-  '# checkout. It ignores itself so it never becomes a change nobody made.',
-  '*',
-  '',
-].join('\n')
-
-/**
- * The one path a grounded turn names, with the file behind it known to exist.
- *
- * One path and not two. The memory file is deliberately absent: see `ground` below.
- */
-export interface Grounding {
-  /** The ground file, absolute, for `dropped`. */
-  ground: string
-}
-
-/**
- * Make a bot's files current, and say where the one a turn may name is.
- *
- * Returns `null` when the checkout cannot be prepared: a volume that is not mounted, a directory
- * somebody deleted, or a link where the memory file belongs. That is a refusal rather than a
- * repair: sending the turn anyway would fail inside the agent with a message about a path, where
- * this can say the bot's checkout is gone.
- *
- * ## What this hands over, and what it refuses to
- *
- * The briefing, and nothing else. `turn.send` admits every path it is given as *trusted* context,
- * which is the agent recording that a person named the file in their own line, so the only paths
- * this may name are ones whose every byte this process wrote. The briefing is one: it is
- * composed from the bot's name and purpose, which somebody typed into this window, and from the
- * memory's *path*, which is a string this file builds out of a slug it judged.
- *
- * The memory is not one, and it was handed over twice. It was named in `files`, and its body was
- * copied into the briefing, a fresh path under this app's own data directory that the trust map
- * has never heard of and that a copy therefore laundered. Both of those vouched, on a
- * person's behalf and without asking them, for text the model itself wrote. That undid the gate
- * the write went through: a turn that has touched untrusted content is asked before it may write
- * to the memory *because that write leaves the path untrusted*, and the next grounded turn
- * vouched for it again regardless, so a fetched page's bytes came back as trusted context and
- * stayed there.
- *
- * So the memory reaches a turn the way any other file in the checkout does: the briefing says
- * where it is, and the model reads it with its ordinary read tool, under whatever the agent's
- * trust map says about that path. A memory a write left untrusted comes back quarantined, which is
- * the outcome the gate was for. Whether it may be trusted is the agent's question, and this is how
- * it gets asked.
- */
-export function ground(bot: Bot, directory: string, nudge = false): Grounding | null {
-  try {
-    // Through the confined helper rather than `node:fs`. A concatenated path handed to `node:fs`
-    // follows a link at every component, so a link at the memory file was read through and
-    // written through; the helper opens each component relative to a pinned directory and follows
-    // nothing. It answers only whether it wrote, because what the memory *says* has no business
-    // in a file this process composes.
-    const fresh =
-      bot.definition === null
-        ? seedProjectMemory(directory, memoryPath(bot), emptyMemory(bot), GITIGNORE)
-        : false
-
-    const ground = join(ownDirectory(bot.slug), 'ground.md')
-    mkdirSync(ownDirectory(bot.slug), { recursive: true })
-    // Written to a name of its own and renamed into place, never opened by the name the turn will
-    // name. `writeFileSync` on the briefing's own path follows a link sitting there and writes the
-    // target instead; a rename replaces whatever is at the name, so a link there is displaced
-    // rather than written through, and what the turn reads is what this process wrote.
-    // A name nothing else will pick, so two sends for one bot cannot collide, and an exclusive
-    // create so a link left at that name is refused rather than written through. `rm` first
-    // because `wx` on a leftover of our own, from a process that died between the write and the
-    // rename, would otherwise refuse this bot's turns for good; it unlinks a name and never
-    // follows one.
-    const pending = `${ground}.${randomUUID()}.tmp`
-    rmSync(pending, { force: true })
-    writeFileSync(pending, groundText(bot, nudge, fresh), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
-    try {
-      renameSync(pending, ground)
-    } catch (error) {
-      rmSync(pending, { force: true })
-      throw error
-    }
-    return { ground }
-  } catch {
-    return null
-  }
 }
 
 /**

@@ -57,6 +57,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/unfinished` | | List what this session left open, and whose move each is |
+| `/layout` | `<name>` | End this session and open another layout of the interface |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/redraw` | | Redraw the whole screen, for a terminal that was cleared or reset |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
@@ -941,8 +942,26 @@ Alt-A does the same and is one of the [chords you can move](../customize/configu
 action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
 the chord in force, where the plan has room for it.
 
-## `/mcp [list | reconnect [alias] | disable <alias> | remove <alias>]`
+## `/layout <name>`
 
+Ends this session and opens the layout named. The layouts are `default`, which is the chat, and `bots`,
+which lists your bots with their faces and begins with no session. `/layout bots` leaves the session
+where it is recorded, so `--resume` finds it. `/layout default` from the bots layout begins a fresh
+session, and nothing the earlier one read or was allowed carries into it. `bravebot --layout bots`
+opens the bots layout from the start.
+
+It is refused, with a line saying why and nothing ended, while a turn runs, while lines wait to be
+sent, while a `/loop`, `/goal` or `/after` is pending, in a run started with `--incognito`, and in a
+session that works under an agent definition given by `--agent` or by a record, since the next
+session would not keep it. A definition chosen by the `agent` setting does not refuse it, since the
+next session is addressed to it too. It does not wait for a turn to end. A name that is not a layout is refused, and the refusal lists the
+names that exist. In
+the bots layout `/branch`, `/resume`, `/manifest`, `/panel` and `/diff` are refused, since the layout
+holds only bots and draws no info panel. Before a bot is chosen the prompt takes `/layout`, `?` and
+leaving, and a line sent to a model is refused with a line saying to choose a bot first. The `?` list
+and the slash menu there show only those.
+
+## `/mcp [list | reconnect [alias] | disable <alias> | remove <alias>]`
 Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
 tools stand, and each server your settings request that is not running, saying whether it was turned
 off. `reconnect` starts every requested server that is not running and was not turned off here, and
@@ -1733,8 +1752,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
-what the session keeps for itself, so they are carried out as you type them, ahead of anything
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/layout`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme`, `/config` and `/language` change only how the screen

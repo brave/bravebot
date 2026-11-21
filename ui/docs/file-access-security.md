@@ -47,16 +47,11 @@ or directory, granting the account it runs as full control and no one else anyth
 and 0700 are on POSIX. It is not the list inherited from the profile. A directory that was already
 there keeps the list it has, as it keeps its mode on POSIX.
 
-Grounding a bot turn goes through the same walk, on a `memory.seed` operation that accepts
-the same path shape. It makes `.bravebot-ui`, `.bravebot-ui/bots` and the memory file exist
-and answers only whether it created one: there is no operation here that returns memory text
-to the grounding path, because what the memory says is the model's own writing and a briefing
-the app vouches for may hold only bytes the app wrote. A seed writes only when the file is
-absent, and never reads or judges what is in one that is there. It refuses a link, a
-directory or anything else that is not a regular file rather than replacing it, since the
-path is the app's own and something else at it was arranged. The `.gitignore` beside it is
-written only when absent, and a link or a directory in its place is left alone rather than
-failing the seed: nothing a memory read depends on is in that file.
+The desktop does not seed a memory file or write a briefing on the way into a turn. A bot's
+purpose is the definition in the person's own directory, and the driver tells the run where
+the definition's memory is. The helper still implements `memory.seed` for `.bravebot-ui/bots/*.md`.
+It writes only when the file is absent, returns no memory text, and refuses a link, a directory,
+or anything else that is not a regular file. The desktop does not call it.
 
 Attachment validation is an `attachment` operation on the same walk. It accepts a regular file
 whose first 8 KiB pass the agent's own binary test (no NUL, and no more than 30% control
@@ -65,10 +60,6 @@ caps a file's size or how many files a message carries, which are the terminal's
 file named with `@` or `--file`. The agent reads the file itself once the turn is sent, and a file
 that is not valid UTF-8 past those first bytes ends the turn there, as it does in the terminal.
 
-The briefing itself is written under the app's own data directory rather than a checkout, so
-it is not pinned to a project root. It is written to a name of its own and renamed into
-place, never opened by the name the turn will name, so a link left at the briefing's path is
-displaced instead of written through.
 Previews never send content to a model. A file goes to a model only with a send, either
 picked through the native picker, which the `attachment` check above covers, named with
 `@` in the prompt, or dropped on the window. The bridge reads `@` names back out of the prompt
@@ -94,15 +85,14 @@ rather than in the main process.
 Drafts are stored locally in `experience.json` with mode 0600; clearing a draft removes
 its saved text. Memory history retains up to 30 revisions. Reset preserves revisions for
 recovery, as stated in its confirmation, one history per folder the bot works in. Deleting a
-bot removes its app-owned revision histories and cached briefing, but keeps project memory files,
+bot removes its app-owned revision histories, but keeps project memory files,
 its home folder and saved conversations.
 Deletion errors are surfaced, and deletion is refused while a bot's conversation is running.
 These are local files, not encrypted storage or a promise of secure erasure from backups.
 
 Regression coverage includes parent-directory swaps for reads, writes and seeds, root and
 leaf symlinks, a link at every component (a junction as well on Windows, where CI runs the
-helper's suite), Windows name forms, links at the memory path and at the briefing path,
+helper's suite), Windows name forms, links at the memory path for `memory.seed`,
 traversal, size bounds, stale edits, file permissions, removal and bot recreation, and actual
-IPC in a packaged app.
-It also covers what a briefing may carry: that it names the memory file and quotes no byte
-of it, and that a second grounding leaves an existing memory alone. See [testing.md](testing.md) for reproduction commands.
+IPC in a packaged app. The desktop does not write a briefing, so nothing here asserts what a
+briefing would carry. See [testing.md](testing.md) for reproduction commands.

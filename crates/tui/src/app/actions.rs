@@ -31,7 +31,7 @@ use super::side_requests::{
 };
 use super::turns::{Continued, Wrote, next_after_a_turn, run_turn_animated};
 use super::{
-    BACKGROUND_LOSES, Ended, RunSettings, Suggesting, Switch, branch_session,
+    BACKGROUND_LOSES, Ended, LayoutChange, RunSettings, Suggesting, Switch, branch_session,
     handed_to_the_background, left_behind, opened_scratch, record_to_resume, run_command,
     status_report, suggest_next,
 };
@@ -300,6 +300,10 @@ impl Held<'_> {
             directory,
             |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
         );
+        if changed == Changed::Moved {
+            self.session
+                .note_confirmed_directory(self.workspace.root().to_path_buf());
+        }
         if changed != Changed::Stayed {
             with_standing(
                 self.session,
@@ -363,6 +367,21 @@ impl Held<'_> {
             record,
         ));
         Some(left_behind(self.stored))
+    }
+
+    pub(super) fn leave_for_layout(
+        &mut self,
+        servers: &mut Servers,
+        layout: crate::layout::Layout,
+    ) -> (LayoutChange, Ended) {
+        self.workspace.end_session();
+        *servers = std::mem::take(&mut self.session.servers);
+        let change = LayoutChange {
+            layout,
+            workspace: self.session.workspace_to_leave_with(self.workspace.clone()),
+            sandbox: self.session.sandbox().clone(),
+        };
+        (change, left_behind(self.stored))
     }
 
     pub(super) fn status(&mut self, config: &Config) {
@@ -912,6 +931,9 @@ impl Held<'_> {
         self.session.dismiss_suggestion();
         let mut sending = Some((prompt, whose));
         while let Some((prompt, wrote)) = sending {
+            if !self.address_the_bot_before_the_turn(config) {
+                break;
+            }
             // Here as well as at the top of the outer loop, which no turn in this chain
             // goes back round until the last one ends.
             self.session.keep_awake();
@@ -990,6 +1012,7 @@ impl Held<'_> {
             // come: the session worth resuming is the one whose machine slept and never
             // woke. Best-effort, like everything else under ~/.bravebot.
             self.save(&prompt);
+            self.record_a_finished_bot_turn(&prompt);
             self.stored.append_audit(self.session.turns, &events);
 
             sending = next_after_a_turn(self.session, |session| {
@@ -1014,6 +1037,43 @@ impl Held<'_> {
             self.conversation,
             &self.answers.trust,
         ))
+    }
+
+    fn address_the_bot_before_the_turn(&mut self, config: &mut Config) -> bool {
+        match super::bot::gate_turn(self.session, self.workspace) {
+            super::bot::TurnGate::NotABot => true,
+            super::bot::TurnGate::Refused(why) => {
+                self.session.note(why);
+                false
+            }
+            super::bot::TurnGate::Ready(name) => {
+                if let Err(why) = super::bot::address_the_row(
+                    self.session,
+                    config,
+                    self.workspace,
+                    &self.answers.trust,
+                    &self.answers.rules.permissions,
+                    &name,
+                ) {
+                    self.session.note(why);
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+    }
+
+    fn record_a_finished_bot_turn(&mut self, prompt: &str) {
+        let Some(id) = self.stored.resumable().map(str::to_string) else {
+            return;
+        };
+        let failed = self
+            .session
+            .finished
+            .is_some_and(|finished| finished.failed());
+        let ordinal = super::bot::prompt_ordinal(self.conversation, prompt);
+        super::bot::record_finished_turn(self.session, &id, self.workspace.root(), failed, ordinal);
     }
 
     /// A `!` line, run as the person's own command. `private` keeps it out of the conversation the

@@ -6,7 +6,7 @@ import { allowStateWrites } from './state'
 export type BotsBridge = (method: string, params: Record<string, unknown>) => Promise<unknown>
 
 interface Listed {
-  bots: Omit<Bot, 'remembered' | 'quiet'>[]
+  bots: Bot[]
   dropped: { index: number; slug: string | null; reason: string }[]
   unreadable: { path: string; reason: string } | null
   oldRowsWaiting?: unknown
@@ -32,12 +32,12 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-async function request(method: string, params: Record<string, unknown>): Promise<unknown> {
+export async function bridgeRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
   if (!ask) throw new Error('The agent is not running, so the bots cannot be reached.')
   return ask(method, { dataFolder: app.getPath('userData'), ...params })
 }
 
-const withoutFigures = (row: Listed['bots'][number]): Bot => ({ ...row, remembered: 0, quiet: 0 })
+export type BotRow = Listed['bots'][number]
 
 function report(listed: Listed): string | null {
   if (listed.unreadable) return `The bots could not be read from ${listed.unreadable.path}: ${listed.unreadable.reason}`
@@ -53,7 +53,7 @@ function waitingProblem(): string {
 }
 
 async function list(): Promise<Listed> {
-  const listed = (await request('bot.list', {})) as Listed
+  const listed = (await bridgeRequest('bot.list', {})) as Listed
   const waiting = listed.oldRowsWaiting !== false
   const problems = [report(listed)]
   if (waiting && !listed.unreadable) problems.push(waitingProblem())
@@ -66,12 +66,12 @@ async function list(): Promise<Listed> {
 export async function usableBots(): Promise<Bot[]> {
   const listed = await list()
   if (listed.unreadable) throw new Error(report(listed) ?? 'The bots could not be read.')
-  return listed.bots.map(withoutFigures)
+  return listed.bots
 }
 
 export async function readBots(): Promise<Bot[]> {
   try {
-    return (await list()).bots.map(withoutFigures)
+    return (await list()).bots
   } catch (error) {
     unread = message(error)
     return []
@@ -92,22 +92,58 @@ export function firstBotsRead(wait = FIRST_READ_WAIT_MS): Promise<void> {
 
 let queue: Promise<unknown> = Promise.resolve()
 
+export function oneAtATime<T>(task: () => Promise<T>): Promise<T> {
+  return serially(task)
+}
+
+function serially<T>(task: () => Promise<T>): Promise<T> {
+  const run = queue.then(task)
+  queue = run.catch(() => undefined)
+  return run
+}
+
 // One change at a time: a change reads the list and replaces it, and two interleaved would lose one.
 export function updateBots(change: (bots: Bot[]) => Bot[] | null): Promise<Bot[]> {
-  const run = queue.then(async () => {
+  return serially(async () => {
     const current = await usableBots()
     const next = change(current)
     if (next === null) return current
-    try {
-      const written = (await request('bot.replace', { bots: next })) as { bots: Listed['bots'] }
+    const written = (await sendWrite('bot.replace', { bots: next })) as { bots: BotRow[] }
+    return written.bots
+  })
+}
+
+export interface BridgeWrite {
+  method: string
+  params: Record<string, unknown>
+}
+
+export function writeThroughBridge(prepare: () => Promise<BridgeWrite | null> | BridgeWrite | null): Promise<unknown> {
+  return serially(async () => {
+    const prepared = await prepare()
+    if (prepared === null) return null
+    return sendWrite(prepared.method, prepared.params)
+  })
+}
+
+async function sendWrite(method: string, params: Record<string, unknown>): Promise<unknown> {
+  try {
+    const answer = await bridgeRequest(method, params)
+    if (!leftTheFileAlone(answer)) {
       unread = null
       unwritten = null
-      return written.bots.map(withoutFigures)
-    } catch (error) {
-      unwritten = message(error)
-      throw error
     }
-  })
-  queue = run.catch(() => undefined)
-  return run
+    return answer
+  } catch (error) {
+    if (!isValidationRefusal(error)) unwritten = message(error)
+    throw error
+  }
+}
+
+function isValidationRefusal(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === 'bad_request'
+}
+
+function leftTheFileAlone(answer: unknown): boolean {
+  return answer !== null && typeof answer === 'object' && (answer as { wrote?: unknown }).wrote === false
 }

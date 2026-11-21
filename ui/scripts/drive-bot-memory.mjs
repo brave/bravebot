@@ -1,30 +1,5 @@
-// That a bot is asked to keep its memory current without anybody asking it to.
-//
-// `drive-bot-turn.mjs` next door proves the memory file is real and that the briefing reaches the
-// model. It does not touch the question this feature exists for: the instruction to *write* lives
-// in the briefing, the briefing reaches a turn only when that turn is grounded, and a session
-// spends most of its life ungrounded. So a bot was told once, at the start, and then left to
-// remember on its own for as long as the conversation ran.
-//
-// Two claims here, and they need a model for different reasons:
-//
-//  1. **A bot that has stopped writing is grounded early.** `quiet` counts turns since its memory
-//     file last moved; past `QUIET_MAX` the next turn carries the briefing whether the window
-//     thought it was due or not, with a paragraph saying so. Checked against the ground file on
-//     disk rather than against anything the model said — the file is written synchronously on the
-//     way into the send, so this is a claim about the app and not about whether a model took the
-//     hint.
-//  2. **A turn this app sent is not drawn as one somebody typed.** A consolidation opens with a
-//     mark, and a reopened transcript matches on it to draw a line rather than a prompt bubble.
-//     That match is the fragile half of the arrangement and the only half a reopened session can
-//     be asked about.
-//
-// What is **not** covered, and cannot cheaply be: the trigger itself. A consolidation is sent when
-// a conversation's archive rises, which happens when a compaction actually happens, which needs a
-// conversation long enough to be worth compacting. Faking it is not available either — the archive
-// only rises, so seeding a low figure and waiting for a real one to exceed it needs the real one to
-// be non-zero, which is the thing being avoided. The comparison it turns on is two lines in
-// `src/main/index.ts`; the expensive parts around it are what is driven here.
+// That a prompt which reads like house-keeping this app sent is drawn as a prompt somebody typed,
+// and that a reopened transcript draws no house-keeping row for a turn the app did not send.
 //
 // Run it the way `drive-bot-turn.mjs` is run. It costs two turns. It runs against a scratch
 // user-data directory and state directory, and it puts its own keys back. The scratch state
@@ -33,7 +8,7 @@
 
 import { checker, launch, COMPOSER_INPUT, BOT_OPEN_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 import { appBots, appState, forgetCheckoutSessions, openBot, scratchProfile, settle } from './drive-profile.mjs'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 mkdirSync(SHOTS_DIR, { recursive: true })
@@ -49,7 +24,6 @@ const hadView = readState().view
 // room is a destructive act one interrupted run away from happening. It adds one and removes one.
 const MINE = 'archivist'
 const withoutMine = () => readBots().filter((bot) => bot.slug !== MINE)
-const stored = () => readBots().find((bot) => bot.slug === MINE) ?? null
 
 putBots(withoutMine())
 putKey('view', undefined)
@@ -77,7 +51,7 @@ const home = await openBot(page, {
   check,
 })
 
-// --- one ordinary turn, to ground the session --------------------------------------------
+// --- one ordinary turn -------------------------------------------------------------------
 
 // Sent in the bot's conversation, which runs in its home folder.
 await page.locator(COMPOSER_INPUT).fill('Name one file in this folder.')
@@ -99,29 +73,6 @@ if (first === 'unconfigured') {
 }
 check(first === 'done', `the first turn finished (${first})`)
 
-const groundFile = join(userData, 'bots', MINE, 'ground.md')
-check(existsSync(groundFile), 'the briefing was composed as a file outside the home folder')
-check(
-  !readFileSync(groundFile, 'utf8').includes('not changed it in a while'),
-  'and says nothing about a quiet memory, this bot having only just started',
-)
-
-// --- then a quiet spell, and the turn that answers it -------------------------------------
-
-// Seeded rather than earned. Earning it means six turns nobody needs and the model deciding, on
-// each of them, not to write anything down — six chances for this to fail over something that is
-// not what it is testing. Written between turns, when nothing in the app is writing this file:
-// `noteBotMemory` runs on `turn.done`, which has already happened.
-const before = stored()
-check(before !== null, 'the bot has a row to seed')
-putBots(
-  readBots().map((bot) =>
-    bot.slug === MINE
-      ? { ...bot, quiet: 9, remembered: statSync(join(home, '.bravebot-ui', 'bots', `${MINE}.md`)).mtimeMs }
-      : bot,
-  ),
-)
-
 // The prompt this app would compose, with a sentence in front of it that reads like the app
 // talking to itself. Ordinary text as far as everything downstream is concerned, which is the
 // point being driven: a person typed it, so a person typed it, and the reopened transcript below
@@ -129,22 +80,13 @@ putBots(
 const prompt = [
   LOOKALIKE,
   '',
-  `Look back over this conversation and bring \`.bravebot-ui/bots/${MINE}.md\` up to date: write`,
+  `Look back over this conversation and bring \`.bravebot/memory/${MINE}.md\` up to date: write`,
   'down the name of the file you just mentioned, and nothing else.',
 ].join('\n')
 
 await page.locator(COMPOSER_INPUT).fill(prompt)
 await page.locator('.send').click()
 await page.waitForTimeout(1200)
-
-// Read while the turn is still running. `ground()` writes this synchronously on the way into the
-// send, so the paragraph is on disk long before the model has said anything — which is the whole
-// reason this claim can be made about the app rather than about a model.
-check(
-  readFileSync(groundFile, 'utf8').includes('not changed it in a while'),
-  'a bot whose memory has gone quiet is handed its briefing again, with a line saying so',
-)
-check(stored()?.quiet === 0, 'and the count resets on the nudge, so it is not nudged every turn')
 
 console.log('  ..   sent the second turn; waiting…')
 const second = await settle(page)
@@ -157,17 +99,6 @@ check(
   'a prompt that reads like house-keeping is drawn as the prompt it is',
 )
 await page.screenshot({ path: `${SHOTS_DIR}/26-bot-memory-nudged.png` })
-
-const memory = join(home, '.bravebot-ui', 'bots', `${MINE}.md`)
-check(existsSync(memory), 'the memory file is still where the bot can edit it')
-// Whether the model took the hint is not this driver's to assert — nothing here can make it write,
-// and a check that demanded it would fail on a model having an off day rather than on a bug. What
-// is worth reporting is the app's own reading of it, which is the count that drives the next nudge:
-// zero means `noteBotMemory` saw the file move.
-check(
-  typeof stored()?.quiet === 'number',
-  `the app read the turn back as ${stored()?.quiet === 0 ? 'a memory that moved' : 'another quiet turn'} (quiet=${stored()?.quiet})`,
-)
 
 await app.close()
 

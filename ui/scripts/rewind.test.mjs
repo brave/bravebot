@@ -128,14 +128,14 @@ test('a rewind puts back what the conversation has met, either way, and holds a 
   })
   const old = {
     handle: 's1', entries: [], turns: { 1: {}, 2: {}, 3: {} }, todos: [], running: false, context: 'untrusted',
-    awaitingOrdinal: 4, focus: 'x', queued: [{ text: 'next' }], queuePaused: false, bot: { grounded: true },
+    awaitingOrdinal: 4, focus: 'x', queued: [{ text: 'next' }], queuePaused: false, bot: { slug: 'custodian' },
   }
   const back = rewoundLive(old, rewound('trusted'))
   assert.equal(back.context, 'trusted', 'the untrusted turns were undone')
   assert.equal(rewoundLive({ ...old, context: 'trusted' }, rewound('untrusted')).context, 'untrusted', 'what it met before stays met')
   assert.deepEqual(Object.keys(back.turns), ['1'])
   assert.equal(back.queuePaused, true)
-  assert.equal(back.bot.grounded, false)
+  assert.equal(back.bot.slug, 'custodian')
   assert.equal(back.awaitingOrdinal, null)
   assert.equal(back.contextTokens, 40)
 })

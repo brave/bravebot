@@ -131,10 +131,6 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askSettled(message.data)] }
       case 'turn.done': {
         refresh()
-        // A rise means compaction summarised part of this conversation away, and what it takes it
-        // takes from the front — so a briefing put at the top of the session is the first thing
-        // gone. Saying the bot is no longer grounded is what makes the next prompt carry it again.
-        const compacted = message.data.archived > old.archived
         return leftOver({
           ...old,
           contextTokens: message.data.contextTokens,
@@ -151,7 +147,6 @@ export function apply(
           awaitingOrdinal: null,
           archived: message.data.archived,
           rewind: message.data.rewind ?? [],
-          bot: old.bot && compacted ? { ...old.bot, grounded: false } : old.bot,
         }, true)
       }
       case 'turn.error': {

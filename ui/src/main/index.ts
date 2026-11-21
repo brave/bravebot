@@ -29,15 +29,11 @@ import { forgetFork, forks, noteFork } from './forks'
 import {
   bot,
   bots,
-  ensureHome,
+  ensureBotHome,
   worksIn,
-  ground,
   memory,
   noteBotArchived,
-  noteBotMemory,
-  noteBotNudged,
   noteBotSession,
-  nudgeDue,
   releaseBotSession,
   retireBot,
   removeBot,
@@ -46,13 +42,13 @@ import {
   readBotServers,
   saveBotServers,
   saveForm,
-  migrateBot,
-  owesCarryOver,
+  carryStillOwed,
+  definitionForTurn,
   carryOverPrompt,
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { botFolders, isBotModel, isServerSelection, type Bot } from '../shared/bots'
+import { botFolders, isServerSelection, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, noteAnsweredFolders, open as openInApp, preview, search, chooseAttachments, chooseFolder, attachmentPaths } from './files'
@@ -85,7 +81,7 @@ import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
 import { faultReporter } from './window-fault'
-import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
+import { editMemory, memoryHistory, snapshotMemory, tidyMemory } from './memory'
 import { forgetSummons, noteTurnEnded, summons } from './summons'
 import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
 
@@ -109,8 +105,7 @@ let caffeinate: Caffeinate | null = null
  *
  * One job: a consolidation ends in a `turn.done` like any other, and the hook that decides to send
  * one is reading `turn.done`. Without this a compaction would be answered by a turn, whose own
- * completion would be answered by another, forever — and each would be grounded, so the loop would
- * also be the most expensive one available.
+ * completion would be answered by another, forever.
  *
  * Not written down, for the same reason `botHandles` is not: a handle means nothing across runs,
  * and a consolidation left running when the process died is not one this process can finish.
@@ -226,11 +221,7 @@ const keyEntry = new KeyEntry<BrowserWindow>({
  * of this feature — a window that could name one would be a window that could have the planner read
  * anything on the machine. Both callers hand over a bot; neither hands over a path.
  *
- * Which paths a bot may contribute is `ground`'s question, and its answer is one: the briefing this
- * process composed. The bot's memory is not among them, because its words are the model's own.
- *
- * `grounded` decides how much is attached. `nudge` decides only what the briefing says once it has
- * been decided to attach it, and is meaningless without it.
+ * The definition a turn is addressed to is the row's. A window does not name it.
  *
  * `composed` says this process wrote the prompt rather than a person typing it, and is the whole
  * of what makes a reopened transcript draw it as house-keeping. It is a tag on the record and not
@@ -241,8 +232,6 @@ async function sendBotTurn(
   held: Bot,
   prompt: string,
   options: {
-    grounded: boolean
-    nudge?: boolean
     recall?: boolean
     model?: string | null
     attachments?: unknown
@@ -250,24 +239,38 @@ async function sendBotTurn(
     staged?: { drops?: unknown; pastes?: unknown }
   },
 ): Promise<Answer> {
-  const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
+  const { recall = true, model, attachments, composed, staged } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
-  // The folder the agent confirmed this session runs in, never one the window named. A bot only
-  // works where `worksIn` allows, because grounding seeds a file there.
+  // The folder the agent confirmed this session runs in, never one the window named.
   const folder = rootForSession(session)
-  if (!worksIn(held, folder)) {
+  let allowed = false
+  try {
+    allowed = await worksIn(held, folder)
+  } catch (error) {
+    return { error: { code: 'internal', message: String(error) } }
+  }
+  if (folder === undefined || !allowed) {
     return { error: { code: 'not_this_bots_folder', message: `${held.name} has not been given this folder` } }
   }
 
-  // A bot made before definitions is given one first, and its old memory is recorded as untrusted
-  // (MEMORY-11). Nothing is sent until that has happened, so a briefing never names the old path
-  // of a bot whose notes are not yet recorded.
-  const owes = owesCarryOver(held, folder)
-  try {
-    held = await migrateBot(held, (method, params) => bridge!.request(method, params))
-  } catch (error) {
-    return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+  // A bot that already has a definition is sent as it is. Asking the module again would take the
+  // lock and, if that wait failed, refuse the turn as a migration that this bot does not need.
+  let owes = false
+  if (held.definition === null) {
+    // A bot made before definitions is given one first, and its old memory is recorded as untrusted
+    // (MEMORY-11). Nothing is sent until that has happened. The carry-over is the answer from before
+    // that.
+    try {
+      owes = await carryStillOwed(held.slug, folder)
+    } catch (error) {
+      return { error: { code: 'internal', message: String(error) } }
+    }
+    try {
+      held = await definitionForTurn(held.slug)
+    } catch (error) {
+      return { error: { code: 'no_definition', message: `${held.name} could not be given a definition: ${String(error)}` } }
+    }
   }
   botHandles.set(session, held.slug)
   if (owes) owedCarryOver.add(session)
@@ -283,37 +286,14 @@ async function sendBotTurn(
   if (composed) params.composed = composed
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
-  if (held.definition !== null) {
-    // Every turn in this bot's conversation is addressed to its definition (MEMORY-10), the ones
-    // this process composes included. The name is the row's, judged a slug when it was stored, and
-    // never anything a window or a reply said. The purpose reaches the run as the definition's body
-    // and the memory's path as the agent puts it, so there is no briefing to attach and nothing
-    // for `grounded` to decide.
-    params.definition = held.definition
-  } else if (grounded) {
-    // Made afresh on the way into every send rather than once when the bot was created. A file a
-    // turn names and cannot read is not a smaller turn, it is a failed one — so a memory deleted
-    // by a `git clean`, or a branch switched to one that never had it, is repaired here instead of
-    // ending the turn inside the agent with a message about a path.
-    const paths = ground(held, folder, nudge)
-    if (!paths) {
-      return {
-        error: {
-          code: 'no_checkout',
-          message: `${held.name} works in ${folder}, which cannot be written to`,
-        },
-      }
-    }
-    // The briefing alone. `dropped` and `files` are both admitted as trusted context, so the only
-    // path that may go in either is one whose every byte this process wrote: see `ground`.
-    params.dropped = [paths.ground]
-  }
+  // The row has a definition. A bot that lacked one was migrated above. The name is the row's,
+  // judged a slug when it was stored, and never anything a window or a reply said.
+  params.definition = held.definition
 
   try {
     // The bridge adds the files the prompt names with `@`, and none for a prompt `composed` says
     // this process wrote.
     params.files = [...((params.files as string[] | undefined) ?? []), ...attachmentPaths(session, attachments)]
-    // What the person dropped goes after the briefing, which stays first in `dropped`.
     const carried = withPastes(session, staged?.pastes, withDrops(session, staged?.drops, params))
     return { ok: await bridge.request('turn.send', carried) }
   } catch (error) {
@@ -344,14 +324,15 @@ function summonedTurn(
       folderOf: rootForSession,
       ownerOf: async (handle, folder) => botHandles.get(handle) ?? (await bots()).find((each) => each.home === folder)?.slug,
       adopt: (handle, slug) => { botHandles.set(handle, slug) },
-      migrate: migrateBot,
-      host: async (handle, slug, folder, request) => {
+      migrate: async (held) => (held.definition !== null ? held : definitionForTurn(held.slug)),
+      host: async (handle, slug, folder) => {
         const held = await bot(slug)
         if (!held) return null
+        if (held.definition !== null) return held
         // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
         // are asked about once the turn that gave the bot one has ended.
-        const owes = owesCarryOver(held, folder)
-        const migrated = await migrateBot(held, request)
+        const owes = await carryStillOwed(slug, folder)
+        const migrated = await definitionForTurn(slug)
         if (owes) owedCarryOver.add(handle)
         return migrated
       },
@@ -372,28 +353,9 @@ function summonedTurn(
   )
 }
 
-/**
- * Answer a compaction with a turn asking the bot to bring its memory up to date.
- *
- * Sent grounded, which is not an extra cost: the compaction has just made the briefing due, so the
- * user's next prompt would have carried it anyway. This spends the round trip and the attachment
- * together, and the window is told so it can stop expecting to send one.
- *
- * Everything about this is best-effort. A failure to consolidate is a memory that stays as it was,
- * which is exactly where it would have stayed had none of this existed — so nothing here surfaces
- * an error of its own, and the `turn.error` the window is about to receive is the whole report.
- */
-/**
- * Tell the window a consolidation is over, and whether the briefing went with it.
- *
- * `delivered` is the whole of what the window does with this. A consolidation that ran carried the
- * briefing, so the session is grounded again and the next thing somebody types must not carry it a
- * second time — but one that never left, because the checkout is gone or a turn was already in
- * flight, delivered nothing, and saying otherwise would cost the bot its briefing over a turn that
- * did not happen.
- */
-function ended(session: string, slug: string | null, delivered: boolean): void {
-  tell('bravebot:bots:consolidated', { session, slug, delivered })
+/** Tell the window a consolidation is over. */
+function ended(session: string, slug: string | null): void {
+  tell('bravebot:bots:consolidated', { session, slug })
 }
 
 async function consolidate(
@@ -408,7 +370,6 @@ async function consolidate(
   consolidating.add(session)
   tell('bravebot:bots:consolidating', { session, slug })
   const answer = await sendBotTurn(session, held, compose(held), {
-    grounded: true,
     // Nobody typed this, so it is not something anybody should find by pressing up — in this
     // window or in the terminal front-end, which shares the same history file. It does not name
     // the session either. See `recall` in `bridge.rs`.
@@ -417,9 +378,10 @@ async function consolidate(
     // separate answers: `recall` is about the history file, this is about what the message is.
     composed: 'consolidation',
   }).catch(() => ({ error: { code: 'internal', message: 'consolidation failed' } }))
+  // A failure leaves the memory as it was. The window's `turn.error` is the report.
   if (answer.error) {
     consolidating.delete(session)
-    ended(session, slug, false)
+    ended(session, slug)
   }
 }
 
@@ -435,10 +397,10 @@ const recorded = (work: Promise<unknown>): Promise<unknown> => work.catch(noteBo
 async function record(message: BridgeEvent): Promise<(() => void) | void> {
   // What this app has to say about the event, held until the event itself has been sent.
   let after: (() => void) | null = null
-  // Two things a bot needs to remember are only ever said here, and only by the agent: the
-  // durable id of the session behind it — which becomes real on the turn that first writes a
-  // record, not before — and how much compaction has taken out of that session, which is what
-  // decides when its briefing has to be given again.
+  // Two things a bot needs recorded are only ever said here, and only by the agent: the
+  // durable id of the session behind it (which becomes real on the turn that first writes a
+  // record, not before) and how much compaction has taken out of that session, which is what
+  // decides when a consolidation is sent.
   //
   // Read off the event and never off anything a window asked for, the same promise the recents
   // list and the fork lineage each make one screen up. The window can ask a bot to speak; it
@@ -460,17 +422,13 @@ async function record(message: BridgeEvent): Promise<(() => void) | void> {
       const known = await bot(slug)
       const before = known?.archived ?? 0
       await recorded(noteBotArchived(slug, message.data.archived))
-      // Whether the bot wrote anything down during the turn that has just ended. Asked of every
-      // turn including a consolidation's own, so a consolidation that worked is what resets the
-      // count that would otherwise have nudged.
-      await recorded(noteBotMemory(slug, folder))
       try { await snapshotMemory(slug, folder) } catch { /* Memory itself remains available if history storage fails. */ }
 
       // A consolidation ending is the end of it. Answering it with another would be a loop.
       if (consolidating.delete(handle)) {
         // Keep the queue held until the ordered completion announcement releases it.
         message.data.consolidating = true
-        after = () => ended(handle, slug, true)
+        after = () => ended(handle, slug)
       }
       else if (message.data.archived > before) {
         message.data.consolidating = true
@@ -495,7 +453,7 @@ async function record(message: BridgeEvent): Promise<(() => void) | void> {
     const folder = rootForSession(handle)
     if (slug && folder && message.data.id) await recorded(noteBotSession(slug, message.data.id, folder))
     if (consolidating.delete(handle)) {
-      after = () => ended(handle, botHandles.get(handle) ?? null, true)
+      after = () => ended(handle, botHandles.get(handle) ?? null)
     }
   }
 
@@ -765,7 +723,7 @@ app.whenReady().then(() => {
     if (method === 'session.new' || method === 'session.open') {
       const directory = (params as { directory?: unknown } | null)?.directory
       const owner = (await bots()).find((each) => each.home === directory)
-      if (owner && !ensureHome(owner)) {
+      if (owner && !(await ensureBotHome(owner.slug))) {
         return { error: { code: 'bad_request', message: `could not make the folder for ${owner.name}` } }
       }
     }
@@ -946,13 +904,11 @@ app.whenReady().then(() => {
   // The bots. Three channels rather than the usual read-and-write pair, and the extra one is the
   // point of the arrangement: a bot's turn cannot go through `bravebot:request` above, because a
   // bot needs `files` and `dropped` on `turn.send` and `sanitised` removes those from anything a
-  // window sends. So the window names a *bot*, and this process — which holds the definitions and
-  // composes every path from a slug it has judged — names the files.
+  // window sends. So the window names a bot, and this process addresses the turn from the row.
   //
   // The split inside `bravebot:bots:write` is the same idea one field down. The form fields and
-  // a creation seed cross freely; the session id, the compaction watermark and the
-  // two figures that decide when a bot is reminded to write are reports of what the agent did, are
-  // taken off its answers and off the filesystem below, and have no way in from here.
+  // a creation seed cross freely; the session id and the compaction watermark are reports of what
+  // the agent did, taken off its answers, and have no way in from here.
 
   // A bot's home and the folders it has worked in are offered as the recents are: this process
   // composed them, so a window may open a session there. Whether a bot's turn may run there is
@@ -967,8 +923,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
     const held = await bot(slug)
-    if (!held || !isBotModel(model)) return null
-    return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
+    if (!held || (model !== null && typeof model !== 'string')) return null
+    return saveBotModel(held.slug, model)
   })
 
   // The window names a bot and a selection; the definition is the row's, so no window chooses which
@@ -986,15 +942,8 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {
-    // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
-    // field on this channel that decides where files land, and the check that it is a folder
-    // somebody opened belongs beside the code that writes there.
-    // Making a bot writes its definition to `~/.bravebot/agents` (MEMORY-8), and editing one
-    // rewrites the fields the form shows (MEMORY-9). This process writes nothing there itself; the
-    // agent does, and `saveFormBot` keeps the name it answers with. Saves run one at a time.
-    const next = await saveForm(value, bridge ? (method, params) => bridge!.request(method, params) : null)
+    const next = await saveForm(value)
     if (!next) return null
-    ensureHome(next)
     offerDirectories(botFolders(next))
     return next
   })
@@ -1003,15 +952,13 @@ app.whenReady().then(() => {
   // definition stays exactly as it was, which is what lets the same session, the same memory and
   // the same face come back together when somebody brings it out again.
   ipcMain.handle('bravebot:bots:retire', async (_event, slug: unknown, retired: unknown) => {
-    if (typeof retired !== 'boolean') return null
     return retireBot(slug, retired)
   })
 
+  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
+
   ipcMain.handle('bravebot:bots:remove', async (_event, slug: unknown) => {
-    const held = await bot(slug)
-    if (!held) return null
-    if ([...botHandles].some(([handle, owner]) => owner === held.slug && runningHandles.has(handle))) throw new Error('Stop this bot’s running conversations before deleting it.')
-    // The definition and app-owned memory copies go. Its session is a session like any other and stays
+    // The definition, the sessions, and the memory files stay, and `bot.delete` removes the history folder. Its session is a session like any other and stays
     // in the agent's own store, and its memory is a file in somebody's checkout that this app did
     // not put there on its own account. Deleting either would make a bot's removal a destructive
     // act, which is not what removing a row from a list looks like.
@@ -1022,13 +969,10 @@ app.whenReady().then(() => {
     // there, a second deliberate step. The guarantee is the interface's rather than this
     // channel's, and it stays that way on purpose — the demo tears its own bots down through
     // here, and a bot made by a script is a bot a script should be able to take away.
-    await removeBot(held.slug)
-    await removeMemoryHistory(held.slug)
-    return held.slug
+    return removeBot(slug, botRunning(slug))
   })
 
   // Each names a folder, which is checked against the folders this process recorded for the bot.
-  const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
   ipcMain.handle('bravebot:bots:memory', async (_event, slug: unknown, directory: unknown) => {
     if (!botRunning(slug)) await tidyMemory(slug, directory)
     return memory(slug, directory)
@@ -1043,20 +987,14 @@ app.whenReady().then(() => {
   // becomes is not the window's to say — see `releaseBotSession`.
   ipcMain.handle('bravebot:bots:release', (_event, slug: unknown) => releaseBotSession(slug))
 
-  /**
-   * Send a turn as a bot.
-   *
-   * `grounded` is the window's claim that this turn is the one that has to carry the briefing —
-   * the first of a session, or the first since a compaction. It decides how much is attached and
-   * nothing else; it cannot name what is attached, which is the whole reason this channel exists.
-   */
+  /** Send a turn as a bot. The window names the bot. It does not name a file or a definition. */
   ipcMain.handle(
     'bravebot:bots:send',
     async (_event, value: unknown): Promise<Answer> => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, grounded, model, attachments, drops, pastes } = value as Record<string, unknown>
+      const { session, slug, prompt, model, attachments, drops, pastes } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -1073,14 +1011,7 @@ app.whenReady().then(() => {
         return { error: { code: 'bot_archived', message: 'that bot is archived' } }
       }
 
-      // The window's claim is that the briefing is due; this may decide it is due when the window
-      // did not. It is never the other way round — a window saying "grounded" is answering a
-      // question about *its* session, which this process cannot see, so that answer stands.
-      const nudge = grounded !== true && nudgeDue(held)
-      if (nudge) await recorded(noteBotNudged(held.slug))
       return sendBotTurn(session, held, prompt, {
-        grounded: grounded === true || nudge,
-        nudge,
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },

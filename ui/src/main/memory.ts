@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { bot, folderOf, keepingMemoryMark, memory, memoryPath, unwrapMemoryNote } from './bots'
+import { bot, folderOf, memory, memoryPath, unwrapMemoryNote } from './bots'
 import { replaceProjectMemory } from './project-files'
 import { isSlug } from '../shared/bots'
 
@@ -76,9 +76,7 @@ export async function tidyMemory(slug: unknown, directory: unknown): Promise<voi
   const tidy = text === null ? null : unwrapMemoryNote(text)
   if (text === null || tidy === null) return
   try {
-    await keepingMemoryMark(held.slug, folder, () => {
-      replaceProjectMemory(folder, memoryPath(held), tidy, text)
-    })
+    replaceProjectMemory(folder, memoryPath(held), tidy, text)
     await recordMemory(held.slug, folder, text, 'agent')
   } catch { /* changed since it was read, or not writable */ }
 }

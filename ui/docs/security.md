@@ -160,11 +160,8 @@ name, a directory and a binary file. A name that fails refuses the whole send wi
 message naming it, before a turn starts. There is no cap on the number of files or on a
 text file's size, matching the terminal. The completion list for a half-typed name
 (`mentions.offer`) is the terminal's list of one directory at a time, and returns names
-and kinds only. Bot briefings are also composed by the main process.
-Both lists are admitted as trusted context, so the only path a bot contributes is the
-briefing, whose every byte the main process wrote from what somebody typed. A bot's memory
-is neither named nor quoted in it: the briefing says where the memory is and the model reads
-it under whatever the trust map says about that path. See
+and kinds only. A bot's turn names its definition and adds no `dropped` path of its own.
+The driver tells the run where the memory is, and the run reads that file. See
 [how a purpose reaches the model](interface.md#how-a-purpose-reaches-the-model).
 
 A bot's turn is sent only in a folder the agent confirmed its session runs in, and only when that

@@ -277,9 +277,20 @@ pub(super) fn queue_words(width: u16, place: usize, count: usize) -> Option<Queu
 ///
 /// Each waiting prompt takes two rows, its words and its mark, one after the other from here
 /// (MOUSE-28). They come after what is attached to the line and what is put away.
-pub(super) fn first_waiting_row(session: &Session, width: u16) -> Option<usize> {
-    (!session.queued.is_empty())
-        .then(|| attached_lines(session, width).len() + stashed_lines(session, width).len())
+pub(super) fn first_waiting_row(session: &Session, width: u16, columns: u16) -> Option<usize> {
+    (!session.queued.is_empty()).then(|| {
+        width_note(session, columns) as usize
+            + attached_lines(session, width).len()
+            + stashed_lines(session, width).len()
+    })
+}
+
+fn width_note(session: &Session, columns: u16) -> u16 {
+    u16::from(
+        session.interface_layout() == crate::layout::Layout::Bots
+            && !session.without_a_session()
+            && !crate::bots_pane::drawn(columns),
+    )
 }
 
 /// Everything drawn between the box and the hint line, one per row.
@@ -297,11 +308,19 @@ pub(super) fn lines_beneath_the_box(
     session: &Session,
     width: u16,
     offered: &crate::state::Offered,
+    columns: u16,
 ) -> Vec<Line<'static>> {
     // Attachments first, nearest the box, because they belong to the line still in it: they are
     // what the next Enter will carry, and a file staged mid-turn appeared below the queue, which
     // reads as belonging to a prompt already gone.
-    let mut lines = attached_lines(session, width);
+    let mut lines = Vec::new();
+    if width_note(session, columns) == 1 {
+        lines.push(Line::styled(
+            crate::bots_pane::line_about_width(),
+            Style::default().fg(theme::note()),
+        ));
+    }
+    lines.extend(attached_lines(session, width));
     // Then the line put away, which is about the box and nothing else: it is what the next press of
     // one key puts back into it. Above the queue because those prompts have gone and this one has
     // not, and below the attachments because they belong to the line in the box now.
@@ -316,11 +335,12 @@ pub(super) fn lines_beneath_the_box(
             slash_lines(session, commands, skills, width)
         }
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
-        crate::state::Offered::Shortcuts => shortcut_lines(
+        crate::state::Offered::Shortcuts => shortcut_lines_in(
             session.editing(),
             session.bindings(),
-            PointerKeys::of(session),
             width,
+            audience_of(session, width),
+            PointerKeys::of(session),
         ),
     });
     lines
@@ -332,6 +352,7 @@ pub(super) fn lines_beneath_the_box(
 fn offered_lines(
     session: &Session,
     width: u16,
+    columns: u16,
     offered: &crate::state::Offered,
 ) -> Option<std::ops::Range<usize>> {
     let items = match offered {
@@ -339,7 +360,8 @@ fn offered_lines(
         crate::state::Offered::Files(entries) => entries.len(),
         crate::state::Offered::Nothing | crate::state::Offered::Shortcuts => return None,
     };
-    let before = attached_lines(session, width).len()
+    let before = width_note(session, columns) as usize
+        + attached_lines(session, width).len()
         + stashed_lines(session, width).len()
         + queued_lines(session, width).len();
     Some(before..before + items)
@@ -355,11 +377,12 @@ fn offered_lines(
 pub(super) fn fit_to_room(
     session: &Session,
     width: u16,
+    columns: u16,
     offered: &crate::state::Offered,
     mut lines: Vec<Line<'static>>,
     room: usize,
 ) -> (Vec<Line<'static>>, usize) {
-    let Some(rows) = offered_lines(session, width, offered) else {
+    let Some(rows) = offered_lines(session, width, columns, offered) else {
         lines.truncate(room);
         return (lines, 0);
     };
@@ -389,11 +412,12 @@ pub(super) fn fit_to_room(
 pub(super) fn offered_picks(
     session: &Session,
     width: u16,
+    columns: u16,
     offered: &crate::state::Offered,
     first: usize,
     pane: ratatui::layout::Rect,
 ) -> Vec<crate::state::Target> {
-    let Some(lines) = offered_lines(session, width, offered) else {
+    let Some(lines) = offered_lines(session, width, columns, offered) else {
         return Vec::new();
     };
     let before = lines.start;
@@ -564,13 +588,62 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The sixteen the file can move
+/// list names the key that answers rather than the key that used to. The seventeen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
+#[cfg(test)]
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
     pointer: PointerKeys,
 ) -> Vec<(String, &'static str)> {
+    shortcuts_in(
+        editing,
+        bindings,
+        Audience::Session { names_panes: false },
+        pointer,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Audience {
+    Session { names_panes: bool },
+    WithoutASession { names_panes: bool },
+}
+
+fn audience_of(session: &Session, width: u16) -> Audience {
+    if session.without_a_session() {
+        return Audience::WithoutASession {
+            names_panes: crate::bots_pane::drawn(width),
+        };
+    }
+    Audience::Session {
+        names_panes: session.interface_layout() == crate::layout::Layout::Bots,
+    }
+}
+
+fn shortcuts_in(
+    editing: crate::vim::Editing,
+    bindings: &Keybindings,
+    audience: Audience,
+    pointer: PointerKeys,
+) -> Vec<(String, &'static str)> {
+    let names_panes = match audience {
+        Audience::WithoutASession { names_panes } => {
+            let mut listed = vec![
+                ("/".to_string(), "switch layout, or leave"),
+                ("?".to_string(), "this list"),
+                ("ctrl-c".to_string(), "clear, then exit"),
+                ("ctrl-d".to_string(), "exit"),
+            ];
+            if names_panes {
+                listed.push((bindings.panes_name(), "move between prompt and panes"));
+            }
+            #[cfg(unix)]
+            listed.push((bindings.suspend_name(), "suspend to the shell"));
+            return listed;
+        }
+        Audience::Session { names_panes } => names_panes,
+    };
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -610,6 +683,9 @@ pub(super) fn shortcuts(
         (bindings.undo_name(), "undo the last edit"),
         (bindings.enhance_name(), "make the line more specific"),
     ];
+    if names_panes {
+        listed.push((bindings.panes_name(), "move between prompt and panes"));
+    }
     // Where the session can be suspended, which is every platform but Windows (INPUT-47).
     #[cfg(unix)]
     listed.push((bindings.suspend_name(), "suspend to the shell"));
@@ -657,11 +733,28 @@ impl PointerKeys {
 /// to be. One column when nothing else fits, and the meanings are cut to the width there rather
 /// than drawn past the edge, where the terminal would wrap them under the keys and put the list one
 /// row over the height the layout reserved for it.
+#[cfg(test)]
 pub(super) fn shortcut_lines(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
     pointer: PointerKeys,
     width: u16,
+) -> Vec<Line<'static>> {
+    shortcut_lines_in(
+        editing,
+        bindings,
+        width,
+        Audience::Session { names_panes: false },
+        pointer,
+    )
+}
+
+fn shortcut_lines_in(
+    editing: crate::vim::Editing,
+    bindings: &Keybindings,
+    width: u16,
+    audience: Audience,
+    pointer: PointerKeys,
 ) -> Vec<Line<'static>> {
     /// Blank columns between one column of the list and the next.
     const GUTTER: usize = 3;
@@ -675,7 +768,7 @@ pub(super) fn shortcut_lines(
         return Vec::new();
     }
 
-    let listed = shortcuts(editing, bindings, pointer);
+    let listed = shortcuts_in(editing, bindings, audience, pointer);
     let key_column = listed
         .iter()
         .map(|(key, _)| key.chars().count())

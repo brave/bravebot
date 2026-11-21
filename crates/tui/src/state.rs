@@ -10,10 +10,13 @@ use bravebot_aichat::protocol::Effort;
 use bravebot_i18n::t;
 use bravebot_session::audit::TrailLine;
 use bravebot_session::sessions::{Aside, RewindPoint};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 mod accounts;
 mod attachments;
+mod bots;
 mod completion;
 mod editing;
 mod entry;
@@ -704,6 +707,26 @@ pub struct Session {
     /// runs applies to what it starts after that (SANDBOX-22). Moved only with `sandbox`, by
     /// [`Session::set_sandbox_mode`] and [`Session::with_sandbox`].
     live_sandbox: bravebot_agent::LiveSandbox,
+    interface_layout: crate::layout::Layout,
+    bots: crate::bots_pane::State,
+    without_a_session: bool,
+    /// The bot this session was started as, when it was. Absent for every other session, including
+    /// a fork of a bot's conversation.
+    bot: Option<String>,
+    /// A bot the panes asked to open, taken by the loop that owns the phase.
+    bot_open: Option<crate::state::bots::BotOpen>,
+    /// Archiving the bot this session is ends it and returns to the list.
+    return_to_the_list: bool,
+    /// Folders a typed `/cd` confirmed in this run. Shared across the sessions of the run.
+    confirmed_cd: Rc<RefCell<Vec<std::path::PathBuf>>>,
+    /// The workspace from before this session moved into a bot's folder. A later `/cd` is not this.
+    before_the_bot: Option<bravebot_agent::Workspace>,
+    /// The model in force just before a bot's definition replaced it. Put back once, when that
+    /// definition no longer names a model.
+    model_beside_a_bot: Option<Option<String>>,
+    /// The model the bot's definition last put in force. Cleared when that model is put back, so a
+    /// later pick is not replaced on the next turn.
+    model_from_the_definition: Option<String>,
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
@@ -1498,6 +1521,16 @@ impl Session {
             laid: Laid::default(),
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
+            interface_layout: crate::layout::Layout::default(),
+            bots: crate::bots_pane::State::default(),
+            without_a_session: false,
+            bot: None,
+            bot_open: None,
+            return_to_the_list: false,
+            confirmed_cd: Rc::new(RefCell::new(Vec::new())),
+            before_the_bot: None,
+            model_beside_a_bot: None,
+            model_from_the_definition: None,
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,
@@ -3508,6 +3541,13 @@ impl Session {
         self.status == Status::Working && self.turn_in_flight
     }
 
+    /// Marks a turn in flight so a test can open the form while one runs.
+    #[cfg(test)]
+    pub fn pretend_a_turn_is_running(&mut self) {
+        self.status = Status::Working;
+        self.turn_in_flight = true;
+    }
+
     /// The oldest loop repeating a prompt, where one is running: the only one in a session that
     /// holds one, and some loop at all exactly when any is live.
     pub fn looping(&self) -> Option<&crate::loops::Running> {
@@ -3729,7 +3769,8 @@ impl Session {
 
     /// Work every turn of this session under `definition`, from the first one on.
     ///
-    /// Only for the caller that read it off the command line, before the first turn (ADDRESS-3).
+    /// For the caller that read the name off the command line, and for `address_the_row`, which the
+    /// bots layout calls with the row's definition (ADDRESS-3). Neither is a turn.
     /// Nothing clears it. A session started under a definition keeps it until the session ends, and
     /// a person who wants the planner back starts a new session.
     ///
@@ -4487,6 +4528,10 @@ impl Session {
     }
 
     pub fn note(&mut self, message: impl Into<String>) {
+        if self.without_a_session {
+            self.bots.say(message.into());
+            return;
+        }
         self.transcript.push(Entry::system(message));
     }
 

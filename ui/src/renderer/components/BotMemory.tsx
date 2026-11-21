@@ -33,7 +33,6 @@ export function BotMemory({ slug, directory }: { slug: string; directory: string
     setBusy(true); setProblem('')
     try {
       const saved = await window.bravebot.editBotMemory(slug, directory, value, text)
-      document.dispatchEvent(new CustomEvent('bravebot:memory-edited', { detail: slug }))
       setText(saved)
       setHistory(await window.bravebot.readMemoryHistory(slug, directory))
       return true

@@ -175,6 +175,7 @@ cli-option-log-level =
     How much of a failure's shape is written to the diagnostic log: error (the default), info or debug.
     Hosts, statuses and counts only, never content; an incognito session writes none
 cli-option-agent = Address every turn to this definition, as /agent does for one
+cli-option-layout = Open the interface in this layout, one of { $names }. The bots layout begins with no session
 cli-option-issue = Give the session it opens this issue link, as /issue does
 cli-option-pr = Give the session it opens this pull request link, as /pr does
 cli-option-system-prompt =
@@ -3816,6 +3817,7 @@ command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
 command-hunks = List the hunks the last turn wrote, or put one back as it stood before the turn
 command-exit = Leave
+command-layout = End this session and open another layout of the interface
 
 
 ## When Enter carries out a command listed while work runs
@@ -4029,6 +4031,10 @@ copied-from-offered = { $count ->
 copied-from-footer = { $count ->
     [one] { $count } char to clipboard, from the footer
    *[other] { $count } chars to clipboard, from the footer
+    }
+copied-from-bots = { $count ->
+    [one] { $count } char to clipboard, from the bots list
+   *[other] { $count } chars to clipboard, from the bots list
     }
 # A click on a web address in the transcript, when no browser could be started for it. The address is not repeated: it is text the assistant wrote.
 session-link-not-opened = no browser could be started for that address, which can be selected and copied instead
@@ -6221,3 +6227,54 @@ schedule-nothing-to-clear = Schedule { $id } has no question to clear.
 schedule-stopped-at-question = schedule { $id } stopped at a question. Run bravebot schedule pending to read it.
 schedule-skipped-paused = schedule { $id } is paused, so this firing was skipped.
 schedule-skipped-running = schedule { $id } is still running from the last firing, so this firing was skipped.
+## The bots layout
+
+bots-heading = Bots
+bots-none = No bots yet. Press n to make one here.
+bots-keys-empty = n makes a bot
+bots-keys-in-use = n makes a bot  ·  e edits it  ·  a archives it
+bots-keys-archived = n makes a bot  ·  e edits it  ·  r restores it  ·  d deletes it
+bots-keys-form = Tab moves between fields  ·  Enter saves  ·  Esc cancels
+bots-form-make = New bot
+bots-form-edit = Edit bot
+bots-form-name = Name
+bots-form-purpose = Purpose
+bots-form-model = Model
+bots-delete-only-archived = Delete is only for an archived bot.
+bots-archive-question = Archive { $name }? y archives it, and any other key keeps it.
+bots-delete-question = Delete { $name }? y deletes it, and any other key keeps it.
+bots-file-unreadable = The bots file could not be read: { $path } ({ $reason })
+bots-old-rows-waiting = The bots saved by an earlier version are still in { $path } and could not be moved to the bots file, so they are not listed.
+bots-entries-left-out = Some entries in { $path } are not valid bots and are not listed.
+bots-incognito = A bot's session is not started with --incognito, because the conversation could not be recorded.
+bots-no-data-folder = This bot's home folder cannot be named on this machine, so the session was not started.
+bots-no-such-bot = There is no bot named { $slug }.
+bots-folder-unusable = The session was not started in { $directory }: { $problem }
+bots-definition-missing = { $definition } does not resolve, so this turn runs nothing.
+bots-home-held = { $definition } cannot be read from a folder that holds the home directory, so this turn runs nothing.
+bots-folder-not-text = This turn was not sent, because the folder's name is not text and the conversation could not be recorded.
+bots-folder-refused = This bot has not been given { $directory }.
+bots-working-in = Working in { $directory }
+bots-delete-while-running = Delete is refused while a turn of this bot is in progress.
+bots-bg-refused = /bg is not available in a bot's session. A background process takes its definition from the record, and this session records none.
+bots-conversations = Conversations
+bots-no-conversations = No conversations yet.
+bots-need-width = The panes need a wider terminal: at least { $columns } columns.
+bots-choose-a-bot-first = Choose a bot first. This screen takes /layout, ? and leaving.
+bots-hint = ? for shortcuts  ·  Esc to the prompt  ·  { $chord } switches  ·  /layout default for a session
+bots-hint-without-panes = ? for shortcuts  ·  /layout default for a session
+bots-layout-refuses-branch-and-resume = The bots layout holds only bots. Use --fork to fork a session and --resume to resume one.
+bots-layout-refuses-manifest = /manifest is not available in the bots layout.
+layout-draws-no-info-panel = The bots layout draws no info panel.
+layout-needs-a-name = /layout takes the name of a layout: { $names }.
+layout-unknown = There is no layout named { $name }. The layouts are { $names }.
+layout-already-open = The { $name } layout is already open.
+layout-refused-running = /layout does not end a session while a turn is running. Stop the turn first.
+layout-refused-queued = /layout does not end a session while lines are waiting to be sent.
+layout-refused-pending = /layout does not end a session while a /loop, /goal or /after is pending.
+layout-refused-incognito = /layout does not end a session in an incognito run, because no record of it is kept to come back to.
+layout-refused-agent = /layout does not end a session that works under an agent definition, because the next session would not keep it.
+layout-refused-form = /layout does not end a session while a form or a confirmation is open. Save or cancel it first.
+cli-layout-needs-a-name = --layout needs the name of a layout: { $names }
+cli-layout-unknown = there is no layout named { $name }; the layouts are { $names }
+cli-layout-not-with = --layout opens the interface with no session begun, so it does not go with { $other }

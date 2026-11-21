@@ -360,15 +360,13 @@ const api = {
    *
    * Separate from `request` above because a bot's turn carries files, and `turn.send` through that
    * channel has its file lists removed — a window that could name a file to read would be a window
-   * that could have the planner read any file on the machine. So this names a *bot* and a moment:
-   * `grounded` says whether this is the turn that has to carry the briefing, and the main process
-   * decides what that means and which paths it is made of.
+   * that could have the planner read any file on the machine. So this names a bot, and the main
+   * process addresses the turn from the row.
    */
   sendBotTurn(request: {
     session: string
     slug: string
     prompt: string
-    grounded: boolean
     model?: string | null
     attachments?: string[]
     drops?: string[]
@@ -548,8 +546,7 @@ const api = {
    * Two announcements over one channel pair: `consolidating` when such a turn goes out, and
    * `consolidated` when it ends however it ends. The window needs both — the first because a
    * transcript that drew a reply with no prompt above it would be a transcript with a hole in it,
-   * and the second because such a turn carries the briefing, so by the time it is over the session
-   * is grounded again and the next thing the user types must not carry it a second time.
+   * and the second because the composer stays locked until the turn ends.
    *
    * It carries a handle and a slug and no more. Nothing about what was said crosses here; the
    * words arrive as ordinary events like everything else.
@@ -559,14 +556,13 @@ const api = {
       session: string
       slug: string | null
       running: boolean
-      delivered: boolean
     }) => void,
   ): () => void {
     const started = (_event: IpcRendererEvent, at: { session: string; slug: string }) =>
-      listener({ ...at, running: true, delivered: false })
+      listener({ ...at, running: true })
     const ended = (
       _event: IpcRendererEvent,
-      at: { session: string; slug: string | null; delivered: boolean },
+      at: { session: string; slug: string | null },
     ) => listener({ ...at, running: false })
     ipcRenderer.on('bravebot:bots:consolidating', started)
     ipcRenderer.on('bravebot:bots:consolidated', ended)

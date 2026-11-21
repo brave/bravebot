@@ -86,11 +86,9 @@ matter:
 - `pnpm run build`: bridge and secure-file helper builds, TypeScript, and Electron bundles.
 - `make check-ui` from the repository root, or `node --test scripts/*.test.mjs` here after an
   install and a `cargo build -p bravebot-ui-files`: renderer state, models, file access,
-  memory retention, bot grounding, avatar motion and traits, and the delay before a loading row
+  memory retention, avatar motion and traits, and the delay before a loading row
   shows. File tests use the actual
-  secure-file helper, the grounding tests included: they assert that a briefing names the
-  memory file and quotes no byte of it, and that a link at the memory path or at the
-  briefing path is refused or displaced rather than followed. `marking.test.mjs` needs no
+  secure-file helper. `marking.test.mjs` needs no
   build: it renders the transcript's own components through `react-dom/server` and asserts
   on the markup, which is what pins the three properties
   [LAYER-5](../../docs/specs/layering.md#LAYER-5) states for this surface.
@@ -186,8 +184,8 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
 | `pnpm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename, asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
 | `pnpm run drive:packaged` | A built `.app`: that a release hides the developer items and finds its agent |
-| `pnpm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the bot's home folder, and that reopening the bot resumes the same session |
-| `pnpm run drive:bot-memory` | That a bot is asked to keep its memory current without anybody asking it to: that one which has gone quiet is handed its briefing again with a line saying so, that the count resets on the nudge rather than on every turn, and that a prompt somebody typed to read like the app's own house-keeping is drawn as a prompt in a reopened transcript, with its words and the cut that is taken on its ordinal |
+| `pnpm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed into the composer reaches the model, that the live turn draws no attached file, and that reopening the bot resumes the same session |
+| `pnpm run drive:bot-memory` | That a prompt somebody typed to read like the app's own house-keeping is drawn as a prompt, and that a reopened transcript draws no house-keeping row for a turn the app did not send, with the typed words and the cut that is taken on its ordinal |
 | `pnpm run drive:bot-summon` | Summoning a bot with `@` for one message, in a project's chat and in another bot's conversation: the label on its reply, the next turn answered as before, and the **Replied to** cards in its own conversation. Stub model service, disposable profile |
 | `pnpm run drive:visual` | The gallery: every surface as screenshots, in light and dark, with a hit-target audit and forced-colours captures; see [below](#the-visual-gallery) |
 | `pnpm run drive:perf` | The performance budgets on a 1,000-session list and a 500-entry transcript; see [below](#performance-budgets) |

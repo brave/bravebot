@@ -325,7 +325,7 @@ people who have them. A bot's row shows its face, its name and its purpose; **+*
 **Create bot**, which asks for a face, a name, a purpose and a model.
 
 A bot has a name, purpose, model choice, avatar, a home folder and persistent memory. The home
-folder is made by the app under its own data directory, beside the briefing and never inside it.
+folder is made by the app under its own data directory, outside the checkout.
 Opening a bot opens its conversation, one that carries on, in its home folder
 ([MEMORY-14](../../docs/specs/definition-memory.md#MEMORY-14)). A bot nobody has talked to yet
 shows its face and **Talk to** its name above the message box. The face, the title, the notes
@@ -355,7 +355,7 @@ the first lines of the memory as the bot wrote it. **Edit memory** opens a dialo
 for editing and an explicit save. The dialog's **History** lists earlier versions for review and
 restoration, one history per folder, and its **Reset…** asks before it empties the memory. Reset
 preserves history; deleting a bot removes
-its app-owned histories and cached briefing. See [file retention](file-access-security.md) for what
+its app-owned memory histories. See [file retention](file-access-security.md) for what
 stays in the project.
 
 Bots' conversations are listed in the Chats tab too, with the bot's face in place of the folder
@@ -390,7 +390,7 @@ column earns its colour on the way past.
 It also asks, in a dialog that names the bot and says what the deletion costs, with Cancel and a
 red **Delete**. The dialog is the same one a conversation's deletion uses.
 
-Deletion removes the bot definition, cached briefing and app-owned memory revision
+Deletion removes the row and the app-owned memory revision
 histories. Saved conversations stay under `~/.bravebot`, the project memory files stay in
 their checkouts, and the home folder stays where it is. Deletion is refused while a bot conversation is running.
 
@@ -452,84 +452,19 @@ its bot is doing changes. See `src/renderer/avatar/`, `src/renderer/components/B
 
 #### How a purpose reaches the model
 
-The agent has no persona field, and it is not modified here. `Task` offers a prompt, some files and
-a home directory; the system prompt belongs to the build, and `AGENTS.md` is global or per-checkout
-rather than per-bot — writing one into somebody's repo would clobber theirs. Splicing a purpose
-into the prompt is out too: every prompt is appended to the shared `~/.bravebot/history`, and a
-charter poured into somebody's recall is not a feature.
+Making a bot writes a definition in the person's own directory. The purpose is that file's body.
+Every turn of the bot names the definition, and the driver resolves it the way it resolves a line
+typed after `/agent`. A bot made before definitions is given one before the turn is sent.
 
-So a bot is handed a **file to read**, and there are two of them:
+The memory is `.bravebot/memory/<definition>.md` in the folder the conversation runs in. The driver
+tells the run the path. The run reads the file with its ordinary tools. The desktop does not copy
+the memory into a file it hands to the turn, and it does not count quiet turns.
 
-- **The briefing**, `<userData>/bots/<slug>/ground.md`, composed by the main process from the bot's
-  name and its purpose. It goes to a turn as `dropped`, which is the read deliberately *not*
-  confined to the workspace. It lives outside the checkout precisely so the planner cannot rewrite
-  what defines it — the agent may write inside the workspace and nowhere else, and this is nowhere
-  else.
-- **The memory**, `<folder>/.bravebot-ui/bots/<slug>.md`, inside the folder the conversation runs
-  in, because that is the only place the agent *can* write. There is one in each folder the bot
-  works in: its home folder for conversations with no project, and each project. That is the whole mechanism: the bot is told where
-  its memory is and asked to keep it current, and it edits the file with its ordinary write tool.
-  Nothing parses what a model said; the change the agent applied is the record. The folder ignores
-  itself, so it never becomes a change nobody made. What that write is *gated* on is below, and is
-  not what it looks like.
-
-**Only the briefing is handed over, and the memory is neither attached nor quoted in it.** `files`
-and `dropped` are both admitted as *trusted* context, which is the agent recording that a person
-named the path in their own line, so the only path the app may name is one whose every byte the app
-wrote. The briefing is one: the name and the purpose were typed into this window, and the memory's
-path is a string composed from a slug. The memory is not one: its words are the model's own. The
-briefing therefore says where the memory is and asks the bot to read it first, and what that read
-comes back as is the trust map's answer about that path, the same as for any other file in the
-checkout. A memory that an earlier write left untrusted comes back quarantined.
-
-A memory the grounding walk has just created is the one case the briefing does not ask for: it
-holds a template and nothing more, so the briefing says as much rather than spending a call on it.
-A memory that is there is never replaced, whatever is in it: one whose bytes are not text now
-costs the bot a paragraph, where under the old arrangement it would have failed the turn, so
-there is nothing to be gained by a seed that overwrites what it cannot read.
-
-Reading it costs one tool call at the top of a grounded turn, and buys back the attachment it used
-to spend: every attached file becomes its own user message, and the agent's compaction keeps only
-the last two of those verbatim, so an injection of the app's own is expensive in the one window
-that matters.
-
-#### When it is said again
-
-Compaction always cuts from the front, so a briefing at the top of a session is the first thing it
-takes. The signal that it has is **not** the `compacting` phase: that is emitted before compaction
-is attempted, so it also fires when there was nothing worth compacting, and then on every round of
-a conversation that is over budget and cannot get under it. A bot re-grounded off that would be
-re-grounded on every turn forever, which — given that each attachment stays in the conversation —
-makes the problem worse.
-
-What is watched instead is the size of the conversation's **archive**, which `turn.done` and
-`session.open` both report. It only rises, it rises exactly once per compaction that actually
-happened, and it is written into the record, so a session resumed in a new process knows it without
-having watched it happen. A bot is re-grounded when that figure has gone up, and when its session
-has just been opened.
-
-#### When it is asked to write
-
-None of the above makes a bot *remember*. It only puts the instruction in front of it, and the
-instruction is in the briefing — so for as long as a session ran without being re-grounded, nothing
-was asking. In practice a memory changed when somebody said "remember that", and not otherwise.
-
-Two things close that, and neither of them attaches anything to an ordinary turn:
-
-- **A compaction is answered with a turn of the app's own.** A rise in the archive is the one moment
-  memory is unambiguously *for*, since it is the only thing that survived. Instead of waiting for
-  the next prompt to carry the briefing, the main process sends a turn saying so, grounded. This is an additional model request and can incur provider usage and cost.
-- **A bot that has stopped writing is grounded early.** A count on the bot rises each time one of
-  its turns ends without its memory file's mtime moving, and at six the next turn carries the
-  briefing whether the window thought it was due or not, with one extra paragraph asking whether
-  anything since is worth keeping. It resets on the nudge as well as on a write, so a bot that
-  ignores it gets six more turns of quiet rather than a briefing stapled to everything it is asked.
-
-Both figures are main-written, like the session id and the archive watermark beside them: the editor does not control when a bot is reminded to remember.
-
-Neither checks that the model wrote anything, because checking would mean parsing what it said, and
-the rule this feature is built on is that the change the agent applied is the record. The mtime is
-the only claim involved that nothing can be talked into.
+The size of the conversation's archive, which `turn.done` reports, rises once per compaction that
+happened. When it rises, the desktop sends a turn of its own asking the bot to bring the memory
+file up to date. That turn is an additional model request and can incur provider usage and cost.
+A failure leaves the memory as it was. The desktop does not parse the reply to decide whether the
+file changed.
 
 A turn the app sends is also kept out of `~/.bravebot/history`, which is recall and is shared with
 the terminal front-end. That is what `recall: false` on `turn.send` is for: what belongs under the
@@ -537,11 +472,10 @@ up-arrow is what somebody typed, and boilerplate this window wrote turning up in
 history would be this app spending somebody else's furniture. The same flag holds the prompt back
 from naming the session, by the same argument.
 
-A turn the app sent is **not drawn as one somebody typed**. It opens with a mark this app composes,
-the transcript draws a line for it rather than a prompt bubble, and a reopened session recognises it
-by that mark — the same judgement, for the same reason, that a handed-over file gets. The cost of
-recognising a turn by its first line is that typing that line oneself gets the same treatment; the
-mark is long and bracketed, so doing it is a thing somebody does on purpose.
+A turn the app sent is drawn from the `consolidation` tag on the record, as a line rather than a
+prompt bubble. A user message is drawn as what was typed, including one whose first line reads
+like house-keeping. The other kinds on the record are drawn from their own tags. The transcript
+does not choose the row by reading the message.
 
 #### What a memory write is actually gated on
 
@@ -561,20 +495,11 @@ page, a command's output, a quarantined file — is asked before it may write to
 that write would turn a trusted path untrusted. The gate is on prompt injection reaching the memory,
 not on the memory changing.
 
-The briefing handed to the model once promised more than that — that every edit would be shown as
-a diff before it happened — and it was false, found by filming it and watching the Writes panel say
-`APPLIED` with no card in the transcript. A false promise in a briefing is worse than none, since it
-is the model telling somebody something the app does not do, so the briefing now says what is true:
-the edit is on the record rather than in front of a card. Tightening the behaviour instead is not
-available from here — there is no "always ask about this path" upstream, and adding one would be a
-change to a repository this app does not modify.
+An ordinary memory write is on the record: the transcript draws it and the Writes panel lists it.
+There is no setting here that asks before every write to that path.
 
-Two more things are honestly imperfect and worth knowing:
+Two limits are worth knowing:
 
-- **The turn compaction happens in runs without the briefing.** It can fire on the first round.
-  Nothing the briefing says can reach the turn once it is running, so the summary the agent writes is
-  what carries the gist through; the mitigation is keeping a purpose short enough that re-reading it
-  is cheap.
 - **A bot whose memory was poisoned loses it rather than reading it back.** The memory arrives under
   whatever the trust map says about its path, so a write that turned the path untrusted means the
   next read is quarantined and the bot carries on without what it knew. That is the gate doing its
@@ -594,8 +519,8 @@ text files at send; drop grants bound to the session, which the main process che
 and turns into `dropped` and `attachments`; paste grants bound to the session, which the main
 process turns into `images` from the bytes it holds; and names written with `@` in the prompt,
 which the bridge reads back out of the prompt at `turn.send` and surveys with the agent's own
-confined read before the turn starts. Bot briefings are composed by the main process from a bot
-definition, and are the only `dropped` path a bot contributes.
+confined read before the turn starts. A bot's turn names its definition. It does not add a
+`dropped` path of its own.
 
 The preload does carry file contents for previews and memory editing. These are
 bounded, explicit operations rather than unrestricted filesystem access, and previews
@@ -823,10 +748,12 @@ Additional state lives outside this file:
   and this app does not write `bravebot-ui.json` until a read of the bots has answered.
 - `experience.json`: per-conversation drafts, scroll, pins, archives and bot associations;
   also recent model choices.
-- `bots/<slug>/ground.md` and `memory-history-<folder hash>.json`: cached briefing and memory
-  revisions, one history per folder.
+- `bots/<slug>/memory-history-<folder hash>.json`: earlier revisions of a memory file, one history
+  per folder. This build does not write `ground.md`.
 - `bot-homes/<slug>/`: a bot's home folder, where its conversations with no project run.
-- Project `.bravebot-ui/bots/<slug>.md`: the bot's persistent memory.
+- `.bravebot/memory/<definition>.md` in the folder the conversation runs in: the bot's memory.
+  `.bravebot-ui/bots/<slug>.md` is the notes a bot made before definitions still has, which the
+  carry-over turn names.
 - Renderer `localStorage`: per-conversation model choices, keyed by project and session ID.
 
 See [file access and retention](file-access-security.md) for retention and permissions.

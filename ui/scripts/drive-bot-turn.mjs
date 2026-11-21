@@ -1,10 +1,9 @@
 // A live turn as a bot, which is the only way to see whether any of this works.
 //
 // `drive-bots.mjs` next door proves a bot can be made, found again and told apart. It cannot prove
-// the part the feature is actually for: that the purpose somebody wrote reaches the model, that the
-// bot's memory is a real file it can edit, and that resuming the bot resumes the *same* session
-// rather than beginning another. Each of those needs a model to answer, so this needs credentials
-// and the driver above does not.
+// the part the feature is actually for: that the purpose somebody wrote reaches the model, and that
+// resuming the bot resumes the *same* session rather than beginning another. Each of those needs a
+// model to answer, so this needs credentials and the driver above does not.
 //
 // Run it the way `drive-turn.mjs` is run. It runs against a scratch user-data directory and state
 // directory, and it puts its own keys back. The scratch state directory holds copies of the real
@@ -13,7 +12,7 @@
 
 import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, SHOTS_DIR } from './drive-support.mjs'
 import { appBots, appState, forgetCheckoutSessions, openBot, scratchProfile, settle } from './drive-profile.mjs'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 mkdirSync(SHOTS_DIR, { recursive: true })
@@ -41,8 +40,8 @@ await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
 await page.waitForTimeout(2500)
 
-// The purpose carries a word nothing else would produce, so the reply is evidence the briefing
-// arrived rather than evidence the model is agreeable.
+// The purpose carries a word nothing else would produce, so the reply is evidence the definition
+// reached the model rather than evidence the model is agreeable.
 // Opening the bot opens its one conversation, in its home folder, and answers the trust question
 // that folder asks.
 const home = await openBot(page, {
@@ -69,22 +68,9 @@ check(
 
 await page.screenshot({ path: `${SHOTS_DIR}/24-bot-turn.png` })
 
-// Nothing is drawn for the briefing during the turn it arrives in, and that is not an oversight:
-// the agent emits no event when it reads a file the user named, so a live transcript has nothing
-// to draw from. It shows up on the reopened session below, where the transcript is built from the
-// record instead — which is exactly where it would otherwise have been drawn as a prompt bubble
-// holding the whole file.
 check(
   (await page.locator('.attached').count()) === 0,
-  'a live turn draws nothing for the briefing, having been told nothing about it',
-)
-
-// The memory file is real, and in the home folder where the bot can edit it.
-const memory = join(home, '.bravebot-ui', 'bots', 'custodian.md')
-check(existsSync(memory), 'the bot has a memory file inside its home folder')
-check(
-  existsSync(join(home, '.bravebot-ui', '.gitignore')),
-  'and the folder holding it ignores itself, so it is not somebody’s diff',
+  'a live turn draws no attached file',
 )
 
 // The id the agent minted has been written down, which is what a resume needs.
@@ -113,10 +99,6 @@ await page2.waitForTimeout(2000)
 check(
   (await page2.locator(ASSISTANT_BUBBLE).count()) >= 1,
   'reopening the bot brings back what it said before — the same session, resumed',
-)
-check(
-  (await page2.locator('.attached').count()) >= 1,
-  'the briefing is drawn as a file that was read rather than as something somebody typed',
 )
 // A bot's conversation is a chat like any other, so it is in the Chats list too, marked with the
 // bot's face.

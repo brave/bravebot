@@ -83,6 +83,65 @@ pub(crate) fn starts_neither_a_session_nor_a_task(first: &str) -> Option<&'stati
         .find(|command| *command == first)
 }
 
+pub(crate) const LAYOUT: &str = "--layout";
+
+const OTHER_STARTS: [&str; 10] = [
+    "--resume",
+    "-r",
+    "--continue",
+    "-c",
+    "--fork",
+    "-f",
+    "--from-pr",
+    "-i",
+    "--interactive",
+    "--plain",
+];
+
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one flag's presence, and naming them is what replaces positional booleans: incognito, agent, issue, pull request, and an optional system prompt"
+)]
+pub(crate) struct TakenOut<'a> {
+    pub incognito: bool,
+    pub agent: bool,
+    pub issue: bool,
+    pub pull_request: bool,
+    pub system_prompt: Option<&'a str>,
+}
+
+impl TakenOut<'_> {
+    fn first_named(&self) -> Option<&str> {
+        [
+            (self.incognito, INCOGNITO),
+            (self.agent, "--agent"),
+            (self.issue, "--issue"),
+            (self.pull_request, "--pr"),
+        ]
+        .into_iter()
+        .find_map(|(given, flag)| given.then_some(flag))
+        .or(self.system_prompt)
+    }
+}
+
+pub(crate) fn what_layout_does_not_go_with(
+    first: Option<&str>,
+    taken: &TakenOut<'_>,
+) -> Option<String> {
+    if let Some(flag) = taken.first_named() {
+        return Some(flag.to_string());
+    }
+    let first = first?;
+    if OTHER_STARTS.contains(&first)
+        || first == "--bg"
+        || TASK_FLAGS.contains(&first)
+        || starts_neither_a_session_nor_a_task(first).is_some()
+    {
+        return Some(first.to_string());
+    }
+    (!first.starts_with('-')).then(|| "a task".to_string())
+}
+
 /// Whether the arguments left after the flags are taken start a one-shot run, which is what
 /// [`ACCEPT_EDITS`] and [`AUTO`] are for: a session has a mode key to say the same thing with, and the commands
 /// that start no run have no write to answer.
@@ -739,3 +798,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod layout_tests;

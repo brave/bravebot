@@ -14,7 +14,7 @@ const answering = (answer) => {
   return load()
 }
 
-const bot = { session: 's', slug: 'b', prompt: 'p', grounded: false, model: null }
+const bot = { session: 's', slug: 'b', prompt: 'p', model: null }
 
 test('an answer from the agent is returned, over either channel', async () => {
   const rpc = answering({ ok: { sessions: [] } })
