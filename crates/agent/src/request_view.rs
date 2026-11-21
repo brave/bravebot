@@ -194,6 +194,105 @@ impl RequestView {
             })
             .collect()
     }
+
+    /// Share `measured`, the count the server gave for this request, out over the fixed sections,
+    /// in [`Section::ALL`] order, leaving out each section whose share is zero.
+    ///
+    /// A section is chosen from the role and the provenance the driver recorded for a span, and
+    /// its weight is the length in bytes of what was sent. No span's words are read, so no section
+    /// is chosen by what a span says.
+    pub fn sections(&self, measured: u64) -> Vec<(Section, u64)> {
+        let mut bytes = [0u64; Section::ALL.len()];
+        bytes[Section::Tools as usize] = self.tools_bytes;
+        for span in &self.spans {
+            bytes[Section::of(span) as usize] += span.text.len() as u64;
+        }
+        Section::ALL
+            .into_iter()
+            .zip(apportion(measured, &bytes))
+            .filter(|(_, share)| *share > 0)
+            .collect()
+    }
+}
+
+/// A part of a request that `/context` gives a row of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    /// The system prompt's own paragraphs.
+    System,
+    /// The instruction files the system prompt was built from.
+    Instructions,
+    /// The skill list in the system prompt.
+    Skills,
+    /// The tool definitions the request offered.
+    Tools,
+    /// What a person typed.
+    Typed,
+    /// What the planner wrote earlier, sent back to it.
+    Planner,
+    /// Tool results.
+    Results,
+    /// Every other message.
+    Other,
+}
+
+impl Section {
+    /// Every section, in the order the rows are listed.
+    pub const ALL: [Section; 8] = [
+        Section::System,
+        Section::Instructions,
+        Section::Skills,
+        Section::Tools,
+        Section::Typed,
+        Section::Planner,
+        Section::Results,
+        Section::Other,
+    ];
+
+    /// The section a span belongs to, by its role and the provenance the driver recorded.
+    fn of(span: &Span) -> Section {
+        match (span.role, &span.provenance) {
+            ("system", Provenance::TrustedFile(_)) => Section::Instructions,
+            ("system", Provenance::Trusted("skill list")) => Section::Skills,
+            ("system", _) => Section::System,
+            (
+                "user",
+                Provenance::Typed | Provenance::TypedWithFiles | Provenance::TypedWithSessions(_),
+            ) => Section::Typed,
+            ("assistant", _) => Section::Planner,
+            ("tool", _) => Section::Results,
+            _ => Section::Other,
+        }
+    }
+}
+
+/// Divide `total` in proportion to `weights`, in whole numbers that add up to exactly `total`.
+///
+/// Each part is rounded down and what is left over goes one apiece to the parts with the largest
+/// remainders, so the shares of a measured count always sum to it. All zeros where the weights
+/// are, since nothing says what the total is made of.
+pub fn apportion(total: u64, weights: &[u64]) -> Vec<u64> {
+    let sum: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
+    if sum == 0 {
+        return vec![0; weights.len()];
+    }
+    let mut shares: Vec<u64> = weights
+        .iter()
+        .map(|weight| (u128::from(total) * u128::from(*weight) / sum) as u64)
+        .collect();
+    let mut left = total - shares.iter().sum::<u64>();
+    let mut by_remainder: Vec<usize> = (0..weights.len()).collect();
+    by_remainder.sort_by_key(|index| {
+        std::cmp::Reverse(u128::from(total) * u128::from(weights[*index]) % sum)
+    });
+    for index in by_remainder {
+        if left == 0 {
+            break;
+        }
+        shares[index] += 1;
+        left -= 1;
+    }
+    shares
 }
 
 fn role_of(role: Role) -> &'static str {
@@ -357,5 +456,95 @@ mod tests {
             Provenance::Trusted("tool result").label(),
             "tool result (trusted)"
         );
+    }
+
+    /// The `/context` rows must add up to the measured total, so each share is a whole number
+    /// and the rounding remainders are handed out rather than dropped.
+    #[test]
+    fn a_count_is_apportioned_in_whole_numbers_that_add_up_to_it() {
+        assert_eq!(apportion(10, &[1, 1, 1]), vec![4, 3, 3]);
+        assert_eq!(apportion(777, &[0, 300, 0, 700]).iter().sum::<u64>(), 777);
+        assert_eq!(apportion(100, &[0, 0]), vec![0, 0]);
+        assert_eq!(apportion(0, &[5, 5]), vec![0, 0]);
+        assert_eq!(
+            apportion(u64::MAX, &[u64::MAX, u64::MAX])
+                .iter()
+                .sum::<u64>(),
+            u64::MAX
+        );
+    }
+
+    fn span(role: &'static str, provenance: Provenance, bytes: usize) -> Span {
+        Span {
+            role,
+            provenance,
+            text: "x".repeat(bytes),
+        }
+    }
+
+    /// Each span goes to the section its role and recorded provenance name, the tool definitions
+    /// have a section of their own, and the shares add up to the measured count.
+    #[test]
+    fn each_span_is_counted_in_the_section_its_role_and_provenance_name() {
+        let view = RequestView {
+            model: "model".into(),
+            spans: vec![
+                span("system", Provenance::Driver, 1),
+                span("system", Provenance::TrustedFile("AGENTS.md".into()), 2),
+                span("system", Provenance::Trusted("skill list"), 3),
+                span("user", Provenance::Typed, 2),
+                span("user", Provenance::TypedWithFiles, 1),
+                span("user", Provenance::TypedWithSessions("hi".into()), 2),
+                span("assistant", Provenance::Planner, 6),
+                span("tool", Provenance::Trusted("tool result"), 7),
+                span("user", Provenance::Reference("ref:1".into()), 8),
+            ],
+            tools: vec![],
+            tools_bytes: 4,
+        };
+
+        assert_eq!(
+            view.sections(36),
+            vec![
+                (Section::System, 1),
+                (Section::Instructions, 2),
+                (Section::Skills, 3),
+                (Section::Tools, 4),
+                (Section::Typed, 5),
+                (Section::Planner, 6),
+                (Section::Results, 7),
+                (Section::Other, 8),
+            ]
+        );
+        assert_eq!(
+            view.sections(1_000)
+                .iter()
+                .map(|(_, share)| share)
+                .sum::<u64>(),
+            1_000
+        );
+    }
+
+    /// A section with nothing in it has no row, and a request with nothing in it has none at all.
+    #[test]
+    fn a_section_with_nothing_in_it_is_left_out() {
+        let view = RequestView {
+            model: "model".into(),
+            spans: vec![span("tool", Provenance::Trusted("tool result"), 3)],
+            tools: vec![],
+            tools_bytes: 1,
+        };
+        assert_eq!(
+            view.sections(100),
+            vec![(Section::Tools, 25), (Section::Results, 75)]
+        );
+
+        let empty = RequestView {
+            model: "model".into(),
+            spans: vec![],
+            tools: vec![],
+            tools_bytes: 0,
+        };
+        assert!(empty.sections(100).is_empty());
     }
 }

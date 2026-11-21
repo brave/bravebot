@@ -1356,7 +1356,9 @@ a length the driver already holds, so nothing branches on untrusted content.
 `verified-by: bravebot_tui::app::the_context_command_does_not_describe_a_conversation_it_has_no_request_for`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_context_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
-`verified-by: bravebot_tui::state::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
+`verified-by: bravebot_agent::request_view::a_count_is_apportioned_in_whole_numbers_that_add_up_to_it`
+`verified-by: bravebot_agent::request_view::each_span_is_counted_in_the_section_its_role_and_provenance_name`
+`verified-by: bravebot_agent::request_view::a_section_with_nothing_in_it_is_left_out`
 `verified-by: bravebot_agent::request_view::the_size_of_the_tool_definitions_is_what_was_sent`
 
 <a id="CMD-20"></a>
