@@ -24726,6 +24726,53 @@ fn a_line_does_not_approve_a_write() {
     );
 }
 
+/// RULE-3, PROMPT-9, CLI-36: a program reading lines cannot approve a rule write, so propose_rule
+/// is never put to it and nothing is appended to AGENTS.md.
+#[test]
+fn a_lines_run_refuses_a_rule_proposal() {
+    let gateway = a_gateway_following(
+        vec![
+            Model::Calls(
+                "propose_rule",
+                serde_json::json!({
+                    "text": "Always use tabs.",
+                    "scope": "home",
+                    "reason": "stated"
+                })
+                .to_string(),
+            ),
+            Model::Words("finished"),
+        ],
+        None,
+    );
+    let scratch = Scratch::new("cli-lines-rule").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["-p", "propose a rule"]);
+    run.send(r#"{"type":"answer","id":1,"choices":[[0]]}"#);
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(
+        !scratch.path.join(".bravebot/AGENTS.md").exists(),
+        "a rule was appended to AGENTS.md by a lines run"
+    );
+    assert!(
+        !lines.iter().any(|line| line["event"] == "question"),
+        "a question event was emitted to lines: {lines:?}"
+    );
+    let sent = bodies(&gateway);
+    assert!(
+        sent[1].contains("Nobody could be asked to keep the rule"),
+        "unexpected response to planner: {}",
+        sent[1]
+    );
+    assert!(
+        !sent[1].contains("The user chose: Keep this rule"),
+        "the planner was told the rule was kept: {}",
+        sent[1]
+    );
+}
+
 fn a_gateway_writing_files(files: &[&str]) -> Gateway {
     let mut script: Vec<Model> = files
         .iter()
