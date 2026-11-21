@@ -910,6 +910,13 @@ arrives at all.
     ([PROC-12](processors.md#PROC-12)). The residue is that a plausible remark might still
     persuade somebody to skim the diff it sits above.
   - **Add or drop a trailing newline.**
+  - **Make the processor's request fail.** By content the service refuses, by an answer cut at the
+    token ceiling, by one the service reports as incomplete, or by answering with no bytes at all,
+    which the transport refuses for every processor. The planner is told in a sentence the driver
+    wrote that the request failed, with one word of a closed set the driver wrote (`refused`,
+    `too-long`, `incomplete` or `undecodable`), as it is for every processor. In a manifest, where
+    there is no planner to ask again, the failed request fails the step, and a step that fails ends
+    the run.
 
   What is not on the list is the thing that would matter: choosing *which* file is written. That
   stays the planner's choice plus a person's approval, and no amount of steering the text changes
