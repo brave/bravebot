@@ -1366,6 +1366,13 @@ compacted, since the request on hand is of the conversation that was shortened; 
 is known but this session has built no request, it says that. None of these is drawn as a row of
 zeros or as nothing. The figures are marked approximate, because bytes are not tokens.
 
+The desktop window's Chat › Context Breakdown… shows the same breakdown through the bridge's
+`session.report.context`, in the Notice dialog, and its Chat › Token Spend… shows what `/cost`
+reports through `session.report.cost`. Both are offered while a turn runs. The bridge answers them
+from the session's report store, which the turn writes its count, its spend and its request into,
+and not from the state the turn holds. The sections are the ones this command uses, divided by the
+same function, and each empty state is named in words, as here.
+
 **Why.** One percentage cannot tell a person whether tool definitions, instructions or a few large
 results fill the window, and so whether to compact, clear or trim what is loaded. Every input here is
 a length the driver already holds, so nothing branches on untrusted content.
@@ -1379,6 +1386,13 @@ a length the driver already holds, so nothing branches on untrusted content.
 `verified-by: bravebot_agent::request_view::each_span_is_counted_in_the_section_its_role_and_provenance_name`
 `verified-by: bravebot_agent::request_view::a_section_with_nothing_in_it_is_left_out`
 `verified-by: bravebot_agent::request_view::the_size_of_the_tool_definitions_is_what_was_sent`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_divides_the_measured_count_by_section`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_says_when_nothing_was_measured`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_says_when_the_conversation_was_compacted`
+`verified-by: bravebot_ui_bridge::reports_tests::the_context_report_does_not_divide_a_count_it_has_no_request_for`
+`verified-by: bravebot_ui_bridge::reports_tests::the_cost_report_counts_the_running_turn_and_what_no_turn_accounts_for`
+`verified-by: bravebot_ui_bridge::reports_tests::the_reports_are_answered_while_a_turn_holds_the_session`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Token Spend… and Chat › Context Breakdown… are offered on an open chat during a turn and after it and are routed to their own actions, ui/scripts/reports.test.mjs that a measured context is broken down by section and called approximate and that each empty state is named, and ui/scripts/drive-reports.mjs opens every report from the real menu before, during and after a turn; make check-ui runs all three)`
 
 <a id="CMD-20"></a>
 ### CMD-20: a person who has been away is given a recap, once, without asking
