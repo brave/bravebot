@@ -526,6 +526,18 @@ were. Only a `/btw` already waiting holds a later one back, as a waiting line of
 does for any command. A click on a row of the info panel that
 stands for one of these commands is carried out by the same rule ([MOUSE-29](mouse.md#MOUSE-29)).
 
+**`/btw` in the desktop app.** The desktop composer takes `/btw <question>` typed on Enter, on the
+key that queues a line and on the key that interjects one, and sends it to the bridge as
+`session.btw`, never as a prompt or an interjection. At rest it is asked over the session's exchange
+as the terminal asks it. While a turn runs it is asked at once, beside the turn, over the exchange
+the turn published with its latest request and the turn's own file authority, and lines already
+queued stay where they were. The bridge refuses it in the terminal's cases: an empty question, a
+second question while one is out, a file dropped on it beside a turn, and a turn that has not sent a
+request yet. The window draws each refusal as an error note in the bridge's words and puts the line
+back in the composer. Stopping the turn stops the question. A turn that ends any other way leaves it
+out, and its answer is kept and the record written again once the turn has released the session.
+Where the answer is read in the window is [WATCH-19](watching.md#WATCH-19)'s.
+
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
 `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` are not carried out while the turn runs, and do
 not stop it: stopping a turn costs the work it has done, and a person who typed a command did not
@@ -1229,6 +1241,13 @@ it is drawn and before it is offered to the record, so a model that ignores the 
 for cannot exceed it. It is answered and recorded as an aside is: a row in the mode Ctrl-L opens, and
 written down only where the exchange had met nothing untrusted ([SESSION-20](sessions.md#SESSION-20)). It is
 not a turn. Typed during a turn it waits for the turn to end (CMD-8).
+
+The desktop composer takes the bare `/recap` and sends it to the bridge as `session.recap`, never as
+a prompt. The bridge asks the same fixed question with the same limit and keeps the answer as an
+aside labelled `/recap`. While a turn runs the bridge refuses it as `turn_in_flight`, and the window
+puts the line in the queue as a recap, asked again when the turn ends rather than sent. Its answer is
+read where a `/btw` answer is ([WATCH-19](watching.md#WATCH-19)). The recap the terminal makes on its
+own for a person who has been away is the terminal's alone (CMD-20).
 
 **Why.** A person returning to a long session needs to know where it stands, and reading the
 transcript back to find out is the cost the command removes. Sending it as a prompt would put the

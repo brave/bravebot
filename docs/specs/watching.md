@@ -574,6 +574,11 @@ session's list is asides alone. Put last, every delegate a later turn spawned wo
 above them and move their places; put first, every delegate the session goes on to start appends
 after them.
 
+The desktop app has no agents list. There a `/btw` or `/recap` is read in two places: a row of the
+Asides panel in the context column, which draws the question above the answer as plain text, and one
+narration line in the transcript ([WATCH-19](#WATCH-19)). The narration is a kind of row no turn
+sends, so neither half reaches the planner from it.
+
 `verified-by: bravebot_tui::state::an_aside_is_something_the_view_can_open`
 `verified-by: bravebot_tui::state::an_aside_keeps_its_place_when_a_delegate_is_spawned_after_it`
 `verified-by: bravebot_tui::state::neither_half_of_an_aside_reaches_the_transcript`
@@ -584,6 +589,9 @@ after them.
 `verified-by: bravebot_tui::render::an_asides_view_draws_the_question_and_the_answer`
 `verified-by: bravebot_tui::render::an_asides_view_wraps_an_answer_that_is_one_long_line`
 `verified-by: bravebot_agent::turn::asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_not_added_to_the_exchange`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that the Asides panel lists each question and answer as plain text, and that an aside.done becomes one narration row, a kind no turn sends, and never a user bubble; make check-ui runs it)`
 
 <a id="WATCH-19"></a>
 ### WATCH-19: the view opens on an aside the moment it is answered
@@ -631,7 +639,10 @@ not called an answer.
 The desktop app has no agents list and no view to open. There an answer is a line in the transcript
 and a row of the Asides panel in the context column, which lists the session's questions and answers
 oldest first, the ones the record kept when the session was opened followed by the ones answered
-since. Neither is ever sent to the model.
+since. Neither is ever sent to the model. The transcript line holds the question and the answer, or
+says the question was stopped or why it failed, and a stopped or failed question adds no row to the
+panel. A `/btw` asked beside a turn adds one more line when it goes out, naming the Asides panel and
+saying the turn goes on. Neither line moves the running turn or the lines queued behind it.
 
 `verified-by: bravebot_tui::app::a_btw_answered_beside_a_turn_is_a_row_and_does_not_open_the_view`
 `verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
@@ -642,6 +653,9 @@ since. Neither is ever sent to the model.
 `verified-by: bravebot_tui::state::answering_a_question_while_the_view_is_open_keeps_the_turns_own_view`
 `verified-by: bravebot_tui::state::answering_a_question_closes_a_history_search_opened_during_the_wait`
 `verified-by: bravebot_tui::render::an_answer_takes_the_screen_from_a_scroller_opened_while_it_was_awaited`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_beside_a_turn_is_asked_over_the_turns_exchange_and_answered_while_it_runs`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_still_out_when_the_turn_ends_is_answered_and_recorded`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that a /btw the bridge answers besideTurn:true draws one line naming the Asides panel, that an aside.done arriving while a turn runs adds one line and leaves running, the queue and awaitingOrdinal unchanged, that a stopped or failed question is a line and not an aside, and that a session opened or resumed seeds its asides from the bridge answer; make check-ui runs it)`
 
 <a id="WATCH-20"></a>
 ### WATCH-20: an answer the record cannot hold is said to be on the screen only
