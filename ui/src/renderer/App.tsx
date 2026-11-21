@@ -323,6 +323,8 @@ export function App(): React.JSX.Element {
         entries: t.fromSaid(opened.said),
         todos: Object.values(opened.todos).flat(),
         notes: opened.notes ?? [],
+        // CMD-8, CMD-16: the /btw and /recap answers the record kept, for the Asides panel.
+        asides: opened.asides ?? [],
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
         contextTokens: opened.contextTokens,

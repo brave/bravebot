@@ -1,6 +1,7 @@
 import type { Enhancement } from './enhancing'
 import type { RetryDue } from './retry'
 import type { FileAttachment } from '../shared/files'
+import type { AsideRow } from '../shared/aside'
 import type { Staged, Staging } from './staging'
 import type {
   Checking,
@@ -39,6 +40,11 @@ export interface Queued {
    * bridge when the turn ends and is never sent as a prompt (CMD-8).
    */
   schedule?: string
+  /**
+   * Set for a typed `/recap` line that waits for the turn, which the bridge refused while it ran
+   * (CMD-16). It is asked of the bridge when the turn ends and is never sent as a prompt.
+   */
+  aside?: 'recap'
 }
 
 /** A line sent into the running turn, kept as written until the turn says it has read it. */
@@ -76,6 +82,8 @@ export interface Live {
   todos: TodoRow[]
   /** The notes kept on this session's record, oldest first. Shown beside it, never sent. */
   notes?: SessionNote[]
+  /** The `/btw` and `/recap` answers of this session, oldest first. Shown beside it, never sent. */
+  asides?: AsideRow[]
   quarantine: Shown[]
   phase: Waiting | null
   /**

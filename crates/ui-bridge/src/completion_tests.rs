@@ -108,6 +108,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             finished,
             interjections: Default::default(),
             actors: Default::default(),
+            published: Default::default(),
         })
     });
     let result = received.recv_timeout(Duration::from_secs(10));

@@ -366,6 +366,23 @@ export interface SessionSettled extends ProjectQuestionsReport {
   settingsRules?: SettingsRules | null
 }
 
+/** `session.btw`: a question asked over the exchange, at rest or beside the running turn (CMD-8). Answered with `AsideStarted`. */
+export interface BtwParams {
+  session: string
+  question: string
+  model: string | null
+  /** Ids of pictures pasted on the line, which the main process resolves to `images` (CMD-5). */
+  pastes?: string[]
+  /** Ids of pictures and PDFs dropped on the line, which the main process resolves to `attachments`. */
+  drops?: string[]
+  /** Text files dropped on the line, each put back into the question as its name (DROP-4). */
+  files?: { marker: string; name: string }[]
+}
+/** `session.recap`: a recap of the exchange at rest (CMD-16). Refused with `turn_in_flight` while a turn runs. */
+export interface RecapParams { session: string; model: string | null }
+/** `session.aside.cancel`: stops the question that is out, if any. Answered with `{}`. */
+export interface AsideCancelParams { session: string }
+
 export interface OpenedSession extends SessionSettled {
   /** Absent from an older bridge, which kept no rewind points. Newest first. */
   rewind?: RewindPoint[]
@@ -378,6 +395,8 @@ export interface OpenedSession extends SessionSettled {
   todos: Record<string, TodoRow[]>
   /** Absent from an older bridge, which sent none. */
   notes?: SessionNote[]
+  /** The `/btw` and `/recap` asides the record kept, oldest first. Absent from an older bridge. */
+  asides?: import('./aside').AsideRow[]
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string
@@ -1217,6 +1236,8 @@ export interface EventMap {
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
   'schedule.ran': import('./schedule').ScheduleAnswer
+  /** What a `session.btw` or `session.recap` came back with (CMD-8, CMD-16). Shown, never sent to the model. */
+  'aside.done': import('./aside').AsideDone
   /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
   phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }
