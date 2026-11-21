@@ -326,6 +326,13 @@ pub const DENIED: &[&str] = &[
     // (INPUT-50). The only client of the host today has no box to put it in.
     "session.enhance",
     "session.enhance.cancel",
+    // The `/cost`, `/context`, `/request` and `/status` reports the window's Chat menu opens
+    // (CMD-19). The only client of the host today has no menu that asks for them, and the last
+    // request holds the session's whole system prompt and the paths of its instruction files.
+    "session.report.cost",
+    "session.report.context",
+    "session.report.request",
+    "session.report.status",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",
