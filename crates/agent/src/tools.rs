@@ -11142,10 +11142,9 @@ fn operand_names_of<S: Sink>(
         if found.contains_key(&operand) {
             continue;
         }
-        let looked_up = match std::path::Path::new(&operand).strip_prefix(workspace.root()) {
-            Ok(relative) => relative.to_string_lossy().into_owned(),
-            Err(_) => operand.clone(),
-        };
+        let looked_up = workspace
+            .below_root(&operand)
+            .unwrap_or_else(|| operand.clone());
         let others = workspace.other_trust_keys(&looked_up);
         found.insert(operand, (others.keys, others.complete));
     }

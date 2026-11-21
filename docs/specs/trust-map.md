@@ -1760,6 +1760,17 @@ thing stays outside both: the prompt before a write asks under the
 spelling it was given, since it also matches the rules a person wrote in advance and those are
 matched on the path as written, so it asks where a reduced name would not have.
 
+Whether a name is below the working directory is decided in one spelling of both. On a host where a
+backslash separates, the platform resolves the working directory to `\\?\C:\proj` and a person, a
+command line or a language server names a file in it as `C:\proj\x`. `Path` reads those as two
+different prefixes, so a comparison by components finds nothing below the directory, and a lookup
+that is made under the relative name is made under an absolute one instead, which
+`Workspace::resolve` refuses inside the root. `bravebot_core::spelling::below` compares both as keys,
+with the drive letter in one case, and is what takes a name below the working directory for its
+relative spelling in the operands of a `run` line ([CMDLINE-8](tools/command-line.md#CMDLINE-8)) and
+in the locations a language server reports ([LSP-3](tools/lsp.md#LSP-3)). Where a slash is the only
+separator `C:\proj\x` is a file at the top of the project and is below nothing.
+
 **Why.** Without the reduction a directory reached by a second spelling of its own name is covered
 by nothing, so a file the user vouched for is quarantined under half its names; on macOS that is
 the ordinary case rather than a corner, since `/tmp` and `$TMPDIR` are both links. And the refusal
@@ -1795,6 +1806,9 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::policy::a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed`
 `verified-by: bravebot_agent::workspace::files_in_an_added_directory_named_through_a_link_are_labelled_as_a_read_labels_them`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_vouched_directory_reached_through_a_link_holds_its_files`
+`verified-by: bravebot_core::spelling::a_name_is_below_a_verbatim_root_whichever_way_the_drive_path_is_spelled`
+`verified-by: bravebot_core::spelling::a_drive_spelling_is_not_below_a_root_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_agent::workspace::a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path`
 
 ## What a rewind puts back
 
