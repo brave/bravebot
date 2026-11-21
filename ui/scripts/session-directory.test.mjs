@@ -81,7 +81,7 @@ const NO_GATE = {
 const TAKES_NO_DIRECTORY = [
   'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.rewind',
   'session.note', 'session.folders.list',
-  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
+  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'session.compact', 'session.compact.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'rules.reply',

@@ -218,6 +218,8 @@ export function installMenu(window: BrowserWindow): void {
         SEPARATOR,
         item('turn.rewind'),
         item('session.note'),
+        SEPARATOR,
+        item('session.compact'),
       ],
     },
     { role: 'windowMenu' },

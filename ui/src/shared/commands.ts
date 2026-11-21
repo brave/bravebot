@@ -39,6 +39,7 @@ export type CommandId =
   | 'mode.cycle'
   | 'turn.rewind'
   | 'session.note'
+  | 'session.compact'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -188,6 +189,9 @@ export const COMMANDS: readonly Command[] = [
   // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the
   // turn holds the record until it ends.
   { id: 'session.note', label: 'Add Note…', requires: 'forkable' },
+  // `/compact [focus]` (CMD-34). Not while a turn runs, since the turn holds the conversation. No
+  // accelerator, because it asks for a focus first.
+  { id: 'session.compact', label: 'Compact Conversation…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',
