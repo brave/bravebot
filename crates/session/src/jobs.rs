@@ -808,6 +808,10 @@ fn lock(_file: &std::fs::File, hold: Hold) -> bool {
 /// What [`refusal`] reads about a foreground session that is to be handed to a background one
 /// (BG-2).
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a separate fact a refusal reads, and none is a state of another"
+)]
 pub struct Handing {
     /// The mode the session's next turn runs in.
     pub permission_mode: bravebot_agent::PermissionMode,
@@ -937,6 +941,10 @@ pub fn start_host(
     if !roster.get(id).is_some_and(|seen| seen.live)
         && let Some(socket) = roster.socket_of(id)
     {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a socket already gone is the state this wants"
+        )]
         let _ = std::fs::remove_file(socket);
     }
     let mut command = host_command(program, id, directory, mode);
