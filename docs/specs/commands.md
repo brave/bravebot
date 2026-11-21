@@ -811,6 +811,7 @@ carried out or queued as above.
 `verified-by: bravebot_ui_bridge::asking_aside::stopping_the_turn_stops_the_btw_beside_it`
 `verified-by: bravebot_ui_bridge::asking_aside::a_btw_still_out_when_the_turn_ends_is_answered_and_recorded`
 `verified-by: bravebot_ui_bridge::aside::an_empty_question_is_refused`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that only /btw and /btw <question> are the command, that the composer asks it from the typed line in submit, the queue key and the interject key before anything is sent or queued, that it goes to session.btw while a turn runs without reading the queue, and that its aside.done answer becomes a narration row and never a prompt; make check-ui runs it)`
 
 ## What a slash word is offered
 
@@ -1240,6 +1241,7 @@ question and the account into the conversation the planner reads for the rest of
 `verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_in_the_record_when_the_session_is_opened_again`
 `verified-by: bravebot_ui_bridge::asking_aside::a_recap_while_a_turn_runs_is_refused_as_turn_in_flight`
 `verified-by: bravebot_ui_bridge::aside::an_answer_is_shown_kept_and_charged`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that only the bare /recap is the command, that a /recap the bridge refuses with turn_in_flight waits in the queue as a recap and is asked again when the turn ends rather than sent as a prompt, and that its aside.done answer becomes a narration row and never a prompt; make check-ui runs it)`
 
 <a id="CMD-17"></a>
 ### CMD-17: a line starting with the name of a prompt file is replaced by the file's text, and sends nothing

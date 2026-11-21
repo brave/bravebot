@@ -636,6 +636,10 @@ const ALLOWED = new Set([
   'turn.interject',
   'session.enhance',
   'session.enhance.cancel',
+  // A typed `/btw` or `/recap` (CMD-8, CMD-16): a question over the exchange, never a turn.
+  'session.btw',
+  'session.recap',
+  'session.aside.cancel',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',
