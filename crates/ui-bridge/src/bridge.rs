@@ -2506,20 +2506,19 @@ impl Bridge {
                 .ok()
                 .and_then(|state| state.handle.as_ref().and_then(Handle::to_resume)),
         };
-        let chat = crate::background::Chat {
+        let chat = bravebot_session::jobs::Handing {
             permission_mode: open.permission_mode.get(),
             sandbox: self.sandbox_mode_in(&open.project, open.sandbox),
             settled: self.sandbox_mode_in(&open.project, None),
             busy,
-            watching,
+            // A chat has no loop or goal, so its watches are all it could keep running.
+            keeps_running: watching,
             recorded: left.is_some(),
             incognito: bravebot_core::incognito::engaged(),
         };
         let mode = crate::background::refusal(&chat).map_err(Failure::bad_request)?;
         let (Some(left), Some(roster)) = (left, bravebot_session::jobs::Roster::writable()) else {
-            return Err(Failure::bad_request(
-                "There is nothing to continue in the background until a turn of this chat has ended.",
-            ));
+            return Err(Failure::bad_request(crate::background::NOTHING_RECORDED));
         };
         let program = crate::background::program()
             .ok_or_else(|| Failure::bad_request(crate::background::NO_PROGRAM))?;

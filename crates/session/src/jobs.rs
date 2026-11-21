@@ -805,6 +805,99 @@ fn lock(_file: &std::fs::File, hold: Hold) -> bool {
     matches!(hold, Hold::Exclusive)
 }
 
+/// What [`refusal`] reads about a foreground session that is to be handed to a background one
+/// (BG-2).
+#[derive(Debug, Clone, Copy)]
+pub struct Handing {
+    /// The mode the session's next turn runs in.
+    pub permission_mode: bravebot_agent::PermissionMode,
+    /// The sandbox mode the session's next turn runs its programs under.
+    pub sandbox: bravebot_sandbox::SandboxMode,
+    /// The sandbox mode the settings choose, which the background process runs in (SANDBOX-22).
+    pub settled: bravebot_sandbox::SandboxMode,
+    /// Whether a turn, a compaction, or a question beside the work is running. A front end that
+    /// waits for these before it decides passes `false`.
+    pub busy: bool,
+    /// Whether a loop, a goal or a watch is running, none of which the background session has.
+    pub keeps_running: bool,
+    /// Whether the session has a record on disk a background session can resume.
+    pub recorded: bool,
+    /// Whether this process leaves nothing behind (BG-1).
+    pub incognito: bool,
+}
+
+/// Why a foreground session may not be handed to a background one. Each front end says it in its
+/// own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Background sessions do not run on this system (BG-1).
+    Unsupported,
+    /// The session is in auto, and nobody would see what auto decided (BG-8).
+    Auto,
+    /// The session bypasses permissions (BG-8).
+    Bypass,
+    /// The session's sandbox mode is not the one the settings choose, which the background process
+    /// would run in instead.
+    SandboxMoved {
+        mode: bravebot_sandbox::SandboxMode,
+        settled: bravebot_sandbox::SandboxMode,
+    },
+    /// Something is running in the session.
+    Busy,
+    /// A loop, a goal or a watch would be dropped.
+    KeepsRunning,
+    /// The process is incognito and keeps no record.
+    Incognito,
+    /// No record has been written yet.
+    NothingRecorded,
+}
+
+impl Refusal {
+    /// Whether this refusal comes before a front end's own checks that follow the mode, such as the
+    /// terminal's refusal for a command-line option the background process would lose. Those are
+    /// said in [`refusal`]'s order only where this is false.
+    pub fn precedes_the_options(self) -> bool {
+        matches!(self, Self::Unsupported | Self::Auto | Self::Bypass)
+    }
+}
+
+/// The mode a foreground session goes on in once handed to a background one, or why it may not be
+/// (BG-2, BG-8).
+///
+/// The one decision both front ends make, in one order, so a session that fails several is told
+/// the same first reason by each.
+pub fn refusal(handing: &Handing) -> Result<Mode, Refusal> {
+    use bravebot_agent::PermissionMode;
+    if !cfg!(unix) {
+        return Err(Refusal::Unsupported);
+    }
+    let Some(mode) = Mode::of(handing.permission_mode) else {
+        return Err(match handing.permission_mode {
+            PermissionMode::Auto => Refusal::Auto,
+            _ => Refusal::Bypass,
+        });
+    };
+    if handing.sandbox != handing.settled {
+        return Err(Refusal::SandboxMoved {
+            mode: handing.sandbox,
+            settled: handing.settled,
+        });
+    }
+    if handing.busy {
+        return Err(Refusal::Busy);
+    }
+    if handing.keeps_running {
+        return Err(Refusal::KeepsRunning);
+    }
+    if handing.incognito {
+        return Err(Refusal::Incognito);
+    }
+    if !handing.recorded {
+        return Err(Refusal::NothingRecorded);
+    }
+    Ok(mode)
+}
+
 /// Why [`start_host`] started no background session. Each front end says it in its own words.
 #[derive(Debug)]
 pub enum StartError {
@@ -984,6 +1077,115 @@ mod tests {
             assert!(!label.is_empty(), "{held:?} has no word");
             assert!(said.insert(label), "{held:?} repeats the word {label}");
         }
+    }
+
+    fn idle() -> Handing {
+        Handing {
+            permission_mode: bravebot_agent::PermissionMode::Ask,
+            sandbox: bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            settled: bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            busy: false,
+            keeps_running: false,
+            recorded: true,
+            incognito: false,
+        }
+    }
+
+    /// BG-2, BG-8: an idle recorded session in a mode that carries over is handed over in that
+    /// mode, and each refusal is its own reason, given in one order whichever front end asks.
+    #[test]
+    fn each_refusal_of_a_hand_over_is_its_own_and_comes_in_one_order() {
+        use bravebot_agent::PermissionMode;
+        use bravebot_sandbox::SandboxMode;
+        if !cfg!(unix) {
+            assert_eq!(refusal(&idle()), Err(Refusal::Unsupported));
+            return;
+        }
+        for (mode, carried) in [
+            (PermissionMode::Ask, Mode::Ask),
+            (PermissionMode::AcceptEdits, Mode::AcceptEdits),
+            (PermissionMode::Plan, Mode::Plan),
+        ] {
+            let handing = Handing {
+                permission_mode: mode,
+                ..idle()
+            };
+            assert_eq!(refusal(&handing), Ok(carried));
+        }
+        let refused = [
+            (
+                Handing {
+                    permission_mode: PermissionMode::Auto,
+                    ..idle()
+                },
+                Refusal::Auto,
+            ),
+            (
+                Handing {
+                    permission_mode: PermissionMode::Bypass,
+                    ..idle()
+                },
+                Refusal::Bypass,
+            ),
+            (
+                Handing {
+                    sandbox: SandboxMode::Strict,
+                    ..idle()
+                },
+                Refusal::SandboxMoved {
+                    mode: SandboxMode::Strict,
+                    settled: SandboxMode::WorkspaceWrite,
+                },
+            ),
+            (
+                Handing {
+                    busy: true,
+                    ..idle()
+                },
+                Refusal::Busy,
+            ),
+            (
+                Handing {
+                    keeps_running: true,
+                    ..idle()
+                },
+                Refusal::KeepsRunning,
+            ),
+            (
+                Handing {
+                    incognito: true,
+                    recorded: false,
+                    ..idle()
+                },
+                Refusal::Incognito,
+            ),
+            (
+                Handing {
+                    recorded: false,
+                    ..idle()
+                },
+                Refusal::NothingRecorded,
+            ),
+        ];
+        for (handing, expected) in refused {
+            assert_eq!(refusal(&handing), Err(expected), "{handing:?}");
+        }
+        // Every reason at once is told the first one.
+        let everything = Handing {
+            permission_mode: PermissionMode::Auto,
+            sandbox: SandboxMode::Strict,
+            busy: true,
+            keeps_running: true,
+            recorded: false,
+            incognito: true,
+            ..idle()
+        };
+        assert_eq!(refusal(&everything), Err(Refusal::Auto));
+        let moved = Handing {
+            permission_mode: PermissionMode::Ask,
+            ..everything
+        };
+        assert!(matches!(refusal(&moved), Err(Refusal::SandboxMoved { .. })));
     }
 
     fn roster() -> (tempfile::TempDir, Roster) {
