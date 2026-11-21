@@ -242,27 +242,40 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
    * A `/btw` goes out at once, while a turn runs and lines wait in the queue too (CMD-8): the bridge
    * asks it over the exchange the turn sent. A `/recap` the bridge refuses while a turn runs
    * (`turn_in_flight`, the bridge's decision) waits in the queue and is asked again when the turn
-   * ends (CMD-16). A `/btw` carries no file or picture yet, so one with any staged is refused here
-   * and its line goes back in the composer.
+   * ends (CMD-16). A `/btw` carries the pictures and files staged on its line (CMD-5). One the
+   * bridge refuses with staged items, such as a dropped file while a turn runs, goes back in the
+   * composer with them, so it can be asked again. A file chosen with the paperclip is a grant a
+   * question cannot be handed, so a `/btw` with one is refused here.
    */
   const askAside = useCallback(async (handle: string, kind: 'btw' | 'recap', question: string, line: string, queuedAlready = false) => {
     const asking = openedLives.current.get(handle)
-    if (kind === 'btw' && (named(asking?.staging, line).length > 0 || (asking?.attachments?.length ?? 0) > 0)) {
+    if (kind === 'btw' && (asking?.attachments?.length ?? 0) > 0) {
       if (handleRef.current === handle) setDraft(line)
-      setProblem('A /btw question cannot carry files or pictures yet. Take them off the line and ask again.')
+      setProblem('A /btw question cannot carry files chosen with the paperclip. Take them off and ask again.')
       return
     }
     const model = asking?.model ?? null
+    // What was pasted or dropped on the line goes with the question (CMD-5): pictures and PDFs as
+    // the ids the main process resolves, as it does for a prompt's, and a text file as its name
+    // (DROP-4). The bridge refuses a dropped file while a turn runs, in the terminal's words.
+    const staged = kind === 'btw' ? named(asking?.staging, line) : []
+    const carried = {
+      pastes: grantsOf(staged).pastes,
+      drops: staged.flatMap((item) => item.via === 'drop' && item.file.kind !== 'text' ? [item.file.id] : []),
+      files: markersOf(staged.filter((item) => item.via === 'drop' && item.file.kind === 'text')).files,
+    }
     try {
       const started = kind === 'btw'
-        ? await call<AsideStarted>('session.btw', { session: handle, question, model })
+        ? await call<AsideStarted>('session.btw', { session: handle, question, model, ...carried })
         : await call<AsideStarted>('session.recap', { session: handle, model })
+      if (staged.length > 0) updateSession(handle, (old) => old ? { ...old, staging: sent(old.staging) } : old)
       if (started.besideTurn) updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.asideOut(question)] } : old)
     } catch (error) {
       if (kind === 'recap' && error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
         updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], aside: 'recap' }] } : old)
         return
       }
+      if (staged.length > 0 && handleRef.current === handle) setDraft(line)
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error))] } : old)
     }
   }, [])

@@ -870,6 +870,13 @@ it arrives as an `aside.done` event with `recap` false. An empty question is ref
 `bad_request`, as is a second question while one is out, a `/recap` included.
 `session.aside.cancel` stops it.
 
+What was staged on the line goes with the question (CMD-5), under the names `turn.send` uses:
+`images` for pictures pasted, `attachments` for absolute paths of pictures and PDFs dropped, read
+before the request under a policy of their own (DROP-4), and `files`, `{ marker, name }` pairs that
+put a dropped text file back into the question as its name. A non-empty `dropped` is refused with
+`bad_request`, because on a `/btw` line a text file is its name. While a turn runs, a non-empty
+`attachments` is refused with `bad_request` in the terminal's words; pasted pictures still go.
+
 While a turn runs, the question is asked over the exchange the turn sent at its latest request,
 under the turn's own file decisions, and the answer is `besideTurn: true`. It is refused with
 `bad_request` before the turn has sent anything. `turn.cancel` stops it with the turn, and its

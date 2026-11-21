@@ -173,6 +173,23 @@ test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /
   assert.ok(interjecting.indexOf('askAside(') < interjecting.indexOf("route(live"), 'a /btw is not queued behind the turn')
 })
 
+test('a /btw sends what was staged on its line with the request, and a recap sends none (CMD-5)', () => {
+  const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const typedAside = '))
+  // The items the line still names, read for a /btw only.
+  assert.match(body, /const staged = kind === 'btw' \? named\(asking\?\.staging, line\) : \[\]/)
+  // Pasted pictures and dropped pictures or PDFs go as grant ids, and a text file as its marker and name.
+  assert.match(body, /pastes: grantsOf\(staged\)\.pastes/)
+  assert.match(body, /drops: staged\.flatMap\(\(item\) => item\.via === 'drop' && item\.file\.kind !== 'text' \? \[item\.file\.id\] : \[\]\)/)
+  assert.match(body, /files: markersOf\(staged\.filter\(\(item\) => item\.via === 'drop' && item\.file\.kind === 'text'\)\)\.files/)
+  assert.match(body, /call<AsideStarted>\('session\.btw', \{ session: handle, question, model, \.\.\.carried \}\)/)
+  assert.match(body, /call<AsideStarted>\('session\.recap', \{ session: handle, model \}\)/)
+  // Sent items leave the composer, and a refused line goes back to it with them.
+  assert.match(body, /if \(staged\.length > 0\) updateSession\(handle, \(old\) => old \? \{ \.\.\.old, staging: sent\(old\.staging\) \} : old\)/)
+  assert.match(body, /if \(staged\.length > 0 && handleRef\.current === handle\) setDraft\(line\)/)
+  assert.doesNotMatch(body, /cannot carry files or pictures yet/, 'staged items are no longer refused')
+})
+
 // The Asides panel, drawn through `react-dom/server` as notes.test.mjs draws the Notes panel. The
 // file tree reads the disk, so it is left out, and a Leo button is drawn as a plain one.
 const React = require('react')

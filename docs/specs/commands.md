@@ -319,6 +319,11 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
 `verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_picture_pasted_on_a_btw_at_rest_goes_with_the_question_and_not_into_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_picture_dropped_on_a_btw_at_rest_goes_with_the_question`
+`verified-by: bravebot_ui_bridge::asking_aside::a_text_file_dropped_on_a_btw_is_its_name_in_the_question`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that a /btw sends the pictures pasted and the pictures or PDFs dropped on its line as grant ids and a dropped text file as its marker and name, and ui/scripts/drops.test.mjs asserts that the main process forwards a session.btw with only the paths its grants name and no picture or path the window named; make check-ui runs both)`
 
 
 <a id="CMD-6"></a>
