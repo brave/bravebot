@@ -57,6 +57,7 @@ import { useExperience, conversationPreferences, setConversation, setExperience,
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
+import { contextNotice, costNotice, type ContextReport, type CostReport } from './reports'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
@@ -604,6 +605,27 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // The desktop's /cost and /context (CMD-15, CMD-19). Both answer while a turn runs, since the
+  // bridge reads them from the session's report store and not from the state the turn holds.
+  const cost = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(costNotice(await call<CostReport>('session.report.cost', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+  const contextBreakdown = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(contextNotice(await call<ContextReport>('session.report.context', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+
   // Plain text, not Markdown: the notes link every issue, and the agent has already written each
   // link as its label, so nothing in this dialog opens anything.
   const changelog = useCallback(async () => {
@@ -939,6 +961,8 @@ export function App(): React.JSX.Element {
     changelog: () => void changelog(),
     note: askNote,
     doctor: () => void doctor(),
+    cost: () => void cost(),
+    context: () => void contextBreakdown(),
     bugReport: () => setBugReportOpen(true),
     openSession,
     closeNamed,
