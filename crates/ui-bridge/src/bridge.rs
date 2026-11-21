@@ -4718,19 +4718,23 @@ pub(crate) fn save(
     archived
 }
 
+/// A `/btw` line's question, pasted pictures and dropped files, as [`staged_aside`] reads them.
+type Staged = (
+    Option<String>,
+    Vec<bravebot_agent::turn::PastedImage>,
+    Vec<bravebot_agent::turn::Attachment>,
+);
+
+/// A question asked beside the work, with the account and file authority it is asked under.
+type Asking = (
+    bravebot_agent::aside::Question,
+    bravebot_agent::chatgpt::AccountSession,
+    bravebot_core::file_authority::FileAuthority,
+);
+
 /// What was staged on a `/btw` line: the person's question, its pasted pictures, and its dropped
 /// pictures and PDFs. A recap (`btw` unset) is the driver's own question and takes none of them.
-fn staged_aside(
-    request: &Request,
-    btw: bool,
-) -> Result<
-    (
-        Option<String>,
-        Vec<bravebot_agent::turn::PastedImage>,
-        Vec<bravebot_agent::turn::Attachment>,
-    ),
-    Failure,
-> {
+fn staged_aside(request: &Request, btw: bool) -> Result<Staged, Failure> {
     if !btw {
         return Ok((None, Vec::new(), Vec::new()));
     }
@@ -4771,14 +4775,7 @@ fn asked_beside_turn(
     published: &crate::turn::Published,
     question: &str,
     pasted: Vec<bravebot_agent::turn::PastedImage>,
-) -> Result<
-    (
-        bravebot_agent::aside::Question,
-        bravebot_agent::chatgpt::AccountSession,
-        bravebot_core::file_authority::FileAuthority,
-    ),
-    Failure,
-> {
+) -> Result<Asking, Failure> {
     let (Some(fork), Some(files), Some(account)) =
         (published.exchange(), published.files(), published.account())
     else {
@@ -4802,14 +4799,7 @@ fn asked_at_rest(
     pasted: Vec<bravebot_agent::turn::PastedImage>,
     workspace: Option<&Workspace>,
     dropped: &[bravebot_agent::turn::Attachment],
-) -> Result<
-    (
-        bravebot_agent::aside::Question,
-        bravebot_agent::chatgpt::AccountSession,
-        bravebot_core::file_authority::FileAuthority,
-    ),
-    Failure,
-> {
+) -> Result<Asking, Failure> {
     let mut state = state
         .lock()
         .map_err(|_| Failure::new(ErrorCode::Internal, "the session's state is unavailable"))?;
