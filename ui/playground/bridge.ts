@@ -76,6 +76,8 @@ let rows: SessionSummary[] = SESSIONS()
 let bots: Bot[] = BOTS()
 let experience: Experience = parseExperience(null)
 let effort: EffortLevel | null = null
+/** The level every playground session began with, which a model of the ChatGPT account is sent (CHATGPT-10). */
+const sessionBegan: EffortLevel | null = 'medium'
 let appearance: Appearance = (localStorage.getItem('playground:theme') as Appearance | null) ?? 'system'
 let requests = 100
 let created = 0
@@ -311,7 +313,7 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'update.status': return ok({ check: 'on', running: '0.19.0', newer: false, checked: null })
     case 'session.list': return ok({ sessions: rows })
     case 'models.list': return ok(MODELS)
-    case 'effort.get': return ok({ recorded: effort, inForce: effort, outranked: false })
+    case 'effort.get': return ok({ recorded: effort, inForce: effort, outranked: false, ...(typeof params.session === 'string' ? { sessionBegan } : {}) })
     case 'effort.set': effort = (params.level as EffortLevel | null | undefined) ?? null; return ok({ recorded: effort })
     case 'mentions.named': return ok({ files: [] })
     case 'mentions.offer': {

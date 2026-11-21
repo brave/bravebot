@@ -41,7 +41,7 @@ try {
           { id: 'brave-model', name: 'Brave model', provider: 'Brave', providerKey: 'brave', readsEffort: false, premium: false, contextWindow: 24000 },
         ] } }
       }
-      if (method === 'effort.get') return { ok: { recorded: globalThis.modelTest.effort, inForce: globalThis.modelTest.effort, outranked: false } }
+      if (method === 'effort.get') return { ok: { recorded: globalThis.modelTest.effort, inForce: globalThis.modelTest.effort, outranked: false, sessionBegan: globalThis.modelTest.sessionBegan } }
       if (method === 'effort.set') {
         globalThis.modelTest.effort = params?.level ?? null
         globalThis.modelTest.efforts.push(params?.level ?? null)

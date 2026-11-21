@@ -71,7 +71,7 @@ test('the request handler refuses session.new, session.open, session.delete, ses
 const GATED = ['session.new', 'session.open', 'session.delete', 'session.purge', 'session.import']
 const NO_GATE = {
   'models.list': 'answered in the main process, which reads the configuration of the folder it is given and opens no session',
-  'effort.get': 'answered with the folder of the session the window names, whose settings it reads, and opens no session',
+  'effort.get': 'answered with the folder of the session the window names, whose settings it reads, and the handle of that session, whose starting level it reads, and opens no session',
   'session.list': 'the sanitiser drops a directory the window states, so the window cannot choose the store',
   'manifest.read': 'reads a store record and opens nothing',
   'connectors.preview': 'a stdio connector\'s own working folder, typed into the form',

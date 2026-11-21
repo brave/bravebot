@@ -810,9 +810,12 @@ if (primary) app.whenReady().then(() => {
       const ok = method === 'models.list'
         ? await listModels(rootForSession(typeof session === 'string' ? session : ''))
         // The level a checkout's settings name outranks a pick there (BACKEND-43), so the picker is
-        // told about the folder its session works in, which the window names by session alone.
+        // told about the folder its session works in, which the window names by session alone. The
+        // handle goes too, so the bridge can name the level that session began with (CHATGPT-10).
         : method === 'effort.get'
-          ? await bridge.request(method, { directory: rootForSession(typeof session === 'string' ? session : '') })
+          ? await bridge.request(method, typeof session === 'string'
+            ? { directory: rootForSession(session), session }
+            : { directory: rootForSession('') })
         : method === 'language.get'
           // The system's languages answer only where nothing else names one (LOCALE-8), and are
           // read here, since the window cannot ask the system and the bridge has no other way to.
