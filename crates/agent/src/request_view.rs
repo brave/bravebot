@@ -271,6 +271,10 @@ impl Section {
 /// Each part is rounded down and what is left over goes one apiece to the parts with the largest
 /// remainders, so the shares of a measured count always sum to it. All zeros where the weights
 /// are, since nothing says what the total is made of.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a weight is at most the sum of the weights, so its share is at most `total`, a u64"
+)]
 pub fn apportion(total: u64, weights: &[u64]) -> Vec<u64> {
     let sum: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
     if sum == 0 {
