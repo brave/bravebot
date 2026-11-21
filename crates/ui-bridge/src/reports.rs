@@ -1,4 +1,4 @@
-//! What a session's `/cost`, `/context` and `/request` reports are answered from while a turn
+//! What a session's `/cost`, `/context`, `/request` and `/status` reports are answered from while a turn
 //! holds its state (CMD-8).
 //!
 //! A turn holds the session's [`State`] locked from its start to its end, so a report read from
@@ -60,6 +60,10 @@ pub struct Held {
     pub running: u64,
     /// The budget the running turn compacts at, for a count it measures.
     budget: u64,
+    /// The session's id, once it has one, and the title its record is written under, as they
+    /// stood when the state was last read, for a `/status` asked while a turn holds it.
+    id: Option<String>,
+    title: Option<String>,
 }
 
 /// A session's [`Held`], shared between the session and the turn that writes into it.
@@ -90,6 +94,17 @@ impl Held {
             spend: state.spend.clone(),
             running: 0,
             budget,
+            id: state
+                .handle
+                .as_ref()
+                .map(|handle| handle.id().to_owned())
+                .or_else(|| state.named.clone()),
+            title: state
+                .handle
+                .as_ref()
+                .map(|handle| handle.title().to_owned())
+                .filter(|title| !title.is_empty())
+                .or_else(|| state.first_prompt.clone()),
         }
     }
 
@@ -134,6 +149,21 @@ impl Held {
             archived,
             self.budget,
         );
+        let named = Self::of(state, self.budget);
+        self.id = named.id;
+        self.title = named.title;
+    }
+
+    /// The part of the `session.report.status` answer this store holds: the session's id and
+    /// title, its turns counting the one running, and the tokens it has spent with the running
+    /// turn's in them.
+    pub fn status(&self) -> Value {
+        json!({
+            "sessionId": self.id,
+            "title": self.title,
+            "turns": self.turns,
+            "tokens": self.total + self.running,
+        })
     }
 
     /// The `session.report.cost` answer, worked out as the terminal's `/cost` works it out: the

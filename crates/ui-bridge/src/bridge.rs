@@ -363,6 +363,7 @@ impl Bridge {
             "session.report.cost" | "session.report.context" | "session.report.request" => {
                 self.report(request)
             }
+            "session.report.status" => self.report_status(request),
             "turn.send" => self.send_turn(request),
             "turn.lookup" => {
                 let id = crate::wire::message_id(request.params.get("messageId"))?;
@@ -893,6 +894,48 @@ impl Bridge {
                 held.context(fallback)
             }
         })
+    }
+
+    /// `session.report.status`, the desktop's `/status`: the session's project, folders, model,
+    /// definition, permission and sandbox modes, id, title, turns and tokens, none of which is
+    /// read from its state. Between turns the answer also holds the rules, as `permissions.list`
+    /// gives them. While a turn runs it holds the trust map and the vouched programs, so the
+    /// answer says so and gives no rules rather than waiting for the turn (CMD-8).
+    fn report_status(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let model = open.model.clone().or_else(|| {
+            crate::settings::config(Some(&open.project), self.settings.as_deref())
+                .ok()
+                .map(|config| config.default_model)
+        });
+        let mut status = json!({
+            "project": open.project.display().to_string(),
+            "folders": open
+                .folders
+                .iter()
+                .map(|folder| folder.display().to_string())
+                .collect::<Vec<_>>(),
+            "model": model,
+            "definition": open.definition,
+            "permissionMode": wire::permission_mode_name(open.permission_mode.get()),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&open.project, open.sandbox)),
+        });
+        merge(&mut status, crate::reports::hold(&open.reports).status());
+        let running = open.running.is_some();
+        merge(
+            &mut status,
+            if running {
+                json!({ "rulesHeldByTurn": true, "rules": Value::Null })
+            } else {
+                json!({ "rulesHeldByTurn": false, "rules": self.permissions(request, false)? })
+            },
+        );
+        Ok(status)
     }
 
     /// What a response that may make a question due adds about it: the question out, if any, and

@@ -497,6 +497,81 @@ fn the_reports_are_answered_while_a_turn_holds_the_session() {
     );
 }
 
+/// CMD-8: `/status` asked while a turn holds the session answers at once, says the rules are held
+/// by the turn and gives none of them. Asked once the turn has ended, it gives the rules as
+/// `permissions.list` does.
+#[test]
+fn the_status_report_leaves_out_the_rules_a_running_turn_holds() {
+    if !in_own_profile() {
+        return;
+    }
+    let (mut bridge, handle) = a_session(|_| {});
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(directory.path()).unwrap();
+    let state = Arc::clone(&bridge.open[&handle].state);
+    let reports = Arc::clone(&bridge.open[&handle].reports);
+    let (ended, received) = mpsc::channel();
+    let emitter = Emitter::new(Box::new(move |event| {
+        if event.name == "turn.done" || event.name == "turn.error" {
+            let _ = ended.send(event);
+        }
+    }));
+    let (arrived, asked) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let (endpoint, stop, server) = service_holding(Some((arrived, released)));
+    let config = scripted_config(&endpoint);
+    // The session holds the turn as `turn.send` leaves it, so the bridge knows a turn is running.
+    let started = crate::running::Running::start();
+    let finished = Arc::clone(&started.finished);
+    bridge.open.get_mut(&handle).unwrap().running = Some(started.running);
+    let worker = {
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || {
+            let mut turn = a_turn(emitter, workspace, state, reports, config);
+            turn.finished = finished;
+            work(turn);
+        })
+    };
+
+    asked
+        .recv_timeout(PATIENCE)
+        .expect("the turn must send its request");
+    assert!(
+        state.try_lock().is_err(),
+        "the turn must hold the state while it waits"
+    );
+    let (sent, answers) = mpsc::channel();
+    let asker = std::thread::spawn(move || {
+        let during = ask(&mut bridge, "session.report.status", &handle);
+        let _ = sent.send(during);
+        (bridge, handle)
+    });
+    let during = answers
+        .recv_timeout(PATIENCE)
+        .expect("the status report waited on the turn's state");
+    let (mut bridge, handle) = asker.join().unwrap();
+    release.send(()).unwrap();
+    let ended = received.recv_timeout(PATIENCE);
+    stop.store(true, Ordering::Release);
+    server.join().unwrap();
+    worker.join().unwrap();
+    assert_eq!(ended.expect("the turn must end").name, "turn.done");
+
+    assert_eq!(during["rulesHeldByTurn"], true, "{during}");
+    assert_eq!(during["rules"], Value::Null, "{during}");
+    assert_eq!(during["turns"], 1, "{during}");
+    assert_eq!(during["project"], env!("CARGO_MANIFEST_DIR"), "{during}");
+
+    let after = ask(&mut bridge, "session.report.status", &handle);
+    assert_eq!(after["rulesHeldByTurn"], false, "{after}");
+    let listed = ask(&mut bridge, "permissions.list", &handle);
+    for key in ["paths", "commands", "remembered", "settingsRules"] {
+        assert_eq!(after["rules"][key], listed[key], "{key}: {after}");
+    }
+    assert_eq!(after["turns"], 1, "{after}");
+    assert!(after["tokens"].as_u64().unwrap() > 0, "{after}");
+}
+
 fn scripted_config(endpoint: &str) -> Config {
     Config::from_lookup(|key| match key {
         "SERVICES_KEY_AICHAT" => Some("test-key".into()),
