@@ -220,6 +220,7 @@ export function installMenu(window: BrowserWindow): void {
         item('session.note'),
         SEPARATOR,
         item('session.compact'),
+        item('session.handoff'),
       ],
     },
     { role: 'windowMenu' },

@@ -41,3 +41,18 @@ test('Compact Conversation… is offered on an open chat with no turn running, a
   assert.match(allowed, /'session\.compact',/)
   assert.match(allowed, /'session\.compact\.cancel',/)
 })
+
+test('Hand Off to New Chat… is offered on an open chat with no turn running, and the menu and router reach it (SESSION-34, CMD-34)', () => {
+  const handoff = command('session.handoff')
+  assert.equal(handoff.label, 'Hand Off to New Chat…')
+  assert.equal(handoff.requires, 'forkable')
+  assert.equal(handoff.accelerator, undefined, 'it asks for the goal first, so it has no shortcut')
+  assert.equal(isEnabled(handoff.requires, NOTHING_OPEN), false)
+  assert.equal(isEnabled(handoff.requires, { ...NOTHING_OPEN, hasSession: true }), true)
+  assert.equal(isEnabled(handoff.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), false)
+  assert.match(readFileSync('src/main/menu.ts', 'utf8'), /item\('session\.handoff'\)/)
+  assert.match(readFileSync('src/renderer/commands.ts', 'utf8'), /case 'session\.handoff':\s*return act\.handoff\(\)/)
+  const allowed = readFileSync('src/main/index.ts', 'utf8')
+  assert.match(allowed, /'session\.handoff',/)
+  assert.match(allowed, /'session\.handoff\.cancel',/)
+})

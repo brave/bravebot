@@ -290,6 +290,11 @@ export interface SessionSummary {
    * `manifest.read` and cannot be opened or continued. Absent from an older bridge.
    */
   manifest?: boolean
+  /**
+   * The id of the record this chat was handed off from (SESSION-34), or null for one that was not.
+   * Absent from an older bridge.
+   */
+  handedOffFrom?: string | null
 }
 
 export interface SessionRecord {
@@ -1219,6 +1224,12 @@ export interface EventMap {
    * nothing worth shortening. `failed` carries `message`.
    */
   'compact.done': { status: 'compacted' | 'nothing' | 'stopped' | 'failed'; summarised?: number; kept?: number; message?: string }
+  /**
+   * What a `session.handoff` request came back with (SESSION-34). `ready` carries `text`: the brief,
+   * the sentence saying what did not come with it, and the goal. `untrusted` means the exchange met
+   * something the planner is not shown, so no brief is offered. `failed` carries `message`.
+   */
+  'handoff.done': { status: 'ready' | 'untrusted' | 'stopped' | 'failed'; text?: string; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
