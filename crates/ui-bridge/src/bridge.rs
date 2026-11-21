@@ -113,6 +113,9 @@ struct Open {
     /// change the conversation, as it does while a turn runs. Cleared by `reap` once the worker has
     /// put the conversation back.
     compacting: Option<crate::compaction::Compacting>,
+    /// The stop for the last request for a brief to hand the chat off from (SESSION-34). Left in
+    /// place once it has answered, as `enhancing` is.
+    handing_off: Option<Cancel>,
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
@@ -155,6 +158,7 @@ impl Open {
             offered_definitions: Mutex::new(Vec::new()),
             enhancing: None,
             compacting: None,
+            handing_off: None,
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
             refused_folders: Vec::new(),
@@ -427,6 +431,8 @@ impl Bridge {
             "session.enhance.cancel" => self.cancel_enhancement(request),
             "session.compact" => self.compact_session(request),
             "session.compact.cancel" => self.cancel_compaction(request),
+            "session.handoff" => self.handoff_brief(request),
+            "session.handoff.cancel" => self.cancel_handoff(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -622,6 +628,9 @@ impl Bridge {
                     "branch": entry.summary.branch,
                     // Carried to the row as the string the record holds. Nothing here reads it.
                     "pullRequest": entry.summary.pull_request,
+                    // The session this one was handed off from (SESSION-34), which the summary
+                    // keeps only where it is a session id.
+                    "handedOffFrom": entry.summary.handed_off_from,
                     "title": entry.summary.title,
                     "updated": entry.summary.updated,
                     "bytes": entry.summary.bytes,
@@ -1093,6 +1102,7 @@ impl Bridge {
 
     fn new_session(&mut self, request: &Request) -> Result<Value, Failure> {
         let directory = PathBuf::from(request.string("directory")?);
+        let handed_off_from = self.handed_off_from(request)?;
 
         if !directory.is_dir() {
             return Err(Failure::new(
@@ -1139,6 +1149,7 @@ impl Bridge {
         let mut state = State::fresh(opening.trust);
         state.account = self.account_session(&directory);
         state.directories = additional;
+        state.handed_off_from = handed_off_from;
         let handle = self.mint(
             Open::opened(
                 directory.clone(),
@@ -1171,6 +1182,35 @@ impl Bridge {
         merge(&mut made, reported);
         merge(&mut made, self.questions_report(&handle));
         Ok(made)
+    }
+
+    /// The id of the record a new chat is handed off from, read from the chat this bridge holds
+    /// open under the `handedOffFrom` handle (SESSION-34).
+    ///
+    /// The id comes from the bridge's own state and never from text the window sent, as
+    /// [`Handle::hand_off_from`] requires. A handle the bridge does not hold, and a chat with no
+    /// record to link back to, are refused before anything is created.
+    fn handed_off_from(&self, request: &Request) -> Result<Option<String>, Failure> {
+        let source = match request.params.get("handedOffFrom") {
+            None | Some(Value::Null) => return Ok(None),
+            Some(Value::String(source)) => source,
+            Some(_) => return Err(Failure::bad_request("`handedOffFrom` must be a string")),
+        };
+        let open = self.open.get(source).ok_or_else(|| {
+            Failure::bad_request("the chat to hand off from is not open in this window")
+        })?;
+        let state = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "the session's state is unavailable"))?;
+        state
+            .handle
+            .as_ref()
+            .and_then(Handle::resumable)
+            .map(|id| Some(id.to_string()))
+            .ok_or_else(|| {
+                Failure::bad_request("the chat to hand off from has no record to link back to")
+            })
     }
 
     /// Begin a session from part of another one.
@@ -1703,6 +1743,9 @@ impl Bridge {
         }
         if let Some(compacting) = &open.compacting {
             compacting.cancel.cancel();
+        }
+        if let Some(handing_off) = &open.handing_off {
+            handing_off.cancel();
         }
         let workers = self.workers.remove(&handle).unwrap_or_default();
         // The end of a session that began is one of the workers this returns, so a host that waits for
@@ -2237,6 +2280,97 @@ impl Bridge {
             emitter.send(Event::new("compact.done", &session, event));
         });
         Ok(json!({ "started": true }))
+    }
+
+    /// Ask the session's model for a brief to start the next chat from, toward `goal`, as the
+    /// terminal's `/handoff <next goal>` does (SESSION-34, CMD-34), and return before it has
+    /// answered.
+    ///
+    /// The request is [`bravebot_agent::aside::Question::handoff`] over the exchange as it stands
+    /// and with no tools, and the conversation is not changed. The answer comes back as a
+    /// `handoff.done` event. Refused before anything is sent with no goal, and before a turn has
+    /// ended and been recorded, because the new chat links back to the record.
+    fn handoff_brief(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let goal = request.string("goal")?;
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+
+        let state = Arc::clone(&open.state);
+        // Taken here, on the thread that holds the state, because a conversation is not `Clone`
+        // and what crosses to the worker is the request and not the exchange.
+        let (asking, account, trust) = {
+            let state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            let recorded = state.handle.as_ref().and_then(Handle::resumable).is_some();
+            if let Some(why) = crate::handoff::refusal(&goal, state.turns, recorded) {
+                return Err(Failure::bad_request(why));
+            }
+            (
+                bravebot_agent::aside::Question::handoff(&state.conversation, &goal),
+                state.account.clone(),
+                state.answers.trust.clone(),
+            )
+        };
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let cancel = Cancel::new();
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.handing_off = Some(cancel.clone());
+        }
+        self.workers_of(&handle).spawn(move || {
+            let egress = Egress::new();
+            let mut sink = bravebot_session::audit::Trail::new();
+            let done = agent_turn::aside(
+                &config,
+                &egress,
+                &account,
+                asking,
+                model.as_deref(),
+                &mut sink,
+                trust,
+                |_written| {},
+                &cancel,
+            );
+            let (event, tokens) = crate::handoff::settle(done, &goal, cancel.is_cancelled());
+            // Charged as the terminal charges an aside: the request was made and spent what it
+            // spent, whether or not the brief is offered.
+            if tokens > 0
+                && let Ok(mut state) = state.lock()
+            {
+                state.tokens += tokens;
+            }
+            emitter.send(Event::new("handoff.done", &session, event));
+        });
+        Ok(json!({ "started": true }))
+    }
+
+    /// Stop the request for a handoff brief, if one is running. Nothing running is not an error:
+    /// the answer may have arrived first.
+    fn cancel_handoff(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(cancel) = &open.handing_off {
+            cancel.cancel();
+        }
+        Ok(json!({}))
     }
 
     /// Stop the request to shorten the conversation, if one is running. Nothing running is not an
@@ -4646,9 +4780,10 @@ pub(crate) fn save(
     trail: &bravebot_session::audit::Trail,
 ) -> usize {
     let named = state.named.take();
+    let handed_off_from = state.handed_off_from.take();
     let handle = state
         .handle
-        .get_or_insert_with(|| crate::running::begin_named(named, project));
+        .get_or_insert_with(|| crate::running::begin_named(named, handed_off_from, project));
 
     let checkouts = state
         .kept

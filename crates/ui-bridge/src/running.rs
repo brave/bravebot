@@ -80,6 +80,10 @@ pub struct State {
     /// checkout proposed, which names the session the yes was given in as the terminal's does
     /// (PERM-15). `None` once the handle exists, or where nothing has named the session yet.
     pub named: Option<String>,
+    /// The id of the record this session was handed off from (SESSION-34), given to the handle
+    /// the first turn makes. Taken by the bridge from a chat it holds open, never from text the
+    /// window sent. `None` once the handle exists, or for a session nobody handed work to.
+    pub handed_off_from: Option<String>,
     pub turns: usize,
     /// Where each turn began and ended, and what came of it (SESSION-23).
     ///
@@ -208,12 +212,21 @@ pub enum Mcp {
 }
 
 /// A handle for a fresh session in `project`, under the id it was `named` by already if it was
-/// ([`State::named`]).
-pub fn begin_named(named: Option<String>, project: &Path) -> Handle {
-    match named {
+/// ([`State::named`]), linked to the session it was `handed_off_from` if it was
+/// ([`State::handed_off_from`]).
+pub fn begin_named(
+    named: Option<String>,
+    handed_off_from: Option<String>,
+    project: &Path,
+) -> Handle {
+    let mut handle = match named {
         Some(id) => Handle::begin_as(id, project, crate::FRONT, crate::agent_build()),
         None => Handle::begin(project, crate::FRONT, crate::agent_build()),
+    };
+    if let Some(source) = handed_off_from {
+        handle.hand_off_from(&source);
     }
+    handle
 }
 
 impl State {
@@ -236,8 +249,9 @@ impl State {
     /// by already if it was.
     pub fn handle_or_begin(&mut self, project: &Path) -> &mut Handle {
         let named = self.named.take();
+        let handed_off_from = self.handed_off_from.take();
         self.handle
-            .get_or_insert_with(|| begin_named(named, project))
+            .get_or_insert_with(|| begin_named(named, handed_off_from, project))
     }
 
     pub fn fresh(trust: TrustStore) -> Self {
@@ -262,6 +276,7 @@ impl State {
             kept: None,
             handle: None,
             named: None,
+            handed_off_from: None,
             turns: 0,
             history: Some(Vec::new()),
             tokens: 0,
