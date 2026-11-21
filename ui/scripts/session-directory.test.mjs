@@ -96,6 +96,8 @@ const TAKES_NO_DIRECTORY = [
   'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
   'accounts.list', 'accounts.signOut', 'effort.set',
+  // Reads the roster of every project and opens nothing; the bridge takes no parameter for it.
+  'background.list',
 ]
 
 function allowedMethods(index) {

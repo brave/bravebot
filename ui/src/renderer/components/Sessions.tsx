@@ -5,6 +5,7 @@ import { flushSync } from 'react-dom'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
+import { BackgroundSessions } from './BackgroundSessions'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
 import { BotFace } from './BotAvatar'
@@ -232,6 +233,7 @@ export function Sessions({
       </header>
 
       <div className="session-list">
+        <BackgroundSessions />
         {sessions.length === 0 && (
           <p className="sidebar-empty">
             No chats yet. Open a project to begin, or start one in a terminal with{' '}

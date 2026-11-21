@@ -49,6 +49,7 @@
     "package": "pnpm run bridge && electron-vite build && node scripts/package.mjs",
     "drive:menu": "pnpm run bridge && electron-vite build && node scripts/drive-menu.mjs",
     "drive:session-list": "pnpm run bridge && electron-vite build && node scripts/drive-session-list.mjs",
+    "drive:background-sessions": "pnpm run bridge && electron-vite build && node scripts/drive-background-sessions.mjs",
     "drive:window-fault": "pnpm run bridge && electron-vite build && node scripts/drive-window-fault.mjs",
     "drive:pointer-crash": "pnpm run bridge && electron-vite build && node scripts/drive-pointer-crash.mjs",
     "drive:project-actions": "pnpm run bridge && electron-vite build && node scripts/drive-project-actions.mjs",

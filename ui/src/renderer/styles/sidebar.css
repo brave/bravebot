@@ -345,6 +345,109 @@
 
 .session-archive { margin-top: var(--leo-spacing-l); }
 
+/* ------------------------------------------------------------------ background sessions
+
+   The roster (BG-17) above the chats, closed off from them by a hairline. Its state headings are
+   drawn as a group heading is, without the fold and not sticky, since the chat headings below
+   stick to the same edge. A row has the session row's padding and three lines: the short id and
+   the time, the name, the state. */
+.background-sessions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-s);
+  padding-bottom: var(--leo-spacing-m);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.background-sessions[hidden] { display: none !important; }
+.background-title {
+  margin: 0;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m) 0;
+  font: var(--type-meta-strong);
+  color: var(--ink-secondary);
+}
+.background-group { display: flex; flex-direction: column; gap: var(--leo-spacing-s); }
+.background-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  height: var(--hit);
+  padding: 0 var(--leo-spacing-m);
+  font: var(--type-caption-strong);
+  color: var(--ink-tertiary);
+}
+.background-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.background-group-head .count { margin-left: auto; flex: none; font: var(--type-caption); }
+
+.background-row {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-primary);
+  text-align: left;
+  transition: background-color var(--motion-fast);
+}
+.background-row:hover { background: var(--surface-hover); }
+.background-row:active { background: var(--surface-selected); }
+.background-row.current { background: var(--surface-panel); }
+.background-row:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.background-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  min-width: 0;
+  font: var(--type-caption-strong);
+  color: var(--ink-tertiary);
+}
+.background-short { font: var(--type-code); color: var(--ink-tertiary); user-select: none; }
+.background-time { flex: none; margin-left: auto; font: var(--type-caption); }
+/* BG-5 cuts a name at 28 columns. */
+.background-name {
+  max-width: 28ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--type-body);
+  color: var(--ink-secondary);
+}
+.background-row.current .background-name { font: var(--type-body-strong); }
+.background-state { font: var(--type-caption); color: var(--ink-tertiary); }
+
+.background-note {
+  margin: 0;
+  padding: 0 var(--leo-spacing-m);
+  font: var(--type-caption);
+  color: var(--status-error);
+}
+
+/* The selected session: where it runs, what was last asked, and the command that attaches to it. */
+.background-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-m);
+  margin: 0 var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  font: var(--type-caption);
+  color: var(--ink-secondary);
+}
+.background-detail dl { margin: 0; display: grid; gap: var(--leo-spacing-s); }
+.background-detail dt { font: var(--type-caption-strong); color: var(--ink-tertiary); }
+.background-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.background-detail dd + dt { margin-top: var(--leo-spacing-s); }
+.background-detail code { font: var(--type-code); }
+.background-attach { display: flex; align-items: center; gap: var(--leo-spacing-s); min-width: 0; }
+/* Wrapped rather than cut: the command is the thing to read, and the column can be narrower than it. */
+.background-command { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
+
 /* ------------------------------------------------------------------ bots */
 
 /* The archive: the foot of the tab, outside the scrolling list, so it is in the same place with
