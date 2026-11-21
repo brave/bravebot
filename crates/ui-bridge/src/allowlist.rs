@@ -228,6 +228,7 @@ pub fn check_answer(request: &Request, answers: &[Answer]) -> Result<(), Failure
 pub const DENIED: &[&str] = &[
     // Reach saved sessions, every project's list, and other directories.
     "session.list",
+    "background.list",
     "session.open",
     "session.fork",
     "session.addressed",
@@ -420,6 +421,7 @@ mod tests {
     fn a_method_the_host_does_not_name_is_refused_whether_or_not_the_bridge_has_it() {
         for method in [
             "session.list",
+            "background.list",
             "settings.select",
             "crash_reports.notice_due",
             "crash_reports.mark_notice_shown",

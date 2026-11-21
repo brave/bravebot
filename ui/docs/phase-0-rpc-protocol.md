@@ -315,6 +315,38 @@ not reversible), so it is read out of the record rather than un-mangled.
 
 `project` is the basename of `directory`, computed by the agent so both front-ends agree.
 
+#### `background.list`
+
+```json
+{ "id": 1, "method": "background.list" }
+```
+
+Lists the background sessions in the roster, from every project (BG-17). It takes no
+parameters and is read-only: nothing in the protocol attaches to, replies to, stops or starts a
+background session, which only a terminal does (BG-9). The host client is refused it.
+
+```json
+{ "id": 1, "ok": { "sessions": [
+  { "id": "…", "short": "0a1b2c3d", "name": "fix the parser", "state": "needs-input",
+    "held": "run", "updated": 1756300000, "directory": "/Users/me/repos/thing",
+    "prompt": "fix the parser" }
+] } }
+```
+
+Sessions come in the order of the terminal list's headings (BG-16): `needs-input`,
+`interrupted`, `working`, `idle`, `stopped`, and most recent `updated` first within a state.
+
+- `state` is the BG-6 word, the one `bravebot sessions --json` writes. An entry whose process
+  holds no lock is `interrupted` or `stopped`, never `working`.
+- `held` is the message catalog's words for the kind of prompt held, and `null` unless `state` is
+  `needs-input`.
+- `short` is the first 8 characters of `id`, which `bravebot attach` takes.
+- `name` is the first line of the session's name and `prompt` the last prompt typed, cut as a
+  title is. Every text field has its control characters pictured (BG-5).
+- `updated` is seconds since the epoch.
+
+No roster, or an empty one, gives `{ "sessions": [] }`.
+
 #### `session.open`
 
 ```json
