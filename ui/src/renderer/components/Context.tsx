@@ -10,6 +10,7 @@ import { LabelChip } from './LabelChip'
 import { middleTruncate } from '../truncate'
 import { folderName } from '../folders'
 import { t } from '../i18n'
+import type { AsideRow } from '../../shared/aside'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -18,6 +19,8 @@ interface Live {
   entries: Entry[]
   todos: TodoRow[]
   notes?: SessionNote[]
+  /** The `/btw` and `/recap` answers of this session, oldest first. */
+  asides?: AsideRow[]
   quarantine: Shown[]
   phase: Waiting | null
   tokens: number
@@ -63,7 +66,7 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
   details?: React.ReactNode
 }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
-  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined', 'notes'])
+  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined', 'notes', 'asides'])
   const reveal = (path: string) => {
     const entry = [...(live?.entries ?? [])].reverse().find((entry) =>
       entry.kind === 'tool' ? fileTarget(entry.activity.target) === path : entry.kind === 'confirm' ? entry.request.path === path : false)
@@ -78,6 +81,7 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
   const writes = written(live.entries)
   const replayed = live.entries.filter((entry) => entry.kind === 'replayed-tool')
   const notes = live.notes ?? []
+  const asides = live.asides ?? []
 
   // A session read back off disk has calls in its transcript and nothing behind them:
   // the record keeps what a turn did, not what came of it. Saying "nothing read yet"
@@ -95,6 +99,7 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
     writes: 'Changes',
     confined: 'Confined content',
     notes: 'Notes',
+    asides: 'Asides',
     files: 'Files',
   }
 
@@ -264,6 +269,30 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
             <Icon slot="icon-before" name="plus-add" />
             Add note…
           </Button>
+        )}
+      </Section>
+
+      {/* The /btw and /recap answers (CMD-8, CMD-16): those the record kept, then those that came in
+          since. Plain text, and never sent to the model. A record keeps no answer that met something
+          untrusted (WATCH-20), so such an answer is shown now and is gone when the chat is reopened. */}
+      <Section id="asides" title="Asides" count={asides.length} off={off.has('asides')}
+        about="Answers to /btw and /recap. Never sent to the model.">
+        {asides.length === 0 ? (
+          <Empty icon="message-bubble">No asides. Type /btw and a question, or /recap.</Empty>
+        ) : (
+          <ul className="asides" data-test="asides">
+            {asides.map((aside, index) => (
+              <li key={index}>
+                <span className="aside-question">{aside.question}</span>
+                {aside.answer === null
+                  ? <span className="aside-note">The record did not keep this answer.</span>
+                  : <span className="aside-answer">{aside.answer}</span>}
+                {aside.answer !== null && !aside.kept && (
+                  <span className="aside-note">This answer is not written down in the record.</span>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </Section>
 

@@ -628,6 +628,11 @@ While a question asked with no turn running is out, the working indicator calls 
 of the word it has for a turn. The name goes with the request, so the next summary or goal check is
 not called an answer.
 
+The desktop app has no agents list and no view to open. There an answer is a line in the transcript
+and a row of the Asides panel in the context column, which lists the session's questions and answers
+oldest first, the ones the record kept when the session was opened followed by the ones answered
+since. Neither is ever sent to the model.
+
 `verified-by: bravebot_tui::app::a_btw_answered_beside_a_turn_is_a_row_and_does_not_open_the_view`
 `verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
 `verified-by: bravebot_tui::app::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
@@ -651,10 +656,15 @@ while the words are still there to copy rather than on the next resume when they
 empty screen under a question is worse than either: it reads as a question that was never
 answered.
 
+The desktop app's Asides panel says both things in the same cases: under an answer the record does
+not keep, that it is not written down, and under a resumed question with no answer, that the record
+did not keep it.
+
 `verified-by: bravebot_tui::render::an_asides_view_says_when_the_answer_is_not_written_down`
 `verified-by: bravebot_tui::render::a_resumed_aside_with_no_answer_says_the_record_did_not_keep_it`
 `verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs draws the Asides panel and asserts that an answer with kept false says it is not written down and that a resumed aside with a null answer says the record did not keep it; make check-ui runs it)`
 
 <a id="WATCH-21"></a>
 ### WATCH-21: a question asks for no cache of the exchange it is asked beside

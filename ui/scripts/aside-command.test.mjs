@@ -131,6 +131,59 @@ test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /
   assert.ok(interjecting.indexOf('askAside(') < interjecting.indexOf("route(live"), 'a /btw is not queued behind the turn')
 })
 
+// The Asides panel, drawn through `react-dom/server` as notes.test.mjs draws the Notes panel. The
+// file tree reads the disk, so it is left out, and a Leo button is drawn as a plain one.
+const React = require('react')
+const { renderToStaticMarkup } = require('react-dom/server')
+const withoutTree = {
+  name: 'without-tree',
+  setup(built) {
+    built.onResolve({ filter: /^\.\/FileTree$/ }, () => ({ path: 'tree', namespace: 'no-tree' }))
+    built.onLoad({ filter: /.*/, namespace: 'no-tree' }, () => ({ loader: 'js', contents: 'export const FileTree = () => null' }))
+  },
+}
+let column
+const context = async () => {
+  const { loadComponents } = await import('./render-support.mjs')
+  return (column ??= loadComponents({ contents: "export { Context } from './src/renderer/components/Context.tsx'" }, [withoutTree]))
+}
+const asidesPanel = async (asides) => {
+  const { Context } = await context()
+  const inspected = { handle: 's-1', summary: { directory: '/p' }, entries: [], todos: [], quarantine: [], phase: null, tokens: 0, running: false, asides }
+  const markup = renderToStaticMarkup(React.createElement(Context, { live: inspected }))
+  const start = markup.indexOf('id="panel-asides"')
+  assert.ok(start > 0, 'the column has an Asides panel')
+  return markup.slice(start, markup.indexOf('</section>', start))
+}
+
+test('the Asides panel lists each question and answer as plain text, and counts them', async () => {
+  const panel = await asidesPanel([
+    { question: 'why <b>retry</b>', answer: 'It retries <img src=x>.', kept: true },
+    { question: '/recap', answer: 'We are adding retries.', kept: true },
+  ])
+  assert.ok(panel.includes('why &lt;b&gt;retry&lt;/b&gt;') && panel.includes('It retries &lt;img src=x&gt;.'), panel)
+  assert.ok(panel.includes('/recap') && panel.includes('We are adding retries.'), panel)
+  assert.equal(panel.match(/<li\b/g).length, 2)
+  assert.ok(panel.includes(', 2 items'), panel)
+  assert.doesNotMatch(panel, /not written down|did not keep/, 'a kept answer carries no note')
+})
+
+test('the Asides panel says when an answer is not written down, and when the record did not keep one (WATCH-20)', async () => {
+  const unkept = await asidesPanel([{ question: 'why', answer: 'Shown, not kept.', kept: false }])
+  assert.ok(unkept.includes('Shown, not kept.'), unkept)
+  assert.match(unkept, /This answer is not written down in the record\./)
+  const resumed = await asidesPanel([{ question: 'why', answer: null, kept: false }])
+  assert.match(resumed, /The record did not keep this answer\./)
+  assert.doesNotMatch(resumed, /not written down/, 'one note for a resumed aside')
+  const none = await asidesPanel([])
+  assert.match(none, /No asides\./)
+})
+
+test('a session opened or resumed seeds its asides from the bridge answer', () => {
+  const app = readFileSync('src/renderer/App.tsx', 'utf8')
+  assert.match(app, /asides: opened\.asides \?\? \[\]/)
+})
+
 test('the bridge methods are ones the window may send', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   assert.match(index, /'session\.btw',\s*'session\.recap',\s*'session\.aside\.cancel',/)
