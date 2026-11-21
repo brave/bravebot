@@ -46,3 +46,10 @@ A delegate is offered no `recall`, and a call from one is answered as an unknown
 
 `verified-by: bravebot_agent::tools::tests::recalling::a_delegate_cannot_recall`
 `verified-by: bravebot_agent::tools::tests::recalling::a_delegate_reaching_the_recall_handlers_anyway_is_refused`
+
+<a id="RECALLTOOL-4"></a>
+### RECALLTOOL-4: `query` and `key` are routing, refused once the context has met something untrusted
+
+`query` and `key` choose which of the person's kept facts the answer carries ([TOOL-1](tool-surface.md#TOOL-1)), so neither is read straight off the call: each is taken through `Policy::promote_confined_read` before a fact is loaded or ranked, and a fallen context ([LABEL-5](../labels.md#LABEL-5)) is refused rather than answered.
+
+`verified-by: bravebot_agent::tools::tests::recalling::recall_is_refused_once_the_context_has_met_something_untrusted`
