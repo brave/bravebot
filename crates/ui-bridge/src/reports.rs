@@ -7,6 +7,7 @@
 //! when a turn ends and whenever the state is replaced.
 
 use crate::running::State;
+use bravebot_agent::breakdown::{ContextReading, Spend, share};
 use bravebot_agent::confirm::printable_spelled;
 use bravebot_agent::request_view::{RequestView, Section};
 use serde_json::{Value, json};
@@ -167,17 +168,17 @@ impl Held {
         })
     }
 
-    /// The `session.report.cost` answer, worked out as the terminal's `/cost` works it out: the
-    /// session total with the running turn's tokens in it, one row per turn with its share of the
-    /// total, and what the total holds that no turn's row accounts for, such as what a session
+    /// The `session.report.cost` answer, the breakdown the terminal's `/cost` words ([`Spend`]):
+    /// the session total with the running turn's tokens in it, one row per turn with its share of
+    /// the total, and what the total holds that no turn's row accounts for, such as what a session
     /// resumed from an older record spent before it was charged by turn.
     pub fn cost(&self) -> Value {
-        let mut spend = self.spend.clone();
-        if self.running > 0 {
-            *spend.entry(self.turns).or_default() += self.running;
-        }
-        let total = self.total + self.running;
-        let rows: Vec<Value> = spend
+        let Spend {
+            total,
+            rows,
+            unattributed,
+        } = Spend::of(self.total, &self.spend, self.turns, self.running);
+        let rows: Vec<Value> = rows
             .iter()
             .map(|(turn, tokens)| {
                 json!({
@@ -191,43 +192,48 @@ impl Held {
             "total": total,
             "turns": self.turns,
             "rows": rows,
-            "unattributed": total.saturating_sub(spend.values().sum()),
+            "unattributed": unattributed,
             "running": self.running,
         })
     }
 
-    /// The `session.report.context` answer, in the terminal's `/context` order of cases: a count
-    /// against no known budget is not measured, a compacted conversation says so, and a count with
-    /// no request to divide it by says that. `fallback_budget` is the budget the settings name now,
-    /// for a session no turn of which has started in this process.
-    ///
-    /// The sections are [`RequestView::sections`], so the split is the one the terminal draws.
+    /// The `session.report.context` answer, the reading the terminal's `/context` words
+    /// ([`ContextReading`]): a count against no known budget is not measured, a compacted
+    /// conversation says so, and a count with no request to divide it by says that.
+    /// `fallback_budget` is the budget the settings name now, for a count taken before any turn of
+    /// this process read one.
     pub fn context(&self, fallback_budget: u64) -> Value {
-        let (used, budget) = match self.occupancy {
+        let measured = match self.occupancy {
             Occupancy::Measured { used, budget } => {
-                (used, if budget > 0 { budget } else { fallback_budget })
+                Some((used, if budget > 0 { budget } else { fallback_budget }))
             }
-            Occupancy::Compacted => return context_answer("compacted", 0, 0, Vec::new()),
-            Occupancy::NotMeasured => return context_answer("not-measured", 0, 0, Vec::new()),
+            _ => None,
         };
-        if budget == 0 {
-            return context_answer("not-measured", 0, 0, Vec::new());
+        let compacted = self.occupancy == Occupancy::Compacted;
+        match ContextReading::of(measured, compacted, self.last_request.as_ref()) {
+            ContextReading::NotMeasured => context_answer("not-measured", 0, 0, Vec::new()),
+            ContextReading::Compacted => context_answer("compacted", 0, 0, Vec::new()),
+            ContextReading::NoRequest { used, budget } => {
+                context_answer("no-request", used, budget, Vec::new())
+            }
+            ContextReading::Measured {
+                used,
+                budget,
+                sections,
+            } => {
+                let sections = sections
+                    .into_iter()
+                    .map(|(section, tokens)| {
+                        json!({
+                            "section": section_name(section),
+                            "tokens": tokens,
+                            "share": share(tokens, used),
+                        })
+                    })
+                    .collect();
+                context_answer("measured", used, budget, sections)
+            }
         }
-        let Some(view) = self.last_request.as_ref() else {
-            return context_answer("no-request", used, budget, Vec::new());
-        };
-        let sections = view
-            .sections(used)
-            .into_iter()
-            .map(|(section, tokens)| {
-                json!({
-                    "section": section_name(section),
-                    "tokens": tokens,
-                    "share": share(tokens, used),
-                })
-            })
-            .collect();
-        context_answer("measured", used, budget, sections)
     }
 
     /// The `session.report.request` answer: the instruction files the last request's system
@@ -267,14 +273,6 @@ fn printable_lines(text: &str) -> String {
         .map(printable_spelled)
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// `part` as a whole percentage of `whole`, rounded down as the terminal's rows are.
-fn share(part: u64, whole: u64) -> u64 {
-    match whole {
-        0 => 0,
-        whole => part.saturating_mul(100) / whole,
-    }
 }
 
 fn context_answer(state: &str, total: u64, budget: u64, sections: Vec<Value>) -> Value {

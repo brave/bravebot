@@ -427,14 +427,18 @@ impl Session {
     /// at a fraction of a fresh one while the record keeps no cache split per turn, so a figure in
     /// money would be composed here rather than measured.
     pub fn report_spend(&mut self) {
-        // A turn still running is charged when it ends, so what it has spent so far is added here:
-        // asked mid-turn (CMD-8), the count of turns already includes it.
-        let mut spend = self.spend.clone();
-        let running = self.running_tokens();
-        if running > 0 {
-            *spend.entry(self.turns).or_default() += running;
-        }
-        let total = self.spent_tokens();
+        // A turn still running is charged when it ends, so what it has spent so far is in the
+        // breakdown: asked mid-turn (CMD-8), the count of turns already includes it.
+        let bravebot_agent::breakdown::Spend {
+            total,
+            rows: spend,
+            unattributed,
+        } = bravebot_agent::breakdown::Spend::of(
+            self.tokens,
+            &self.spend,
+            self.turns,
+            self.running_tokens(),
+        );
         let mut lines = vec![crate::status::Line::new(
             t!(status_this_session),
             if total == 0 && spend.is_empty() {
@@ -456,7 +460,10 @@ impl Session {
             let line = crate::status::Line::new(&label, crate::status::tokens(*spent));
             lines.push(match total {
                 0 => line,
-                total => line.with_note(t!(cost_share, percent = spent * 100 / total)),
+                total => line.with_note(t!(
+                    cost_share,
+                    percent = bravebot_agent::breakdown::share(*spent, total)
+                )),
             });
         }
 
@@ -465,7 +472,6 @@ impl Session {
         // the part it spent before the resume, so an empty breakdown is the far end of this case
         // rather than a case of its own. Left out, the rows would read as an account of the total
         // that quietly does not add up to it.
-        let unattributed = total.saturating_sub(spend.values().sum());
         if unattributed > 0 {
             lines.push(
                 crate::status::Line::new("", crate::status::tokens(unattributed))
@@ -504,24 +510,29 @@ impl Session {
     /// driver composed or carried, scaled to the measured total, so no row is chosen by reading
     /// what a result says and the section names are fixed words.
     pub fn report_context(&mut self) {
-        let used = match self.occupancy {
-            Occupancy::Measured { used, budget, .. } if budget > 0 => used,
-            Occupancy::Compacted { .. } => {
-                self.note(t!(context_compacted));
-                return;
-            }
-            _ => {
+        use bravebot_agent::breakdown::ContextReading;
+        use bravebot_agent::request_view::Section;
+        let measured = match self.occupancy {
+            Occupancy::Measured { used, budget, .. } => Some((used, budget)),
+            _ => None,
+        };
+        let compacted = matches!(self.occupancy, Occupancy::Compacted { .. });
+        let (used, rows) = match ContextReading::of(measured, compacted, self.last_request.as_ref())
+        {
+            ContextReading::NotMeasured => {
                 self.note(t!(context_not_measured));
                 return;
             }
+            ContextReading::Compacted => {
+                self.note(t!(context_compacted));
+                return;
+            }
+            ContextReading::NoRequest { .. } => {
+                self.note(t!(context_no_request));
+                return;
+            }
+            ContextReading::Measured { used, sections, .. } => (used, sections),
         };
-        let Some(view) = self.last_request.as_ref() else {
-            self.note(t!(context_no_request));
-            return;
-        };
-
-        use bravebot_agent::request_view::Section;
-        let rows = view.sections(used);
 
         let mut lines = vec![crate::status::Line::new(
             t!(context_total),
@@ -543,8 +554,10 @@ impl Session {
                 Section::Other => t!(context_section_other),
             };
             lines.push(
-                crate::status::Line::new(name, crate::status::tokens(share))
-                    .with_note(t!(cost_share, percent = share * 100 / used)),
+                crate::status::Line::new(name, crate::status::tokens(share)).with_note(t!(
+                    cost_share,
+                    percent = bravebot_agent::breakdown::share(share, used)
+                )),
             );
         }
         self.report(crate::status::Report { lines });
