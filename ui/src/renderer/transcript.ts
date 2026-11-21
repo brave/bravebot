@@ -39,6 +39,7 @@ import type {
   VetRequest,
 } from '../shared/protocol'
 import type { ExportTurn } from '../shared/export'
+import type { AsideDone } from '../shared/aside'
 
 export type Entry = (
   | { kind: 'turn-start'; id: string; number: number }
@@ -336,7 +337,23 @@ export const scheduleAnswered = (answer: { lines: string[]; refused: boolean }):
   text: answer.lines.join('\n'),
   ...(answer.refused ? { refused: true as const } : {}),
 })
-export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
+/** That a `/btw` asked beside the running turn is out (CMD-8). A narration, never part of the conversation. */
+export const asideOut = (question: string): Entry => narrated(`/btw ${question}: asked beside the turn. The answer is shown here when it is in.`, '/btw')
+/**
+ * What a `/btw` or `/recap` came back with, drawn as a narration: for the person to read and never
+ * part of the conversation (CMD-8, CMD-16). An answer the record does not keep says so (WATCH-20).
+ */
+export const asideAnswered = (done: AsideDone): Entry => {
+  const command = done.recap ? '/recap' : '/btw'
+  const asked = done.recap ? '/recap' : `/btw ${done.question}`
+  if (done.status === 'answered') {
+    const unkept = done.kept === false ? '\n(Not written down: the exchange met something untrusted, so the record does not keep this answer.)' : ''
+    return { kind: 'narration', id: nextId(), text: `${asked}\n${done.answer ?? ''}${unkept}`, command }
+  }
+  if (done.status === 'stopped') return { kind: 'narration', id: nextId(), text: `${asked}: stopped.`, command }
+  return { kind: 'narration', id: nextId(), text: `${asked}: ${done.message ?? 'the question failed'}`, command, refused: true }
+}
+export const watchFired =(number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
 export const started = (activity: Activity): Entry => ({
