@@ -847,8 +847,12 @@ impl Channel {
     /// Put the planner's questions to the program and wait for its answer.
     ///
     /// Declined, with no answers at all as [`bravebot_agent::Confirmer::ask_user`] asks, when the
-    /// input has ended without one or the turn was stopped while the question waited.
+    /// input has ended without one or the turn was stopped while the question waited. A non-planner
+    /// question (such as a rule proposal) is never put to the program (RULE-3, CLI-36).
     pub(crate) fn ask(&self, asking: &Asking) -> Vec<Answer> {
+        if !asking.closes_when_idle {
+            return Vec::new();
+        }
         let shape = asking
             .prompts
             .iter()
