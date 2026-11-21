@@ -360,6 +360,9 @@ impl Bridge {
             "session.folders.list" | "session.folders.add" | "session.folders.close" => {
                 self.folders(request)
             }
+            "session.report.cost" | "session.report.context" | "session.report.request" => {
+                self.report(request)
+            }
             "turn.send" => self.send_turn(request),
             "turn.lookup" => {
                 let id = crate::wire::message_id(request.params.get("messageId"))?;
@@ -867,6 +870,29 @@ impl Bridge {
             self.emitter
                 .send(Event::new("folder.request", handle, folder));
         }
+    }
+
+    /// `session.report.cost`, `.context` and `.request`, the desktop's `/cost`, `/context` and
+    /// `/request`. Answered from the session's [`crate::reports::Held`] and never from its state,
+    /// so a report asked while a turn holds the state is answered at once (CMD-8).
+    fn report(&self, request: &Request) -> Result<Value, Failure> {
+        let open = self
+            .open
+            .get(&request.string("session")?)
+            .ok_or_else(Failure::no_such_session)?;
+        let held = crate::reports::hold(&open.reports);
+        Ok(match request.method.as_str() {
+            "session.report.cost" => held.cost(),
+            "session.report.request" => held.request(),
+            _ => {
+                // A session none of whose turns has started here measures against the budget the
+                // settings name now, which is the budget its next turn reads.
+                let fallback =
+                    crate::settings::config(Some(&open.project), self.settings.as_deref())
+                        .map_or(0, |config| config.context_budget);
+                held.context(fallback)
+            }
+        })
     }
 
     /// What a response that may make a question due adds about it: the question out, if any, and
