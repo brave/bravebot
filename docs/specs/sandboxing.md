@@ -17,6 +17,7 @@ governs:
   - crates/sandbox/src/address.rs
   - crates/sandbox/src/scope.rs
   - crates/cli/src/push_identity.rs
+  - crates/agent/src/plugin_git.rs
   - crates/sandbox/src/mode.rs
   - crates/config/src/sandbox.rs
   - crates/config/src/sandbox_network.rs
@@ -4414,7 +4415,8 @@ person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`)
 tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, the `crontab`, `launchctl` and `systemctl` that `bravebot schedule` and `/schedule` run and the destination program of a scheduled entry ([SCHEDULE-7](schedule.md#SCHEDULE-7), [SCHEDULE-8](schedule.md#SCHEDULE-8)), a language server, the
 editor Ctrl-G opens, which `v` uses as well and a ctrl-click on a file path starts without this agent's own credentials ([CRED-14](credential-protection.md#CRED-14)), the browser opener that `auth login chatgpt` and a click on a link in the terminal
 interface start (`open`, `xdg-open` or `rundll32`, [CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13)), the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
-([SANDBOX-16](#SANDBOX-16)), and what `doctor --sandbox-check` runs with no sandbox
+([SANDBOX-16](#SANDBOX-16)), the `git` that `/plugin add` runs to fetch a plugin source
+([PLUGIN-3](plugins.md#PLUGIN-3)), and what `doctor --sandbox-check` runs with no sandbox
 ([SANDBOX-21](#SANDBOX-21)): the `gh` of the stored-login row, the programs of a workflow's setup
 stages, and the programs of a workflow run again without the sandbox as the control, `git`, `sh`,
 `cat` and `touch` among them. Each is resolved to an absolute path before it is started, from the
@@ -4512,7 +4514,7 @@ file. A new spawn that looks a name up through
   The editor Ctrl-G opens, a hook's program, the credential authority, the inhibitor `/caffeinate`
   starts, a clipboard tool or `osascript`, the browser opener that `auth login chatgpt` and a
   click on a link start, the
-  `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, and the AWS CLI are started with
+  `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, the `git` of `/plugin add`, and the AWS CLI are started with
   bravebot's `PATH` reduced to the entries the lookup searches, in the order
   they were written, so a `#!/usr/bin/env` shebang in the editor, the hook, a clipboard tool, the
   browser opener or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a `ProxyCommand` in the
@@ -5119,6 +5121,30 @@ file. A new spawn that looks a name up through
   `ProxyCommand` or a `LocalCommand` with `$SHELL -c`. `SHELL` is set and not checked, since the
   person's shell has no use here. The tests in `crates/cli/src/push_identity.rs` hand `started` an
   environment and read the one it gives the program, so they start no real `ssh`.
+
+  The `git` that `/plugin add` starts to fetch a plugin source ([PLUGIN-3](plugins.md#PLUGIN-3)) is
+  found with `Resolved::find_on`, started with `programs::start_against`, and given
+  `Inherits::Without` this agent's own credentials, `SearchPath::Reduced` and `CodeSelectors::Checked`
+  with the list `CODE_SELECTORS` in `crates/agent/src/plugin_git.rs`. A `git` found only in a directory
+  a stage may write reads as not installed, and the install is refused before the host is asked
+  about. The list is the generic table and:
+
+  | Variable | Names | Why it selects code |
+  |---|---|---|
+  | `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PROXY_COMMAND` | options | the program `git` runs to reach a host |
+  | `GIT_ASKPASS` | options | the program `git` runs to ask for a credential |
+  | `GIT_EDITOR`, `GIT_PAGER`, `GIT_EXTERNAL_DIFF` | options | a program `git` runs to edit, page or compare |
+  | `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`, `SSH_SK_PROVIDER`, `SSH_SK_HELPER`, `SSH_PKCS11_HELPER` | options | as in the table above, for the `ssh` that `git` starts |
+  | `GIT_TEMPLATE_DIR` | a directory | a directory whose `hooks` are copied into a repository `git init` makes |
+  | `XDG_CONFIG_HOME` | a directory | the directory holding the `git/config` `git` reads, which can name a program |
+
+  `GIT_SSL_*` name a certificate or a key and no program, so they are left as set. The start removes
+  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_COMMON_DIR` by name, so each step works in the
+  directories it names itself, and sets `GIT_TERMINAL_PROMPT=0`. The tests in
+  `crates/agent/src/plugin_git.rs` and `crates/agent/src/plugin_git/safety_tests/environment_tests.rs` hand the
+  start an environment and read the one the program gets, and one of them starts a real `git` with a
+  marker-writing selector set to show the marker is not written.
 
   The `powershell` that the clipboard tool and `/caffeinate` start on Windows is started by
   `powershell::start` in `crates/tui/src/powershell.rs`, which both call. It gives a program whose
@@ -6576,6 +6602,13 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_cli::push_identity::the_start_is_given_bin_sh_for_shell_whatever_the_person_has`
 `verified-by: bravebot_cli::push_identity::a_developer_directory_a_stage_may_write_is_not_handed_to_the_start`
 `verified-by: bravebot_cli::push_identity::a_developer_directory_outside_every_directory_a_stage_may_write_still_reaches_the_start`
+`verified-by: bravebot_agent::plugin_git::the_variables_that_name_a_program_for_git_or_ssh_are_removed`
+`verified-by: bravebot_agent::plugin_git::the_generic_selectors_apply_and_a_certificate_variable_is_left_alone`
+`verified-by: bravebot_agent::plugin_git::this_agents_credentials_and_the_repository_variables_are_not_passed`
+`verified-by: bravebot_agent::plugin_git::a_git_found_only_where_a_stage_may_write_reads_as_not_installed`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::variables_that_select_code_set_in_the_persons_environment_do_not_reach_the_clone`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::a_template_directory_in_the_persons_environment_is_not_used_by_the_clone`
+`verified-by: bravebot_agent::plugin_git::safety_tests::environment_tests::an_ssh_a_stage_planted_first_on_the_persons_path_is_not_run_by_the_clone`
 `verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`

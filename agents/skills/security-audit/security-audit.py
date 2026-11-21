@@ -419,6 +419,11 @@ LOOKUPS_LISTED = {
     "crates/agent/src/gcloud.rs": (1, "`gcloud`, for a session and for `auth` and `doctor`"),
     "crates/agent/src/hooks.rs": (1, "a hook's program, in a session"),
     "crates/agent/src/lsp.rs": (1, "a language server, in a session"),
+    "crates/agent/src/plugin_git.rs": (
+        1,
+        "the `git` that fetches a plugin source for `/plugin add`, in a session: found among the entries "
+        "outside every recorded directory, and not started until the person answered the host question",
+    ),
     "crates/agent/src/preamble.rs": (
         2,
         "the `gh` and `jk` probes through `programs::resolve`, once per turn of a session, after the "

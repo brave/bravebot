@@ -520,7 +520,19 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
         (None, None) => held(task),
     };
     let holding = match &task.mcp {
-        Some(session) => session.in_a_turn(holding),
+        Some(session) => {
+            // The plugins' directories are hashed again here, before any list of theirs is put to
+            // the person, and a plugin found changed is named once in the session (PLUGIN-7).
+            let answers = task.account_session().plugin_hook_answers();
+            let held =
+                session.without_plugins_that_may_not_run(session.in_a_turn(holding), answers);
+            for plugin in answers.take_stopped_servers() {
+                let said = t!(servers_plugin_stopped_changed, plugin = plugin);
+                reporter.notice(said.clone());
+                notices.push(crate::skills::Notice::from_message(said));
+            }
+            held
+        }
         None => holding,
     };
     let holds_a_server = holding

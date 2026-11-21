@@ -4307,6 +4307,7 @@ int main(int argc, char **argv) {
             ".bravebot/chatgpt-account.json",
             ".bravebot/xai-account.json",
             ".bravebot/mcp.json",
+            ".bravebot/hooks-approved",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",

@@ -15,7 +15,24 @@ which says you have read what it will run.
 One file, in one place: `mcp.json` in `~/.bravebot`, the directory holding what is yours. It is
 written by `bravebot mcp add` and read by the other `bravebot mcp` commands.
 
-No other file declares a server. This is deliberately *not* `settings.json`, and it is not a
+No other file declares a server, with one exception: a server an installed [plugin](plugins.md)
+carries is read alongside it. It is asked about at first use in the same way, with these
+differences:
+
+- Its alias is `<plugin>_<alias>`, such as `demo_weather`.
+- Installing and enabling the plugin is the request, so there is no `mcp.request` to add.
+- `--dangerously-skip-permissions`, a one-shot run and a recorded "all future MCP servers in this
+  project" answer do not approve it. Only a yes to that server does.
+- The plugin's folder is hashed again before the server starts. If it changed, the server is not
+  started and a notice names the plugin once per session.
+- It is not moved if its remote host redirects.
+- A server in `mcp.json` with the same alias wins over the plugin's, and a note says so.
+- `bravebot mcp list`, `get` and `doctor` and `/mcp list` do not show it.
+
+A yes is recorded as a `plugin` line in `~/.bravebot/mcp-approved`. See
+[Plugins](plugins.md#a-plugins-servers).
+
+The declaration file is deliberately *not* `settings.json`, and it is not a
 `.mcp.json` at the root of a checkout either. The agent writes files inside the workspace as its
 job, so a file there that could name a program to run would be a way for one ordinary edit to put a
 program on your machine. A [settings file](configuration.md) may name a destination and never a
@@ -236,7 +253,9 @@ What you approve is the **digest**: a hash of the transport, the program and eve
 url, the variable names, the header and header-variable names, the tool lists and the directory.
 A declaration with no tool lists digests as it did before. The alias is not part of it. It is written, one per
 line with the alias you approved it as beside it, to `~/.bravebot/mcp-approved`. The alias is kept
-so a session can say a declaration changed since you approved it; it approves nothing.
+so a session can say a declaration changed since you approved it; it approves nothing. A server an
+installed plugin carries is recorded as a line of its own kind, `plugin`, that names the plugin, and
+the approval covers that plugin's folder as installed.
 
 So changing anything a server would run is a server nobody approved. Pinning the version above:
 
@@ -352,7 +371,8 @@ A session with no terminal says the same. An approved server starts in either. A
 asks, and a yes there starts the server for that session and records nothing.
 
 `--dangerously-skip-permissions` answers the question yes without drawing it, and records nothing,
-so a later run without it asks.
+so a later run without it asks. It does not answer the question for a server an installed plugin
+carries: that server starts only after a yes to it.
 
 ## Offering its tools to the model
 

@@ -1884,6 +1884,20 @@ servers-nobody-at-a-terminal =
     { $alias } was not started: there is no terminal to ask at, so run bravebot mcp approve
     { $alias } at one
 servers-declined = { $alias } is not used in this session
+servers-carried-by = carried by the plugin { $plugin }
+servers-plugin-nobody =
+    { $alias } was not started: it is a server of the plugin { $plugin }, and a run that cannot ask
+    a person approves no server a plugin carries
+servers-plugin-disabled = { $alias } was not started: the plugin { $plugin } is turned off
+servers-plugin-changed =
+    { $alias } was not started: the files of the plugin { $plugin } no longer match what was
+    installed. Remove the plugin and install it again to use its servers
+servers-plugin-shadowed =
+    { $alias } is declared in mcp.json, so the server the plugin { $plugin } carries under that
+    name is not used
+servers-plugin-stopped-changed =
+    A server of the plugin { $plugin } was stopped: the plugin's files no longer match what was
+    installed. Remove the plugin and install it again to use its servers.
 servers-program-relative = { $program } is a relative path, which names a different program in each directory
 servers-program-without-path =
     { $program } is found through PATH, which the declaration does not name: declare it with
@@ -2063,8 +2077,8 @@ mcp-command-reconnected = { $alias } is running. Its tools are put to you before
 mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
 mcp-command-already-off = { $alias } is already turned off
 command-plugin = Install, list, remove, enable or disable a plugin
-plugin-command-usage = /plugin takes add <path>, list, remove <name>, enable <name> or disable <name>
-plugin-command-needs-an-argument = /plugin { $command } needs a path or a name
+plugin-command-usage = /plugin takes add <path or git url[#ref]>, list, remove <name>, enable <name> or disable <name>
+plugin-command-needs-an-argument = /plugin { $command } needs a path, a git url or a name
 plugin-command-no-home = There is no state directory, so no plugin can be read or written
 plugin-added = Installed { $name } from { $path }
 plugin-add-refused = Nothing was installed from { $path }: { $why }
@@ -2074,12 +2088,22 @@ plugin-refused-manifest-key = plugin.toml was refused at the key { $key }
 plugin-refused-part-missing = the path given for { $key } does not exist in the plugin
 plugin-refused-unreadable = the directory could not be read or copied
 plugin-refused-already-installed = a plugin named { $name } is already installed
-plugin-refused-update-not-built = { $name } is already installed from this path, and updating is not built
+plugin-refused-update-not-built = { $name } is already installed from this source, and updating is not built
+plugin-refused-archive = an archive is not a source. Name a git url or a directory
+plugin-refused-npm-package = an npm package is not a source. Name a git url or a directory
+plugin-refused-plain-url = a web address that is not a git url is not a source. A git url is https ending in .git, or ssh
+plugin-refused-file-url = a file:// url is not a source. Type the directory as a path
+plugin-refused-unsupported-scheme = only https and ssh git urls and local paths are sources
+plugin-refused-bad-url = the git url could not be used: it needs a host and a path, no password and no space or control character
+plugin-refused-bad-ref = the ref after # could not be used: it is empty, starts with - or holds a space or control character
+plugin-refused-git-not-installed = git is not installed where bravebot may start it, so nothing was fetched
+plugin-refused-clone-failed = git could not fetch the source at that ref, so nothing was installed
 plugin-refused-name-offered = { $new } offers { $offered }, which { $existing } already offers
 plugin-refused-nobody-to-ask = nobody can be asked here, so nothing is installed
 plugin-refused-declined = the install was declined
 plugin-list-none = No plugin is installed
 plugin-list-row = { $name } { $version } from { $source } digest { $digest } ({ $state })
+plugin-list-row-git = { $name } { $version } from { $source } commit { $commit } digest { $digest } ({ $state })
 plugin-list-enabled = enabled
 plugin-list-disabled = disabled
 plugin-removed = Removed { $name }
@@ -2092,11 +2116,43 @@ plugin-install-title = Install plugin
 plugin-install-name = Name
 plugin-install-version = Version
 plugin-install-source = Source (a local path)
+plugin-install-source-git = Source (a git repository)
+plugin-install-requested-ref = Requested ref
+plugin-install-no-ref = none given, so the repository's default branch
+plugin-install-commit = Commit it resolved to
 plugin-install-skills = Skills ({ $count })
 plugin-install-no-skills = This plugin offers no skill
 plugin-install-definitions = Definitions ({ $count })
 plugin-install-no-definitions = This plugin offers no definition
 plugin-install-kind = kind: { $kind }
+plugin-install-hooks = Hooks ({ $count })
+plugin-install-no-hooks = This plugin offers no hook
+plugin-install-hook-at = Runs at { $moment }
+plugin-install-hook-tool = Only for the tool
+plugin-install-hook-path = Watches the file
+plugin-install-hook-timeout = Bound: { $seconds } seconds
+plugin-install-argv = Program and arguments
+plugin-install-hooks-unkept = The hooks file holds more than is listed here: { $dropped } entries the hook reader cannot use and { $keys } keys it does not read. Only what is listed here can run.
+plugin-install-servers = Servers ({ $count })
+plugin-install-no-servers = This plugin offers no server
+plugin-install-server = Server
+plugin-install-server-unusable = This entry states no declaration that can be used, so it is never started
+plugin-install-server-unreachable = The plugin name and this alias are too long together, so it is never started
+plugin-install-server-transport = Transport
+plugin-install-server-url = Address
+plugin-install-server-variable = Variable it names
+plugin-install-server-stored = Variable given a value, as written
+plugin-install-reach-command = Would start the program
+plugin-install-reach-host = Would reach the host
+plugin-install-reach-file = May read the file
+plugin-install-reach-directory = Runs in the directory
+plugin-install-fault-unreadable = The file this part names could not be read, so nothing of it is listed
+plugin-install-fault-not-file = The path this part names is not a regular file, so nothing of it is listed
+plugin-install-fault-too-large = The file this part names is too large to read, so nothing of it is listed
+plugin-install-fault-not-text = The file this part names is not text, so nothing of it is listed
+plugin-install-fault-not-hooks = The file this part names is not a hooks file, so nothing of it is listed
+plugin-install-fault-not-servers = The file this part names is not a servers file, so nothing of it is listed
+plugin-install-fault-path = The directory this plugin installs to is not text, so nothing of this part is listed
 plugin-install-shadowed = Shadowed by { $by }. The one named here is not the one a session gets
 plugin-install-expand = (e to show the rest)
 plugin-install-collapse = (e to cut long text)
@@ -2104,6 +2160,16 @@ plugin-install-not-done = A yes copies this plugin and records it. It does not m
 plugin-install-question = Install this plugin?
 plugin-install-yes = Yes, install it
 plugin-install-no = No, install nothing
+plugin-hook-title = run this plugin's hook?
+plugin-hook-plugin = Plugin
+plugin-hook-moment = Moment
+plugin-hook-argv = Starts, one word to a row
+plugin-hook-explained = This hook starts a program the plugin carries, with your own access, each time that moment comes in a session. It has not been answered about yet.
+plugin-hook-recorded = A yes is written to { $file }, so it is not asked again for this exact hook and plugin files. A no is not written, and the question comes again in a later session.
+plugin-hook-session-only = A yes is not written anywhere and lasts until this session ends.
+plugin-hook-yes = Yes, run it
+plugin-hook-no = No, do not run it
+plugin-hook-stopped-changed = A hook of the plugin { $plugin } did not run: the plugin's files no longer match what was installed. Remove the plugin and install it again to use its hooks.
 mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-command-not-an-alias = { $alias } is not the name of an MCP server
 mcp-command-no-match = No MCP server is named by { $pattern }. Nothing was changed

@@ -2305,6 +2305,7 @@ fn a_server_question_carries_the_declaration_and_no_stored_value() {
         declaration: &declaration,
         program: Some(&program),
         changed: true,
+        plugin: None,
     };
 
     let sent = wire::mcp_server_request(3, &question);

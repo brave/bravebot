@@ -9,9 +9,10 @@
 
 use crate::input;
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
-    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HookRequest, HostRequest,
+    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+    RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+    WriteRequest,
 };
 use bravebot_core::ask::{Answer as UserAnswer, Asking};
 use ratatui::Terminal;
@@ -20,6 +21,7 @@ use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, Key
 
 mod chrome;
 mod grants;
+mod hook;
 mod mcp;
 mod note;
 mod pinned;
@@ -31,11 +33,14 @@ mod write;
 #[cfg(test)]
 use chrome::centred;
 pub(crate) use chrome::scroll_hint;
+#[cfg(test)]
+pub(crate) use grants::ask_fetch_reading;
 pub use grants::{
     ask_apply, ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout,
 };
 #[cfg(test)]
 use grants::{draw_exposure, draw_host, draw_manifest, draw_path};
+pub use hook::ask_hook;
 pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_to_start, ask_tool_list};
 #[cfg(test)]
 use mcp::{
@@ -46,7 +51,7 @@ pub use note::Noted;
 use pinned::{Drawn, Seen};
 #[cfg(test)]
 pub(crate) use plugin::ask_install_reading;
-pub use plugin::{DefinitionRow, InstallRequest, SkillRow, ask_install};
+pub use plugin::{DefinitionRow, GitRows, InstallRequest, SkillRow, ask_install};
 pub(crate) use run::scope_name;
 #[cfg(test)]
 use run::{RowsShown, RunDrawn, RunResponse, draw_run, run_answer_for};
@@ -120,6 +125,14 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_host(&mut self, request: &HostRequest) -> Decision {
         ask_host(self.terminal, request).decision()
+    }
+
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    fn confirm_hook(&mut self, request: &HookRequest) -> Decision {
+        ask_hook(self.terminal, request).decision()
     }
 
     /// Declined: a session in a terminal is offered no way to send, so this is never asked, and a
@@ -1054,7 +1067,7 @@ mod tests {
 
     kinds!(
         Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Apply, Move, Path, Host, Ask,
+        Apply, Move, Path, Host, Hook, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -1498,6 +1511,25 @@ mod tests {
                     deciding: hosts,
                 })
             }
+            Kind::Hook => {
+                let words = numbered('w', 80);
+                let request = bravebot_agent::confirm::HookRequest {
+                    plugin: "demo-plugin".to_string(),
+                    moment: "turn-started",
+                    argv: words.clone(),
+                    records: true,
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        hook::draw_hook(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: words,
+                })
+            }
             // Every answer goes to the planner as an answer, and none of them approves anything.
             Kind::Ask => None,
         }
@@ -1625,6 +1657,7 @@ mod tests {
             declaration: &declaration,
             program: None,
             changed: false,
+            plugin: None,
         }
         .lines();
         Case {
@@ -2197,6 +2230,7 @@ mod tests {
             declaration: &declaration,
             program: None,
             changed: false,
+            plugin: None,
         };
         assert_eq!(
             ask_to_start(&mut terminal, &start),

@@ -47,7 +47,7 @@ mod task;
 
 pub use hooked::Hooked;
 pub(crate) use hooked::trouble_sentences;
-use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices};
+use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices, say_stopped_plugins};
 pub(crate) use prompts::PLANNING;
 use prompts::{FOR_A_PERSON, KEPT_FACTS, KEPT_FACTS_END, OPENING};
 pub use result::*;
@@ -2240,6 +2240,7 @@ fn reads_that_run_together(
     confined_to: Option<&[String]>,
     offered: Option<&[bravebot_aichat::protocol::Tool]>,
     hooks: &bravebot_config::hooks::Hooks,
+    plugin_hooks: &crate::plugin_hooks::PluginHooks,
 ) -> usize {
     let mut counting = repeats.clone();
     let mut together = 0;
@@ -2254,6 +2255,10 @@ fn reads_that_run_together(
                 )
                 .next()
                 .is_some()
+            || plugin_hooks.declares(
+                bravebot_config::hooks::Moment::ToolFinished,
+                Some(&call.function.name),
+            )
             || counting.is_held(call)
         {
             break;
@@ -2327,6 +2332,11 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     //
     // Not read at all in a safe session, which is what leaves no hook to fire.
     let hooks = crate::hooks::in_force(task.home.as_deref());
+    // The hooks enabled plugins carry. Never merged into `hooks`: each moment joins them with the
+    // person's own through `PluginHooks::joined_with`, which asks before one fires (PLUGIN-7).
+    let plugin_hooks = crate::plugin_hooks::PluginHooks::read(task.home.as_deref());
+    let hook_answers = task.account_session().plugin_hook_answers();
+    let can_ask_about_hooks = confirmer.can_ask_about_a_hook();
 
     // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
     // started by a call the person did not make, so firing "the turn began" for each of them would
@@ -2339,10 +2349,12 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // spawned it armed, so only a turn a person asked for arms it (HOOK-2).
     let prompt_notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let prompts_hooked = own
-        && hooks
+        && (hooks
             .firing(bravebot_config::hooks::Moment::PromptShown, None)
             .next()
-            .is_some();
+            .is_some()
+            || (can_ask_about_hooks
+                && plugin_hooks.declares(bravebot_config::hooks::Moment::PromptShown, None)));
     if prompts_hooked {
         // Hook programs can write files outside the backup journal, regardless of their outcome.
         workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
@@ -2350,11 +2362,20 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             checkout.mark_worked_in();
         }
         let hooks = hooks.clone();
+        let plugin_hooks = plugin_hooks.clone();
+        let session = task.account_session().clone();
         let directory = workspace.root().to_path_buf();
         let notices = std::sync::Arc::clone(&prompt_notices);
         confirmer.alert_when_asking(Some(std::sync::Arc::new(move || {
-            let fired = crate::hooks::fire(
+            // Only a plugin hook already answered yes: this fires with a question on screen.
+            let joined = plugin_hooks.joined_without_asking(
                 &hooks,
+                bravebot_config::hooks::Moment::PromptShown,
+                session.plugin_hook_answers(),
+                can_ask_about_hooks,
+            );
+            let fired = crate::hooks::fire(
+                &joined,
                 bravebot_config::hooks::Moment::PromptShown,
                 None,
                 &directory,
@@ -2367,7 +2388,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     }
     let began = match own {
         true => fire_hooks(
-            &hooks,
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::TurnStarted,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
             bravebot_config::hooks::Moment::TurnStarted,
             None,
             workspace,
@@ -2375,6 +2402,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         ),
         false => Vec::new(),
     };
+    // A plugin whose directory no longer matches its record, found while the hooks above were
+    // considered, is named once in a session (PLUGIN-7).
+    let began = [began, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // The driver has written a checkout for this delegate and nothing has run in it: the moment a
     // person's setup command is for (HOOK-2). A delegate that shares its parent's checkout is not
@@ -2386,9 +2416,20 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             .is_some_and(|checkout| checkout.made_for() == spec.id())
     });
     let set_up = match given {
-        true => fire_checkout_made(&hooks, workspace, reporter),
+        true => fire_checkout_made(
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::CheckoutMade,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
+            workspace,
+            reporter,
+        ),
         false => Vec::new(),
     };
+    let set_up = [set_up, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // Where the rounds' own hook sentences land. Held here rather than inside the rounds so that
     // a turn which failed part way through still has them: the outcome that would have carried
@@ -2406,6 +2447,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             task,
             cancel,
             hooks: &hooks,
+            plugin_hooks: &plugin_hooks,
             prompt_notices: &prompt_notices,
             advisor: advisor.as_deref(),
             lent_premium_key,
@@ -2429,7 +2471,13 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
 
     let ended = match own {
         true => fire_hooks(
-            &hooks,
+            &plugin_hooks.joined_with(
+                &hooks,
+                bravebot_config::hooks::Moment::TurnFinished,
+                None,
+                hook_answers,
+                &mut *confirmer,
+            ),
             bravebot_config::hooks::Moment::TurnFinished,
             None,
             workspace,
@@ -2437,6 +2485,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         ),
         false => Vec::new(),
     };
+    let ended = [ended, say_stopped_plugins(hook_answers, reporter)].concat();
 
     // The rounds' sentences alone, for the caller that asked: the two ends of the turn never fire
     // for a delegate, so what its calls fired and what its checkout's setup said are the whole of
@@ -2484,6 +2533,9 @@ struct Inputs<'a> {
     task: &'a Task,
     cancel: &'a Cancel,
     hooks: &'a bravebot_config::hooks::Hooks,
+    /// The hooks enabled plugins carry, asked about before one fires (PLUGIN-7). Kept apart from
+    /// `hooks`, which holds only what the person wrote.
+    plugin_hooks: &'a crate::plugin_hooks::PluginHooks,
     /// What `prompt-shown` hooks said went wrong since the turn last drained it. See [`run_inner`].
     prompt_notices: &'a std::sync::Mutex<Vec<String>>,
     /// The model the planner may consult, where it may consult one. See [`advisor_for`].
@@ -2844,6 +2896,7 @@ where
         task,
         cancel: _,
         hooks: _,
+        plugin_hooks: _,
         prompt_notices: _,
         advisor,
         lent_premium_key,
@@ -3842,6 +3895,7 @@ where
         task,
         cancel,
         hooks,
+        plugin_hooks,
         prompt_notices: _,
         advisor: _,
         lent_premium_key: _,
@@ -4170,6 +4224,7 @@ where
                     addressed.as_ref().map(|addressed| addressed.tools()),
                     Some(&state.offered),
                     hooks,
+                    plugin_hooks,
                 );
                 examined = index + reads.max(1);
                 if reads > 0 {
@@ -10444,7 +10499,14 @@ mod tests {
             let none = bravebot_config::hooks::Hooks::default();
             let repeats = crate::repeated_call::Repeats::default();
             let run = |names: &[&str], hooks: &bravebot_config::hooks::Hooks| {
-                reads_that_run_together(&calls(names), &repeats, None, None, hooks)
+                reads_that_run_together(
+                    &calls(names),
+                    &repeats,
+                    None,
+                    None,
+                    hooks,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                )
             };
 
             assert_eq!(run(&["search", "list_files", "search"], &none), 3);
@@ -10476,14 +10538,28 @@ mod tests {
                     .collect()
             };
             assert_eq!(
-                reads_that_run_together(&same(4), &repeats, None, None, &none),
+                reads_that_run_together(
+                    &same(4),
+                    &repeats,
+                    None,
+                    None,
+                    &none,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                ),
                 2
             );
             let mut after_two = crate::repeated_call::Repeats::default();
             after_two.is_held(&same(1)[0]);
             after_two.is_held(&same(1)[0]);
             assert_eq!(
-                reads_that_run_together(&same(3), &after_two, None, None, &none),
+                reads_that_run_together(
+                    &same(3),
+                    &after_two,
+                    None,
+                    None,
+                    &none,
+                    &crate::plugin_hooks::PluginHooks::default(),
+                ),
                 0
             );
         }

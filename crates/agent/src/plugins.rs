@@ -11,7 +11,9 @@
 //! directory is made directly under it, on the same filesystem as `plugins/`, and never in the
 //! system temporary directory, which other accounts can write.
 
-use bravebot_config::plugin::{self, Manifest, Part};
+use crate::confirm::{Classified, FetchRequest};
+use crate::plugin_source::{Commit, GitSource, NotASource, Requested, Source, classify};
+use bravebot_config::plugin::{self, FileFault, HookList, Manifest, Part, ServerList};
 use sha2::{Digest as _, Sha256};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -32,6 +34,14 @@ pub enum Refusal {
     PartMissing(Part),
     /// The source is not a directory or could not be read.
     Source(io::ErrorKind),
+    /// The typed text is not a source: an archive, an npm package, a plain URL or a git URL or
+    /// ref that cannot be used. Nothing was read or fetched and no host was asked about.
+    NotASource(NotASource),
+    /// The source is a git URL and no `git` program is installed where bravebot may start one:
+    /// the only one found is in a directory a confined stage may write. Nothing was fetched.
+    GitNotInstalled,
+    /// `git` did not fetch the source or did not resolve a commit. Its own words are not read.
+    CloneFailed,
     /// The source path is not text, so it cannot be recorded.
     SourceNotText,
     /// The staging copy or the install failed.
@@ -40,15 +50,15 @@ pub enum Refusal {
     /// is there and its record cannot be read.
     AlreadyInstalled {
         name: String,
-        installed: Option<PathBuf>,
-        new: PathBuf,
+        installed: Option<Box<Source>>,
+        new: Box<Source>,
     },
     /// Nobody can be asked (a one-shot run), so nothing is installed (PLUGIN-4).
     NobodyToAsk,
     /// The person answered no. Nothing was copied or recorded.
     Declined,
     /// The name is installed from this same source. Updating is not built (decision 1).
-    UpdateNotBuilt { name: String, source: PathBuf },
+    UpdateNotBuilt { name: String, source: Source },
     /// Another installed plugin, enabled or not, already offers a skill or definition of this
     /// name (PLUGIN-12). Both plugins are named and no prefix is added.
     NameOffered {
@@ -65,13 +75,19 @@ pub struct Staged {
     /// Owns the staging directory and removes it when the value is dropped.
     _holder: Holder,
     tree: PathBuf,
-    /// The source directory as a canonical absolute path.
-    pub source: PathBuf,
+    /// Where the plugin was read from. A local directory is its canonical absolute path.
+    pub source: Source,
     pub manifest: Manifest,
     /// Lowercase hex SHA-256 of the staged tree.
     pub digest: String,
     /// Paths, relative to the source, of links and other non-regular files that were not copied.
     pub skipped: Vec<PathBuf>,
+    /// The plugin's hooks file read from the staged tree as data, with `${PLUGIN_ROOT}` already
+    /// replaced by the directory the plugin will have once installed (PLUGIN-13). `None` where the
+    /// manifest names none; an `Err` says the file could not be read, and the listing says so.
+    pub hooks: Option<Result<HookList, FileFault>>,
+    /// The plugin's servers file, read and expanded the same way.
+    pub servers: Option<Result<ServerList, FileFault>>,
 }
 
 #[expect(
@@ -252,17 +268,31 @@ pub fn stage(source_dir: &Path, home: &Path) -> Result<Staged, Refusal> {
     {
         return Err(Refusal::SourceNotText);
     }
-    let manifest = plugin::read(&source).map_err(Refusal::Manifest)?;
-    plugin::check_links(&source, &manifest.named_parts()).map_err(Refusal::Manifest)?;
+    stage_directory(&source, Source::Local(source.clone()), home)
+}
+
+/// [`stage`] for a plugin tree that is already a directory on this machine, recorded as coming
+/// from `source`. A local source passes its own canonical path. A git source passes the directory
+/// a clone was made into and the source naming the URL, the requested ref and the resolved commit.
+pub(crate) fn stage_directory(
+    directory: &Path,
+    source: Source,
+    home: &Path,
+) -> Result<Staged, Refusal> {
+    let manifest = plugin::read(directory).map_err(Refusal::Manifest)?;
+    plugin::check_links(directory, &manifest.named_parts()).map_err(Refusal::Manifest)?;
     for (part, path) in manifest.named_parts() {
-        if part.is_installed() && std::fs::symlink_metadata(path.under(&source)).is_err() {
+        if std::fs::symlink_metadata(path.under(directory)).is_err() {
             return Err(Refusal::PartMissing(part));
         }
     }
     let holder = staging_dir(home)?;
     let tree = holder.dir.join("tree");
-    let skipped = copy_tree(&source, &tree)?;
+    let skipped = copy_tree(directory, &tree)?;
     let digest = digest_tree(&tree)?;
+    let will_be = installed_dir(home, &manifest.name);
+    let hooks = manifest.hooks_list(&tree, &will_be);
+    let servers = manifest.servers_list(&tree, &will_be);
     Ok(Staged {
         _holder: holder,
         tree,
@@ -270,7 +300,26 @@ pub fn stage(source_dir: &Path, home: &Path) -> Result<Staged, Refusal> {
         manifest,
         digest,
         skipped,
+        hooks,
+        servers,
     })
+}
+
+/// The plugin's hooks, read from its installed directory with `${PLUGIN_ROOT}` replaced by that
+/// directory (PLUGIN-13): the list a later step digests and fires from.
+///
+/// `None` where the plugin is not installed, its manifest cannot be read or names no hooks file.
+/// `Some(Err)` where the file cannot be read. The manifest is read again from the installed
+/// directory, so an edit there shows here and is for the digest check to refuse. Nothing is run.
+pub fn installed_hooks(home: &Path, name: &str) -> Option<Result<HookList, FileFault>> {
+    let dir = installed_dir(home, name);
+    plugin::read(&dir).ok()?.hooks_list(&dir, &dir)
+}
+
+/// The plugin's servers, read from its installed directory and expanded as [`installed_hooks`] is.
+pub fn installed_servers(home: &Path, name: &str) -> Option<Result<ServerList, FileFault>> {
+    let dir = installed_dir(home, name);
+    plugin::read(&dir).ok()?.servers_list(&dir, &dir)
 }
 
 /// `<state>/plugins`, where `state` is the state directory itself (`~/.bravebot`, or what
@@ -284,18 +333,59 @@ pub fn installed_dir(home: &Path, name: &str) -> PathBuf {
     plugins_dir(home).join(name)
 }
 
+/// Why an installed plugin's directory is not the one its record describes (PLUGIN-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mismatch {
+    /// The plugin has no readable record, so there is no digest to hold the directory to.
+    NoRecord,
+    /// The directory could not be hashed: it is missing, holds a link or another entry that is not
+    /// a file or a directory, or a file in it could not be read.
+    Unreadable,
+    /// The directory hashes to something other than the digest recorded at install.
+    Differs,
+}
+
+/// Hashes the installed directory of `name` again and compares it with the digest the install
+/// recorded, the check made before a plugin's hook fires or a plugin's server starts (PLUGIN-7).
+///
+/// The driver uses the answer only to refuse. It reads no byte of the tree to decide anything else,
+/// and an `Err` of any kind means the hook or the server does not run. The digest is the one
+/// [`stage`] computed over the copy, so a tree nobody touched matches.
+pub fn tree_matches_record(home: &Path, name: &str) -> Result<(), Mismatch> {
+    let recorded = read_record(home, name).ok_or(Mismatch::NoRecord)?;
+    let now = digest_tree(&installed_dir(home, name)).map_err(|_| Mismatch::Unreadable)?;
+    if now == recorded.digest {
+        Ok(())
+    } else {
+        Err(Mismatch::Differs)
+    }
+}
+
 fn record_path(home: &Path, name: &str) -> PathBuf {
     plugins_dir(home).join(format!("{name}{RECORD_SUFFIX}"))
 }
 
-/// The record's text: four `key = value` lines. The source and the version hold no control
-/// character (stage and the manifest reader refuse one), so a value is one line and is written as
-/// it is.
-fn record_text(source: &Path, version: &str, enabled: bool, digest: &str) -> String {
-    format!(
-        "source = {}\nversion = {version}\nenabled = {enabled}\ndigest = {digest}\n",
-        source.display()
-    )
+/// The record's text: `key = value` lines. A local source writes the four lines `source`,
+/// `version`, `enabled` and `digest`. A git source adds `commit`, and `requested-ref` where the
+/// person named a ref, so a record with no `commit` line is a local one and every record written
+/// before git sources still reads. The source, the ref and the version hold no control character or
+/// whitespace (the classifier and the manifest reader refuse one), so a value is one line and is
+/// written as it is.
+fn record_text(source: &Source, version: &str, enabled: bool, digest: &str) -> String {
+    let git = match source {
+        Source::Local(_) => String::new(),
+        Source::Git {
+            requested_ref,
+            commit,
+            ..
+        } => {
+            let asked = requested_ref
+                .as_ref()
+                .map_or_else(String::new, |name| format!("requested-ref = {name}\n"));
+            format!("{asked}commit = {commit}\n")
+        }
+    };
+    format!("source = {source}\n{git}version = {version}\nenabled = {enabled}\ndigest = {digest}\n")
 }
 
 /// Reads the record beside an installed plugin. `None` when there is no record or it does not say
@@ -307,10 +397,13 @@ pub fn read_record(home: &Path, name: &str) -> Option<Installed> {
 fn read_record_in(plugins: &Path, name: &str) -> Option<Installed> {
     let text = std::fs::read_to_string(plugins.join(format!("{name}{RECORD_SUFFIX}"))).ok()?;
     let (mut source, mut version, mut enabled, mut digest) = (None, None, None, None);
+    let (mut requested_ref, mut commit) = (None, None);
     for line in text.lines() {
         let (key, value) = line.split_once(" = ")?;
         match key {
-            "source" => source = Some(PathBuf::from(value)),
+            "source" => source = Some(value),
+            "requested-ref" if !value.is_empty() => requested_ref = Some(value.to_string()),
+            "commit" => commit = Some(Commit::parse(value)?),
             "version" => version = Some(value.to_string()),
             "enabled" => {
                 enabled = match value {
@@ -323,9 +416,19 @@ fn read_record_in(plugins: &Path, name: &str) -> Option<Installed> {
             _ => return None,
         }
     }
+    let source = match (commit, requested_ref) {
+        (None, None) => Source::Local(PathBuf::from(source?)),
+        (Some(commit), requested_ref) => Source::Git {
+            url: source?.to_string(),
+            requested_ref,
+            commit,
+        },
+        // A ref with no commit it resolved to is not a record this build writes.
+        (None, Some(_)) => return None,
+    };
     Some(Installed {
         name: name.to_string(),
-        source: source?,
+        source,
         version: version?,
         enabled: enabled?,
         digest: digest?,
@@ -352,11 +455,13 @@ pub fn commit_install(staged: Staged, home: &Path) -> Result<(), Refusal> {
     if is_present(&target) || is_present(&record) {
         let installed = read_record(home, &name).map(|read| read.source);
         return Err(match installed {
-            Some(source) if source == staged.source => Refusal::UpdateNotBuilt { name, source },
+            Some(source) if source.same_origin(&staged.source) => {
+                Refusal::UpdateNotBuilt { name, source }
+            }
             installed => Refusal::AlreadyInstalled {
                 name,
-                installed,
-                new: staged.source.clone(),
+                installed: installed.map(Box::new),
+                new: Box::new(staged.source.clone()),
             },
         });
     }
@@ -411,6 +516,13 @@ pub trait Asker {
     /// Whether anybody is there to answer. Where nobody is, nothing is staged and nothing is asked.
     fn anybody_there(&self) -> bool;
 
+    /// Put the host a git source is fetched from to the person, in the prompt a fetch uses, before
+    /// anything is fetched. Only a true answer lets a request leave.
+    ///
+    /// Like [`Asker::confirm_install`] this has no default and takes no mode, rule or setting: an
+    /// implementation puts it to a person or answers no.
+    fn confirm_fetch_host(&mut self, request: &FetchRequest) -> bool;
+
     /// Put the listing of `staged` to the person. Only a true answer installs.
     fn confirm_install(&mut self, staged: &Staged) -> bool;
 }
@@ -420,6 +532,10 @@ pub struct Nobody;
 
 impl Asker for Nobody {
     fn anybody_there(&self) -> bool {
+        false
+    }
+
+    fn confirm_fetch_host(&mut self, _request: &FetchRequest) -> bool {
         false
     }
 
@@ -442,6 +558,93 @@ pub fn install_asked<A: Asker + ?Sized>(
         return Err(Refusal::NobodyToAsk);
     }
     let staged = stage(source_dir, home)?;
+    confirm_and_commit(staged, home, asker)
+}
+
+/// [`install_asked`] for what a person typed after `/plugin add`.
+///
+/// The text is classified first, from the text alone ([`classify`]): an archive, an npm package, a
+/// plain URL, a `file://` URL, another scheme or a bad ref is [`Refusal::NotASource`], with nothing
+/// read, fetched or asked. A local path is read from `root` when it is relative, as
+/// [`install_asked`] reads it. A git URL goes through [`install_git`].
+pub fn install_typed<A: Asker + ?Sized>(
+    typed: &str,
+    root: &Path,
+    home: &Path,
+    asker: &mut A,
+) -> Result<String, Refusal> {
+    install_typed_with(
+        typed,
+        root,
+        home,
+        asker,
+        crate::plugin_git::locate(),
+        &crate::plugin_git::PROTOCOLS,
+        // The directory the fetch is made under is a fresh one this account alone can enter, made
+        // with a name that is not reused (`plugin_git::Scratch`), so the shared parent is not trusted.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        &std::env::temp_dir(), // shared-temp-name: only the parent is shared, the directory under it is random
+    )
+}
+
+/// [`install_typed`] with the `git` program, the protocols it may use and the directory the fetch
+/// is made under given, so a test can show which typed texts start no program and ask no question.
+pub(crate) fn install_typed_with<A: Asker + ?Sized>(
+    typed: &str,
+    root: &Path,
+    home: &Path,
+    asker: &mut A,
+    program: Option<bravebot_sandbox::programs::Resolved>,
+    allow: &[&str],
+    parent: &Path,
+) -> Result<String, Refusal> {
+    match classify(typed).map_err(Refusal::NotASource)? {
+        Requested::Local(path) => install_asked(&root.join(path), home, asker),
+        Requested::Git(git) => install_git(&git, home, asker, program, allow, parent),
+    }
+}
+
+/// Installs a git source that has been classified: finds out whether anybody can be asked, whether
+/// `git` is installed, puts the host to the person, and only after a yes fetches the source into a
+/// staging directory and puts the install question.
+///
+/// The order is the whole of PLUGIN-3's network rule. Where nobody can be asked nothing is read.
+/// Where there is no `git`, [`Refusal::GitNotInstalled`] is answered before a question is put. The
+/// host question is put before any program is started, so a no starts none and a request never
+/// leaves before the yes. `program` is the `git` to start, `allow` the protocols it may use, and
+/// `parent` the directory the fetch's own directory is made in, which is outside the state
+/// directory and every workspace and session directory for a person's install.
+pub(crate) fn install_git<A: Asker + ?Sized>(
+    git: &GitSource,
+    home: &Path,
+    asker: &mut A,
+    program: Option<bravebot_sandbox::programs::Resolved>,
+    allow: &[&str],
+    parent: &Path,
+) -> Result<String, Refusal> {
+    if !asker.anybody_there() {
+        return Err(Refusal::NobodyToAsk);
+    }
+    let program = program.ok_or(Refusal::GitNotInstalled)?;
+    let request = FetchRequest {
+        url: git.url.clone(),
+        host: git.host.clone(),
+        redirected_from: None,
+        classified: Classified::NotAsked,
+    };
+    if !asker.confirm_fetch_host(&request) {
+        return Err(Refusal::Declined);
+    }
+    let staged = crate::plugin_git::stage_from(&program, git, allow, parent, home)?;
+    confirm_and_commit(staged, home, asker)
+}
+
+/// Puts the listing of `staged` to `asker` and installs it on a yes.
+fn confirm_and_commit<A: Asker + ?Sized>(
+    staged: Staged,
+    home: &Path,
+    asker: &mut A,
+) -> Result<String, Refusal> {
     if !asker.confirm_install(&staged) {
         return Err(Refusal::Declined);
     }
@@ -454,7 +657,7 @@ pub fn install_asked<A: Asker + ?Sized>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
     pub name: String,
-    pub source: PathBuf,
+    pub source: Source,
     pub version: String,
     pub enabled: bool,
     pub digest: String,
@@ -521,8 +724,11 @@ fn list_in(plugins: &Path) -> Vec<Installed> {
     found
 }
 
-/// Deletes the plugin's directory and its record (PLUGIN-9). The directory goes first, so a
-/// failure leaves the record and the removal can be run again.
+/// Deletes the plugin's directory and its record (PLUGIN-9), after withdrawing the answers
+/// recorded for its hooks in `hooks-approved`, so a later install of the same name asks again. The
+/// withdrawal comes first: a failure after it leaves a plugin that asks again, and one before it
+/// would leave a yes with nothing it applies to. The directory goes before the record, so a failure
+/// leaves the record and the removal can be run again.
 pub fn remove(home: &Path, name: &str) -> Result<(), ManageRefusal> {
     checked_name(name)?;
     let directory = installed_dir(home, name);
@@ -530,6 +736,10 @@ pub fn remove(home: &Path, name: &str) -> Result<(), ManageRefusal> {
     if !is_present(&directory) && !is_present(&record) {
         return Err(ManageRefusal::NotInstalled(name.to_string()));
     }
+    bravebot_config::hooks_approved::withdraw(home, name)
+        .map_err(|error| ManageRefusal::Io(error.kind()))?;
+    bravebot_config::mcp::withdraw_plugin(home, name)
+        .map_err(|error| ManageRefusal::Io(error.kind()))?;
     if is_present(&directory) {
         std::fs::remove_dir_all(&directory).map_err(|error| ManageRefusal::Io(error.kind()))?;
     }
@@ -785,7 +995,10 @@ mod tests {
         let first = stage(&source, &home).unwrap();
         let second = stage(&source, &home).unwrap();
         assert_eq!(first.manifest.name, "demo");
-        assert_eq!(first.source, std::fs::canonicalize(&source).unwrap());
+        assert_eq!(
+            first.source,
+            Source::Local(std::fs::canonicalize(&source).unwrap())
+        );
         assert_eq!(first.digest.len(), 64);
         assert!(first.digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_eq!(first.digest, second.digest);
@@ -999,8 +1212,10 @@ mod tests {
             refused,
             Refusal::AlreadyInstalled {
                 name: "demo".to_string(),
-                installed: Some(std::fs::canonicalize(&first).unwrap()),
-                new,
+                installed: Some(Box::new(Source::Local(
+                    std::fs::canonicalize(&first).unwrap()
+                ))),
+                new: Box::new(new),
             }
         );
         assert_eq!(snapshot(&home), before);
@@ -1023,7 +1238,7 @@ mod tests {
             refused,
             Refusal::UpdateNotBuilt {
                 name: "demo".to_string(),
-                source: std::fs::canonicalize(&source).unwrap(),
+                source: Source::Local(std::fs::canonicalize(&source).unwrap()),
             }
         );
         assert_eq!(snapshot(&home), before);
@@ -1091,7 +1306,10 @@ mod tests {
             listed.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             vec!["alpha", "beta"]
         );
-        assert_eq!(listed[1].source, std::fs::canonicalize(&one).unwrap());
+        assert_eq!(
+            listed[1].source,
+            Source::Local(std::fs::canonicalize(&one).unwrap())
+        );
         assert_eq!(listed[1].digest, digest);
         assert!(listed.iter().all(|p| p.enabled));
     }
@@ -1268,6 +1486,10 @@ mod tests {
             self.there
         }
 
+        fn confirm_fetch_host(&mut self, _request: &FetchRequest) -> bool {
+            false
+        }
+
         fn confirm_install(&mut self, _staged: &Staged) -> bool {
             self.asked += 1;
             self.yes
@@ -1299,6 +1521,480 @@ mod tests {
             Err(Refusal::NobodyToAsk)
         );
         assert!(!home.exists());
+    }
+
+    /// PLUGIN-5, PLUGIN-14: a git source's record holds the URL, the requested ref, the commit it
+    /// resolved to and the digest, and reads back the same through list, enable and disable. A
+    /// source with no ref records none, and the same URL and ref added again is the update that is
+    /// not built even where the commit differs, while another ref of the URL is another source.
+    ///
+    /// Rejects: a record that drops the ref or the commit, a ref written for a source that named
+    /// none, enable or disable rewriting the record without them, and an update test that compares
+    /// the commit or ignores the ref.
+    #[test]
+    fn a_git_record_holds_the_url_ref_and_commit_and_the_same_url_and_ref_is_an_update() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let tree = plugin_dir(scratch.path(), "cloned", MANIFEST);
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let git = |requested: Option<&str>, commit: &str| Source::Git {
+            url: "https://example.com/demo.git".to_string(),
+            requested_ref: requested.map(str::to_string),
+            commit: Commit::parse(commit).unwrap(),
+        };
+        let staged = stage_directory(&tree, git(Some("release-2"), commit), &home).unwrap();
+        let digest = staged.digest.clone();
+        commit_install(staged, &home).unwrap();
+        let text = std::fs::read_to_string(record_path(&home, "demo")).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "source = https://example.com/demo.git\nrequested-ref = release-2\ncommit = {commit}\n\
+                 version = 1.0.0\nenabled = true\ndigest = {digest}\n"
+            )
+        );
+        let read = read_record(&home, "demo").unwrap();
+        assert_eq!(read.source, git(Some("release-2"), commit));
+        assert_eq!(read.digest, digest);
+        set_enabled(&home, "demo", false).unwrap();
+        set_enabled(&home, "demo", true).unwrap();
+        assert_eq!(read_record(&home, "demo"), Some(read));
+        assert_eq!(list(&home).len(), 1);
+
+        let before = snapshot(&home);
+        let moved = "f".repeat(40);
+        let again = stage_directory(&tree, git(Some("release-2"), &moved), &home).unwrap();
+        assert!(matches!(
+            commit_install(again, &home),
+            Err(Refusal::UpdateNotBuilt { .. })
+        ));
+        let other_ref = stage_directory(&tree, git(Some("dev"), commit), &home).unwrap();
+        assert!(matches!(
+            commit_install(other_ref, &home),
+            Err(Refusal::AlreadyInstalled { .. })
+        ));
+        let no_ref = stage_directory(&tree, git(None, commit), &home).unwrap();
+        assert!(matches!(
+            commit_install(no_ref, &home),
+            Err(Refusal::AlreadyInstalled { .. })
+        ));
+        assert_eq!(snapshot(&home), before);
+
+        remove(&home, "demo").unwrap();
+        commit_install(
+            stage_directory(&tree, git(None, commit), &home).unwrap(),
+            &home,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(record_path(&home, "demo")).unwrap();
+        assert!(!text.contains("requested-ref"), "{text}");
+        assert_eq!(
+            read_record(&home, "demo").unwrap().source,
+            git(None, commit)
+        );
+    }
+
+    /// PLUGIN-14: a record written before git sources, with four lines and no commit, reads as a
+    /// local source, and a record that names a commit that is not 40 lowercase hex digits, a ref
+    /// with no commit or an empty ref reads as no record.
+    ///
+    /// Rejects: a reader that requires the new lines, one that reads a damaged commit as a
+    /// plugin, and one that reads a ref with no commit as a local source.
+    #[test]
+    fn an_old_record_still_reads_and_a_damaged_git_record_does_not() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path();
+        std::fs::create_dir_all(plugins_dir(home)).unwrap();
+        std::fs::write(
+            record_path(home, "demo"),
+            "source = /a/b\nversion = 1\nenabled = false\ndigest = d\n",
+        )
+        .unwrap();
+        let old = read_record(home, "demo").unwrap();
+        assert_eq!(old.source, Source::Local(PathBuf::from("/a/b")));
+        assert_eq!(old.source.commit(), None);
+        assert!(!old.enabled);
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let tail = "version = 1\nenabled = true\ndigest = d\n";
+        for text in [
+            format!(
+                "source = https://h/x.git\ncommit = {}\n{tail}",
+                &commit[..39]
+            ),
+            format!(
+                "source = https://h/x.git\ncommit = {}\n{tail}",
+                commit.to_uppercase()
+            ),
+            format!("source = https://h/x.git\ncommit = main\n{tail}"),
+            format!("source = https://h/x.git\nrequested-ref = main\n{tail}"),
+            format!("source = https://h/x.git\nrequested-ref = \ncommit = {commit}\n{tail}"),
+            format!("commit = {commit}\n{tail}"),
+        ] {
+            std::fs::write(record_path(home, "demo"), &text).unwrap();
+            assert_eq!(read_record(home, "demo"), None, "{text}");
+        }
+    }
+
+    /// An asker that answers yes and counts how often it was asked.
+    struct Counting {
+        asked: usize,
+    }
+
+    impl Asker for Counting {
+        fn anybody_there(&self) -> bool {
+            true
+        }
+
+        fn confirm_fetch_host(&mut self, _request: &FetchRequest) -> bool {
+            false
+        }
+
+        fn confirm_install(&mut self, _staged: &Staged) -> bool {
+            self.asked += 1;
+            true
+        }
+    }
+
+    /// PLUGIN-3: typed text that is not a source is refused before anything is read, staged or
+    /// asked. A typed local path still installs from the directory the root names.
+    ///
+    /// Rejects: an archive, an npm name, a plain URL or a bad ref that reaches the asker or the
+    /// state directory, a git URL that is read as a local path, and a local path that is no longer
+    /// read from the root.
+    #[test]
+    fn typed_text_that_is_not_a_source_asks_and_writes_nothing_and_a_path_still_installs() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        plugin_dir(scratch.path(), "src", MANIFEST);
+        let mut asker = Counting { asked: 0 };
+        for (typed, why) in [
+            ("https://example.com/x.tar.gz", NotASource::Archive),
+            ("@scope/pkg", NotASource::NpmPackage),
+            ("https://example.com/docs", NotASource::PlainUrl),
+            ("file:///tmp/p", NotASource::FileUrl),
+            ("git+ftp://example.com/x", NotASource::UnsupportedScheme),
+            ("https://example.com/x.git#-x", NotASource::BadRef),
+        ] {
+            assert_eq!(
+                install_typed(typed, scratch.path(), &home, &mut asker),
+                Err(Refusal::NotASource(why)),
+                "{typed}"
+            );
+        }
+        assert_eq!(
+            install_typed(
+                "https://example.com/x.git",
+                scratch.path(),
+                &home,
+                &mut Nobody
+            ),
+            Err(Refusal::NobodyToAsk)
+        );
+        assert_eq!(asker.asked, 0);
+        assert!(!home.exists());
+        assert_eq!(
+            install_typed("src", scratch.path(), &home, &mut asker),
+            Ok("demo".to_string())
+        );
+        assert_eq!(asker.asked, 1);
+        assert_eq!(
+            read_record(&home, "demo").unwrap().source,
+            Source::Local(std::fs::canonicalize(scratch.path().join("src")).unwrap())
+        );
+    }
+
+    /// An asker that records what it was shown and answers the two questions as told. `seen` reads
+    /// the number of connections a listener has taken when the host question is put.
+    struct Host {
+        host_yes: bool,
+        install_yes: bool,
+        hosts: Vec<FetchRequest>,
+        installs: usize,
+        connections_when_asked: Vec<usize>,
+        seen: Box<dyn Fn() -> usize>,
+    }
+
+    impl Host {
+        fn new(host_yes: bool, install_yes: bool, seen: Box<dyn Fn() -> usize>) -> Self {
+            Self {
+                host_yes,
+                install_yes,
+                hosts: Vec::new(),
+                installs: 0,
+                connections_when_asked: Vec::new(),
+                seen,
+            }
+        }
+    }
+
+    impl Asker for Host {
+        fn anybody_there(&self) -> bool {
+            true
+        }
+
+        fn confirm_fetch_host(&mut self, request: &FetchRequest) -> bool {
+            self.connections_when_asked.push((self.seen)());
+            self.hosts.push(request.clone());
+            self.host_yes
+        }
+
+        fn confirm_install(&mut self, _staged: &Staged) -> bool {
+            self.installs += 1;
+            self.install_yes
+        }
+    }
+
+    /// A loopback listener that counts the connections made to it and closes each at once.
+    struct Listener {
+        port: u16,
+        count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Listener {
+        fn start() -> Self {
+            use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+            let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            socket.set_nonblocking(true).unwrap();
+            let port = socket.local_addr().unwrap().port();
+            let count = std::sync::Arc::new(AtomicUsize::new(0));
+            let stop = std::sync::Arc::new(AtomicBool::new(false));
+            let (counted, stopped) = (count.clone(), stop.clone());
+            let thread = std::thread::spawn(move || {
+                while !stopped.load(Ordering::SeqCst) {
+                    match socket.accept() {
+                        Ok(_) => {
+                            counted.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    }
+                }
+            });
+            Self {
+                port,
+                count,
+                stop,
+                thread: Some(thread),
+            }
+        }
+
+        fn connections(&self) -> usize {
+            self.count.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn counter(&self) -> Box<dyn Fn() -> usize> {
+            let count = self.count.clone();
+            Box::new(move || count.load(std::sync::atomic::Ordering::SeqCst))
+        }
+    }
+
+    impl Drop for Listener {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                thread.join().ok();
+            }
+        }
+    }
+
+    fn a_git_source_at(listener: &Listener) -> GitSource {
+        let Ok(Requested::Git(git)) = classify(&format!(
+            "https://127.0.0.1:{}/demo.git#main",
+            listener.port
+        )) else {
+            panic!("a git source");
+        };
+        git
+    }
+
+    /// PLUGIN-3, issue test 1: no connection is made to the host before the answer is yes, a no
+    /// makes none and starts no program, and a yes lets the request leave.
+    ///
+    /// The listener is the host named in the URL. The asker reads its count while the question is
+    /// put, and again after the install returns.
+    ///
+    /// Rejects: a fetch started before the question is put (the count is above zero when the asker
+    /// reads it), a no that is ignored (the count is above zero after it), a question put with
+    /// nobody to answer it, and a yes that fetches nothing (the control: a listener that counts
+    /// zero after every answer would pass the first two on a build that never fetches).
+    #[test]
+    fn no_connection_is_made_to_the_host_before_a_yes_and_a_no_makes_none() {
+        let git = crate::plugin_git::locate().expect("git must be on PATH for this test");
+        let parent = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let listener = Listener::start();
+        let source = a_git_source_at(&listener);
+
+        let mut no = Host::new(false, true, listener.counter());
+        assert_eq!(
+            install_git(
+                &source,
+                &home,
+                &mut no,
+                Some(git.clone()),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::Declined)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(no.connections_when_asked, vec![0]);
+        assert_eq!(listener.connections(), 0, "a no made a connection");
+        assert_eq!(no.installs, 0);
+        assert!(!home.exists());
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+
+        let mut yes = Host::new(true, true, listener.counter());
+        let answered = install_git(
+            &source,
+            &home,
+            &mut yes,
+            Some(git),
+            &crate::plugin_git::PROTOCOLS,
+            parent.path(),
+        );
+        assert_eq!(answered, Err(Refusal::CloneFailed));
+        assert_eq!(yes.connections_when_asked, vec![0]);
+        assert!(listener.connections() > 0, "a yes did not reach the host");
+        assert_eq!(yes.installs, 0);
+        assert!(!home.exists());
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+
+    /// PLUGIN-3, FETCH-2: the question carries the host the URL parser read and the URL, as the
+    /// prompt of a fetch does, with no redirect and no classifier answer, and it is put once.
+    ///
+    /// Rejects: a question whose host is the text before the first `/` (the userinfo of
+    /// `ssh://example.com@evil.test/x` is not the host), a missing URL, and a redirect row or a
+    /// classifier answer carried into a question that is about a typed URL.
+    #[test]
+    fn the_host_question_carries_the_parsed_host_and_the_url_and_is_put_once() {
+        let git = crate::plugin_git::locate().expect("git must be on PATH for this test");
+        let parent = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let Ok(Requested::Git(source)) = classify("ssh://example.com@evil.test/x.git#v2") else {
+            panic!("a git source");
+        };
+        let mut no = Host::new(false, true, Box::new(|| 0));
+        assert_eq!(
+            install_git(
+                &source,
+                &scratch.path().join("home"),
+                &mut no,
+                Some(git),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::Declined)
+        );
+        assert_eq!(
+            no.hosts,
+            vec![FetchRequest {
+                url: "ssh://example.com@evil.test/x.git".to_string(),
+                host: "evil.test".to_string(),
+                redirected_from: None,
+                classified: Classified::NotAsked,
+            }]
+        );
+    }
+
+    /// PLUGIN-3: where there is no `git` the refusal is the not-installed one and no question is
+    /// put, and where nobody can be asked nothing is started and nothing is asked.
+    ///
+    /// Rejects: a host question for a program that cannot be started, and a fetch with nobody to
+    /// answer for it.
+    #[test]
+    fn no_git_or_nobody_to_ask_puts_no_question() {
+        let parent = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let Ok(Requested::Git(source)) = classify("https://example.com/x.git") else {
+            panic!("a git source");
+        };
+        let mut asker = Host::new(true, true, Box::new(|| 0));
+        assert_eq!(
+            install_git(
+                &source,
+                &home,
+                &mut asker,
+                None,
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::GitNotInstalled)
+        );
+        assert!(asker.hosts.is_empty());
+        let git = crate::plugin_git::locate().expect("git must be on PATH for this test");
+        assert_eq!(
+            install_git(
+                &source,
+                &home,
+                &mut Nobody,
+                Some(git),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::NobodyToAsk)
+        );
+        assert!(!home.exists());
+    }
+
+    /// PLUGIN-3, PLUGIN-14: after both answers are yes, a git source installs the tree of the
+    /// commit its branch pointed to and records that commit, and a no at the install question
+    /// leaves the state directory as it was although the fetch ran.
+    ///
+    /// Rejects: an install that records the ref text instead of the commit, one that asks the
+    /// install question before the fetch (the listing could not hold the commit), and one that
+    /// writes the state directory on a no.
+    #[test]
+    fn a_yes_to_the_host_and_to_the_listing_installs_the_commit_the_branch_pointed_to() {
+        let git = crate::plugin_git::locate().expect("git must be on PATH for this test");
+        let remote = crate::plugin_git::fixtures::remote();
+        let parent = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = GitSource {
+            url: remote.path.to_string_lossy().into_owned(),
+            host: "local.test".to_string(),
+            requested_ref: Some("main".to_string()),
+        };
+        let mut declined = Host::new(true, false, Box::new(|| 0));
+        assert_eq!(
+            install_git(
+                &source,
+                &home,
+                &mut declined,
+                Some(git.clone()),
+                &["file"],
+                parent.path()
+            ),
+            Err(Refusal::Declined)
+        );
+        assert_eq!(declined.installs, 1);
+        assert!(!home.exists());
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+
+        let mut yes = Host::new(true, true, Box::new(|| 0));
+        assert_eq!(
+            install_git(
+                &source,
+                &home,
+                &mut yes,
+                Some(git),
+                &["file"],
+                parent.path()
+            ),
+            Ok("demo".to_string())
+        );
+        let record = read_record(&home, "demo").unwrap();
+        assert_eq!(
+            record.source.commit().map(Commit::as_str),
+            Some(remote.second.as_str())
+        );
+        assert!(installed_dir(&home, "demo").join("second.txt").exists());
+        assert!(!installed_dir(&home, "demo").join(".git").exists());
     }
 
     /// A no installs nothing, and a yes installs once after one question.
@@ -1361,7 +2057,10 @@ mod tests {
         );
 
         let staged = stage(&lookalike, &home).unwrap();
-        assert_eq!(staged.source, std::fs::canonicalize(&lookalike).unwrap());
+        assert_eq!(
+            staged.source,
+            Source::Local(std::fs::canonicalize(&lookalike).unwrap())
+        );
         assert_eq!(staged.manifest.name, "demo");
     }
 
@@ -1398,5 +2097,147 @@ mod tests {
         assert!(!first.tree.join(lookalike).exists());
         assert!(second.tree.join(lookalike).is_file());
         assert!(!second.tree.join(invalid).exists());
+    }
+
+    const WITH_PARTS: &str = "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nskills = \"skills\"\nhooks = \"hooks.json\"\nservers = \"servers.json\"\n";
+    const HOOKS: &str = r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]},{"on":"nope","run":["x"]}]}"#;
+    const SERVERS: &str = r#"{"servers":{"s":{"transport":"stdio","argv":["${PLUGIN_ROOT}/server.py"],"env":{"K":"${PLUGIN_ROOT}/k"}}}}"#;
+
+    fn plugin_with_parts(parent: &Path) -> PathBuf {
+        let root = plugin_dir(parent, "src", WITH_PARTS);
+        std::fs::write(root.join("hooks.json"), HOOKS).unwrap();
+        std::fs::write(root.join("servers.json"), SERVERS).unwrap();
+        root
+    }
+
+    /// S1, S2, S6, S7, S29: stage reads both files from the staged copy as data, and a staged
+    /// plugin's argv already names the directory it will have once installed, not the staging
+    /// directory it was read from. What the hook reader passed over is counted.
+    ///
+    /// Rejects: a staged read that expands to the staging path, a read of the source directory
+    /// instead of the copy, a hooks file that is not read at all, and a drop of an entry with no
+    /// trace in the result.
+    #[test]
+    fn a_staged_plugin_reads_its_hooks_and_servers_with_the_path_it_will_have() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let staged = stage(&plugin_with_parts(scratch.path()), &home).unwrap();
+        let will_be = installed_dir(&home, "demo");
+        let hooks = staged.hooks.as_ref().unwrap().as_ref().unwrap();
+        let hook = &hooks.hooks.declared()[0];
+        assert_eq!(hooks.hooks.declared().len(), 1);
+        assert_eq!(hook.run(), [format!("{}/hook.sh", will_be.display())]);
+        assert_eq!(hooks.unkept.dropped, 1);
+        let servers = staged.servers.as_ref().unwrap().as_ref().unwrap();
+        let server = servers.entries[0].declaration.as_ref().unwrap();
+        assert_eq!(server.argv(), [format!("{}/server.py", will_be.display())]);
+        assert!(!server.argv()[0].contains(".plugin-staging"));
+        // A plugin naming neither part has nothing to read.
+        let bare = stage(&plugin_dir(scratch.path(), "bare", MANIFEST), &home).unwrap();
+        assert!(bare.hooks.is_none() && bare.servers.is_none());
+    }
+
+    /// S8: the list read from the installed directory is the list the staged copy gave before the
+    /// install, so a digest taken at install and one taken at a later check are over the same argv.
+    ///
+    /// Rejects: an installed read that expands against a different directory than a staged read.
+    #[test]
+    fn the_installed_read_gives_the_list_the_staged_read_gave() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let staged = stage(&plugin_with_parts(scratch.path()), &home).unwrap();
+        let (hooks, servers) = (staged.hooks.clone(), staged.servers.clone());
+        commit_install(staged, &home).unwrap();
+        assert_eq!(installed_hooks(&home, "demo"), hooks);
+        assert_eq!(installed_servers(&home, "demo"), servers);
+        assert_eq!(installed_hooks(&home, "missing"), None);
+    }
+
+    /// S18: an install of a plugin carrying hooks and servers writes the tree and its record under
+    /// `plugins/` and nothing else: no `hooks-approved`, no `mcp-approved`, no `mcp.json`.
+    ///
+    /// Rejects: an install that records an answer for a hook or a server.
+    #[test]
+    fn an_install_records_no_answer_for_a_hook_or_a_server() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        commit_install(
+            stage(&plugin_with_parts(scratch.path()), &home).unwrap(),
+            &home,
+        )
+        .unwrap();
+        let mut top: Vec<String> = std::fs::read_dir(&home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        top.sort();
+        assert_eq!(top, ["plugins"]);
+        let mut inside: Vec<String> = std::fs::read_dir(plugins_dir(&home))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        inside.sort();
+        assert_eq!(inside, ["demo", "demo.record"]);
+    }
+
+    /// S20: the re-hash the servers worker calls. An untouched install matches its record. An
+    /// edited file, an added file, a removed file and a missing directory are each a mismatch, and
+    /// a plugin with no record has nothing to match.
+    ///
+    /// Rejects: a comparison that is skipped (always Ok), one that ignores an added or removed
+    /// file, and one that reads a missing record as a match.
+    #[test]
+    fn the_installed_tree_is_hashed_again_and_compared_with_the_record() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        commit_install(
+            stage(&plugin_with_parts(scratch.path()), &home).unwrap(),
+            &home,
+        )
+        .unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+        let dir = installed_dir(&home, "demo");
+
+        std::fs::write(dir.join("hooks.json"), HOOKS.replace("x", "y")).unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Err(Mismatch::Differs));
+        std::fs::write(dir.join("hooks.json"), HOOKS).unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+
+        std::fs::write(dir.join("added"), "").unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Err(Mismatch::Differs));
+        std::fs::remove_file(dir.join("added")).unwrap();
+        std::fs::remove_file(dir.join("servers.json")).unwrap();
+        assert_eq!(tree_matches_record(&home, "demo"), Err(Mismatch::Differs));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            tree_matches_record(&home, "demo"),
+            Err(Mismatch::Unreadable)
+        );
+        assert_eq!(
+            tree_matches_record(&home, "missing"),
+            Err(Mismatch::NoRecord)
+        );
+    }
+
+    /// S1, S2: a named hooks or servers file that is not there is refused like a missing skills
+    /// directory, and one that cannot be used is carried as a fault for the listing, not refused.
+    ///
+    /// Rejects: a plugin that stages with a part path naming nothing, and a staged plugin whose
+    /// unusable hooks file is read as no hooks.
+    #[test]
+    fn a_named_part_file_that_is_missing_is_refused_and_one_that_is_unusable_is_a_fault() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = plugin_with_parts(scratch.path());
+        std::fs::write(source.join("hooks.json"), "not json").unwrap();
+        let staged = stage(&source, &home).unwrap();
+        assert_eq!(staged.hooks, Some(Err(plugin::FileFault::NotHooks)));
+        drop(staged);
+        std::fs::remove_file(source.join("servers.json")).unwrap();
+        assert_eq!(
+            stage(&source, &home).unwrap_err(),
+            Refusal::PartMissing(Part::Servers)
+        );
     }
 }

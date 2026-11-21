@@ -948,7 +948,7 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
         "variables": variables,
         "reads": declaration.reads(),
         "directory": directory,
-        "digest": declaration.digest().short(),
+        "digest": question.digest().short(),
         "requestedBy": question.file,
         "changed": question.changed,
         // Every line the terminal draws above the answers, worded once in the agent.

@@ -13,6 +13,7 @@ governs:
   - crates/config/src/import.rs
   - crates/cli/src/mcp.rs
   - crates/agent/src/servers.rs
+  - crates/agent/src/plugin_servers.rs
   - crates/agent/src/images.rs
   - crates/core/src/capability.rs
   - crates/core/src/permissions.rs
@@ -252,6 +253,8 @@ was recorded, and leaves every other project's as it was. An incognito session w
 |---|---|---|---|
 | A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory, its startup and call bounds, and the HTTP headers read from environment variables | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
+| An approval of a plugin's server, a `plugin` line holding the digest, the plugin's name and the alias the plugin gave. The digest covers the plugin's name, its install directory, the tree digest recorded at install and the expanded declaration ([SERVERS-27](#SERVERS-27)) | `~/.bravebot/mcp-approved` | the person's own directory | until the plugin's tree or install directory changes, or the plugin is removed |
+| A plugin's servers, `{ "servers": { ... } }` in the format of `mcp.json` | the file the plugin's `plugin.toml` names, inside `~/.bravebot/plugins/<name>` | the plugin's own directory | until the plugin is removed |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
 | What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
@@ -278,7 +281,10 @@ no other.
 
 The file that may carry an alias, a transport, an argv, a url, the names of the variables a server
 needs, the values it stores for others, the files it may read, and the directory it runs in is
-`~/.bravebot/mcp.json`. A settings layer carries none of
+`~/.bravebot/mcp.json`, and no other file declares one, with one exception: the servers file of a
+plugin the person installed, which is read from that plugin's own directory under
+`~/.bravebot/plugins` alongside `mcp.json` and asked about at first use ([SERVERS-27](#SERVERS-27)). A
+settings layer carries none of
 those, at any of the three levels, including the one the command line names.
 
 A project layer that names an argv is a parse error reported by `doctor`, not a declaration that is
@@ -1609,6 +1615,10 @@ exist yet.
 The mode is named in the session's own display for as long as it is in force, and the servers
 reachable under it are listed rather than summarised.
 
+**A plugin's server is the exception.** The question of a server an installed plugin carries is not
+answered by this mode, by a one-shot run or by a recorded project answer, which differs from a declared
+server above: only a person's yes to that server approves it ([SERVERS-27](#SERVERS-27)).
+
 **Why this clause exists when [permission-modes.md](permission-modes.md) already says it.** Because the list above is the part
 nobody reads off those clauses. A mode that skips prompts is understood as a mode that turns the
 safety off, and that reading is how it comes to be used in a container where it then does turn the
@@ -2653,3 +2663,80 @@ A server asking every call has said each of its calls is put on its own, which n
 `verified-by: bravebot_agent::servers::an_openshell_declaration_keeps_what_a_row_may_fill_and_what_the_plan_covers`
 `verified-by: bravebot_cli::mcp::add_writes_the_plan_covers_marks_and_the_question_and_get_say_them`
 `verified-by: bravebot_browser::install::the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill`
+
+<a id="SERVERS-27"></a>
+### SERVERS-27: a server an installed plugin carries is read beside `mcp.json`, asked about at first use, and stopped when the plugin's directory changed
+
+An enabled plugin that names a servers file ([plugins.md](plugins.md)) adds the servers in it to what a
+session can start. The file is read from the plugin's own directory under `~/.bravebot/plugins`, in
+the format of `mcp.json`, and `${PLUGIN_ROOT}` in a server's program and arguments is replaced with the
+absolute path of that directory before the declaration is digested, and nowhere else in it. A plugin
+in a workspace offers nothing, a plugin that is turned off offers nothing, and a session started with
+`--safe` reads none.
+
+A plugin's server is reached as `<plugin>_<alias>`, the plugin's name and the alias its file gave. A
+plugin's name holds letters, digits and hyphens and an alias starts with a letter or a digit, so the
+first underscore ends the plugin's name and two plugins never share an alias. A joined alias longer
+than 64 characters is an entry that cannot be used. Where the person's own `mcp.json` declares the same
+alias, that declaration is the one used, the plugin's is not, and a note says so.
+
+Installing and enabling the plugin is the request for each server in it, since the install listing
+showed every one ([PLUGIN-4](plugins.md#PLUGIN-4)). No `mcp.request` is written or needed, and a checkout
+cannot add to what plugins request. A server is then put to the person with the question
+[SERVERS-4](#SERVERS-4) describes, with a line naming the plugin that carries it, and its approval is a
+line of its own kind in `~/.bravebot/mcp-approved`: `plugin`, the digest, the plugin's name and the
+alias the plugin gave. The digest is taken over the plugin's name, the directory it is installed in, the
+digest of the plugin's tree recorded at install and the digest of the declaration as expanded, so an
+answer about one install of a plugin is not an answer about another install, another tree or a server
+the person declared. `Approvals::approves` for a declaration reads no `plugin` line, and a person's `mcp
+add` and `mcp remove` leave the `plugin` lines as they were.
+
+**What differs from a server the person declared.** [SERVERS-13](#SERVERS-13) lets bypassing answer the
+question of a declared server without drawing it, and a recorded project answer 2 answers it for every
+server a checkout requests. Neither approves a plugin's server. Bypassing, a one-shot run and a run
+nobody can be asked in start none and say so, and a recorded project answer is not consulted. Only a
+person's yes to that server's question approves it. A declared server's tool list and calls are put as
+[SERVERS-8](#SERVERS-8) and [SERVERS-7](#SERVERS-7) say.
+
+Before the question, again just before the server starts, and at each turn that offers its tools and
+each call and prompt, the plugin's directory is hashed again and compared with the digest recorded at
+install. A directory that differs, cannot be read or has lost its record, and a plugin turned off,
+start nothing and stop a running server: nothing is asked and the plugin is named once in the session,
+with a note, for a changed directory. A turned-off plugin's answers stay in `mcp-approved`, and turning
+it on again asks nothing for a directory that still matches. The alias a plugin's file chose is drawn in
+every note about it as a name a checkout wrote is, with a control character written out. Removing a plugin takes its `plugin` lines
+out of `mcp-approved` before the directory is deleted, and a remove that cannot rewrite the file stops
+with the plugin still installed.
+
+**Not built.** A server of a plugin is not moved ([SERVERS-11](#SERVERS-11)): a redirected handshake of
+one is left unstarted, because a move would write the plugin's alias into `mcp.json`, where the person's
+declaration would then shadow the plugin's. `bravebot mcp list`, `get` and `doctor` and `/mcp list` do
+not show a plugin's servers, and `/mcp reconnect` starts them on the road above.
+
+**Why.** An install is one yes to a list. Starting a program is a decision about that program, so the
+question stays, and the digest holds the plugin's directory because a server is usually an argv that
+starts a script the plugin carries. The stricter reading of bypassing and of a recorded project is that
+a yes kept against a program somebody else wrote must be one the person gave about it. The person's own
+declaration wins an alias because a plugin that could take the place of a server the person wrote would
+decide what runs under that name.
+
+`verified-by: bravebot_agent::servers::plugin_tests::a_plugins_server_is_not_reachable_before_its_question_and_a_no_records_nothing`
+`verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
+`verified-by: bravebot_agent::servers::plugin_tests::an_answer_about_one_install_of_a_plugin_is_not_an_answer_about_another`
+`verified-by: bravebot_agent::servers::plugin_tests::a_plugin_whose_files_changed_starts_no_server_before_or_after_its_question`
+`verified-by: bravebot_agent::servers::plugin_tests::a_disabled_plugin_starts_no_server_and_its_answers_stay`
+`verified-by: bravebot_agent::servers::plugin_tests::a_declaration_in_mcp_json_wins_over_a_plugins_server_of_the_same_alias`
+`verified-by: bravebot_agent::servers::plugin_tests::an_enabled_plugin_requests_each_server_it_carries_once`
+`verified-by: bravebot_agent::servers::plugin_tests::removing_a_plugin_withdraws_its_servers_answers_and_leaves_the_rest`
+`verified-by: bravebot_agent::plugin_servers::a_server_is_reached_as_its_plugin_and_its_alias_joined_by_an_underscore`
+`verified-by: bravebot_agent::plugin_servers::the_digest_is_over_the_expanded_declaration_and_follows_the_plugin_and_its_directory`
+`verified-by: bravebot_agent::plugin_servers::a_plugin_that_is_turned_off_offers_no_server_and_is_named`
+`verified-by: bravebot_agent::plugin_servers::a_joined_alias_that_is_too_long_is_not_used`
+`verified-by: bravebot_agent::servers::plugin_tests::a_plugin_authored_alias_with_a_control_character_and_a_newline_is_drawn_escaped_in_each_note`
+`verified-by: bravebot_agent::plugin_servers::a_server_may_start_only_while_the_plugin_is_enabled_and_its_tree_is_the_recorded_one`
+`verified-by: bravebot_agent::mcp::a_plugins_server_is_stopped_by_a_changed_tree_and_the_plugin_is_named_once`
+`verified-by: bravebot_config::mcp::a_plugin_servers_digest_names_the_plugin_its_directory_and_its_tree`
+`verified-by: bravebot_config::mcp::a_plugins_approval_is_its_own_line_and_a_home_rewrite_keeps_it`
+`verified-by: bravebot_config::mcp::withdrawing_a_plugins_answers_leaves_every_other_line_as_it_was`
+`verified-by: bravebot_config::plugin::the_argv_a_digest_is_taken_over_is_the_expanded_one_and_follows_the_install_directory`
+`verified-by: by-construction (a session started with --safe reads no plugin server because the reader in crates/agent/src/plugin_servers.rs returns none while the safe flag is engaged, and a plugin server is moved by nothing because the move path in crates/agent/src/servers.rs declines a plugin's server)`

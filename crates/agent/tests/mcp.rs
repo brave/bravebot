@@ -8780,3 +8780,114 @@ fn a_line_a_local_server_wrote_that_cannot_be_read_is_told_in_the_fixed_sentence
         "the reader's own words reached the planner: {told}"
     );
 }
+
+/// Installs the plugin `demo` into `scratch`'s state directory, carrying one remote server at `url`.
+fn a_plugin_carrying_the_server_at(scratch: &Scratch, url: &str) {
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nservers = \"servers.json\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        source.join("servers.json"),
+        format!(r#"{{"servers":{{"weather":{{"transport":"http","url":"{url}"}}}}}}"#),
+    )
+    .expect("servers");
+    bravebot_agent::plugins::install(&source, &scratch.state()).expect("install");
+}
+
+/// PLUGIN-7, S17 to S21: a server an installed plugin carries is reached through the first-use
+/// question and then offered in a turn; once a file of the plugin changes, the next turn stops it,
+/// puts nothing of it to the person, offers none of its tools, and names the plugin once in the
+/// session, in the turn that found the change and not in the turns after.
+///
+/// Rejects: a turn that offers the changed plugin's server, one that asks for its list again, one
+/// that says nothing to the person, and one that says it at every turn.
+#[test]
+fn a_plugins_server_is_stopped_by_a_changed_tree_and_the_plugin_is_named_once() {
+    let scratch = Scratch::new("plugin-server-changed");
+    let (url, _server) = serve_two_tools();
+    a_plugin_carrying_the_server_at(&scratch, &format!("{url}/mcp"));
+    let state = scratch.state();
+    let home = bravebot_agent::servers::Home {
+        directory: Some(state.clone()),
+        writable: true,
+    };
+    let requested = bravebot_agent::plugin_servers::PluginServers::requests(&state, &[]);
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b"1\n"[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reach(
+        &requested,
+        &scratch.project(),
+        &home,
+        &Managed::default(),
+        bravebot_agent::servers::Asking::Person,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
+    );
+    let session = reached
+        .session()
+        .unwrap_or_else(|| panic!("the plugin's server was not reached: {:?}", reached.notes));
+    let screen = String::from_utf8(person.screen).expect("screen");
+    assert!(screen.contains("demo_weather"), "{screen}");
+
+    let (endpoint, chat) = serve_chat(vec![
+        reply_with("one"),
+        reply_with("two"),
+        reply_with("three"),
+    ]);
+    let account = bravebot_agent::chatgpt::AccountSession::begin();
+    let turn = |confirmer: &mut Answering| {
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("what is the weather")
+                .with_mcp(Some(session.clone()))
+                .in_account_session(account.clone()),
+            confirmer,
+        )
+    };
+    let named = |outcome: &bravebot_agent::Outcome| {
+        outcome
+            .notices
+            .iter()
+            .filter(|notice| notice.contains("demo") && notice.contains("stopped"))
+            .count()
+    };
+
+    let mut first = Answering::new(Decision::Approve, CallDecision::approve());
+    let outcome = turn(&mut first);
+    assert_eq!(
+        first.lists.len(),
+        1,
+        "control: the list is put to the person"
+    );
+    assert_eq!(named(&outcome), 0);
+
+    std::fs::write(
+        bravebot_agent::plugins::installed_dir(&state, "demo").join("added.txt"),
+        "a file the install did not hold",
+    )
+    .expect("edit the plugin");
+    let mut second = Answering::new(Decision::Approve, CallDecision::approve());
+    let found = turn(&mut second);
+    let mut third = Answering::new(Decision::Approve, CallDecision::approve());
+    let after = turn(&mut third);
+
+    assert!(second.lists.is_empty(), "{:?}", second.lists);
+    assert!(third.lists.is_empty(), "{:?}", third.lists);
+    assert_eq!(named(&found), 1, "{:?}", found.notices);
+    assert_eq!(named(&after), 0, "{:?}", after.notices);
+    let sent = rounds(&chat);
+    let [with, without, still_without] = sent.as_slice() else {
+        panic!("one round for each turn: {}", sent.len());
+    };
+    assert!(with.contains("mcp__demo_weather__get_forecast"), "control");
+    assert!(!without.contains("demo_weather"), "{without}");
+    assert!(!still_without.contains("demo_weather"), "{still_without}");
+}

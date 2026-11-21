@@ -1179,6 +1179,10 @@ fn answer_in_a_turn(
             let answer = crate::confirm::ask_path(terminal, &request);
             replying.plainly(session, answer, crate::remote_confirm::Reply::Path);
         }
+        crate::remote_confirm::ToMain::Hook(request) => {
+            let answer = crate::confirm::ask_hook(terminal, &request);
+            replying.plainly(session, answer, crate::remote_confirm::Reply::Hook);
+        }
         crate::remote_confirm::ToMain::Host(request) => {
             let answer = crate::confirm::ask_host(terminal, &request);
             replying.plainly(session, answer, crate::remote_confirm::Reply::Host);

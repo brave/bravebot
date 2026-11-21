@@ -3033,21 +3033,37 @@ fn begin_session(
 /// (HOOK-10), and note in the transcript what a hook that went wrong said.
 ///
 /// `draw` puts the opening screen up first where a hook will run, so the person is not left on a
-/// blank one while it holds the first prompt back, and is not called where none will. Said once
+/// blank one while it holds the first prompt back, and is not called where none will. It is also
+/// called where a plugin's hook may be asked about, so the question has a screen under it. Said once
 /// however many conversations `/resume` opens in this interface, because `moments` has fired it
 /// already.
-fn start_the_session(
+///
+/// `started` fires the moment, and is handed the same `state` as `draw`, so one terminal serves the
+/// screen and the question. The question for a plugin's hook comes through
+/// [`bravebot_agent::hooks::SessionMoments::started_asking`], the decision every other moment of a
+/// plugin's hook goes through.
+fn start_the_session<T>(
     session: &mut Session,
     moments: &mut bravebot_agent::hooks::SessionMoments,
-    draw: impl FnOnce(&mut Session) -> io::Result<()>,
+    state: &mut T,
+    draw: impl FnOnce(&mut T, &mut Session) -> io::Result<()>,
+    started: impl FnOnce(&mut T, &mut bravebot_agent::hooks::SessionMoments) -> Vec<String>,
 ) -> io::Result<()> {
-    if moments.will_start_a_hook() {
-        draw(session)?;
+    if moments.will_start_a_hook() || moments.may_ask_at_start() {
+        draw(state, session)?;
     }
-    for said in moments.started() {
+    for said in started(state, moments) {
         session.note(said);
     }
     Ok(())
+}
+
+/// Whether a question about a plugin's `file-changed` entry may be put now: the box holds no draft,
+/// so a key typed into it is never taken as the answer, and the Sessions screen is not what is on
+/// the screen. The event loop needs a real terminal, so this is the condition it tests, named so a
+/// test can reach it.
+fn may_put_a_plugin_question(session: &Session) -> bool {
+    session.input().is_empty() && !session.showing_sessions()
 }
 
 /// Concrete in the backend rather than generic: the loop is only ever driven by a real
@@ -3079,16 +3095,35 @@ fn event_loop(
     };
 
     // The session has begun and the first turn is not yet sent, which is where a hook on the start
-    // of a session runs (HOOK-10).
-    start_the_session(&mut session, moments, |session| redraw(terminal, session))?;
+    // of a session runs (HOOK-10). A plugin's hook there is asked about first, in this terminal, by
+    // the decision every moment of a plugin's hook goes through (PLUGIN-7).
+    moments.keep_answers(session.account_session().clone());
+    start_the_session(
+        &mut session,
+        moments,
+        terminal,
+        redraw,
+        |terminal, moments| {
+            let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
+            moments.started_asking(&mut asking)
+        },
+    )?;
     // The files a person asked to have a command run for, looked at from here until the interface is
-    // left (HOOK-2). Read from the directory the session opened in, as the session moments are.
-    let watching =
-        bravebot_agent::hooks::Watching::begin(bravebot_agent::hooks::FileChanged::read(
+    // left (HOOK-2). Read from the directory the session opened in, as the session moments are. A
+    // plugin's entries are watched too, and each is asked about at the first change that would run
+    // it.
+    let watching = bravebot_agent::hooks::Watching::begin(
+        bravebot_agent::hooks::FileChanged::read(
             bravebot_agent::home::directory().as_deref(),
             workspace.root(),
             Instant::now(),
-        ));
+        )
+        .with_plugins(
+            bravebot_agent::home::directory().as_deref(),
+            session.account_session().clone(),
+            Instant::now(),
+        ),
+    );
 
     // Drawn when something has changed rather than on every pass. A drag arrives as a stream of
     // positions, and a frame for each costs more than the whole gesture is worth: with a long
@@ -3112,6 +3147,16 @@ fn event_loop(
             watching.as_ref(),
             &mut needs_draw,
         );
+        // A question about a plugin's `file-changed` entry that its thread is waiting on. Put only
+        // where the box holds nothing, so a key typed into a draft is never taken as the answer, and
+        // not over the Sessions screen. It waits, with the thread, until then. The decision is the
+        // one every moment's plugin hook goes through (PLUGIN-7).
+        if let Some(watching) = watching.as_ref()
+            && may_put_a_plugin_question(&session)
+        {
+            let mut asking = crate::confirm::TerminalConfirmer::new(terminal);
+            needs_draw |= watching.serve(&mut asking);
+        }
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped. Only a drag or a resize is waited out. A typed character
@@ -4022,6 +4067,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::Move(_) => Reply::Move(Decision::Reject),
         ToMain::Path(_) => Reply::Path(Decision::Reject),
         ToMain::Host(_) => Reply::Host(Decision::Reject),
+        ToMain::Hook(_) => Reply::Hook(Decision::Reject),
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
         | ToMain::RequestBuilt(_)
