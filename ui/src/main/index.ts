@@ -88,6 +88,15 @@ import { faultReporter } from './window-fault'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 import { forgetSummons, noteTurnEnded, summons } from './summons'
 import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
+import { raiseMainWindow, takeSingleInstance } from './single-instance'
+
+/**
+ * One instance per user-data profile, taken before anything makes a window, reads state or starts
+ * the agent. A launch that does not get the lock quits and the code below starts nothing for it:
+ * `whenReady` is only waited on when `primary` is true. A later launch raises the main window and
+ * nothing it passed is read.
+ */
+const primary = takeSingleInstance(app, () => raiseMainWindow(app, window, createWindow))
 
 /**
  * Which live session belongs to which bot, for the length of this run.
@@ -756,7 +765,7 @@ function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
   noteRoot(answer.session, directory)
 }
 
-app.whenReady().then(() => {
+if (primary) app.whenReady().then(() => {
   if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(DEV_ICON_DIR, 'icon.png'))
   caffeinate = new Caffeinate(powerSaveBlocker)
   ipcMain.handle('bravebot:request', async (_event, method: unknown, params: unknown) => {

@@ -751,8 +751,9 @@ crates/ui-bridge/     the Rust library and the bravebot-rpc binary
   src/bin/bravebot-rpc.rs   read stdin, frame stdout, nothing else
   tests/                    the integration suites, including the refusal guarantees
 crates/ui-files/  descriptor-based helper for previews and bot memory
-src/main/                   Electron main: one window, one child process, a narrow channel
+src/main/                   Electron main: one instance per profile, one window, one child process, a narrow channel
   index.ts                  the window, and the allow-list of what the renderer may call
+  single-instance.ts        the lock per user-data directory, and raising the main window for a second launch
   bridge.ts                 the child process, and its lifetime
   menu.ts                   the application menu, built from the shared command list
   bots.ts                   the bots, and the two files each one speaks through

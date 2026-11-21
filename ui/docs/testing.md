@@ -97,6 +97,18 @@ matter:
   `schedule-command.test.mjs` pins the `/schedule` line in the composer: which typed lines go to the
   bridge as `schedule.command`, that the answer is drawn as a transcript row and never sent to the
   model, and that a `schedule.ran` event draws the line a `run-now` ends with.
+- `single-instance.test.mjs` and `single-instance-electron.test.mjs` pin the one-instance rule. The
+  first runs `src/main/single-instance.ts` against a fake `app` and fake windows (a launch that does
+  not get the lock quits, a second launch restores, shows and focuses a minimised main window,
+  builds one when there is none, never raises another window, and reads nothing the second process
+  passed) and reads `src/main/index.ts` as text for the lock coming before every window, bridge and
+  state read. The second starts the real Electron on Linux under `xvfb-run`, on one
+  `--user-data-dir` and on another: the second launch on a profile exits 0 with no window, the first
+  stays and raises its window, a launch on another profile runs beside it, and a restart through
+  `relaunchUnlessRunning` starts a process that holds the lock. Elsewhere it prints `skipped`, and
+  under `CI` on Linux a missing `xvfb-run` or Electron fails it. On macOS or Windows,
+  `SINGLE_INSTANCE_ELECTRON=1 node --test scripts/single-instance-electron.test.mjs` runs it on the
+  desktop with scratch profiles, `HOME` and `BRAVEBOT_HOME`; it opens and closes small windows.
 - After building, `node scripts/drive-turn-details.mjs`: notices, completed-turn usage,
   live and unavailable audits, background delivery, disclosure persistence, cancellation,
   focus restoration and the narrow context drawer, using an isolated profile and synthetic events.
@@ -223,6 +235,11 @@ the file: the other keys are somebody's arrangement of this window.
 pinned to light and that its renderer bundle cannot switch appearance at runtime.
 
 ### Which drivers touch your real profile
+
+The app is one instance per profile (`--user-data-dir`, or the default `userData`). A driver that
+launches without `--user-data-dir` while the app is open on the default profile, for example from
+`pnpm run dev`, now exits at once and the open app raises its window. A driver with a profile of its
+own, which is every driver that sets `--user-data-dir`, runs beside any other instance.
 
 **Many drivers run against the real user profile.** A driver that launches Electron without
 `--user-data-dir` uses the app's real `userData`, so it reads and writes your `bravebot-ui.json`
