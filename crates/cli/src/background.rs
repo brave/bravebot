@@ -7,7 +7,7 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
-use bravebot_session::jobs::{Lookup, Mode, Roster, Seen, State, Stopped};
+use bravebot_session::jobs::{Lookup, Mode, Roster, Seen, StartError, State, Stopped};
 use bravebot_session::listing::{Reader, Task};
 use bravebot_tui::sessions_view::{Choice, Row};
 use std::io::{IsTerminal, Write};
@@ -225,7 +225,9 @@ fn launch(roster: &Roster, prompt: &str) -> ExitCode {
 /// `first` is the line the process starts with, left where only it can take it (BG-2); an empty
 /// one starts the session idle. A session started again runs in the directory it worked in, since
 /// its record is found from there. The process runs in `mode` for as long as it runs (BG-8).
-#[cfg(unix)]
+///
+/// The host is this program started again, through [`bravebot_session::jobs::start_host`], and
+/// each way that can fail is said in the words `--bg` has always used.
 fn start_host(
     roster: &Roster,
     id: &str,
@@ -233,132 +235,31 @@ fn start_host(
     directory: Option<&std::path::Path>,
     mode: Mode,
 ) -> Result<(), ExitCode> {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-
-    if let Err(err) = roster.leave_first_prompt(id, first) {
-        return Err(fail(Ending::Failed, t!(bg_spawn_failed, problem = err)));
-    }
-    // The socket of the process that ended, which would otherwise be taken for the new one's. A
-    // live process's socket is its own, and another terminal may have started it a moment ago.
-    if !roster.get(id).is_some_and(|seen| seen.live)
-        && let Some(socket) = roster.socket_of(id)
-    {
-        let _ = std::fs::remove_file(socket);
+    if cfg!(not(unix)) {
+        return Err(fail(Ending::Failed, t!(bg_unsupported)));
     }
     // The host is this same program started again; nothing is trusted from where it says it is.
     // nosemgrep: rust.lang.security.current-exe.current-exe
     let Ok(me) = std::env::current_exe() else {
-        let _ = roster.take_first_prompt(id);
         return Err(fail(Ending::Failed, t!(bg_not_started)));
     };
-    let mut command = host_command(&me, id, directory, mode);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Err(err) = command.spawn() {
-        let _ = roster.take_first_prompt(id);
-        return Err(fail(Ending::Failed, t!(bg_spawn_failed, problem = err)));
-    }
-    let until = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < until {
-        if roster.get(id).is_some_and(|seen| seen.live)
-            && roster.socket_of(id).is_some_and(|s| s.exists())
-        {
-            ensure_supervisor(roster, &me);
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let _ = roster.take_first_prompt(id);
-    Err(fail(Ending::Failed, t!(bg_not_started)))
+    bravebot_session::jobs::start_host(&me, roster, id, first, directory, mode).map_err(|err| {
+        fail(
+            Ending::Failed,
+            match err {
+                StartError::Spawn(problem) => t!(bg_spawn_failed, problem = problem),
+                StartError::NotStarted => t!(bg_not_started).to_string(),
+                StartError::Unsupported => t!(bg_unsupported).to_string(),
+            },
+        )
+    })
 }
 
-/// Make sure a supervisor is running, so the process just started is started again if it ends
-/// between turns (BG-11, BG-12).
-///
-/// Done once the process is alive, not before. A supervisor that is about to end lets go of its lock
-/// and then looks at the roster once more, so a process alive by the time this looks at the lock is
-/// one it finds; a lock this finds free belongs to no supervisor and a new one is started. That
-/// order is what leaves no moment in which a live process has neither.
-///
-/// The session is running whatever becomes of this, so it is not undone when the supervisor cannot
-/// be started.
+/// The command that runs the process for `id`, which the supervisor starts again (BG-12).
 #[cfg(unix)]
-fn ensure_supervisor(roster: &Roster, program: &std::path::Path) {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-
-    if roster.has_supervisor() {
-        return;
-    }
-    let mut command = supervisor_command(program);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let Ok(mut supervisor) = command.spawn() else {
-        return;
-    };
-    // Until it holds its lock, so that the next `--bg` finds it rather than starting another, or
-    // until it has ended: it does when nothing is alive for it to watch.
-    let until = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < until && !roster.has_supervisor() {
-        if !matches!(supervisor.try_wait(), Ok(None)) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// The command that runs the supervisor: the hidden `__bg-supervisor`, from a directory that no
-/// terminal holds open.
-#[cfg(unix)]
-fn supervisor_command(program: &std::path::Path) -> std::process::Command {
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Inherited,
-        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
-        bravebot_sandbox::programs::CodeSelectors::Kept,
-    );
-    command.arg("__bg-supervisor").current_dir("/");
-    command
-}
-
-/// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
-#[cfg(unix)]
-pub(crate) fn host_command(
-    program: &std::path::Path,
-    id: &str,
-    directory: Option<&std::path::Path>,
-    mode: Mode,
-) -> std::process::Command {
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::found_earlier(program),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Inherited,
-        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
-        bravebot_sandbox::programs::CodeSelectors::Kept,
-    );
-    command.arg("__bg-host").arg(id).arg(mode.word());
-    if let Some(directory) = directory {
-        command.current_dir(directory);
-    }
-    command
-}
-
-#[cfg(not(unix))]
-fn start_host(
-    _roster: &Roster,
-    _id: &str,
-    _first: &str,
-    _directory: Option<&std::path::Path>,
-    _mode: Mode,
-) -> Result<(), ExitCode> {
-    Err(fail(Ending::Failed, t!(bg_unsupported)))
-}
+pub(crate) use bravebot_session::jobs::host_command;
+#[cfg(all(unix, test))]
+use bravebot_session::jobs::supervisor_command;
 
 /// The hidden command a started session runs under, with the mode word it was started with.
 #[cfg(unix)]
