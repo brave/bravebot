@@ -149,7 +149,12 @@ impl PingService {
 
 /// A window that starts, asks `methods`, and stays open until a ping arrives or a while passes,
 /// since the ping is sent beside the window rather than before it answers.
-fn a_window_pinging(home: &Path, service: &PingService, methods: &[&str]) -> Vec<String> {
+fn a_window_pinging(
+    home: &Path,
+    service: &PingService,
+    endpoint: &str,
+    methods: &[&str],
+) -> Vec<String> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"));
     command
         .current_dir(home)
@@ -158,7 +163,7 @@ fn a_window_pinging(home: &Path, service: &PingService, methods: &[&str]) -> Vec
         .env("HOME", home)
         .env("SERVICES_KEY_AICHAT", "a-services-key")
         .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-        .env("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1")
+        .env("BRAVE_AI_CHAT_ENDPOINT", endpoint)
         .env("BRAVEBOT_USAGE_PING", "1")
         .env("BRAVEBOT_USAGE_PING_URL", &service.url);
     let mut child = command
@@ -184,12 +189,13 @@ fn a_window_pinging(home: &Path, service: &PingService, methods: &[&str]) -> Vec
 fn the_window_sends_one_ping_a_day_once_its_notice_is_shown() {
     let home = home("pinging");
     let service = PingService::start();
+    let endpoint = "http://127.0.0.1:1";
     assert_eq!(
-        a_window_pinging(&home, &service, &["usage_ping.notice_due"]),
+        a_window_pinging(&home, &service, endpoint, &["usage_ping.notice_due"]),
         Vec::<String>::new(),
         "a window pinged before its notice was shown"
     );
-    let seen = a_window_pinging(&home, &service, &["usage_ping.mark_notice_shown"]);
+    let seen = a_window_pinging(&home, &service, endpoint, &["usage_ping.mark_notice_shown"]);
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert!(seen[0].starts_with("/1/usage/bravebot?"), "{seen:?}");
     assert!(seen[0].contains("&surface=desktop&"), "{seen:?}");
@@ -197,7 +203,7 @@ fn the_window_sends_one_ping_a_day_once_its_notice_is_shown() {
     // A service of its own, empty, so the wait runs its whole bound rather than ending on the
     // ping the window before left in `seen`.
     assert_eq!(
-        a_window_pinging(&home, &PingService::start(), &[]),
+        a_window_pinging(&home, &PingService::start(), endpoint, &[]),
         Vec::<String>::new(),
         "a second window the same day pinged again"
     );
@@ -210,9 +216,34 @@ fn a_window_whose_notice_was_shown_before_pings_at_its_start() {
     std::fs::create_dir_all(home.join(".bravebot")).expect("the state directory");
     std::fs::write(home.join(".bravebot/usage-ping-notice"), "shown\n").expect("the marker");
     let service = PingService::start();
-    let seen = a_window_pinging(&home, &service, &[]);
+    let seen = a_window_pinging(&home, &service, "http://127.0.0.1:1", &[]);
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert!(seen[0].contains("&surface=desktop&"), "{seen:?}");
+}
+
+#[test]
+fn a_window_pings_with_no_backend_when_its_configuration_does_not_load() {
+    for (name, notice_shown) in [
+        ("unconfigured-first", false),
+        ("unconfigured-notified", true),
+    ] {
+        let home = home(name);
+        let methods: &[&str] = if notice_shown {
+            std::fs::create_dir_all(home.join(".bravebot")).expect("the state directory");
+            std::fs::write(home.join(".bravebot/usage-ping-notice"), "shown\n")
+                .expect("the marker");
+            &[]
+        } else {
+            &["usage_ping.mark_notice_shown"]
+        };
+        let service = PingService::start();
+        // An invalid endpoint makes the configuration fail even in a build with baked credentials.
+        let seen = a_window_pinging(&home, &service, "unconfigured", methods);
+        assert_eq!(seen.len(), 1, "{name}: {seen:?}");
+        assert!(seen[0].contains("&surface=desktop&"), "{seen:?}");
+        assert!(seen[0].contains("&backend=none&premium=false&"), "{seen:?}");
+        assert!(seen[0].contains("&first=true&"), "{seen:?}");
+    }
 }
 
 /// The standalone `bravebot-acp` neither says the notice nor records it as said, so the front end
