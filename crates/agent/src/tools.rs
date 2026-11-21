@@ -47,8 +47,10 @@ use crate::workspace::{Listing, Page, Paging, Workspace};
 mod link;
 mod message;
 mod recall;
+mod web_search;
 use link::set_link;
 use recall::{propose_rule, recall, remember};
+use web_search::web_search;
 mod offered;
 
 use offered::checkouts_share_refs;
@@ -57,8 +59,9 @@ use offered::state_withheld;
 pub use offered::{
     Beside, Named, Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
     offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
-    offer_set_link, offer_tool_loader, state_confinement, state_read_output_answer,
-    state_vet_content_answer, state_what_is_beside, state_withheld_variables,
+    offer_set_link, offer_tool_loader, offer_web_search, state_confinement,
+    state_read_output_answer, state_vet_content_answer, state_what_is_beside,
+    state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -2451,6 +2454,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "load_skill" | "load_tool" => Some("name"),
         "search_skills" => Some("query"),
         "fetch_url" => Some("url"),
+        "web_search" => Some("q"),
         "job_output" => Some("job"),
         "vet_content" => Some("ref"),
         "run" => Some("command"),
@@ -3125,6 +3129,7 @@ const READ_THOUGH_UNDECLARED: &[(&str, &str)] = &[
     ("watch_file", "path_ref"),
     ("download_url", "path_ref"),
     ("fetch_url", "read"),
+    ("web_search", "read"),
     ("spawn_processor", "read"),
     ("schedule_next", "stop"),
 ];
@@ -3423,6 +3428,19 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         },
         // The same refusal for the same reason, and a write on top of it.
         "download_url" if !tools.delegated => download_url(policy, tools, confirmer, &arguments),
+        // Offered only where a key file is configured, and never to a delegate: a call to it from
+        // anywhere else is answered as an unknown name is. Refused here as well as absent from the
+        // list. `read` asks for vet_content's release in the result, as fetch_url's does (WEBSEARCH-9).
+        "web_search" if !tools.delegated && tools.chat.config.offers_web_search() => {
+            match read_asked_of(&arguments) {
+                Ok(read_asked) => {
+                    let mut produced = web_search(policy, tools, confirmer, &arguments);
+                    produced.read_asked = read_asked;
+                    produced
+                }
+                Err(refusal) => *refusal,
+            }
+        }
         "job_output" => job_output(policy, tools, reporter, &arguments),
         // A delegate ends when it answers, a tick the person timed has its next look coming
         // already, and a turn nothing will ask again has nowhere for a wait to go, so none of the
@@ -20416,7 +20434,7 @@ mod tests {
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
-            for reaching in ["fetch_url", "download_url"] {
+            for reaching in ["fetch_url", "download_url", "web_search"] {
                 assert!(
                     !offered.iter().any(|t| t == reaching),
                     "a {name} was offered {reaching}, a way to reach a host of its own"

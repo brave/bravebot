@@ -94,19 +94,31 @@ impl Kind {
     /// nothing in any kind's tool set reaches it, so what it buys is the driver's ability to ask
     /// the endpoint on this delegate's behalf. A kind without it is a kind that cannot think.
     ///
+    /// Every kind holds [`Capability::WebSearch`] for the other reason `fetch_url` is not offered to
+    /// one: a person's own turn addressed to a definition keeps only what the definition's kind
+    /// holds, so a kind without it would take `web_search` from a turn the person was watching.
+    /// `web_search` is in [`NEVER_DELEGATED`] and refused at dispatch for a delegate, so holding the
+    /// capability gives a delegate no way to search.
+    ///
     /// A language server goes with running programs, and never without: starting one runs the
     /// project's build tooling (LSP-5), so a kind that may not run a program may not start one.
     pub fn capabilities(self) -> CapabilitySet {
         match self {
-            Self::Reader => CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]),
+            Self::Reader => CapabilitySet::from_iter([
+                Capability::WebFetch,
+                Capability::WebSearch,
+                Capability::FileRead,
+            ]),
             Self::Checker => CapabilitySet::from_iter([
                 Capability::WebFetch,
+                Capability::WebSearch,
                 Capability::FileRead,
                 Capability::ShellExec,
                 Capability::LanguageServer,
             ]),
             Self::Worker => CapabilitySet::from_iter([
                 Capability::WebFetch,
+                Capability::WebSearch,
                 Capability::FileRead,
                 Capability::FileWrite,
                 Capability::ShellExec,
@@ -190,7 +202,8 @@ impl std::fmt::Display for Kind {
 /// Named rather than derived, because each is left out for a reason of its own rather than for
 /// want of a capability: `fetch_url` because every kind holds the capability for reaching the
 /// network so the driver can make its model call (and `download_url` for the same reason, since it
-/// reaches the network and writes a file on top), `apply_checkout` because bringing a delegate's
+/// reaches the network and writes a file on top), `web_search` because a person answers each search
+/// and a delegate's query is a planner's sentence that person never saw, `apply_checkout` because bringing a delegate's
 /// work into the person's tree is the turn's to ask for and not that delegate's, and the rest
 /// because their audience is the person watching the turn (`request_path` among them: a path a
 /// planner's sub-task asked for is reach the person never set up). The list is here rather than beside the tool table so that a
@@ -198,13 +211,14 @@ impl std::fmt::Display for Kind {
 ///
 /// `spawn_agent` is not here. Whether a delegate may delegate is a question about where it sits,
 /// not about what it is, so it is answered by [`MAX_DEPTH`] rather than by name.
-pub const NEVER_DELEGATED: [&str; 12] = [
+pub const NEVER_DELEGATED: [&str; 13] = [
     "ask_user",
     "request_path",
     "apply_checkout",
     "todo_write",
     "schedule_next",
     "fetch_url",
+    "web_search",
     "download_url",
     "vet_content",
     "remember",
@@ -248,7 +262,11 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
 /// a definition naming `write_file` alone and holding no read would be a delegate whose one tool
 /// is refused on every call. Neither is a widening: every kind holds both already, and no tool a
 /// delegate is offered reaches the first, so what a definition narrows is what remains.
-const HELD_WHATEVER_IT_NAMED: [Capability; 2] = [Capability::WebFetch, Capability::FileRead];
+const HELD_WHATEVER_IT_NAMED: [Capability; 3] = [
+    Capability::WebFetch,
+    Capability::WebSearch,
+    Capability::FileRead,
+];
 
 /// What a replacement is confined to: its own `tools:` line, or the servers it selects, met with
 /// the one it replaced.

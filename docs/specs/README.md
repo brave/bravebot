@@ -116,6 +116,7 @@ the routing-versus-content split they share.
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 6 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 6 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 9 | `fetch_url` |
+| [tools/web-search.md](tools/web-search.md) | `WEBSEARCH` | 10 | `web_search` |
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 5 | `load_skill` |
 | [tools/search-skills.md](tools/search-skills.md) | `FINDSKILL` | 4 | `search_skills` |

@@ -483,7 +483,7 @@ const STREAM_CHUNK_BYTES: usize = 1024;
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
 /// A request to send.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is a separate answer the caller gives about one request"
@@ -512,6 +512,29 @@ pub struct Request {
     /// Whether the client certificate is presented to the host of [`Request::url`]. See
     /// [`Request::with_client_certificate`].
     pub client_certificate: bool,
+}
+
+/// A request prints the names of its headers and never their values, since a value can be a
+/// credential. The body is not printed either: it can carry one as well.
+impl fmt::Debug for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names = |headers: &[(String, String)]| -> Vec<String> {
+            headers.iter().map(|(name, _)| name.clone()).collect()
+        };
+        f.debug_struct("Request")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("headers", &names(&self.headers))
+            .field("socket_headers", &names(&self.socket_headers))
+            .field("body_bytes", &self.body.as_ref().map(Vec::len))
+            .field("reply", &self.reply)
+            .field("idle", &self.idle)
+            .field("patient_on_this_machine", &self.patient_on_this_machine)
+            .field("redirects_refused", &self.redirects_refused)
+            .field("refusal_read", &self.refusal_read)
+            .field("client_certificate", &self.client_certificate)
+            .finish()
+    }
 }
 
 /// How long a reply may take, stated by the request that asks for it.
@@ -3879,5 +3902,20 @@ mod tests {
             assert!(!attempt.read_request, "the request reached the server");
         }
         drop(logged);
+    }
+
+    /// A request printed with `{:?}` names its headers and holds none of their values, in either
+    /// header list or in the body. The regression it rejects: the derived `Debug`, which prints
+    /// every value, so a key sent in a header reaches a log line that formats the request.
+    #[test]
+    fn a_request_prints_its_header_names_and_never_their_values() {
+        let request = Request::post("https://example.test/path", b"body-sentinel".to_vec())
+            .header("X-Test-Header", "sentinel-value")
+            .socket_header("X-Test-Socket-Header", "sentinel-value");
+        let printed = format!("{request:?}");
+        assert!(printed.contains("X-Test-Header"), "{printed}");
+        assert!(printed.contains("X-Test-Socket-Header"), "{printed}");
+        assert!(!printed.contains("sentinel-value"), "{printed}");
+        assert!(!printed.contains("body-sentinel"), "{printed}");
     }
 }

@@ -193,6 +193,7 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
         Unreadable::NotAHost => t!(permission_rule_not_a_host),
         Unreadable::NotAToolRule => t!(permission_rule_not_a_tool_rule),
+        Unreadable::NotASearchRule => t!(permission_rule_not_a_search_rule),
         Unreadable::NotAList => t!(permission_rule_not_a_list),
     }
 }
@@ -1050,6 +1051,7 @@ mod tests {
             Unreadable::NoDomainNamed,
             Unreadable::NotAHost,
             Unreadable::NotAToolRule,
+            Unreadable::NotASearchRule,
             Unreadable::NotAList,
         ]
         .map(problem);

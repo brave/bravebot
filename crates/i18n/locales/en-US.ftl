@@ -48,7 +48,7 @@ cli-usage-completion = Print a shell completion script
 cli-usage-acp = Speak the Agent Client Protocol on stdin and stdout, for an editor
 cli-usage-shell-init = Print the shell hook that gives @bravebot the commands you ran
 cli-usage-permissions = Report which permission rule decides a tool call
-permissions-check-usage = permissions check takes a family and what to ask about: Read <path>, Edit <path>, Bash <program> [arguments], WebFetch <host or URL>, or Mcp <server:tool>
+permissions-check-usage = permissions check takes a family and what to ask about: Read <path>, Edit <path>, Bash <program> [arguments], WebFetch <host or URL>, WebSearch, or Mcp <server:tool>
 permissions-check-decision = decision
 permissions-check-deny = deny
 permissions-check-ask = ask
@@ -522,6 +522,12 @@ doctor-premium = premium
 doctor-premium-absent = not configured
 doctor-premium-keyed = { $url }, with a premium key
 doctor-premium-unkeyed = { $url }, without a premium key, so requests go to the endpoint above
+# The web search key file named by the setting webSearch.keyFile. The line says a file is named and
+# is there. It never shows the key, and the file is not read to say it.
+doctor-web-search = web search
+doctor-web-search-absent = not configured: webSearch.keyFile is not set, so the web_search tool is not offered
+doctor-web-search-missing = webSearch.keyFile names { $path }, which is not a file, so the web_search tool is not offered
+doctor-web-search-keyed = a key file is configured in webSearch.keyFile ({ $path }); the key is read from it when a search is made and is sent only to api.search.brave.com
 doctor-key-id = key id
 doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
@@ -550,6 +556,8 @@ doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
 doctor-ends-premium-key =
     the premium key: issued by Brave's premium service, which is also the only surface that revokes it; `bravebot auth logout brave` ends this machine's custody and leaves the key live there
+doctor-ends-search-key =
+    the Brave Search key: read from the file the setting `webSearch.keyFile` names and sent only to api.search.brave.com in one request header; issued by the Brave Search API dashboard, which is also the only surface that revokes it; removing the setting or the file ends this machine's custody, and the key keeps working at Brave until it is revoked in the Brave Search API dashboard
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-chatgpt-account =
@@ -633,6 +641,12 @@ doctor-dropped-premium-key-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the premium service issues one key and nothing here asks it for a narrower one
 doctor-dropped-premium-key-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever `bravebot auth login brave` stored, and it is held for the whole run
+doctor-dropped-search-key-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents the key itself in a request header and nothing is asked to authorise the request
+doctor-dropped-search-key-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the Brave Search API dashboard issues one key and nothing here asks it for a narrower one
+doctor-dropped-search-key-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever the file named by `webSearch.keyFile` holds, and it is read again for every search
 doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
@@ -816,6 +830,8 @@ doctor-settings-start-in-auto-ignored =
 # checkout's list is not read and the names in it withhold nothing.
 doctor-settings-scrub-env-ignored =
     run.scrubEnv in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, and none of its names is withheld
+doctor-settings-web-search-key-file-ignored =
+    webSearch.keyFile in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, so no file named there is read as a web search key
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -1106,6 +1122,8 @@ permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:exam
 permission-rule-no-domain-named = names no domain after 'domain:'
 permission-rule-not-a-host = has a port, scheme, path or other text that is not a host after 'domain:'; write a host name or an address alone, as WebFetch(domain:example.com) or WebFetch(domain:[::1])
 permission-rule-not-a-tool-rule = needs a server, or a server and one of its tools, written Mcp(weather) or Mcp(weather:get_forecast)
+# A WebSearch rule written with something in brackets. A search has no host a person chooses and its query is the planner's own words, so the family is all a rule can name.
+permission-rule-not-a-search-rule = takes no specifier; write WebSearch alone, which covers every web search
 # A permissions block, or its deny, ask or allow list, written as something other than a list.
 # The rules another settings file wrote still apply, which is what "removes none" says.
 permission-rule-not-a-list = sets no rules and removes none; rules go in a list, such as "deny": ["Read(./.env)"]
@@ -5143,6 +5161,7 @@ verb-run = Run
 verb-read-output = Read output
 verb-vet-content = Vet
 verb-fetch-url = Fetch
+verb-web-search = Search
 verb-download-url = Download
 verb-job-output = Job
 verb-spawn-agent = Delegate

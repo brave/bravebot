@@ -2959,7 +2959,14 @@ where
     let delegates = policy.delegates().clone();
 
     let resolved = setup::offered_tools(
-        task, workspace, &delegates, advisor, scheduling, arming, policy,
+        task,
+        workspace,
+        &delegates,
+        advisor,
+        scheduling,
+        arming,
+        policy,
+        config.offers_web_search(),
     );
     // What the list holds, read before the skills are shown so the words around a skill's files name
     // only tools it holds. The list is not changed after this except by adding a server's tools.

@@ -22010,6 +22010,46 @@ fn permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names() {
     }
 }
 
+/// PERM-1, WEBSEARCH-2 and CLI-30: `WebSearch` takes no specifier, is decided by the family's own rule
+/// and by no `WebFetch` rule, and a word after it names no call. The faults this rejects: a
+/// `WebFetch` deny answering for a search, and the family unknown to the report.
+#[test]
+fn permissions_check_decides_a_web_search_by_its_own_family() {
+    let scratch = Scratch::new("cli-running-permissions-check-web-search").with_settings(
+        r#"{"permissions": {"deny": ["WebFetch(domain:example.com)"], "ask": ["WebSearch"]}}"#,
+    );
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create the checkout");
+    let home = scratch.settings().display().to_string();
+    assert_eq!(
+        permissions_check(&scratch, &checkout, &["WebSearch"]),
+        [
+            "decision: ask".to_string(),
+            "rule: WebSearch".to_string(),
+            format!("file: {home}"),
+        ]
+    );
+
+    let fetch_only = Scratch::new("cli-running-permissions-check-web-search-none")
+        .with_settings(r#"{"permissions": {"deny": ["WebFetch(domain:example.com)"]}}"#);
+    assert_eq!(
+        permissions_check(&fetch_only, &fetch_only.path, &["WebSearch"]),
+        ["decision: no rule matches, so the ordinary gates decide"]
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[],
+        &["permissions", "check", "WebSearch", "weather"],
+    );
+    assert!(
+        !output.status.success(),
+        "a word after WebSearch named a call"
+    );
+    assert!(said(&output).0.is_empty());
+}
+
 /// PERM-3 and CLI-30 on real directories: `permissions check` decides `Read .ENV` by the casefold
 /// flag of the directory it is run in and not of the directory above it. A layout the host cannot
 /// build (`chattr +F` needs ext4 or f2fs with casefold, and an empty directory) is skipped, and the

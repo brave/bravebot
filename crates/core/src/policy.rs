@@ -1364,6 +1364,12 @@ pub struct Policy<'sink, S: Sink> {
     /// A host other than `fetching` that a person approved this one fetch to be redirected to,
     /// while it is in flight. Set by [`Policy::before_fetch_via`], cleared with `fetching`.
     fetching_via: Option<String>,
+    /// The host a `web_search` call is approved for, while one is in flight.
+    ///
+    /// Set by [`Policy::before_search`] and cleared by [`Policy::search_finished`]. A hop of the
+    /// request that leaves it is refused at the egress gate with no question asked: the search host
+    /// is fixed in source, so a redirect off it is not a destination anybody could have approved.
+    searching: Option<String>,
     /// The host and port a declared MCP server is at, while a request to it is in flight.
     ///
     /// Set by [`Policy::before_server_request`] and cleared by
@@ -1499,6 +1505,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             fetching: None,
             fetch_hop: None,
             fetching_via: None,
+            searching: None,
             calling_server: None,
             calling_socket: None,
             server_hop: None,
@@ -1714,6 +1721,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             }
         }
 
+        if let Some(approved) = self.searching.clone() {
+            // The search host is fixed in source, so a hop to any other host is a `Location`
+            // header's choice and nobody was shown it. Refused without a question, and the host it
+            // named is not kept: no person could approve it (WEBSEARCH-7). The refusal names the host
+            // of the request, which this program wrote.
+            let host = crate::url::host_of(url).unwrap_or_default();
+            if host != approved {
+                return Err(self.deny(
+                    "network",
+                    Principle::IntegrityGate,
+                    format!(
+                        "this search was sent to {approved} and redirected somewhere else, which \
+                         is refused without asking"
+                    ),
+                ));
+            }
+        }
+
         if let Some(declared) = self.calling_server.clone() {
             // What a `Location` header names is a server's own bytes, so a refusal repeating it
             // would be writing them into whatever formats that refusal. The declared destination
@@ -1884,7 +1909,84 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::before_network`] scopes its host confinement: to the fetch, not to the
     /// connections a person set up themselves.
     pub fn fetch_in_flight(&self) -> bool {
-        self.fetching.is_some()
+        self.fetching.is_some() || self.searching.is_some()
+    }
+
+    /// Refuse a web search a `deny` rule covers, before anybody is asked about it, for the reason
+    /// [`Policy::before_fetch_rules`] refuses a fetch: a rule that refuses is a statement that the
+    /// search does not happen, so a prompt would put a question to somebody that their settings file
+    /// has already closed.
+    pub fn before_search_rules(&mut self) -> Gated<()> {
+        let decision = self.permissions.for_search();
+        self.refuse_if_denied("search", decision, "a web search")
+    }
+
+    /// Whether a person has to approve this search.
+    ///
+    /// Every search asks unless an `allow` rule for the family answers it (WEBSEARCH-2). The destination
+    /// is fixed in source, so the question is about what is sent: the planner's own words. Once the
+    /// planner's context holds private content those words may carry it, and an allow rule is a person
+    /// agreeing in advance to searches nobody has read, so it does not cover a search made then. Which
+    /// of the two holds is the context's label and nothing the query says.
+    pub fn search_needs_approval(&mut self) -> bool {
+        let ruling = self.permissions.for_search();
+        let private_context = !self.context_label().is_public();
+        let allowed = ruling
+            == crate::permissions::Decision::Ruled(crate::permissions::Ruling::Allow)
+            && !private_context;
+        let said = match (allowed, private_context) {
+            (true, _) => "a rule in the settings file says allow for web searches, no prompt",
+            (false, true) => {
+                "the planner has been shown private content, which a query may carry, so the \
+                 search asks whatever a rule says"
+            }
+            (false, false) => "nothing says a web search is allowed, asking",
+        };
+        self.allow("approval", said.to_string());
+        !allowed
+    }
+
+    /// Record that a person approved this exact request, or that a rule answered for it.
+    ///
+    /// Bound to the URL as it will be sent, so an approval cannot be spent on a different query or
+    /// service, and spent once (WEBSEARCH-3).
+    pub fn endorse_search(&mut self, url: &str) {
+        self.issue_grant("web_search", "url", url.to_string());
+    }
+
+    /// The gate a search passes immediately before the request goes out. Returns the label the
+    /// results will carry.
+    ///
+    /// Always `(U,pub)`, from [`Capability::WebSearch`] (WEBSEARCH-1). While the call is in flight the
+    /// egress gate also holds every hop to the host of `url`.
+    pub fn before_search(&mut self, url: &str) -> Gated<Label> {
+        self.before_capability(Capability::WebSearch)?;
+        self.consume_grant("web_search", "url", url)?;
+        self.searching = Some(crate::url::host_of(url).unwrap_or_default());
+        let label = Capability::WebSearch.output_label().ok_or_else(|| Denial {
+            principle: Principle::Capability,
+            message: "search results must have a label".to_string(),
+        })?;
+        self.allow(
+            "provenance",
+            format!(
+                "web_search: results labelled {label}, because an index may return anything and \
+                 approving a query says nothing about what comes back"
+            ),
+        );
+        Ok(label)
+    }
+
+    /// Say that the search has finished, however it went, so a failed request does not leave the
+    /// turn's later egress held to the search host.
+    pub fn search_finished(&mut self) {
+        self.searching = None;
+    }
+
+    /// Record that a search was put to the person and not approved, so nothing was sent
+    /// (TRACE-1). Fixed text, naming nothing the call carried (TRACE-2).
+    pub fn refuse_unapproved_search(&mut self, call: &str) {
+        self.refuse_unapproved(call, "search", "nothing was sent");
     }
 
     /// Confine egress to where a declared server is, until the request reports back.
@@ -2425,6 +2527,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             fetching: self.fetching.clone(),
             fetch_hop: self.fetch_hop.clone(),
             fetching_via: self.fetching_via.clone(),
+            searching: self.searching.clone(),
             calling_server: self.calling_server.clone(),
             calling_socket: self.calling_socket.clone(),
             server_hop: self.server_hop.clone(),
@@ -10780,6 +10883,7 @@ mod tests {
             Capability::FileWrite,
             Capability::ShellExec,
             Capability::WebFetch,
+            Capability::WebSearch,
             Capability::LanguageServer,
         ]
         .into_iter()
@@ -13012,6 +13116,9 @@ five
                 Capability::ShellExec => Some(Label::untrusted_private()),
                 Capability::LanguageServer => Some(Label::untrusted_private()),
                 Capability::WebFetch => Some(Label::untrusted_public()),
+                // Its own capability, labelled as a fetch is: an index returns what the owners of
+                // the pages wrote.
+                Capability::WebSearch => Some(Label::untrusted_public()),
                 // Whichever server: what a call to one produces is a property of the
                 // protocol, and the alias decides who may make the call rather than what
                 // the answer is labelled.
@@ -17853,6 +17960,152 @@ five
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink);
         assert!(policy.fetch_needs_approval("https://example.com/docs"));
+    }
+
+    /// WEBSEARCH-2: a search nobody has ruled on is put to a person, and an `allow` rule for the family
+    /// answers it. The regression it rejects: a search that goes out unasked because nothing denied
+    /// it, and a `WebFetch` allow rule read as covering a search.
+    #[test]
+    fn a_search_asks_unless_a_websearch_rule_allows_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(policy.search_needs_approval());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["WebSearch"]));
+        assert!(!policy.search_needs_approval());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["WebFetch"]));
+        assert!(
+            policy.search_needs_approval(),
+            "a WebFetch rule answered for a search"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &["WebSearch"], &[]));
+        assert!(policy.search_needs_approval());
+    }
+
+    /// WEBSEARCH-2: once the planner has been shown private content its query may carry some, and an
+    /// allow rule written in advance does not cover that. The regression it rejects: the allow rule
+    /// answering whatever the context holds.
+    #[test]
+    fn an_allow_rule_does_not_cover_a_search_made_after_private_content_was_shown() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_permissions(permissions(&[], &[], &["WebSearch"]))
+            .holding(Confidentiality::Private);
+        assert!(
+            policy.search_needs_approval(),
+            "an allow rule let a query out after private content was shown"
+        );
+    }
+
+    /// WEBSEARCH-2: a `deny` rule for the family refuses before anybody is asked, and a `WebFetch` deny
+    /// rule does not. The regression it rejects: the families sharing one answer.
+    #[test]
+    fn a_websearch_deny_rule_refuses_and_a_webfetch_deny_rule_does_not() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["WebSearch"], &[], &[]));
+        assert!(policy.before_search_rules().is_err());
+
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["WebFetch"], &[], &[]));
+        assert!(policy.before_search_rules().is_ok());
+    }
+
+    /// WEBSEARCH-1, WEBSEARCH-3: the label comes from the capability and nothing a person says changes
+    /// it, and an approval is for one exact request and is spent once. The regressions it rejects:
+    /// a trusted label after an approval, an approval spent on another query, and one spent twice.
+    #[test]
+    fn approving_a_search_never_trusts_what_comes_back_and_covers_one_request() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let url = "https://api.search.brave.com/res/v1/web/search?q=rust";
+
+        assert!(
+            policy.before_search(url).is_err(),
+            "a search went out with no approval"
+        );
+        policy.endorse_search(url);
+        assert!(
+            policy
+                .before_search("https://api.search.brave.com/res/v1/web/search?q=other")
+                .is_err(),
+            "an approval was spent on another query"
+        );
+        let label = policy.before_search(url).expect("approved");
+        assert_eq!(label, Label::untrusted_public());
+        assert!(
+            policy.before_search(url).is_err(),
+            "an approval was spent twice"
+        );
+    }
+
+    /// WEBSEARCH-7: while a search is in flight every hop must be on the search host, whatever rules
+    /// allow, and the hop is not kept for a question. The regression it rejects: a redirect off the
+    /// host put to a person, or let through by a `WebFetch` allow rule.
+    #[test]
+    fn a_search_cannot_be_redirected_to_another_host_and_the_host_is_not_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &[],
+            &["WebFetch(domain:elsewhere.test)"],
+        ));
+        let url = "https://api.search.brave.com/res/v1/web/search?q=x";
+        policy.endorse_search(url);
+        policy.before_search(url).expect("approved");
+
+        assert!(
+            policy
+                .before_network("https://api.search.brave.com/res/x")
+                .is_ok()
+        );
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_err(),
+            "a hop off the search host was let through"
+        );
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "a hop off the search host was kept to be asked about"
+        );
+
+        policy.search_finished();
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_ok(),
+            "a finished search went on confining the turn's egress"
+        );
+        assert!(!policy.fetch_in_flight());
+    }
+
+    /// WEBSEARCH-7: the egress path scopes its check of what a name resolves to by
+    /// `fetch_in_flight`, so it has to be true for a search from its approval until it finishes.
+    /// The regression it rejects: the flag set for a fetch only, which leaves a search's hops
+    /// resolved without the address check.
+    #[test]
+    fn a_search_is_in_flight_from_its_approval_until_it_finishes() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        assert!(!policy.fetch_in_flight());
+
+        let url = "https://api.search.brave.com/res/v1/web/search?q=x";
+        policy.endorse_search(url);
+        policy.before_search(url).expect("approved");
+        assert!(policy.fetch_in_flight());
+
+        policy.search_finished();
+        assert!(!policy.fetch_in_flight());
     }
 
     /// A rule that refuses is a statement that the fetch does not happen, so there is nothing
@@ -25383,6 +25636,42 @@ five
             );
         }
 
+        /// TRACE-1, WEBSEARCH-2: a web search put to the person and not approved is a refusal under
+        /// `approval`, naming the tool, in fixed words that carry nothing the query held (TRACE-2),
+        /// and the turn does not end as clean. The regression it rejects is a no that leaves the
+        /// question in the trail and nothing about its answer.
+        #[test]
+        fn a_search_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_search("web_search");
+            assert!(
+                !turn.finish(),
+                "a turn with an unapproved search ended clean"
+            );
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [(
+                    "approval",
+                    Principle::Capability,
+                    "web_search: the search was not approved, so nothing was sent"
+                )]
+            );
+        }
+
         /// TRACE-1: a call to a server's tool put to the person and not approved is a refusal under
         /// `approval`, naming the tool as the alias the person gave the server and the word on its
         /// list, in fixed words that carry nothing the call or the server held (TRACE-2), and the
@@ -26409,7 +26698,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 18] = [
+        const OFFERED: [&str; 19] = [
             "read_file",
             "list_files",
             "write_file",
@@ -26421,6 +26710,7 @@ five
             "todo_write",
             "schedule_next",
             "fetch_url",
+            "web_search",
             "download_url",
             "vet_content",
             "remember",
@@ -26461,6 +26751,7 @@ five
                         "todo_write",
                         "schedule_next",
                         "fetch_url",
+                        "web_search",
                         "download_url",
                         "vet_content",
                         "remember",
@@ -26648,7 +26939,7 @@ five
             let trail = trail(&sink);
             assert!(
                 trail.contains(
-                    "asks for file_write, shell_exec, language_server which this turn does not hold"
+                    "asks for file_write, shell_exec, web_search, language_server which this turn does not hold"
                 ),
                 "the trail does not say what the kind asked for and did not get: {trail}"
             );

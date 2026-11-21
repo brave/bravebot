@@ -259,6 +259,9 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // install scripts from running, and a checkout listing it, or a pattern holding it, runs them
     // (BACKEND-24, RUN-12). So the list is the person's alone, and a checkout's entries are not read.
     ("run.scrubEnv", Entitled::OwnOrNamed),
+    // The file it names is read as the key the `web_search` tool sends to the search service, so a
+    // checkout's file would be choosing which file of the person's is read and sent as a credential.
+    (WEB_SEARCH_KEY_FILE, Entitled::OwnOrNamed),
 ];
 
 /// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
@@ -509,6 +512,18 @@ const RETRIEVAL_BLOCK: &str = "retrieval";
 /// not read, and only a file the person wrote or named can name one.
 const SHARED_SKILLS_KEY: &str = "sharedSkillDirectories";
 
+/// The block holding `webSearch.keyFile`, which only the person's own files may write.
+const WEB_SEARCH_BLOCK: &str = "webSearch";
+
+/// The name of the file key inside [`WEB_SEARCH_BLOCK`].
+const WEB_SEARCH_KEY_NAME: &str = "keyFile";
+
+/// `webSearch.keyFile`: the absolute path of a file holding the key the `web_search` tool sends.
+///
+/// Named as a constant because the per-layer look that removes it from a checkout's file, the read
+/// of the merged root and the list of keys this build reads all spell it here.
+const WEB_SEARCH_KEY_FILE: &str = "webSearch.keyFile";
+
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
 /// Named as a constant for the reason [`VETTING_BLOCK`] is: the rule lists and [`narrowing_stated`]
@@ -567,6 +582,7 @@ const READ_KEYS: &[&str] = &[
     "updateCheck",
     USAGE_PING_KEY,
     VETTING_BLOCK,
+    WEB_SEARCH_BLOCK,
 ];
 
 /// The most of it worth reading.
@@ -858,6 +874,10 @@ pub struct Settings {
     /// Read from the layers [`HOME_ONLY`] entitles, since naming a directory puts every skill in it
     /// in front of the planner.
     shared_skills: Vec<String>,
+    /// The path `webSearch.keyFile` named, if it named an absolute one.
+    ///
+    /// Read from the layers [`HOME_ONLY`] entitles. The file is not opened here.
+    web_search_key_file: Option<String>,
     /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
     language: Option<String>,
     /// The entries of the `references` block that name a directory, in alias order (REFER-1).
@@ -2073,6 +2093,9 @@ impl Settings {
         settings.chatgpt_models = crate::provider::account_models(root);
         settings.style = word(root, "style");
         settings.shared_skills = strings(root, SHARED_SKILLS_KEY);
+        settings.web_search_key_file = object(root, WEB_SEARCH_BLOCK)
+            .and_then(|block| word(block, WEB_SEARCH_KEY_NAME))
+            .filter(|path| std::path::Path::new(path).is_absolute());
         settings.language = word(root, "language");
         settings
     }
@@ -2837,6 +2860,7 @@ impl Settings {
             && self.not_obeyed.values().all(Vec::is_empty)
             && self.style.is_none()
             && self.shared_skills.is_empty()
+            && self.web_search_key_file.is_none()
             && self.language.is_none()
             && self.ask_idle_seconds.is_none()
             && self.start_in_auto.is_none()
@@ -2925,6 +2949,14 @@ impl Settings {
     /// them (INSTR-17).
     pub fn shared_skill_directories(&self) -> &[String] {
         &self.shared_skills
+    }
+
+    /// The absolute path of the file `webSearch.keyFile` named as holding the web search key.
+    ///
+    /// `None` where no layer entitled to name it did, and where what it named is not a string that
+    /// is an absolute path. Only the path: nothing here opens the file.
+    pub fn web_search_key_file(&self) -> Option<&str> {
+        self.web_search_key_file.as_deref()
     }
 
     /// The language the person's own file asked the interface to be read in, as the file spelled it
@@ -3158,6 +3190,11 @@ impl Settings {
             .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
             .chain(self.tui_context_menu.is_some().then_some("tui.contextMenu"))
             .chain(self.deep_links.is_some().then_some("deepLinks"))
+            .chain(
+                self.web_search_key_file
+                    .is_some()
+                    .then_some(WEB_SEARCH_KEY_FILE),
+            )
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -4153,7 +4190,8 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "sessionsKeys"
                     || key == "search"
                     || key == "tui"
-                    || key == "download" =>
+                    || key == "download"
+                    || key == WEB_SEARCH_BLOCK =>
             {
                 for (name, value) in above {
                     lay_over(displaced, under, name, value);
@@ -11095,6 +11133,7 @@ mod tests {
         ("askIdleSeconds", false, false),
         ("permissions.startInAuto", false, false),
         ("run.scrubEnv", false, false),
+        ("webSearch.keyFile", false, false),
     ];
 
     /// The text of a layer naming only `key`, inside its block where the key is written
@@ -12335,6 +12374,69 @@ mod tests {
 
         let nothing = Layers::new("shared-skills-unset").global("{}").read();
         assert!(nothing.shared_skill_directories().is_empty());
+    }
+
+    /// A checkout's project and local layers cannot name the web search key file, the person's own
+    /// layer and a file the command line named can, and each refused layer is reported. An
+    /// implementation that read the key from the merged root without the home-only look would let a
+    /// cloned repository choose which file of the person's is read and sent as a credential.
+    #[test]
+    fn a_project_layer_cannot_name_a_web_search_key_file() {
+        let settings = Layers::new("web-search-layers")
+            .global(r#"{"webSearch": {"keyFile": "/home/person/search-key.txt"}}"#)
+            .project(r#"{"webSearch": {"keyFile": "/etc/passwd"}}"#)
+            .local(r#"{"webSearch": {"keyFile": "/etc/hosts"}}"#)
+            .read();
+        assert_eq!(
+            settings.web_search_key_file(),
+            Some("/home/person/search-key.txt")
+        );
+        assert_eq!(settings.not_obeyed(WEB_SEARCH_KEY_FILE).count(), 2);
+
+        let only_project = Layers::new("web-search-only-project")
+            .project(r#"{"webSearch": {"keyFile": "/etc/passwd"}}"#)
+            .read();
+        assert_eq!(only_project.web_search_key_file(), None);
+        assert_eq!(only_project.not_obeyed(WEB_SEARCH_KEY_FILE).count(), 1);
+        assert!(!only_project.is_empty());
+
+        let named = Layers::new("web-search-named")
+            .named(r#"{"webSearch": {"keyFile": "/home/person/named-key.txt"}}"#)
+            .read();
+        assert_eq!(
+            named.web_search_key_file(),
+            Some("/home/person/named-key.txt")
+        );
+        assert_eq!(named.not_obeyed(WEB_SEARCH_KEY_FILE).count(), 0);
+
+        let nothing = Layers::new("web-search-unset").global("{}").read();
+        assert_eq!(nothing.web_search_key_file(), None);
+    }
+
+    /// Only a string that is an absolute path names the key file: a relative path, a blank, a
+    /// number, a list and a block that is not an object are all absent. An implementation that
+    /// accepted a relative path would resolve it against the working directory, which is the
+    /// checkout, and one that accepted any value would take a number as a path.
+    #[test]
+    fn a_web_search_key_file_must_be_an_absolute_path() {
+        for text in [
+            r#"{"webSearch": {"keyFile": "search-key.txt"}}"#,
+            r#"{"webSearch": {"keyFile": "./search-key.txt"}}"#,
+            r#"{"webSearch": {"keyFile": "~/search-key.txt"}}"#,
+            r#"{"webSearch": {"keyFile": ""}}"#,
+            r#"{"webSearch": {"keyFile": "   "}}"#,
+            r#"{"webSearch": {"keyFile": 7}}"#,
+            r#"{"webSearch": {"keyFile": ["/home/person/search-key.txt"]}}"#,
+            r#"{"webSearch": "/home/person/search-key.txt"}"#,
+            r#"{"keyFile": "/home/person/search-key.txt"}"#,
+        ] {
+            assert_eq!(Settings::parse(text).web_search_key_file(), None, "{text}");
+        }
+        assert_eq!(
+            Settings::parse(r#"{"webSearch": {"keyFile": "/home/person/search-key.txt"}}"#)
+                .web_search_key_file(),
+            Some("/home/person/search-key.txt")
+        );
     }
 
     /// INSTR-12: a style opens the system prompt, so a checkout's layers cannot pick one.

@@ -6190,7 +6190,7 @@ mod tests {
     }
 
     /// CLI-1: a settings file written for another agent names tools this program does not have
-    /// (`Glob`, `Grep`, `Agent`, `Task`, `WebSearch`). Each is reported as a line nothing can act on
+    /// (`Glob`, `Grep`, `Agent`, `Task`, `NotebookEdit`). Each is reported as a line nothing can act on
     /// (PERM-11), and the rules beside it stay in force, so one such file serves both agents.
     #[test]
     fn a_tool_this_program_does_not_have_leaves_the_rest_of_the_file_in_force() {
@@ -6200,7 +6200,7 @@ mod tests {
             r#"{
               "permissions": {
                 "allow": ["Glob", "Grep", "Agent", "Task", "Edit(//work/**)"],
-                "deny": ["WebFetch", "WebSearch"]
+                "deny": ["WebFetch", "NotebookEdit"]
               }
             }"#,
         );
@@ -6211,7 +6211,7 @@ mod tests {
             .iter()
             .map(bravebot_agent::permissions::describe)
             .collect();
-        for unknown in ["Glob", "Grep", "Agent", "Task", "WebSearch"] {
+        for unknown in ["Glob", "Grep", "Agent", "Task", "NotebookEdit"] {
             assert!(
                 named.iter().any(|line| line.contains(unknown)),
                 "{unknown} was not reported: {named:?}"

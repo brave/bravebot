@@ -56,6 +56,10 @@ pub enum Subject {
     Bash,
     /// Fetching a URL: `fetch_url`, and every redirect hop it follows.
     WebFetch,
+    /// Searching the web through the first-party search tool, `web_search`. A rule names the family
+    /// and nothing else: a query is the planner's own words, and a rule matching words would be
+    /// the driver deciding from content ([`Unreadable::NotASearchRule`]).
+    WebSearch,
     /// Calling a tool of an MCP server a person declared, named `alias:tool`.
     Mcp,
 }
@@ -68,6 +72,7 @@ impl Subject {
             Self::Edit => "Edit",
             Self::Bash => "Bash",
             Self::WebFetch => "WebFetch",
+            Self::WebSearch => "WebSearch",
             Self::Mcp => "Mcp",
         }
     }
@@ -79,6 +84,7 @@ impl Subject {
             "Edit" => Some(Self::Edit),
             "Bash" => Some(Self::Bash),
             "WebFetch" => Some(Self::WebFetch),
+            "WebSearch" => Some(Self::WebSearch),
             "Mcp" => Some(Self::Mcp),
             _ => None,
         }
@@ -435,6 +441,12 @@ impl Rule {
             }
             Some(specifier) if subject == Subject::Mcp => tool_pattern(specifier)
                 .ok_or_else(|| Rejected::new(text, Unreadable::NotAToolRule))?,
+            // Nothing in a search call is routing a rule could name: the host is fixed in source
+            // and the query is the planner's own words. A rule that matched them would be the
+            // driver deciding from content, so only the bare family is a rule.
+            Some(_) if subject == Subject::WebSearch => {
+                return Err(Rejected::new(text, Unreadable::NotASearchRule));
+            }
             Some(specifier) => {
                 let written = command_pattern(specifier);
                 let typed = match typed_line(specifier) {
@@ -778,6 +790,10 @@ pub enum Unreadable {
     NotAHost,
     /// An `Mcp` rule whose specifier is not `alias` or `alias:tool`.
     NotAToolRule,
+    /// A `WebSearch` rule with a specifier, as `WebSearch(domain:example.com)` or
+    /// `WebSearch(weather)`. A search has no host a person chooses and its query is content, so
+    /// there is nothing a specifier could match.
+    NotASearchRule,
     /// A value where a list of rules belongs, or the `permissions` block holding them, that is
     /// neither: `null`, a string, a list in place of the block.
     NotAList,
@@ -1178,6 +1194,19 @@ impl Permissions {
         // notation or inside IPv6. The host is put in the form the rule was put in.
         let host = canonical_host(host);
         self.deciding(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(&host))
+    }
+
+    /// What the rules say about a web search.
+    ///
+    /// The family alone: a search carries no routing field a rule could be written against, so one
+    /// `WebSearch` rule covers every search ([`Subject::WebSearch`]).
+    pub fn for_search(&self) -> Decision {
+        decision_of(self.rule_for_search())
+    }
+
+    /// The rule that decides [`Permissions::for_search`].
+    pub fn rule_for_search(&self) -> Option<(Ruling, &Rule)> {
+        self.deciding(|rule, _| rule.subject == Subject::WebSearch)
     }
 
     /// What the rules say about calling `tool` of the server declared as `alias`.
@@ -2723,6 +2752,22 @@ mod tests {
             permissions.for_path(Subject::Read, "src/main.rs"),
             Decision::Ruled(Ruling::Ask)
         );
+    }
+
+    /// WEBSEARCH-2: `WebSearch` is a family with no specifier, since a search has no routing a rule
+    /// could name. Bare, and with `(*)`, it covers every search; with anything else in brackets it
+    /// is reported as unreadable and dropped. The regressions it rejects: a specifier read as a
+    /// pattern over the query (a decision from content) and a bare rule that covers nothing.
+    #[test]
+    fn a_websearch_rule_takes_no_specifier() {
+        for text in ["WebSearch", "WebSearch(*)"] {
+            let permissions = rules(&[], &[], &[text]);
+            assert_eq!(permissions.for_search(), Decision::Ruled(Ruling::Allow));
+        }
+        for text in ["WebSearch(weather)", "WebSearch(domain:example.com)"] {
+            let rejected = Rule::parse(text, &anchors()).expect_err(text);
+            assert_eq!(rejected.reason, Unreadable::NotASearchRule, "{text}");
+        }
     }
 
     /// A bare family name and `(*)` are the same rule, and both cover every use.

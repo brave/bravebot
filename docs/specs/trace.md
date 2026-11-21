@@ -78,11 +78,12 @@ unusable, or the repository was refused), the directory a person opened where th
 and how many of the call's delegates were not started, the withdrawn one included. The delegate
 still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
 
-A write, an edit, a fetch or a save (`write_file`, `edit_file`, `fetch_url` and `download_url`)
-that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
+A write, an edit, a fetch, a search or a save (`write_file`, `edit_file`, `fetch_url`, `web_search`
+and `download_url`) that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
 each file `apply_checkout` brings back and a write a manifest run plans. The entry names the tool, or
 the step and its tool, and says the write or the fetch was not approved and nothing was written or
-fetched. A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
+fetched. For a search it says the search was not approved and nothing was sent, and it carries
+nothing of the query ([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2)). A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
 entry does not tell them apart. A write the credential scan raised doubts about is recorded the same
 way when it is not approved. A `download_url` asks about its host and then about its file, and
 records the question that was answered no: a host that is refused as a fetch, and a file that is
@@ -137,6 +138,7 @@ asked", which is most of what anyone asks it.
 
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
+`verified-by: bravebot_core::policy::a_search_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_core::policy::the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing`
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`
 `verified-by: bravebot_core::policy::the_audit_trail_records_the_precommit_first`
