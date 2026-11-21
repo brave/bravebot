@@ -256,7 +256,7 @@ impl Held {
             .iter()
             .map(|span| {
                 json!({
-                    "role": printable_spelled(&span.role),
+                    "role": printable_spelled(span.role),
                     "label": printable_spelled(&span.provenance.label()),
                     "text": printable_lines(&span.text),
                 })
