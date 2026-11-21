@@ -30,6 +30,9 @@ const ASKS_FOR_A_BRIEF: &str = "I am starting a new session to carry this work o
 /// The goal the person gives.
 const GOAL: &str = "write the tests for the retry";
 
+/// A turn holding this is never answered, so it is still running when the test acts.
+const HELD: &str = "hold this request";
+
 struct Scratch {
     path: PathBuf,
 }
@@ -111,7 +114,11 @@ fn answer(mut stream: std::net::TcpStream, seen: &Mutex<Vec<Value>>) {
     } else {
         let asked: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         let briefing = asked.to_string().contains(ASKS_FOR_A_BRIEF);
+        let held = asked.to_string().contains(HELD);
         seen.lock().unwrap().push(asked);
+        if held {
+            std::thread::park();
+        }
         let text = if briefing {
             BRIEF
         } else {
@@ -425,6 +432,41 @@ fn a_chat_started_from_a_handoff_records_where_it_was_handed_off_from() {
         .find(|row| row["id"] == source.as_str())
         .unwrap();
     assert!(old["handedOffFrom"].is_null(), "{rows:?}");
+}
+
+/// SESSION-34, CMD-34: a handoff from a chat with a turn running is refused at once with a
+/// sentence, and the bridge goes on answering. The turn holds the chat's state for its whole run
+/// and requests are answered one at a time, so waiting for it would stop the bridge answering
+/// anything, including the question the turn might be waiting on.
+#[test]
+fn a_handoff_from_a_chat_with_a_turn_running_is_refused_and_the_bridge_goes_on_answering() {
+    let mut window = Window::open("bridge-handoff-running");
+    window.say("look at src/net.rs");
+    let handle = window.session.clone();
+    let started = window.ask(
+        "turn.send",
+        message_ids::with_fresh(json!({"session": handle, "prompt": format!("{HELD} now")})),
+    );
+    assert!(started.get("ok").is_some(), "{started}");
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while window.requests().len() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the held turn never reached the service"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let params = window.new_chat_params(json!({"handedOffFrom": handle}));
+    let refused = window.ask("session.new", params);
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("running") && m.ends_with('.')),
+        "{refused}"
+    );
+    assert_eq!(window.listed().len(), 1, "a refused handoff wrote a record");
 }
 
 /// SESSION-34, CMD-34: `handedOffFrom` naming a handle the bridge does not hold, or a chat with no

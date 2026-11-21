@@ -1667,7 +1667,8 @@ window says that sending starts a new chat. Send then opens a new chat with `ses
 open chat's handle as `handedOffFrom`, and sends what the box holds as a message the person typed.
 Escape, or emptying the box, drops the handoff. The bridge takes the id of the source record from
 the chat it holds open under that handle, never from text the window sends, and refuses a handle it
-does not hold or a chat with no record before it creates anything. The new chat is given nothing
+does not hold, a chat with no record, and a chat with a turn or a compaction running, before it
+creates anything. The new chat is given nothing
 else from the source.
 
 **Why.** A long session is worth leaving for the next piece of work without carrying all of it
@@ -1692,6 +1693,8 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_ui_bridge::handing_off::a_brief_from_an_exchange_that_met_something_untrusted_is_withheld`
 `verified-by: bravebot_ui_bridge::handing_off::a_chat_started_from_a_handoff_records_where_it_was_handed_off_from`
 `verified-by: bravebot_ui_bridge::handing_off::a_handoff_from_a_chat_the_bridge_does_not_hold_is_refused_and_starts_nothing`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_from_a_chat_with_a_turn_running_is_refused_and_the_bridge_goes_on_answering`
+`verified-by: bravebot_agent::aside::a_handoff_is_refused_without_a_goal_an_ended_turn_or_a_record`
 `verified-by: bravebot_ui_bridge::handoff::a_brief_is_offered_only_where_the_exchange_kept_it`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/handoff.test.mjs asserts that a handoff is armed with the brief, keeps the draft it replaced, is dropped by Escape or an emptied box and is taken on send; make check-ui runs it)`
 

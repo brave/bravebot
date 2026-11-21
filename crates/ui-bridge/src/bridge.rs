@@ -1278,10 +1278,23 @@ impl Bridge {
         let open = self.open.get(source).ok_or_else(|| {
             Failure::bad_request("the chat to hand off from is not open in this window")
         })?;
-        let state = open
-            .state
-            .lock()
-            .map_err(|_| Failure::new(ErrorCode::Internal, "the session's state is unavailable"))?;
+        // Tried rather than waited for: a worker holds the chat's state for the whole of its turn
+        // or compaction, and dispatch is one thread, so waiting would stop this bridge answering
+        // anything, including the question that turn may be blocked on.
+        let state = match open.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(Failure::bad_request(
+                    "Wait for what is running in the chat to hand off from to finish first.",
+                ));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(Failure::new(
+                    ErrorCode::Internal,
+                    "the session's state is unavailable",
+                ));
+            }
+        };
         state
             .handle
             .as_ref()
