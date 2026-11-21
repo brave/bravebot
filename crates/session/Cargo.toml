@@ -20,6 +20,8 @@ bravebot-aichat = { path = "../aichat" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-i18n = { path = "../i18n" }
+# Starts the background host and its supervisor, which are this program started again.
+bravebot-sandbox = { path = "../sandbox" }
 # Names a session, which has to be opaque and collide with nothing, and OsRng is the source
 # that gives both.
 rand = { workspace = true }

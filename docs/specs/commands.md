@@ -54,7 +54,8 @@ and starts no turn, which is CMD-28. `/request` shows the request a turn built, 
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19. `/open` is
 the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30. `/issues` and `/prs` list the issues and pull requests the session has met,
 which is CMD-31. `/sidebar` opens the checklist that turns the sections of the info panel on or off, and
-starts no turn, which is CMD-32.
+starts no turn, which is CMD-32. The desktop window's menu items that stand in for `/compact`,
+`/handoff`, `/bg`, `/clear`, `/branch` and `/resume` are CMD-34.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -2052,3 +2053,59 @@ slash offers, repairs only the rows it covers.
 `verified-by: bravebot_tui::app::redraw_is_a_command_only_as_the_whole_line`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+
+## The desktop window's conversation commands
+
+<a id="CMD-34"></a>
+### CMD-34: the desktop's Chat menu compacts, hands off and continues in the background as `/compact`, `/handoff` and `/bg` do
+
+The desktop window has no line for commands, so the commands of this spec that act on a
+conversation are items of its Chat menu, beside Undo Last Turn… and Add Note…. Each item is enabled
+only while a chat is open and no turn runs in it, and each asks before it acts, so none has a
+shortcut.
+
+- **Compact Conversation…** asks for an optional focus and sends the request `/compact [focus]`
+  sends ([COMPACT](compaction.md)), through the bridge's `session.compact`. The chat shows the
+  compacting phase while the request runs, and the `compacted` hooks run as they do in the terminal
+  ([HOOK-2](hooks.md#HOOK-2)). It ends with a notice that says how many turns were summarised and how
+  many were kept, that there was nothing to shorten, that it was stopped, or that it failed and why.
+  While it runs, a message, a fork, an undo and a note in that chat are refused as they are while a
+  turn runs, and Cancel Turn stops it. A conversation that has gone untrusted is not shortened
+  ([COMPACT-1](compaction.md#COMPACT-1)).
+- **Hand Off to New Chat…** asks for the next goal and has the brief written as `/handoff <next goal>`
+  has it written ([SESSION-34](sessions.md#SESSION-34)), through `session.handoff`. It is refused,
+  with a sentence saying why and nothing requested, with no goal and before a turn of the chat has
+  ended. A brief from an exchange that met something untrusted is not offered, and a stopped or
+  failed request says so. In each of those cases the message box is left as it was.
+- **Continue in Background…** asks to confirm, hands the chat to a background session as `/bg` does
+  ([BG-2](background-sessions.md#BG-2)), through `session.background`, and closes the chat in the
+  window. It is refused, and the chat stays open, in each case where `/bg` is refused that a chat can
+  be in, on a system where background sessions do not run, and where the `bravebot` program is not
+  installed beside the bridge.
+
+Three terminal commands already have a desktop equivalent, and the desktop adds no item for them.
+New Chat stands in for `/clear`. Fork From Here… on an entry of the transcript stands in for
+`/branch` ([SESSION-31](sessions.md#SESSION-31)), and copies the record up to that entry
+([SESSION-18](sessions.md#SESSION-18)). Opening a chat from the list stands in for `/resume`
+(CMD-14), and is refused for a record a running background session holds
+([BG-9](background-sessions.md#BG-9)).
+
+**Why.** A person who uses the desktop needs to shorten a long chat, start the next piece of work
+from a brief, and leave a chat running, as a person in the terminal can. Each item calls the shared
+code the terminal calls, so both front ends send the same requests and refuse the same cases.
+
+`verified-by: bravebot_ui_bridge::compacting::a_compaction_asks_with_no_tools_and_reports_what_it_summarised_and_kept`
+`verified-by: bravebot_ui_bridge::compacting::a_compaction_with_nothing_to_shorten_says_so`
+`verified-by: bravebot_ui_bridge::compacting::a_message_or_a_fork_sent_while_compacting_is_refused_as_a_turn_in_flight`
+`verified-by: bravebot_ui_bridge::compacting::a_cancelled_compaction_reports_stopped_and_keeps_the_conversation`
+`verified-by: bravebot_ui_bridge::compacting::compacting_an_untrusted_conversation_is_refused`
+`verified-by: bravebot_ui_bridge::compaction::each_ending_of_a_compaction_settles_into_its_own_status`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_with_no_goal_or_before_a_turn_ended_is_refused_and_asks_nothing`
+`verified-by: bravebot_ui_bridge::handing_off::a_brief_from_an_exchange_that_met_something_untrusted_is_withheld`
+`verified-by: bravebot_ui_bridge::handoff::the_refusals_are_the_terminals`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_no_record_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_in_bypass_or_auto_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_a_turn_running_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::background::each_refusal_of_bg_is_made_from_what_the_bridge_holds`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened`
+`verified-by: by-construction (the desktop menu and router are not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts the Compact Conversation…, Hand Off to New Chat… and Continue in Background… rows, that each requires an open idle chat and that the router handles each, and ui/scripts/compacting.test.mjs asserts the notice each ending of a compaction gives; make check-ui runs both)`

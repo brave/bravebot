@@ -2151,34 +2151,41 @@ fn handed_to_the_background(
     settled: bravebot_sandbox::SandboxMode,
     incognito: bool,
 ) -> Result<Ended, String> {
-    if !cfg!(unix) {
-        return Err(t!(bg_unsupported).to_string());
-    }
-    let Some(mode) = bravebot_session::jobs::Mode::of(session.permission_mode()) else {
-        return Err(match session.permission_mode() {
-            bravebot_agent::PermissionMode::Auto => t!(session_bg_auto),
-            _ => t!(session_bg_bypass),
-        }
-        .to_string());
-    };
-    if let Some(flag) = lost {
+    use bravebot_session::jobs::Refusal;
+    let decided = bravebot_session::jobs::refusal(&bravebot_session::jobs::Handing {
+        permission_mode: session.permission_mode(),
+        sandbox: session.sandbox_mode(),
+        settled,
+        // `/bg` waits for the turn before it is decided, so nothing is running here.
+        busy: false,
+        keeps_running: session.looping().is_some()
+            || session.goal().is_some()
+            || !session.watches().is_empty(),
+        recorded: resumable.is_some(),
+        incognito,
+    });
+    // The terminal's own check, which the window has no counterpart of, said where `/bg` has
+    // always said it: after the mode and before the rest.
+    if let Some(flag) = lost
+        && !decided.is_err_and(Refusal::precedes_the_options)
+    {
         return Err(t!(session_bg_option_lost, flag = flag));
     }
-    if session.sandbox_mode() != settled {
-        return Err(t!(
+    let mode = decided.map_err(|refusal| match refusal {
+        Refusal::Unsupported => t!(bg_unsupported).to_string(),
+        Refusal::Auto => t!(session_bg_auto).to_string(),
+        Refusal::Bypass => t!(session_bg_bypass).to_string(),
+        Refusal::SandboxMoved { mode, settled } => t!(
             session_bg_sandbox_moved,
-            mode = session.sandbox_mode().name(),
+            mode = mode.name(),
             settled = settled.name()
-        ));
-    }
-    if session.looping().is_some() || session.goal().is_some() || !session.watches().is_empty() {
-        return Err(t!(session_bg_keeps_nothing_running).to_string());
-    }
+        ),
+        Refusal::Busy | Refusal::KeepsRunning => t!(session_bg_keeps_nothing_running).to_string(),
+        Refusal::Incognito => t!(session_bg_incognito).to_string(),
+        Refusal::NothingRecorded => t!(session_bg_nothing_recorded).to_string(),
+    })?;
     let Some(left) = resumable else {
-        return Err(match incognito {
-            true => t!(session_bg_incognito).to_string(),
-            false => t!(session_bg_nothing_recorded).to_string(),
-        });
+        return Err(t!(session_bg_nothing_recorded).to_string());
     };
     Ok(Ended::Background { left, mode })
 }

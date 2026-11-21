@@ -139,6 +139,15 @@ export interface SessionNote {
   text: string
 }
 
+/**
+ * `session.background`'s answer (BG-2, CMD-34): the id of the record a background session now
+ * runs, and the word for the permission mode it runs in. The bridge has closed the chat by then.
+ */
+export interface BackgroundedSession {
+  handedOver: string
+  mode: string
+}
+
 /** `session.note`'s answer: what became of the text, and the session's notes as they now stand. */
 export interface NotedSession {
   noted: 'kept' | 'unwritable' | 'empty'
@@ -290,6 +299,11 @@ export interface SessionSummary {
    * `manifest.read` and cannot be opened or continued. Absent from an older bridge.
    */
   manifest?: boolean
+  /**
+   * The id of the record this chat was handed off from (SESSION-34), or null for one that was not.
+   * Absent from an older bridge.
+   */
+  handedOffFrom?: string | null
 }
 
 export interface SessionRecord {
@@ -1213,6 +1227,18 @@ export interface EventMap {
    * shown. `unusable` is an empty rewrite or one past `limit` characters. `failed` carries `message`.
    */
   'enhance.done': { status: 'ready' | 'untrusted' | 'unusable' | 'stopped' | 'failed'; text?: string; removed?: number; limit?: number; message?: string }
+  /**
+   * What a `session.compact` request came back with (CMD-34). `compacted` carries `summarised`, the
+   * messages no longer sent word for word, and `kept`, those still sent. `nothing` means there was
+   * nothing worth shortening. `failed` carries `message`.
+   */
+  'compact.done': { status: 'compacted' | 'nothing' | 'stopped' | 'failed'; summarised?: number; kept?: number; message?: string }
+  /**
+   * What a `session.handoff` request came back with (SESSION-34). `ready` carries `text`: the brief,
+   * the sentence saying what did not come with it, and the goal. `untrusted` means the exchange met
+   * something the planner is not shown, so no brief is offered. `failed` carries `message`.
+   */
+  'handoff.done': { status: 'ready' | 'untrusted' | 'stopped' | 'failed'; text?: string; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */

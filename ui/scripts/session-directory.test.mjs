@@ -82,7 +82,7 @@ const TAKES_NO_DIRECTORY = [
   'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.rewind',
   'session.note', 'session.folders.list',
   'session.report.cost', 'session.report.context', 'session.report.request', 'session.report.status',
-  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
+  'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'session.compact', 'session.compact.cancel', 'session.handoff', 'session.handoff.cancel', 'session.background','mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'rules.reply',
