@@ -80,6 +80,10 @@ matter:
   in workspace-write, the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and where
   the platform confines a program, a program the agent runs is held to the mode chosen for its turn.
   The script writes two small files under the real home and removes them. No paid inference.
+- `pnpm run drive:spend-limit`: the composer's spend limit (TURN-8), through the real app and
+  bridge, against a model service the script serves itself. A small limit set in the composer
+  brings up the limit question before the turn's second request, and answering "go on without a
+  limit" clears the control. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
@@ -176,6 +180,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
 | `pnpm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
 | `pnpm run drive:sandbox-mode` | The composer's sandbox mode: the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and a program is held to the mode chosen for its turn |
+| `pnpm run drive:spend-limit` | The composer's spend limit: a small limit brings up the limit question, and going on without a limit clears the control |
 | `pnpm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `pnpm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `pnpm run drive:export` | Exporting a conversation to text, Markdown and PDF, with and without the tool calls, and what the file leaves out either way |
@@ -286,12 +291,12 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
 `drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
-`drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
+`drive-secure-files`, `drive-session-list`, `drive-spend-limit`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
 `drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-note-changelog-awake`, `drive-paste`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the

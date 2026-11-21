@@ -624,6 +624,7 @@ const ALLOWED = new Set([
   'session.close',
   'session.mode',
   'session.sandbox',
+  'session.limit',
   'session.rewind',
   'session.note',
   // The folders a chat has open beside its project, and closing one (TRUST-9). Opening one is not

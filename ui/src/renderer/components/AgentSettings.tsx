@@ -18,6 +18,8 @@ const refusalText = (refusal: Refusal, on: string, off: string): string => {
 }
 const grouped = new Intl.NumberFormat('en-US')
 const runLimit = (value: number | null, unit: string): string => value === null ? 'Built-in' : `${grouped.format(value)} ${unit}`
+const spendLimit = ({ limit, path }: NonNullable<Limits['session']>): string =>
+  limit === null ? 'None' : `${grouped.format(limit.count)} ${limit.unit}${path ? ` (set in ${path})` : ''}`
 
 function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
   return <>
@@ -28,6 +30,7 @@ function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
       <dt>Command time limit</dt><dd>{runLimit(limits.run.defaultSeconds, 'seconds')}</dd>
       <dt>Longest a call may ask for</dt><dd>{runLimit(limits.run.maxSeconds, 'seconds')}</dd>
       <dt>Command output shown to the model</dt><dd>{runLimit(limits.run.maxOutput, 'bytes')}</dd>
+      {limits.session && <><dt>Session spend limit</dt><dd data-test="settings-session-limit">{spendLimit(limits.session)}</dd></>}
     </dl>
     {limits.unreadable.map(item => <Alert key={`${item.name}:${item.path}`} type="warning" role="alert">
       <code>permissions.{item.name}</code> in <span className="settings-path">{item.path}</span> is not true or false, so it has no effect.
