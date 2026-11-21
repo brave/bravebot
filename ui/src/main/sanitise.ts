@@ -83,6 +83,15 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
       : undefined
     return { session: held.session, target: held.target, prompt: held.prompt, files, pictures: held.pictures }
   }
+  // A `/schedule` line is carried out by the driver, which has no request for a file to travel
+  // in. What is forwarded is the argument and the names and markers the bridge puts into words
+  // (DROP-4): a name is only text, never a path it opens, and no drop or paste grant crosses.
+  if (method === 'schedule.command') {
+    const files = Array.isArray(held.files)
+      ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
+      : undefined
+    return { session: held.session, argument: held.argument, files, pictures: held.pictures }
+  }
   if (method !== 'turn.send') return held
   // `recall` and `definition` join the lists for a smaller reason than theirs. `recall` decides
   // whether a prompt is one a person can find again, and `definition` decides which definition a
