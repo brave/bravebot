@@ -1792,6 +1792,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::spelling::a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::policy::a_listing_of_a_distrusted_directory_on_a_drive_letter_is_untrusted`
 `verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_on_a_drive_letter_is_untrusted`
+`verified-by: bravebot_core::policy::an_operand_on_a_drive_letter_is_also_named_relative_to_the_project`
 `verified-by: bravebot_core::policy::the_sessions_own_directory_on_a_drive_letter_is_answered_as_the_workspace`
 `verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
