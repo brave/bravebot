@@ -18557,11 +18557,13 @@ fn a_one_shot_task_opening_with_slash_plugin_add_installs_nothing() {
 
 /// A listener that counts the connections made to it. A git-source plugin is recorded with its
 /// address, so a request to the recorded source shows up here.
+#[cfg(unix)]
 struct ConnectionCounter {
     port: u16,
     count: Arc<AtomicUsize>,
 }
 
+#[cfg(unix)]
 impl ConnectionCounter {
     fn start() -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a listener");
