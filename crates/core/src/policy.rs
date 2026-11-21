@@ -8937,7 +8937,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             if climbs_out(word) {
                 return true;
             }
-            let mut keys = keys_for_the_map(&plan.directory, word);
+            let mut keys = keys_for_the_map(&plan.directory, word, self.backslash_separates);
             match &self.operand_names {
                 None => {}
                 Some(found) => match found.get(word.as_str()) {
@@ -8998,7 +8998,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             let answer = match climbs_out(path) {
                 true => Integrity::Untrusted,
                 false => {
-                    let mut keys = keys_for_the_map(&plan.directory, path);
+                    let mut keys =
+                        keys_for_the_map(&plan.directory, path, self.backslash_separates);
                     // The other names the file has (TRUST-2), found by the caller from the file
                     // system, which this crate does not reach. A line whose operands the caller
                     // did not look up is judged by spelling, and one it looked up for and left an
@@ -10637,9 +10638,26 @@ fn names_a_path(program: &str) -> bool {
 /// Nothing is resolved, only re-spelled, so a name outside the root keeps just its own and the rule
 /// about the directory holding it decides.
 ///
+/// Where a backslash separates, the root and the operand are compared as keys. The root arrives as
+/// the host resolved it, `\\?\C:\work`, and a line spells the same directory `C:\work`, whose first
+/// component is not the root's, so compared as paths the two never nest (TRUST-18).
+///
 /// [TRUST-9]: ../../../docs/specs/trust-map.md
-fn keys_for_the_map(root: &std::path::Path, operand: &str) -> Vec<String> {
-    let named = std::path::Path::new(operand);
+/// [TRUST-18]: ../../../docs/specs/trust-map.md
+fn keys_for_the_map(
+    root: &std::path::Path,
+    operand: &str,
+    backslash_separates: bool,
+) -> Vec<String> {
+    let (root, named) = match backslash_separates {
+        true => (
+            std::path::PathBuf::from(&*crate::spelling::to_key(&root.to_string_lossy(), true)),
+            std::path::PathBuf::from(&*crate::spelling::to_key(operand, true)),
+        ),
+        false => (root.to_path_buf(), std::path::PathBuf::from(operand)),
+    };
+    let root = root.as_path();
+    let named = named.as_path();
     let mut keys = vec![operand.to_string()];
     match named.strip_prefix(root) {
         Ok(inside) => keys.push(inside.to_string_lossy().into_owned()),
@@ -21148,6 +21166,41 @@ five
             )
             .is_trusted(),
             "a line reading a file in the project came back untrusted"
+        );
+    }
+
+    /// The root arrives as the host resolved it and a line spells the same directory without the
+    /// `\\?\`, so compared as paths the operand is never inside the root and the key the project's
+    /// own rules are spelled against is not asked (TRUST-9, TRUST-18).
+    #[test]
+    fn an_operand_on_a_drive_letter_is_also_named_relative_to_the_project() {
+        let root = std::path::Path::new(r"\\?\C:\work\project");
+
+        for operand in [
+            r"C:\work\project\secrets\x.txt",
+            r"\\?\C:\work\project\secrets\x.txt",
+            "C:/work/project/secrets/x.txt",
+        ] {
+            assert_eq!(
+                keys_for_the_map(root, operand, true),
+                [operand, "secrets/x.txt"],
+                "{operand} was not named relative to the project"
+            );
+        }
+        assert_eq!(
+            keys_for_the_map(root, r"C:\work", true),
+            [r"C:\work", ""],
+            "a directory holding the project was not named as the project"
+        );
+        assert_eq!(
+            keys_for_the_map(root, r"C:\work\project-other\x.txt", true),
+            [r"C:\work\project-other\x.txt"],
+            "a sibling directory sharing the project's name as a prefix was named inside it"
+        );
+        assert_eq!(
+            keys_for_the_map(root, r"D:\work\project\x.txt", true),
+            [r"D:\work\project\x.txt"],
+            "the same path on another drive was named inside the project"
         );
     }
 
