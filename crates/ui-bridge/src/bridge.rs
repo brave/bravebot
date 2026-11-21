@@ -2298,6 +2298,10 @@ impl Bridge {
             })?;
             // The hooks run in the workspace a turn would have, with the folders opened beside it.
             for directory in &state.directories {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "a folder that can no longer be opened is left out, as a turn leaves it"
+                )]
                 let _ = workspace.add_directory(&directory.display().to_string());
             }
             (
