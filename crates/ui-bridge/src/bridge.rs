@@ -46,6 +46,10 @@ use std::time::Duration;
 /// record it was asked for is held or changed (SESSION-38).
 const CLOSED_SESSIONS_WAIT: Duration = Duration::from_secs(2);
 
+/// How long `session.background` waits for a worker that has said it is done to return, before it
+/// counts the chat as running something.
+const AFTER_WORK_WAIT: Duration = Duration::from_millis(500);
+
 /// What opening a stored session came to.
 enum Stored {
     Opened(Value),
@@ -442,6 +446,7 @@ impl Bridge {
             "session.compact.cancel" => self.cancel_compaction(request),
             "session.handoff" => self.handoff_brief(request),
             "session.handoff.cancel" => self.cancel_handoff(request),
+            "session.background" => self.background_session(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -2461,6 +2466,100 @@ impl Bridge {
             compacting.cancel.cancel();
         }
         Ok(json!({}))
+    }
+
+    /// Hand an open chat to a background session, as the terminal's `/bg` does (BG-2, CMD-34), and
+    /// close it here.
+    ///
+    /// Refused with a sentence, and the chat left open, in each case `/bg` is refused that a chat
+    /// can be in ([`crate::background::refusal`]) and where the `bravebot` program is not installed
+    /// beside the bridge. Otherwise the chat is closed first, because the background session
+    /// resumes the record and this process holds the record's lock until the chat's work has ended
+    /// (SESSION-38). The process is then started with the program beside the bridge, in the chat's
+    /// project and mode, and the answer comes once it is listed and listening.
+    fn background_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let workers = self.workers_of(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        // A worker that has said it is done can still be returning, so what has just ended is given
+        // a moment before it counts as running.
+        let busy = open.running.is_some()
+            || open.compacting.is_some()
+            || !workers.wait_idle(AFTER_WORK_WAIT);
+        drop(workers);
+        let watching = open
+            .watches
+            .lock()
+            .map(|watches| !watches.is_empty())
+            .unwrap_or(true);
+        // Read only when nothing is running, since a running turn holds the state. A busy chat is
+        // refused before the record is consulted.
+        let left = match busy {
+            true => None,
+            false => open
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| state.handle.as_ref().and_then(Handle::to_resume)),
+        };
+        let chat = crate::background::Chat {
+            permission_mode: open.permission_mode.get(),
+            sandbox: self.sandbox_mode_in(&open.project, open.sandbox),
+            settled: self.sandbox_mode_in(&open.project, None),
+            busy,
+            watching,
+            recorded: left.is_some(),
+            incognito: bravebot_core::incognito::engaged(),
+        };
+        let mode = crate::background::refusal(&chat).map_err(Failure::bad_request)?;
+        let (Some(left), Some(roster)) = (left, bravebot_session::jobs::Roster::writable()) else {
+            return Err(Failure::bad_request(
+                "There is nothing to continue in the background until a turn of this chat has ended.",
+            ));
+        };
+        let program = crate::background::program()
+            .ok_or_else(|| Failure::bad_request(crate::background::NO_PROGRAM))?;
+
+        let closed = self.close(&handle)?;
+        if !closed.wait_idle(CLOSED_SESSIONS_WAIT) {
+            return Err(Failure::new(
+                ErrorCode::Internal,
+                "The chat was closed, and its work did not end in time to continue it in the \
+                 background. Open it again from the list.",
+            ));
+        }
+        bravebot_session::jobs::start_host(
+            &program,
+            &roster,
+            &left.id,
+            "",
+            Some(&left.directory),
+            mode,
+        )
+        .map_err(|err| {
+            Failure::new(
+                ErrorCode::Internal,
+                match err {
+                    bravebot_session::jobs::StartError::Spawn(problem) => format!(
+                        "The chat was closed, and the background session could not be started \
+                             ({problem}). Open it again from the list."
+                    ),
+                    bravebot_session::jobs::StartError::NotStarted => {
+                        "The chat was closed, and the background session did not start in time. \
+                             Open it again from the list."
+                            .to_string()
+                    }
+                    bravebot_session::jobs::StartError::Unsupported => {
+                        "Background sessions are not available on this system.".to_string()
+                    }
+                },
+            )
+        })?;
+        Ok(json!({ "handedOver": left.id, "mode": mode.word() }))
     }
 
     /// Start a manifest run, and return before it finishes (MANIFEST-11).
