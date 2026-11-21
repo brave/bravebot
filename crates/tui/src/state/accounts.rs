@@ -39,45 +39,6 @@ pub struct AwaitedListing {
     waited_out: bool,
 }
 
-/// The sections `/context` divides a request into, as indexes into the byte counts.
-const CONTEXT_SYSTEM: usize = 0;
-const CONTEXT_INSTRUCTIONS: usize = 1;
-const CONTEXT_SKILLS: usize = 2;
-const CONTEXT_TOOLS: usize = 3;
-const CONTEXT_TYPED: usize = 4;
-const CONTEXT_PLANNER: usize = 5;
-const CONTEXT_RESULTS: usize = 6;
-const CONTEXT_OTHER: usize = 7;
-
-/// Divide `total` in proportion to `weights`, in whole numbers that add up to exactly `total`.
-///
-/// Each part is rounded down and what is left over goes one apiece to the parts with the largest
-/// remainders, so the shares of a measured count always sum to it. All zeros where the weights
-/// are, since nothing says what the total is made of.
-pub(crate) fn apportion(total: u64, weights: &[u64]) -> Vec<u64> {
-    let sum: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
-    if sum == 0 {
-        return vec![0; weights.len()];
-    }
-    let mut shares: Vec<u64> = weights
-        .iter()
-        .map(|weight| (u128::from(total) * u128::from(*weight) / sum) as u64)
-        .collect();
-    let mut left = total - shares.iter().sum::<u64>();
-    let mut by_remainder: Vec<usize> = (0..weights.len()).collect();
-    by_remainder.sort_by_key(|index| {
-        std::cmp::Reverse(u128::from(total) * u128::from(weights[*index]) % sum)
-    });
-    for index in by_remainder {
-        if left == 0 {
-            break;
-        }
-        shares[index] += 1;
-        left -= 1;
-    }
-    shares
-}
-
 impl Occupancy {
     /// How full the context is, as a percentage, or `None` where nothing has been measured.
     pub fn percent(&self) -> Option<u64> {
@@ -559,37 +520,8 @@ impl Session {
             return;
         };
 
-        let mut bytes = [0u64; 8];
-        bytes[CONTEXT_TOOLS] = view.tools_bytes;
-        for span in &view.spans {
-            use bravebot_agent::request_view::Provenance;
-            let section = match (span.role, &span.provenance) {
-                ("system", Provenance::TrustedFile(_)) => CONTEXT_INSTRUCTIONS,
-                ("system", Provenance::Trusted("skill list")) => CONTEXT_SKILLS,
-                ("system", _) => CONTEXT_SYSTEM,
-                (
-                    "user",
-                    Provenance::Typed
-                    | Provenance::TypedWithFiles
-                    | Provenance::TypedWithSessions(_),
-                ) => CONTEXT_TYPED,
-                ("assistant", _) => CONTEXT_PLANNER,
-                ("tool", _) => CONTEXT_RESULTS,
-                _ => CONTEXT_OTHER,
-            };
-            bytes[section] += span.text.len() as u64;
-        }
-        let shares = apportion(used, &bytes);
-        let names = [
-            t!(context_section_system),
-            t!(context_section_instructions),
-            t!(context_section_skills),
-            t!(context_section_tools),
-            t!(context_section_typed),
-            t!(context_section_planner),
-            t!(context_section_results),
-            t!(context_section_other),
-        ];
+        use bravebot_agent::request_view::Section;
+        let rows = view.sections(used);
 
         let mut lines = vec![crate::status::Line::new(
             t!(context_total),
@@ -599,10 +531,17 @@ impl Session {
                 crate::render::context_reading(self)
             ),
         )];
-        for (name, share) in names.iter().zip(shares) {
-            if share == 0 {
-                continue;
-            }
+        for (section, share) in rows {
+            let name = match section {
+                Section::System => t!(context_section_system),
+                Section::Instructions => t!(context_section_instructions),
+                Section::Skills => t!(context_section_skills),
+                Section::Tools => t!(context_section_tools),
+                Section::Typed => t!(context_section_typed),
+                Section::Planner => t!(context_section_planner),
+                Section::Results => t!(context_section_results),
+                Section::Other => t!(context_section_other),
+            };
             lines.push(
                 crate::status::Line::new(name, crate::status::tokens(share))
                     .with_note(t!(cost_share, percent = share * 100 / used)),

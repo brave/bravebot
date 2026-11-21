@@ -54,6 +54,7 @@ fn take_a_turn_at(
         session: "account-session".into(),
         project: workspace.root().to_path_buf(),
         state: Arc::clone(state),
+        reports: Default::default(),
         config: config(),
         workspace: workspace.clone(),
         attribution: Default::default(),

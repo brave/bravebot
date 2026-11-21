@@ -39,8 +39,6 @@ use entry::JOB_ROW_LINES;
 use vi::{Change, Inserting, Marked, TypedOver, Yanked};
 
 #[cfg(test)]
-use accounts::apportion;
-#[cfg(test)]
 use attachments::preview_of_dropped;
 #[cfg(test)]
 use entry::DELEGATE_KEPT;
@@ -12659,22 +12657,6 @@ mod tests {
             s.indicator().expect("working").verb,
             t!(indicator_answering),
             "the label outlived the question"
-        );
-    }
-
-    /// The `/context` rows must add up to the measured total, so each share is a whole number
-    /// and the rounding remainders are handed out rather than dropped.
-    #[test]
-    fn a_count_is_apportioned_in_whole_numbers_that_add_up_to_it() {
-        assert_eq!(apportion(10, &[1, 1, 1]), vec![4, 3, 3]);
-        assert_eq!(apportion(777, &[0, 300, 0, 700]).iter().sum::<u64>(), 777);
-        assert_eq!(apportion(100, &[0, 0]), vec![0, 0]);
-        assert_eq!(apportion(0, &[5, 5]), vec![0, 0]);
-        assert_eq!(
-            apportion(u64::MAX, &[u64::MAX, u64::MAX])
-                .iter()
-                .sum::<u64>(),
-            u64::MAX
         );
     }
 
