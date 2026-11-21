@@ -115,6 +115,9 @@ mod tests {
         assert!(sentences[3].contains("strict") && sentences[3].contains("workspace-write"));
     }
 
+    /// BG-2, CMD-34: the bridge starts only the `bravebot` that ships beside it, which is the same
+    /// build, and finds none where none is there, so the window is told [`NO_PROGRAM`] before the
+    /// chat is closed rather than a failed start after.
     #[test]
     fn the_program_is_the_one_beside_the_executable() {
         let directory =
