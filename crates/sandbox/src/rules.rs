@@ -1010,13 +1010,18 @@ const MAX_PATH: usize = 260;
 /// one can name. A path that is not text is returned as it is, since a lossy rendering of it would
 /// name another path once the prefix is taken off.
 pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    without_verbatim_prefix_up_to(path, MAX_PATH)
+}
+
+/// [`without_verbatim_prefix`] for a path of fewer than `longest` characters after the prefix.
+fn without_verbatim_prefix_up_to(path: PathBuf, longest: usize) -> PathBuf {
     let stripped = path
         .to_str()
         .and_then(|text| text.strip_prefix(r"\\?\"))
         .filter(|rest| {
             let bytes = rest.as_bytes();
             bytes.len() >= 3
-                && rest.len() < MAX_PATH
+                && rest.len() < longest
                 && bytes[0].is_ascii_alphabetic()
                 && bytes[1] == b':'
                 && bytes[2] == b'\\'
@@ -1025,17 +1030,23 @@ pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
     stripped.unwrap_or(path)
 }
 
+/// `path` spelled for a comparison with another: the prefix comes off whatever the length, since
+/// the result is compared and never handed to the system, so the limit that keeps a long path
+/// nameable does not apply.
+fn comparable(path: &Path) -> PathBuf {
+    without_verbatim_prefix_up_to(path.to_path_buf(), usize::MAX)
+}
+
 /// Whether `path` is at or beneath `ancestor`, whichever spelling each is in.
 ///
 /// A row a stage brings for itself can hold the `\\?\` form and a person's entry does not, and
 /// the two name one directory.
 pub(crate) fn under(path: &Path, ancestor: &Path) -> bool {
-    without_verbatim_prefix(path.to_path_buf())
-        .starts_with(without_verbatim_prefix(ancestor.to_path_buf()))
+    comparable(path).starts_with(comparable(ancestor))
 }
 
 pub(crate) fn same_path(left: &Path, right: &Path) -> bool {
-    without_verbatim_prefix(left.to_path_buf()) == without_verbatim_prefix(right.to_path_buf())
+    comparable(left) == comparable(right)
 }
 
 /// Whether `path` is at or beneath `denied`, each name compared as written or in canonical
@@ -3389,6 +3400,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A path of `MAX_PATH` characters or more keeps its `\\?\` prefix when it is resolved, since
+    /// only that spelling can name it, and it is below a location the person wrote in the ordinary
+    /// spelling. The comparison takes the prefix off whatever the length, so such a path is still
+    /// found beneath the credential location, and a sibling that shares the name as a prefix is not.
+    #[test]
+    fn a_path_too_long_for_the_ordinary_spelling_is_still_beneath_a_location_written_in_it() {
+        let long = PathBuf::from(r"\\?\C:\u")
+            .join("a".repeat(MAX_PATH))
+            .join("x");
+        let location = Path::new(r"C:\u");
+        assert_eq!(
+            without_verbatim_prefix(long.clone()),
+            long,
+            "the name that is handed to the system keeps its prefix"
+        );
+        assert!(under(&long, location));
+        assert!(!same_path(&long, location));
+        assert!(!under(&long, Path::new(r"C:\us")));
+        assert!(!under(&long, Path::new(r"D:\u")));
     }
 
     /// A name that is not text has no ordinary spelling to be given: reading it lossily and taking
