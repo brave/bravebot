@@ -860,15 +860,21 @@ question that is out and answers `{}` whether or not one was.
 
 ```json
 { "id": 9, "method": "session.btw", "params": { "session": "s1", "question": "why does it retry", "model": null } }
-→ { "started": true }
+→ { "started": true, "besideTurn": false }
 ```
 
 Asks the session's model the person's `/btw` question over the exchange as it stands, with no
 tools, and returns before it has answered (CMD-8). The conversation is not changed. The answer is
 kept as an aside in the session's record under the question, its cost is charged to the session, and
 it arrives as an `aside.done` event with `recap` false. An empty question is refused with
-`bad_request`, as is a second question while one is out, a `/recap` included. A turn that is
-running is refused with `turn_in_flight`. `session.aside.cancel` stops it.
+`bad_request`, as is a second question while one is out, a `/recap` included.
+`session.aside.cancel` stops it.
+
+While a turn runs, the question is asked over the exchange the turn sent at its latest request,
+under the turn's own file decisions, and the answer is `besideTurn: true`. It is refused with
+`bad_request` before the turn has sent anything. `turn.cancel` stops it with the turn, and its
+`aside.done` is `stopped`. Its `aside.done` arrives as soon as it is answered, even while the turn
+still runs. The row is kept and the record written again once the turn has ended.
 
 #### `mentions.offer`
 

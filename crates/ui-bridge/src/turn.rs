@@ -231,6 +231,9 @@ pub type ExchangeSlot = Arc<Mutex<Option<Fork>>>;
 pub struct Published {
     exchange: ExchangeSlot,
     files: Arc<Mutex<Option<FileAuthority>>>,
+    /// The account session the turn is sent under, which a question beside it is sent under too
+    /// (CHATGPT-10: one session to the account), since the session's own copy is in its state.
+    account: Arc<Mutex<Option<bravebot_agent::chatgpt::AccountSession>>>,
 }
 
 impl Published {
@@ -254,10 +257,21 @@ impl Published {
         locked(&self.files).clone()
     }
 
+    /// Keep the account session the turn is sent under.
+    pub fn keep_account(&self, account: bravebot_agent::chatgpt::AccountSession) {
+        *locked(&self.account) = Some(account);
+    }
+
+    /// The account session of the turn that published the exchange.
+    pub fn account(&self) -> Option<bravebot_agent::chatgpt::AccountSession> {
+        locked(&self.account).clone()
+    }
+
     /// A turn is beginning, so what the last one published is dropped.
     pub fn turn_begins(&self) {
         *locked(&self.exchange) = None;
         *locked(&self.files) = None;
+        *locked(&self.account) = None;
     }
 }
 
