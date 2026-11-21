@@ -1,9 +1,10 @@
 // The words Token Spend… and Context Breakdown… show (CMD-15, CMD-19), from what the bridge's
-// session.report.cost and session.report.context answer.
+// session.report.cost and session.report.context answer, and the Last Request… dialog (TRACE-9)
+// drawn from what session.report.request answers.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { buildSync } from 'esbuild'
+import { build, buildSync } from 'esbuild'
 const require = createRequire(import.meta.url)
 function load(path) {
   const source = buildSync({ entryPoints: [path], bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text
@@ -12,6 +13,80 @@ function load(path) {
   return module.exports
 }
 const { costNotice, contextNotice, tokens } = load('src/renderer/reports.ts')
+const React = require('react')
+const { renderToStaticMarkup } = require('react-dom/server')
+
+// `Modal` draws through a portal, which one server pass cannot render, so it is drawn in place.
+const inPlaceModal = {
+  name: 'in-place-modal',
+  setup(built) {
+    built.onResolve({ filter: /^\.\/Modal$/ }, () => ({ path: 'modal', namespace: 'in-place-modal' }))
+    built.onLoad({ filter: /.*/, namespace: 'in-place-modal' }, () => ({
+      loader: 'js',
+      resolveDir: process.cwd(),
+      contents: `import { createElement } from 'react'
+        export function Modal({ title, subtitle, children, actions }) { return createElement('div', { className: 'modal', 'data-title': title, 'data-subtitle': subtitle }, children, actions) }`,
+    }))
+  },
+}
+async function requestDialog() {
+  const built = await build({
+    entryPoints: ['src/renderer/components/RequestDialog.tsx'],
+    bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    plugins: [inPlaceModal],
+  })
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', built.outputFiles[0].text)(require, module, module.exports)
+  return module.exports.RequestDialog
+}
+const drawn = async (report) => renderToStaticMarkup(React.createElement(await requestDialog(), { report, onClose() {} }))
+
+// TRACE-9: Last Request… before any turn says there is no request yet.
+test('the last request before any turn says no request has been sent yet', async () => {
+  const markup = await drawn({ none: true, instructionFiles: [], spans: [] })
+  assert.match(markup, /No request has been sent to the model in this session yet\./)
+  assert.doesNotMatch(markup, /request-span/)
+})
+
+// TRACE-9: the instruction files with their bytes come first, then each span under its label.
+test('the last request lists the instruction files with their bytes, then each span under its label', async () => {
+  const markup = await drawn({
+    none: false,
+    instructionFiles: [{ path: 'AGENTS.md', bytes: 14 }, { path: 'docs/AGENTS.md', bytes: 3 }],
+    spans: [
+      { role: 'system', label: 'driver', text: 'You are bravebot.' },
+      { role: 'system', label: 'trusted file AGENTS.md', text: 'Keep it short.' },
+      { role: 'user', label: 'typed', text: 'list the files' },
+      { role: 'tool', label: 'ref:1', text: 'The result is held as ref:1.' },
+    ],
+  })
+  const files = markup.indexOf('Instruction files loaded: AGENTS.md (14 bytes), docs/AGENTS.md (3 bytes)')
+  assert.ok(files >= 0, markup)
+  const heads = ['system · driver', 'system · trusted file AGENTS.md', 'user · typed', 'tool · ref:1'].map((head) => markup.indexOf(head))
+  assert.ok(heads.every((at, index) => at > files && (index === 0 || at > heads[index - 1])), `in order: ${heads}`)
+  assert.match(markup, /<pre class="request-span-text">You are bravebot\.<\/pre>/)
+})
+
+test('a request whose system prompt loaded no instruction file says so', async () => {
+  const markup = await drawn({ none: false, instructionFiles: [], spans: [{ role: 'system', label: 'driver', text: 'x' }] })
+  assert.match(markup, /Instruction files loaded: none/)
+})
+
+// TRACE-9 and TRACE-11: a span's text is shown as plain text. The bridge sends an escape and a bell
+// as their pictures (`printable_spelled`); the dialog shows those pictures and no raw control,
+// and markup in a tool result is shown as characters and not drawn.
+test('a span holding an escape and a bell shows them escaped, and markup in it as text', async () => {
+  const markup = await drawn({
+    none: false,
+    instructionFiles: [],
+    spans: [{ role: 'tool', label: 'tool result (trusted)', text: 'list ␛[31mthe␇ files <img src=x onerror=alert(1)> **bold**' }],
+  })
+  assert.match(markup, /list ␛\[31mthe␇ files/)
+  assert.doesNotMatch(markup, /[\x1b\x07]/)
+  assert.match(markup, /&lt;img src=x onerror=alert\(1\)&gt; \*\*bold\*\*/)
+  assert.doesNotMatch(markup, /<img|<strong/)
+})
 
 test('a count of tokens is written as the terminal writes it', () => {
   assert.equal(tokens(1), '1 token')

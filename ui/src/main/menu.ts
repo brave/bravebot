@@ -221,6 +221,7 @@ export function installMenu(window: BrowserWindow): void {
         SEPARATOR,
         item('session.cost'),
         item('session.context'),
+        item('session.request'),
       ],
     },
     { role: 'windowMenu' },

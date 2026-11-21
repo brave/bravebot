@@ -51,6 +51,8 @@ export interface CommandActions {
   cost: () => void
   /** Show what the open session's last request was made of, by section (CMD-19). */
   context: () => void
+  /** Show the last request the open session's turn sent the model, span by span (TRACE-9). */
+  request: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
   /** Open the session a right-click named. */
@@ -147,6 +149,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.cost()
         case 'session.context':
           return act.context()
+        case 'session.request':
+          return act.request()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':
