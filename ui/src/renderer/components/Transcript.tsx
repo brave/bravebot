@@ -1,5 +1,6 @@
 import { Watches } from './Watches'
 import type { Enhancement } from '../enhancing'
+import type { Handoff } from '../handoff'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { Fragment, memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
@@ -87,6 +88,10 @@ interface Live {
   sendRefused?: string | null
   staging?: Staging
   enhancement?: Enhancement
+  /** A Hand Off to New Chat… request that is out, or a brief armed in the box (SESSION-34). */
+  handoff?: Handoff | null
+  /** The chat this one was handed off from (SESSION-34). */
+  handedOffFrom?: { id: string; title: string } | null
 }
 
 /**
@@ -132,6 +137,12 @@ interface Props {
   /** Escape over a rewrite: put back what was written, and say whether there was one. */
   onRestoreEnhanced: () => boolean
   onDismissEnhancement: () => void
+  /** Stop a Hand Off to New Chat… request that is out (SESSION-34). */
+  onStopHandoff: () => void
+  /** Escape over an armed brief: drop it and put back what the box held. Says whether there was one. */
+  onEscapeHandoff: () => boolean
+  /** Drop the armed brief where the box is empty, or always where `force` is set. */
+  onDropHandoff: (force?: boolean) => void
   queued: string[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -329,6 +340,9 @@ export function Transcript({
   onStopEnhance,
   onRestoreEnhanced,
   onDismissEnhancement,
+  onStopHandoff,
+  onEscapeHandoff,
+  onDropHandoff,
   queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
@@ -495,6 +509,9 @@ export function Transcript({
   const stopEnhance = useEvent(onStopEnhance)
   const restoreEnhanced = useEvent(onRestoreEnhanced)
   const dismissEnhancement = useEvent(onDismissEnhancement)
+  const stopHandoff = useEvent(onStopHandoff)
+  const escapeHandoff = useEvent(onEscapeHandoff)
+  const dropHandoff = useEvent(onDropHandoff)
   const cancel = useEvent(onCancel)
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
@@ -846,6 +863,7 @@ export function Transcript({
         )}
         <SessionNotices
           forkedFrom={live.forkedFrom}
+          handedOffFrom={live.handedOffFrom ?? null}
           kept={live.trustRemembered ?? null}
           vetting={live.autoVetting === true}
           rules={live.rules ?? null}
@@ -935,6 +953,10 @@ export function Transcript({
           onStopEnhance={stopEnhance}
           onRestoreEnhanced={restoreEnhanced}
           onDismissEnhancement={dismissEnhancement}
+          handoff={live.handoff ?? null}
+          onStopHandoff={stopHandoff}
+          onEscapeHandoff={escapeHandoff}
+          onDropHandoff={dropHandoff}
           onCancel={cancel}
           onModel={chooseModelFor}
           permissionMode={live.permissionMode}
@@ -1639,8 +1661,10 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-export function SessionNotices({ forkedFrom, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
+  /** The chat this one was started from with Hand Off to New Chat… (SESSION-34). */
+  handedOffFrom?: { id: string; title: string } | null
   kept: KeptTrust | null
   vetting: boolean
   rules: SettingsRules | null
@@ -1650,9 +1674,15 @@ export function SessionNotices({ forkedFrom, kept, vetting, rules, refused = [],
   onManage: () => void
 }): React.JSX.Element | null {
   const unheld = t.notInForce(rules, refused) || t.grantedRules(rules)
-  if (!forkedFrom && !kept && !vetting && !unheld) return null
+  if (!forkedFrom && !handedOffFrom && !kept && !vetting && !unheld) return null
   return (
     <div className="session-notices">
+      {handedOffFrom && (
+        <p className="session-banner session-notice" role="note" data-test="handed-off-from" data-tooltip={`Record ${handedOffFrom.id}`}>
+          <Icon name="message-bubble" />
+          <span className="notice-text">Handed off from <strong>{handedOffFrom.title}</strong>.</span>
+        </p>
+      )}
       {forkedFrom && (
         <p className="fork-banner session-notice divider">
           <span className="fork-mark"><ForkIcon /></span>

@@ -46,6 +46,12 @@ export interface CommandActions {
   changelog: () => void
   /** Ask for a note to keep on the open chat's record. */
   note: () => void
+  /** Ask for an optional focus, then shorten the open chat's conversation (CMD-34). */
+  compact: () => void
+  /** Ask for the next goal, then have a brief for a new chat written toward it (SESSION-34, CMD-34). */
+  handoff: () => void
+  /** Ask to confirm, then hand the open chat to a background session and close it here (BG-2, CMD-34). */
+  background: () => void
   doctor: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
@@ -139,6 +145,12 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.undoTurn()
         case 'session.note':
           return act.note()
+        case 'session.compact':
+          return act.compact()
+        case 'session.handoff':
+          return act.handoff()
+        case 'session.background':
+          return act.background()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':

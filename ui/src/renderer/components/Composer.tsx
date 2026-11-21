@@ -5,6 +5,7 @@ import { acceptMention, type MentionEntry, type MentionOffer } from '../../share
 import { useContextWindow } from '../context-window'
 import type { Staged, SummonedBot } from '../staging'
 import type { Enhancement } from '../enhancing'
+import type { Handoff } from '../handoff'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -92,6 +93,13 @@ export interface ComposerProps {
   /** Escape over a rewrite: put back what was written. Says whether there was a rewrite to put back. */
   onRestoreEnhanced: () => boolean
   onDismissEnhancement: () => void
+  /** A Hand Off to New Chat… request that is out, or a brief in the box that Send starts a new chat from (SESSION-34). */
+  handoff?: Handoff | null
+  onStopHandoff: () => void
+  /** Escape over an armed brief: drop it and put back what the box held. Says whether there was one. */
+  onEscapeHandoff: () => boolean
+  /** Drop the armed brief where the box is empty, or always where `force` is set. */
+  onDropHandoff: (force?: boolean) => void
   /** Lines sent into the running turn that it has not read yet. */
   interjected: string[]
   queued: string[]
@@ -143,6 +151,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, notice, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
+    handoff, onStopHandoff, onDropHandoff,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
   const latest = useRef(props)
@@ -266,6 +275,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   // come back, and Escape in a later message must not bring it.
   const holdsRewrite = !!enhancement?.rewritten
   useEffect(() => { if (holdsRewrite && !draft.trim()) onDismissEnhancement() }, [holdsRewrite, draft, onDismissEnhancement])
+  // A box emptied drops an armed handoff (SESSION-34): the next message is an ordinary one.
+  const holdsBrief = !!handoff?.armed
+  useEffect(() => { if (holdsBrief && !draft.trim()) onDropHandoff() }, [holdsBrief, draft, onDropHandoff])
 
   const blocked = askingTrust || backendReady === false || starting
   const canSend = !blocked && draft.trim().length > 0
@@ -324,6 +336,20 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               <Button size="tiny" kind="plain" data-test="enhance-put-back" onClick={() => { props.onRestoreEnhanced() }}>Put back mine</Button>
             )}
             <IconButton icon="close" size="tiny" label="Dismiss" tooltip="Dismiss" onClick={onDismissEnhancement} />
+          </div>
+        )}
+        {handoff?.asking && (
+          <div className="composer-tray composer-notice handing-off" role="status" data-test="handing-off">
+            <Icon name="message-bubble" />
+            <span className="notice-text">Writing a brief for a new chat…</span>
+            <Button size="tiny" kind="plain" onClick={onStopHandoff}>Stop</Button>
+          </div>
+        )}
+        {!handoff?.asking && handoff?.armed && (
+          <div className="composer-tray composer-notice handoff-armed" role="status" data-test="handoff-armed">
+            <Icon name="message-bubble" />
+            <span className="notice-text">Sending starts a new chat with this brief. Escape puts back your message.</span>
+            <IconButton icon="close" size="tiny" label="Keep the brief in this chat" tooltip="Send in this chat instead" onClick={() => onDropHandoff(true)} />
           </div>
         )}
         {askingTrust && props.waiting && (
@@ -425,6 +451,16 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   return
                 }
                 if (now.enhancement?.rewritten && now.onRestoreEnhanced()) {
+                  event.preventDefault()
+                  return
+                }
+                // Escape over a brief drops the handoff and puts back what the box held (SESSION-34).
+                if (now.handoff?.asking) {
+                  event.preventDefault()
+                  now.onStopHandoff()
+                  return
+                }
+                if (now.handoff?.armed && now.onEscapeHandoff()) {
                   event.preventDefault()
                   return
                 }

@@ -39,6 +39,9 @@ export type CommandId =
   | 'mode.cycle'
   | 'turn.rewind'
   | 'session.note'
+  | 'session.compact'
+  | 'session.handoff'
+  | 'session.background'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -188,6 +191,15 @@ export const COMMANDS: readonly Command[] = [
   // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the
   // turn holds the record until it ends.
   { id: 'session.note', label: 'Add Note…', requires: 'forkable' },
+  // `/compact [focus]` (CMD-34). Not while a turn runs, since the turn holds the conversation. No
+  // accelerator, because it asks for a focus first.
+  { id: 'session.compact', label: 'Compact Conversation…', requires: 'forkable' },
+  // `/handoff <next goal>` (SESSION-34, CMD-34). Not while a turn runs, since the brief is written
+  // from the conversation as it stands. No accelerator, because it asks for the goal first.
+  { id: 'session.handoff', label: 'Hand Off to New Chat…', requires: 'forkable' },
+  // `/bg` (BG-2, CMD-34). Not while a turn runs, since the background session resumes the record
+  // the turn holds. No accelerator, because it asks to confirm first.
+  { id: 'session.background', label: 'Continue in Background…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',

@@ -8,6 +8,7 @@ import type {
   BridgeEvent,
   ForkedSession,
   NotedSession,
+  BackgroundedSession,
   OpenedSession,
   PermissionMode,
   SandboxMode,
@@ -51,6 +52,9 @@ import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
 import { useEnhance } from './use-enhance'
+import { useCompact } from './use-compact'
+import { type HandingOff, useHandoff } from './use-handoff'
+import { armed, sourceOf } from './handoff'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, setExperience, dropConversation, experienceError } from './experience'
@@ -62,6 +66,9 @@ import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
+import { AskDialog } from './components/AskDialog'
+import { BackgroundConfirm } from './components/BackgroundConfirm'
+import { continueInBackground } from './backgrounding'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
@@ -173,10 +180,11 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
-  const { answerTrust, answerRules, answerFolder, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+  const { answerTrust, answerRules, answerFolder, send, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
+  const compaction = useCompact({ openedLives, updateSession, setProblem })
   const { chosen, writeAppearance } = useAppearance()
 
   // Read inside `showSession`, which is installed once for the same reason. The list lives in the
@@ -220,6 +228,8 @@ export function App(): React.JSX.Element {
     void readSummons()
     const stop = window.bravebot.onEvent((message: BridgeEvent) => {
       if (message.event === 'enhance.done' && message.session) enhancement.receive(message.session, message.data)
+      else if (message.event === 'compact.done' && message.session) compaction.receive(message.session, message.data)
+      else if (message.event === 'handoff.done' && message.session) handoffs.receive(message.session, message.data)
       else if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
       // The list holds two things this window did not write — the session behind a bot and how
@@ -333,6 +343,8 @@ export function App(): React.JSX.Element {
         // Looked up rather than carried: this session may have been forked in another launch
         // entirely, and the file the main process keeps is where that is written down.
         forkedFrom: cameFrom(forksRef.current, summary.directory, summary.id, sessionsRef.current),
+        // From the record, which the list row carries (SESSION-34).
+        handedOffFrom: sourceOf(summary.handedOffFrom, sessionsRef.current),
         focus: focus ?? null,
         // Ungrounded on purpose, even though this session has said the briefing before. What was
         // said before is in the conversation only until compaction takes it, and a resumed session
@@ -352,7 +364,7 @@ export function App(): React.JSX.Element {
     [],
   )
 
-  const create = useCallback(async (directory?: string, bot?: { slug: string; model: string | null }, draftId = `draft:${crypto.randomUUID()}`): Promise<string | null> => {
+  const create = useCallback(async (directory?: string, bot?: { slug: string; model: string | null }, draftId = `draft:${crypto.randomUUID()}`, from?: HandingOff): Promise<string | null> => {
     // A directory only ever arrives here from a list somebody else handed over: File > Open
     // Recent, the recents the composer's project menu and New chat read, which the main process
     // keeps, a group heading in the chat list, whose path came off a session the bridge reported,
@@ -368,6 +380,8 @@ export function App(): React.JSX.Element {
         shownDirectory: string
       }>('session.new', {
         directory: chosen,
+        // The open chat's handle, from which the bridge reads the source record's id (SESSION-34).
+        ...(from ? { handedOffFrom: from.handle } : {}),
       })
       setConversation(conversationKey(chosen, draftId), { botSlug: bot?.slug ?? null })
       setLive(newLive({
@@ -387,6 +401,7 @@ export function App(): React.JSX.Element {
         askingTrust: made.remembered ? null : made.shownDirectory,
         ...settledBy(made),
         forkedFrom: null,
+        handedOffFrom: from ? { id: from.id ?? from.handle, title: from.title } : null,
         focus: null,
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
@@ -398,6 +413,20 @@ export function App(): React.JSX.Element {
       return null
     }
   }, [])
+
+  // Hand Off to New Chat… (SESSION-34, CMD-34). The new chat opens in the source's directory, linked
+  // to it by the handle the bridge holds it under.
+  const createHandedOff = useCallback(
+    (directory: string, from: HandingOff) => create(directory, undefined, undefined, from),
+    [create],
+  )
+  const handoffs = useHandoff({ openedLives, updateSession, setProblem, create: createHandedOff, send })
+  /** Send, or, where the box holds an armed brief, start the new chat from it. */
+  const submitOrHandOff = useCallback(() => {
+    const current = liveRef.current
+    if (current && armed(current.handoff, draft) && canSend(current, backendReady, draft)) void handoffs.take(current.handle)
+    else submit()
+  }, [draft, backendReady, handoffs.take, submit])
 
   const pending = useMemo(
     () => (live ? t.outstanding(live.entries) : null),
@@ -628,6 +657,43 @@ export function App(): React.JSX.Element {
   // The open chat's handle while its note dialog is up.
   const [noting, setNoting] = useState<string | null>(null)
   const askNote = useCallback(() => { if (liveRef.current) setNoting(liveRef.current.handle) }, [])
+  // The open chat's handle while the dialog asking for a compaction's focus is up (CMD-34).
+  const [compacting, setCompacting] = useState<string | null>(null)
+  const askCompact = useCallback(() => { if (liveRef.current) setCompacting(liveRef.current.handle) }, [])
+  const compact = useCallback(
+    (focus: string) => (compacting ? compaction.compact(compacting, focus) : Promise.resolve(true)),
+    [compacting, compaction.compact],
+  )
+  // The open chat's handle while the dialog asking for the next goal is up (SESSION-34, CMD-34).
+  const [handingOff, setHandingOff] = useState<string | null>(null)
+  const askHandoff = useCallback(() => { if (liveRef.current) setHandingOff(liveRef.current.handle) }, [])
+  const handOff = useCallback(
+    (goal: string) => (handingOff ? handoffs.ask(handingOff, goal) : Promise.resolve(true)),
+    [handingOff, handoffs.ask],
+  )
+  // The open chat's handle while Continue in Background… asks to confirm, and whether the bridge is
+  // starting the background session (BG-2, CMD-34).
+  const [backgrounding, setBackgrounding] = useState<{ handle: string; busy: boolean } | null>(null)
+  const askBackground = useCallback(() => {
+    if (liveRef.current) setBackgrounding({ handle: liveRef.current.handle, busy: false })
+  }, [])
+  const background = useCallback(async () => {
+    if (!backgrounding || backgrounding.busy) return
+    const handle = backgrounding.handle
+    setBackgrounding({ handle, busy: true })
+    const came = await continueInBackground(
+      (session) => call<BackgroundedSession>('session.background', { session }), handle)
+    setBackgrounding(null)
+    // The bridge has let go of the chat, so the window does too, as closing it does.
+    if (came.closed) {
+      openedLives.current.delete(handle)
+      if (handleRef.current === handle) setLive(null)
+      void refresh()
+    }
+    if ('toast' in came) showToast(came.toast.title, came.toast.body)
+    else setProblem(came.problem)
+  }, [backgrounding, refresh])
+
   const addNote = useCallback(async (text: string) => {
     if (!noting) return true
     try {
@@ -927,7 +993,7 @@ export function App(): React.JSX.Element {
   useCommandRouter({
     create: (directory) => { void (directory ? create(directory) : newChat()) },
     closeSession: () => void closeSession(),
-    send: submit,
+    send: submitOrHandOff,
     cancel: () => void cancel(),
     cycleMode: () => { if (liveRef.current) void chooseMode(nextPermissionMode(liveRef.current.permissionMode)) },
     toggle,
@@ -938,6 +1004,9 @@ export function App(): React.JSX.Element {
     caffeinate: () => void caffeinate(),
     changelog: () => void changelog(),
     note: askNote,
+    compact: askCompact,
+    handoff: askHandoff,
+    background: askBackground,
     doctor: () => void doctor(),
     bugReport: () => setBugReportOpen(true),
     openSession,
@@ -1107,6 +1176,9 @@ export function App(): React.JSX.Element {
         onStopEnhance={() => { const handle = handleRef.current; if (handle) enhancement.stop(handle) }}
         onRestoreEnhanced={() => { const handle = handleRef.current; return !!handle && enhancement.restore(handle) }}
         onDismissEnhancement={() => { const handle = handleRef.current; if (handle) enhancement.dismiss(handle) }}
+        onStopHandoff={() => { const handle = handleRef.current; if (handle) handoffs.stop(handle) }}
+        onEscapeHandoff={() => { const handle = handleRef.current; return !!handle && handoffs.escape(handle) }}
+        onDropHandoff={(force) => { const handle = handleRef.current; if (handle) handoffs.drop(handle, force) }}
         onQueue={queueDraft}
         interjected={live?.interjected?.map((line) => line.prompt) ?? []}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}
@@ -1125,7 +1197,7 @@ export function App(): React.JSX.Element {
         onModel={(model) => void chooseModel(model)}
         onMode={(mode) => void chooseMode(mode)}
         onSandbox={(mode) => void chooseSandbox(mode)}
-        onSubmit={submit}
+        onSubmit={submitOrHandOff}
         reading={reading}
         onCancel={cancel}
         canExport={canExport}
@@ -1206,6 +1278,20 @@ export function App(): React.JSX.Element {
       )}
       {noting && live?.handle === noting && (
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
+      )}
+      {compacting && live?.handle === compacting && (
+        <AskDialog title="Compact conversation" subtitle="Summarises earlier messages so less is sent to the model."
+          label="Focus (optional)" action="Compact" optional rows={2} test="compact" className="compact-dialog"
+          running={live.running} onCancel={() => setCompacting(null)} onConfirm={compact} />
+      )}
+      {handingOff && live?.handle === handingOff && (
+        <AskDialog title="Hand off to a new chat" subtitle="Writes a brief from this chat for you to read and edit. Sending it starts a new chat."
+          label="Next goal" action="Write brief" rows={2} test="handoff" className="handoff-dialog"
+          running={live.running} onCancel={() => setHandingOff(null)} onConfirm={handOff} />
+      )}
+      {backgrounding && live?.handle === backgrounding.handle && (
+        <BackgroundConfirm name={live.summary.title} busy={backgrounding.busy}
+          onCancel={() => { if (!backgrounding.busy) setBackgrounding(null) }} onConfirm={() => void background()} />
       )}
       {keepAwake.asking && (
         <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />

@@ -1660,6 +1660,17 @@ saying why and nothing requested, with no goal, and before a turn has ended, bec
 record to link back to. A brief is not offered where the exchange has met something untrusted
 ([SESSION-20](#SESSION-20)): the planner could not have held it.
 
+The desktop window's Chat › Hand Off to New Chat… ([CMD-34](commands.md#CMD-34)) asks for the goal
+and makes the same request through the bridge's `session.handoff`, with the same refusals. The brief
+is put in the message box in the same way, the draft that was there is kept to bring back, and the
+window says that sending starts a new chat. Send then opens a new chat with `session.new` given the
+open chat's handle as `handedOffFrom`, and sends what the box holds as a message the person typed.
+Escape, or emptying the box, drops the handoff. The bridge takes the id of the source record from
+the chat it holds open under that handle, never from text the window sends, and refuses a handle it
+does not hold, a chat with no record, and a chat with a turn or a compaction running, before it
+creates anything. The new chat is given nothing
+else from the source.
+
 **Why.** A long session is worth leaving for the next piece of work without carrying all of it
 ([COMPACT](compaction.md)). Writing the brief from the planner's own context adds nothing the
 planner had not been shown, and the person's reading of it is what makes it a prompt. The permissions
@@ -1677,6 +1688,15 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
 `verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
 `verified-by: bravebot_tui::render::sessions_screen::the_details_give_the_id_size_agent_links_and_where_it_was_handed_off_from`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_with_no_goal_or_before_a_turn_ended_is_refused_and_asks_nothing`
+`verified-by: bravebot_ui_bridge::handing_off::a_ready_brief_holds_the_brief_and_ends_with_the_goal`
+`verified-by: bravebot_ui_bridge::handing_off::a_brief_from_an_exchange_that_met_something_untrusted_is_withheld`
+`verified-by: bravebot_ui_bridge::handing_off::a_chat_started_from_a_handoff_records_where_it_was_handed_off_from`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_from_a_chat_the_bridge_does_not_hold_is_refused_and_starts_nothing`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_from_a_chat_with_a_turn_running_is_refused_and_the_bridge_goes_on_answering`
+`verified-by: bravebot_agent::aside::a_handoff_is_refused_without_a_goal_an_ended_turn_or_a_record`
+`verified-by: bravebot_ui_bridge::handoff::a_brief_is_offered_only_where_the_exchange_kept_it`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/handoff.test.mjs asserts that a handoff is armed with the brief, keeps the draft it replaced, is dropped by Escape or an emptied box and is taken on send; make check-ui runs it)`
 
 ## Known costs
 

@@ -376,5 +376,5 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     void interject(handle, line)
   }
 
-  return { answerTrust, answerRules, answerFolder, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
+  return { answerTrust, answerRules, answerFolder, send, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
 }
