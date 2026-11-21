@@ -108,6 +108,11 @@ struct Open {
     /// (INPUT-50). Left in place once it has answered: stopping a request that has ended does
     /// nothing, and the next one replaces it.
     enhancing: Option<Cancel>,
+    /// The request to shorten the conversation, while one is running (CMD-34). The conversation is
+    /// out of the state on its worker until it ends, so the session refuses what would read or
+    /// change the conversation, as it does while a turn runs. Cleared by `reap` once the worker has
+    /// put the conversation back.
+    compacting: Option<crate::compaction::Compacting>,
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
@@ -154,6 +159,7 @@ impl Open {
             sandbox: None,
             offered_definitions: Mutex::new(Vec::new()),
             enhancing: None,
+            compacting: None,
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
             refused_folders: Vec::new(),
@@ -189,6 +195,18 @@ impl Open {
             return Err(Failure::new(
                 ErrorCode::TurnInFlight,
                 "a turn is already running in this session",
+            ));
+        }
+        self.not_compacting()
+    }
+
+    /// Refused while the conversation is being shortened (CMD-34). Its worker holds the
+    /// conversation until it ends, so a turn, a fork, an undo or a note would find it empty.
+    fn not_compacting(&self) -> Result<(), Failure> {
+        if self.compacting.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Wait for the conversation to finish being shortened.",
             ));
         }
         Ok(())
@@ -416,6 +434,8 @@ impl Bridge {
             "turn.interject" => self.interject_turn(request),
             "session.enhance" => self.enhance_draft(request),
             "session.enhance.cancel" => self.cancel_enhancement(request),
+            "session.compact" => self.compact_session(request),
+            "session.compact.cancel" => self.cancel_compaction(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -1260,6 +1280,7 @@ impl Bridge {
                 "a turn is running in the session being forked",
             ));
         }
+        open.not_compacting()?;
 
         let project = open.project.clone();
         let answered_trust = open.answered_trust;
@@ -1754,6 +1775,9 @@ impl Bridge {
         if let Some(enhancing) = &open.enhancing {
             enhancing.cancel();
         }
+        if let Some(compacting) = &open.compacting {
+            compacting.cancel.cancel();
+        }
         let workers = self.workers.remove(&handle).unwrap_or_default();
         // The end of a session that began is one of the workers this returns, so a host that waits for
         // them waits for it, and it follows the turn that was running (HOOK-10).
@@ -2181,6 +2205,130 @@ impl Bridge {
         Ok(json!({}))
     }
 
+    /// Shorten the conversation, as the terminal's `/compact [focus]` does (CMD-34), and return
+    /// before the request ends. `compact.done` says how it ended.
+    ///
+    /// The request is [`agent_turn::compact`], the terminal's own. It needs the conversation for
+    /// the whole request, and a conversation is not `Clone`, so it is moved out of the state here
+    /// and the worker puts it back on every path, a panic included. Until then the session refuses
+    /// a turn, a fork, an undo and a note. The phase and the `compacted` hooks (HOOK-2) reach the
+    /// window through the reporter a turn uses.
+    fn compact_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let focus = match request.params.get("focus") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(focus)) => {
+                Some(focus.trim().to_string()).filter(|focus| !focus.is_empty())
+            }
+            Some(_) => return Err(Failure::bad_request("`focus` must be a string")),
+        };
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let project = open.project.clone();
+        let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
+        let mut workspace =
+            turn_workspace(project.clone(), &settings, open.reads_stay_in_workspace)
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let state = Arc::clone(&open.state);
+        let (conversation, account, trust, turns) = {
+            let mut state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            // The hooks run in the workspace a turn would have, with the folders opened beside it.
+            for directory in &state.directories {
+                let _ = workspace.add_directory(&directory.display().to_string());
+            }
+            (
+                std::mem::take(&mut state.conversation),
+                state.account.clone(),
+                state.answers.trust.clone(),
+                state.turns,
+            )
+        };
+        let (compacting, finished) = crate::compaction::Compacting::start();
+        let cancel = compacting.cancel.clone();
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.compacting = Some(compacting);
+        }
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        self.workers_of(&handle).spawn(move || {
+            let mut conversation = conversation;
+            let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+            let mut sink = BridgeSink::new(emitter.clone(), &session, turns);
+            let home = bravebot_agent::home::directory();
+            // Caught so the conversation, which is owned out here, goes back whatever happens to
+            // the request.
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                agent_turn::compact(
+                    &config,
+                    &Egress::new(),
+                    &account,
+                    &mut conversation,
+                    model.as_deref(),
+                    &mut reporter,
+                    &mut sink,
+                    trust,
+                    focus.as_deref(),
+                    &cancel,
+                    Some(agent_turn::Hooked {
+                        home: home.as_deref(),
+                        workspace: &workspace,
+                    }),
+                )
+            }));
+            let event = done
+                .ok()
+                .map(|done| crate::compaction::settle(done, cancel.is_cancelled()));
+            if let Ok(mut state) = state.lock() {
+                state.conversation = conversation;
+                // Charged as the terminal charges it: the request was made and spent what it
+                // spent, whether or not a summary was adopted.
+                state.tokens += event.as_ref().map_or(0, |(_, tokens)| *tokens);
+                // The last undo point holds the conversation as it was before it was shortened and
+                // the spend before this request, so it is closed as the terminal closes it.
+                state.rewind.close();
+                // Written as the terminal writes it after `/compact`, with the gates the request
+                // passed. A session with no record yet keeps none.
+                if state.handle.is_some() {
+                    save(&project, &mut state, turns, sink.trail());
+                }
+            }
+            finished.store(true, std::sync::atomic::Ordering::Release);
+            let event = event.map_or_else(crate::compaction::ended_unexpectedly, |(e, _)| e);
+            emitter.send(Event::new("compact.done", &session, event));
+        });
+        Ok(json!({ "started": true }))
+    }
+
+    /// Stop the request to shorten the conversation, if one is running. Nothing running is not an
+    /// error: it may have ended first.
+    fn cancel_compaction(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(compacting) = &open.compacting {
+            compacting.cancel.cancel();
+        }
+        Ok(json!({}))
+    }
+
     /// Start a manifest run, and return before it finishes (MANIFEST-11).
     ///
     /// A run plans the whole task, puts the frozen plan to the person, and walks it. It is not a
@@ -2339,6 +2487,7 @@ impl Bridge {
                 "Wait for the current turn to finish before adding a note.",
             ));
         }
+        open.not_compacting()?;
         let mut guard = open
             .state
             .lock()
@@ -2378,6 +2527,7 @@ impl Bridge {
                 "Stop the current turn before undoing one.",
             ));
         }
+        open.not_compacting()?;
         let project = open.project.clone();
         let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
         let mut workspace =
@@ -2600,6 +2750,14 @@ impl Bridge {
                     .note(format!("client {client} cancelled the turn"));
             }
             running.cancel.cancel();
+        }
+        // Cancel Turn is the window's stop key, and a compaction is what it stops while one runs
+        // (CMD-34). A cancel that names a target names a turn or a run, and a compaction is
+        // neither.
+        if expected.is_none()
+            && let Some(compacting) = &open.compacting
+        {
+            compacting.cancel.cancel();
         }
         if let Ok(mut watches) = open.watches.lock() {
             watches.stop_firing();
@@ -3119,6 +3277,7 @@ impl Bridge {
                 continue;
             };
             if open.running.is_some()
+                || open.compacting.is_some()
                 || !open.answered_trust
                 || open.questions.reply_method().is_some()
             {
@@ -3252,6 +3411,14 @@ impl Bridge {
             && open.running.as_ref().is_some_and(Running::is_finished)
         {
             open.running = None;
+        }
+        if let Some(open) = self.open.get_mut(handle)
+            && open
+                .compacting
+                .as_ref()
+                .is_some_and(crate::compaction::Compacting::is_finished)
+        {
+            open.compacting = None;
         }
     }
 

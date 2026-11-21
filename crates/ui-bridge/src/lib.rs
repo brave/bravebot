@@ -44,6 +44,7 @@ pub mod attached;
 pub mod bots;
 pub mod bridge;
 pub mod bug_report;
+pub mod compaction;
 pub mod connectors;
 pub mod crash_notice;
 // Public so the integration tests and the persistent host can reach it, and hidden from the
