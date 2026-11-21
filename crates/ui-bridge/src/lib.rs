@@ -71,6 +71,7 @@ pub mod models;
 pub mod opener_names;
 mod project_questions;
 pub mod protocol;
+pub mod reports;
 pub mod rules;
 pub mod running;
 mod schedule_command;

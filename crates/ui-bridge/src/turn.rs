@@ -233,6 +233,9 @@ pub struct BridgeReporter {
     /// [`bravebot_agent::roster::Roster`]'s and the terminal uses as well. Shared with the session
     /// so the list lasts across turns (VIEW-35).
     roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
+    /// Where the session's reports are answered from while the turn holds its state (CMD-8).
+    /// `None` for a reporter whose requests and spend are not the session's turn's.
+    reports: Option<crate::reports::Shared>,
 }
 
 impl BridgeReporter {
@@ -247,12 +250,20 @@ impl BridgeReporter {
             prompt_at: None,
             task_list: Vec::new(),
             roster: Arc::default(),
+            reports: None,
         }
     }
 
     /// Report into the session's own list of agents and not a fresh one.
     pub fn sharing(mut self, roster: Arc<Mutex<bravebot_agent::roster::Roster>>) -> Self {
         self.roster = roster;
+        self
+    }
+
+    /// Keep the turn's request and what it spends in the session's report store, so `/cost`,
+    /// `/context` and `/request` are answered while the turn runs (CMD-8).
+    pub fn holding(mut self, reports: crate::reports::Shared) -> Self {
+        self.reports = Some(reports);
         self
     }
 
@@ -339,6 +350,22 @@ impl BridgeReporter {
 impl Reporter for BridgeReporter {
     fn spent(&mut self, spent: bravebot_agent::Spent) {
         self.spent = Some(spent);
+        if let Some(reports) = &self.reports {
+            crate::reports::hold(reports).spent(&spent);
+        }
+    }
+
+    /// Built only for a reporter that keeps it, since building one copies every span.
+    fn wants_request_view(&self) -> bool {
+        self.reports.is_some()
+    }
+
+    /// The turn's own request. A delegate's never arrives here: the handle a delegate reports
+    /// through drops it.
+    fn request_built(&mut self, view: bravebot_agent::request_view::RequestView) {
+        if let Some(reports) = &self.reports {
+            crate::reports::hold(reports).request_built(view);
+        }
     }
 
     fn prompt_recorded(&mut self, at: usize) {

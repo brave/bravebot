@@ -57,6 +57,7 @@ fn take_turn_in(
             session: "retention".into(),
             project: workspace.root().to_path_buf(),
             state,
+            reports: Default::default(),
             config,
             workspace,
             attribution: Default::default(),

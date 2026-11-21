@@ -77,6 +77,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             session: "test".into(),
             project,
             state,
+            reports: Default::default(),
             config,
             attribution: Default::default(),
             effort: None,
