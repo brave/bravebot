@@ -211,17 +211,17 @@ impl Held {
         };
         let compacted = self.occupancy == Occupancy::Compacted;
         match ContextReading::of(measured, compacted, self.last_request.as_ref()) {
-            ContextReading::NotMeasured => context_answer("not-measured", 0, 0, Vec::new()),
-            ContextReading::Compacted => context_answer("compacted", 0, 0, Vec::new()),
+            ContextReading::NotMeasured => context_answer("not-measured", 0, 0, &[]),
+            ContextReading::Compacted => context_answer("compacted", 0, 0, &[]),
             ContextReading::NoRequest { used, budget } => {
-                context_answer("no-request", used, budget, Vec::new())
+                context_answer("no-request", used, budget, &[])
             }
             ContextReading::Measured {
                 used,
                 budget,
                 sections,
             } => {
-                let sections = sections
+                let sections: Vec<Value> = sections
                     .into_iter()
                     .map(|(section, tokens)| {
                         json!({
@@ -231,7 +231,7 @@ impl Held {
                         })
                     })
                     .collect();
-                context_answer("measured", used, budget, sections)
+                context_answer("measured", used, budget, &sections)
             }
         }
     }
@@ -275,7 +275,7 @@ fn printable_lines(text: &str) -> String {
         .join("\n")
 }
 
-fn context_answer(state: &str, total: u64, budget: u64, sections: Vec<Value>) -> Value {
+fn context_answer(state: &str, total: u64, budget: u64, sections: &[Value]) -> Value {
     json!({ "state": state, "total": total, "budget": budget, "sections": sections })
 }
 
