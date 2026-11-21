@@ -131,3 +131,13 @@ test('auto-answer ends the scenario when no button can be pressed', async () => 
     mock.timers.reset()
   }
 })
+
+test('background.list answers with a session in each state, as the bridge words them', async () => {
+  const listed = await request('background.list')
+  assert.deepEqual(listed.ok.sessions.map((row) => row.state), ['needs-input', 'interrupted', 'working', 'idle', 'stopped'])
+  for (const row of listed.ok.sessions) {
+    assert.deepEqual(Object.keys(row).sort(), ['directory', 'held', 'id', 'name', 'prompt', 'short', 'state', 'updated'])
+    assert.equal(row.short, row.id.slice(0, 8))
+    assert.equal(row.held !== null, row.state === 'needs-input')
+  }
+})

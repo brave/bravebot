@@ -15,8 +15,9 @@ import type { EffortLevel } from '../src/shared/protocol'
 import type {
   BridgeEvent, EventMap, EventName, ForkedSession, OpenedSession, RewindPoint, RewoundSession, Said, SessionSummary,
 } from '../src/shared/protocol'
+import type { BackgroundRow } from '../src/renderer/background-list'
 import {
-  BOTS, BOT_HOME, BOT_SAID, DIRECTORY, EVERYTHING_SAID, FORKS, FORK_SAID, IDS, MODELS, PLAN_SAID, REWIND, RULES, SESSIONS,
+  BACKGROUND, BOTS, BOT_HOME, BOT_SAID, DIRECTORY, EVERYTHING_SAID, FORKS, FORK_SAID, IDS, MODELS, PLAN_SAID, REWIND, RULES, SESSIONS,
   SHORT_SAID, SUMMONS, TODOS,
 } from './fixtures'
 import { PLAN_RUN, QUICK } from './scenarios'
@@ -40,6 +41,8 @@ export const playground = {
   /** Which scenario a typed prompt gets as its reply. */
   reply: QUICK as Scenario,
   running: null as string | null,
+  /** The roster `background.list` answers with, which a drive script may change between polls. */
+  background: BACKGROUND() as BackgroundRow[],
   listeners: new Set<() => void>(),
   changed(): void { for (const listen of this.listeners) listen() },
 }
@@ -310,6 +313,7 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'language.set': return ok({ saved: true, tag: params.tag })
     case 'update.status': return ok({ check: 'on', running: '0.19.0', newer: false, checked: null })
     case 'session.list': return ok({ sessions: rows })
+    case 'background.list': return ok({ sessions: playground.background })
     case 'models.list': return ok(MODELS)
     case 'effort.get': return ok({ recorded: effort, inForce: effort, outranked: false })
     case 'effort.set': effort = (params.level as EffortLevel | null | undefined) ?? null; return ok({ recorded: effort })
