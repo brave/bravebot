@@ -18,7 +18,7 @@ import type { BridgeEvent } from '../shared/protocol'
 import { parseLayout } from '../shared/layout'
 import { parseView } from '../shared/view'
 import { parseContextRef, parseWindowState } from '../shared/commands'
-import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
+import { commandsReady, installMenu, popupContext, rebuildMenu, refreshMenu, useWindowOpener, windowClosed as menuWindowClosed } from './menu'
 import { noteProject, recents } from './recents'
 import { putLayout, putTheme, putView, readState } from './state'
 import { Caffeinate, trackTurns } from './caffeinate'
@@ -536,6 +536,7 @@ function createWindow(): void {
       webviewTag: false,
     },
   })
+  const created = window
 
   window.once('ready-to-show', () => window?.show())
   // The renderer quiets its accents while the window is in the background, as native windows do.
@@ -571,7 +572,11 @@ function createWindow(): void {
     pollingWatches = true
     void bridge.request('watches.poll').catch(() => {}).finally(() => { pollingWatches = false })
   }, 1000)
-  window.on('closed', () => { if (watchClock) clearInterval(watchClock); watchClock = null })
+  window.on('closed', () => {
+    if (window !== created) return
+    if (watchClock) clearInterval(watchClock)
+    watchClock = null
+  })
 
   // The first read of the bots moves any held in `bravebot-ui.json` to the bots file, and this
   // app's next write of that file drops them from it. The page is loaded after that read, or after
@@ -583,7 +588,10 @@ function createWindow(): void {
     else void window?.loadFile(join(__dirname, '../renderer/index.html'))
   })
 
+  // A window built after this one owns the state below, so a late close of this one leaves it.
   window.on('closed', () => {
+    menuWindowClosed(created)
+    if (window !== created) return
     signIn.abandon()
     keyEntry.abandon()
     bridge?.dispose()
@@ -597,9 +605,8 @@ function createWindow(): void {
 
   // Built here rather than once at startup, because the menu holds the window it delivers a
   // chosen item to. On macOS closing the last window does not quit the app, and clicking the
-  // dock icon builds a new one — with the menu installed once, every item would still be
-  // pointing at the window that was closed, and the whole menu would go quiet with nothing
-  // on screen to say why.
+  // dock icon or choosing File > New Chat builds a new one. The menu is told when a window
+  // closes, so no item points at a window that is gone.
   applyNativeAppearance(parseAppearance(readState().theme))
   installMenu(window)
 }
@@ -1291,7 +1298,10 @@ app.whenReady().then(() => {
   app.on('child-process-gone', (_event, details) =>
     reportFault({ kind: 'child_gone', process: details.type, reason: details.reason, exit: details.exitCode }))
 
-  ipcMain.on('bravebot:menu:state', (_event, value: unknown) => {
+  ipcMain.on('bravebot:menu:state', (event, value: unknown) => {
+    // Only the current window's own top frame is heard, so a message from a window that has
+    // closed cannot enable items after the menu was reset.
+    if (!window || event.senderFrame !== window.webContents.mainFrame) return
     const state = parseWindowState(value)
     if (!state) return
     refreshMenu(state)
@@ -1318,6 +1328,13 @@ app.whenReady().then(() => {
     if (reference) popupContext(reference)
   })
 
+  // The page has subscribed to commands. Carries nothing: the menu delivers a command it held
+  // itself, so the page cannot choose which one runs.
+  ipcMain.on('bravebot:commands:ready', (event) => {
+    if (window && event.senderFrame === window.webContents.mainFrame) commandsReady()
+  })
+
+  useWindowOpener(createWindow)
   createWindow()
 
   app.on('activate', () => {

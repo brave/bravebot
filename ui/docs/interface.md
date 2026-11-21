@@ -625,7 +625,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 
 | Key | Menu item | What |
 | --- | --- | --- |
-| `⌘N` | File › New Chat | Start a chat in the project used last, or pick a folder when there is none |
+| `⌘N` | File › New Chat | Start a chat in the project used last, or pick a folder when there is none. On macOS with every window closed it opens a window first and starts the chat there; the items that need a window are greyed until one is open |
 | `⇧⌘W` | File › Close Chat | Close the chat, `⌘W` still closes the window |
 | `⌘F` | View › Find in Conversation | Open the find bar and focus its field; needs a session |
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
