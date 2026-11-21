@@ -369,7 +369,8 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
     /// be reported to the planner as the person's own words. Where lines are being read the question
     /// is put to the program sending them, and what comes back is a pick among the choices the
-    /// planner offered (CLI-36).
+    /// planner offered (CLI-36). Questions other than the planner's own (such as a rule proposal or
+    /// a plan) stay refused for want of anybody to ask (RULE-3, CLI-36).
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
         if let Some(cancel) = &self.stop_at_a_question {
             cancel.cancel();
@@ -384,8 +385,8 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             return self.refusing.ask_user(asking);
         }
         match &self.lines {
-            Some(lines) => lines.ask(asking),
-            None => self.refusing.ask_user(asking),
+            Some(lines) if asking.closes_when_idle => lines.ask(asking),
+            _ => self.refusing.ask_user(asking),
         }
     }
 
@@ -433,6 +434,14 @@ mod tests {
                 .lines()
                 .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
                 .filter(|event| event["event"] == "permission")
+                .collect()
+        }
+
+        fn questions(&self) -> Vec<serde_json::Value> {
+            String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|event| event["event"] == "question")
                 .collect()
         }
     }
@@ -818,6 +827,47 @@ mod tests {
         assert!(
             asked.is_empty(),
             "the vouch was put to the program: {asked:?}"
+        );
+    }
+
+    /// RULE-3, CLI-36: a question that proposes a rule is never put to a program over lines,
+    /// because only a turn a person is watching can propose and a lines program gets no rule write.
+    /// It stays refused unasked for want of anybody to ask.
+    #[test]
+    fn a_program_over_lines_cannot_answer_a_question_that_proposes_a_rule() {
+        let (mut one_shot, said, program) = approving_over_lines(0);
+        let asking = bravebot_core::ask::Asking {
+            prompts: vec![bravebot_core::ask::Prompt {
+                key: "rule approval 0".to_string(),
+                header: "Rule".to_string(),
+                question: "Keep this rule?".to_string(),
+                rows: vec![
+                    bravebot_core::ask::Row {
+                        index: 0,
+                        label: "Keep this rule".to_string(),
+                        detail: None,
+                    },
+                    bravebot_core::ask::Row {
+                        index: 1,
+                        label: "Do not keep".to_string(),
+                        detail: None,
+                    },
+                ],
+                multiple: false,
+            }],
+            closes_when_idle: false,
+        };
+        let answers = one_shot.ask_user(&asking);
+        program.leaves();
+
+        assert!(
+            answers.is_empty(),
+            "a rule proposal was answered by a program: {answers:?}"
+        );
+        let asked = said.questions();
+        assert!(
+            asked.is_empty(),
+            "the rule proposal was put to the program: {asked:?}"
         );
     }
 }
