@@ -57,7 +57,7 @@ import { useExperience, conversationPreferences, setConversation, setExperience,
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
-import { contextNotice, costNotice, type ContextReport, type CostReport, type RequestReport } from './reports'
+import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type RequestReport, type StatusReport } from './reports'
 import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
@@ -627,6 +627,17 @@ export function App(): React.JSX.Element {
       setProblem(String(error))
     }
   }, [])
+  // The desktop's /status (CMD-8). Mid-turn the bridge answers with rulesHeldByTurn set and no
+  // rules, and the notice says they are held by the running turn.
+  const status = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(statusNotice(await call<StatusReport>('session.report.status', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
   // The desktop's /request (TRACE-9), answered from the same store.
   const lastRequest = useCallback(async () => {
     const session = liveRef.current?.handle
@@ -973,6 +984,7 @@ export function App(): React.JSX.Element {
     changelog: () => void changelog(),
     note: askNote,
     doctor: () => void doctor(),
+    status: () => void status(),
     cost: () => void cost(),
     context: () => void contextBreakdown(),
     request: () => void lastRequest(),

@@ -47,6 +47,8 @@ export interface CommandActions {
   /** Ask for a note to keep on the open chat's record. */
   note: () => void
   doctor: () => void
+  /** Show the open session's status, its rules only between turns (CMD-8). */
+  status: () => void
   /** Show what the open session has spent, by turn (CMD-15). */
   cost: () => void
   /** Show what the open session's last request was made of, by section (CMD-19). */
@@ -145,6 +147,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.undoTurn()
         case 'session.note':
           return act.note()
+        case 'session.status':
+          return act.status()
         case 'session.cost':
           return act.cost()
         case 'session.context':

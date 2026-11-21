@@ -1,8 +1,8 @@
 /**
- * The words Chat › Token Spend… and Chat › Context Breakdown… show, made from what
- * `session.report.cost` and `session.report.context` answer.
+ * The words Chat › Session Status…, Token Spend… and Context Breakdown… show, made from what
+ * `session.report.status`, `session.report.cost` and `session.report.context` answer.
  *
- * The desktop form of `/cost` (CMD-15) and `/context` (CMD-19). The bridge works out the
+ * The desktop form of `/status` (CMD-8), `/cost` (CMD-15) and `/context` (CMD-19). The bridge works out the
  * figures, the same way the terminal does, and this module only words them. The wording is the
  * English the terminal's catalog (`crates/i18n/locales/en-US.ftl`) gives the same rows. Pure, so a
  * test can call it without a window.
@@ -131,4 +131,82 @@ export function contextNotice(report: ContextReport): ReportNotice {
       }
     }
   }
+}
+
+/** What `session.report.status` answers. */
+export interface StatusReport {
+  project: string
+  folders: string[]
+  model: string | null
+  definition: string | null
+  permissionMode: string
+  sandboxMode: string
+  sessionId: string | null
+  title: string | null
+  turns: number
+  tokens: number
+  /** Set while a turn runs: it holds the trust map and the vouched programs, so `rules` is null (CMD-8). */
+  rulesHeldByTurn: boolean
+  rules: {
+    paths: { path: string; shownPath: string; integrity: string }[]
+    commands: { display: string; shownDirectory: string }[]
+  } | null
+}
+
+const PERMISSION_NAMES: Record<string, string> = {
+  ask: 'Ask',
+  acceptEdits: 'Accept edits',
+  plan: 'Plan',
+  auto: 'Auto',
+  bypass: 'Bypass',
+}
+
+const SANDBOX_NAMES: Record<string, string> = {
+  'workspace-write': 'Workspace write',
+  'read-only': 'Read only',
+  strict: 'Strict',
+  off: 'Off',
+}
+
+/**
+ * What a running turn's rules are shown as. The terminal's `status-held-by-the-turn` says the same
+ * in one row; here "shown once it ends" is the subtitle, so the rows fit the dialog.
+ */
+const HELD_BY_THE_TURN = 'held by the running turn'
+
+/**
+ * The notice Session Status… opens, the desktop's `/status` (CMD-8). While a turn runs, the trust
+ * map and the vouched programs are said to be held by it, and neither is stated.
+ */
+export function statusNotice(report: StatusReport): ReportNotice {
+  const rows: Row[] = [['Session', report.title || 'untitled, nothing sent yet']]
+  if (report.sessionId) rows.push(['Session id', report.sessionId])
+  rows.push(['Directory', report.project])
+  for (const folder of report.folders.filter((folder) => folder !== report.project)) {
+    rows.push(['Also open', folder])
+  }
+  if (report.model) rows.push(['Model', report.model])
+  if (report.definition) rows.push(['Agent', report.definition])
+  rows.push(['Permissions', PERMISSION_NAMES[report.permissionMode] ?? report.permissionMode])
+  rows.push(['Sandbox', SANDBOX_NAMES[report.sandboxMode] ?? report.sandboxMode])
+  rows.push(['Spent', `${turns(report.turns)} · ${tokens(report.tokens)}`])
+  if (report.rulesHeldByTurn || !report.rules) {
+    rows.push(['Trust', HELD_BY_THE_TURN], ['Programs', HELD_BY_THE_TURN])
+    return {
+      title: 'Session status',
+      subtitle: 'The running turn holds the trust and the vouched programs. They are shown once it ends.',
+      body: table(rows),
+    }
+  }
+  const { paths, commands } = report.rules
+  if (paths.length === 0) rows.push(['Trust', 'nothing vouched for'])
+  for (const [index, rule] of paths.entries()) {
+    const name = rule.path === '' ? 'Project root' : rule.shownPath
+    rows.push([index === 0 ? 'Trust' : '', `${name} · ${rule.integrity}`])
+  }
+  if (commands.length === 0) rows.push(['Programs', 'every run is put to you'])
+  for (const [index, command] of commands.entries()) {
+    rows.push([index === 0 ? 'Trusted commands' : '', `${command.display} · in ${command.shownDirectory}`])
+  }
+  return { title: 'Session status', body: table(rows) }
 }
