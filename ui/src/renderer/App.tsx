@@ -57,6 +57,8 @@ import { useExperience, conversationPreferences, setConversation, setExperience,
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
+import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type RequestReport, type StatusReport } from './reports'
+import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
@@ -119,6 +121,7 @@ export function App(): React.JSX.Element {
   }, [live?.handle])
   useEffect(() => { void checkBackend() }, [checkBackend])
   const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string } | null>(null)
+  const [requestReport, setRequestReport] = useState<RequestReport | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   const [bugReportOpen, setBugReportOpen] = useState(false)
   /** What the last update check found (UPDATE-12). Asked once at start and again when About opens. */
@@ -604,6 +607,48 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // The desktop's /cost and /context (CMD-15, CMD-19). Both answer while a turn runs, since the
+  // bridge reads them from the session's report store and not from the state the turn holds.
+  const cost = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(costNotice(await call<CostReport>('session.report.cost', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+  const contextBreakdown = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(contextNotice(await call<ContextReport>('session.report.context', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+  // The desktop's /status (CMD-8). Mid-turn the bridge answers with rulesHeldByTurn set and no
+  // rules, and the notice says they are held by the running turn.
+  const status = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(statusNotice(await call<StatusReport>('session.report.status', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+  // The desktop's /request (TRACE-9), answered from the same store.
+  const lastRequest = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setRequestReport(await call<RequestReport>('session.report.request', { session }))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+
   // Plain text, not Markdown: the notes link every issue, and the agent has already written each
   // link as its label, so nothing in this dialog opens anything.
   const changelog = useCallback(async () => {
@@ -939,6 +984,10 @@ export function App(): React.JSX.Element {
     changelog: () => void changelog(),
     note: askNote,
     doctor: () => void doctor(),
+    status: () => void status(),
+    cost: () => void cost(),
+    context: () => void contextBreakdown(),
+    request: () => void lastRequest(),
     bugReport: () => setBugReportOpen(true),
     openSession,
     closeNamed,
@@ -1197,6 +1246,7 @@ export function App(): React.JSX.Element {
       {notice && (
         <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} onClose={() => setNotice(null)} />
       )}
+      {requestReport && <RequestDialog report={requestReport} onClose={() => setRequestReport(null)} />}
       {projectAction?.kind === 'purge' && (
         <PurgeProject directory={projectAction.directory} opened={projectAction.opened} onClose={leaveProjectAction}
           onConfirm={(ids) => void purgeProject(projectAction.directory, ids)} />

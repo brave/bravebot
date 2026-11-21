@@ -120,6 +120,9 @@ struct Open {
     /// The folders open beside the project, as the state held them when they last changed, for a
     /// `session.folders.list` asked while a turn holds the state.
     folders: Vec<PathBuf>,
+    /// What `/cost`, `/context` and `/request` are answered from, which the session's turns write
+    /// into as they run, so a report asked while a turn holds the state is answered (CMD-8).
+    reports: crate::reports::Shared,
 }
 
 impl Open {
@@ -135,6 +138,8 @@ impl Open {
         Self {
             project,
             folders: state.directories.clone(),
+            // Measured against no budget until a turn starts, which reads it from the settings.
+            reports: Arc::new(Mutex::new(crate::reports::Held::of(&state, 0))),
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -355,6 +360,10 @@ impl Bridge {
             "session.folders.list" | "session.folders.add" | "session.folders.close" => {
                 self.folders(request)
             }
+            "session.report.cost" | "session.report.context" | "session.report.request" => {
+                self.report(request)
+            }
+            "session.report.status" => self.report_status(request),
             "turn.send" => self.send_turn(request),
             "turn.lookup" => {
                 let id = crate::wire::message_id(request.params.get("messageId"))?;
@@ -862,6 +871,71 @@ impl Bridge {
             self.emitter
                 .send(Event::new("folder.request", handle, folder));
         }
+    }
+
+    /// `session.report.cost`, `.context` and `.request`, the desktop's `/cost`, `/context` and
+    /// `/request`. Answered from the session's [`crate::reports::Held`] and never from its state,
+    /// so a report asked while a turn holds the state is answered at once (CMD-8).
+    fn report(&self, request: &Request) -> Result<Value, Failure> {
+        let open = self
+            .open
+            .get(&request.string("session")?)
+            .ok_or_else(Failure::no_such_session)?;
+        let held = crate::reports::hold(&open.reports);
+        Ok(match request.method.as_str() {
+            "session.report.cost" => held.cost(),
+            "session.report.request" => held.request(),
+            _ => {
+                // A session none of whose turns has started here measures against the budget the
+                // settings name now, which is the budget its next turn reads.
+                let fallback =
+                    crate::settings::config(Some(&open.project), self.settings.as_deref())
+                        .map_or(0, |config| config.context_budget);
+                held.context(fallback)
+            }
+        })
+    }
+
+    /// `session.report.status`, the desktop's `/status`: the session's project, folders, model,
+    /// definition, permission and sandbox modes, id, title, turns and tokens, none of which is
+    /// read from its state. Between turns the answer also holds the rules, as `permissions.list`
+    /// gives them. While a turn runs it holds the trust map and the vouched programs, so the
+    /// answer says so and gives no rules rather than waiting for the turn (CMD-8).
+    fn report_status(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let model = open.model.clone().or_else(|| {
+            crate::settings::config(Some(&open.project), self.settings.as_deref())
+                .ok()
+                .map(|config| config.default_model)
+        });
+        let mut status = json!({
+            "project": open.project.display().to_string(),
+            "folders": open
+                .folders
+                .iter()
+                .map(|folder| folder.display().to_string())
+                .collect::<Vec<_>>(),
+            "model": model,
+            "definition": open.definition,
+            "permissionMode": wire::permission_mode_name(open.permission_mode.get()),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&open.project, open.sandbox)),
+        });
+        merge(&mut status, crate::reports::hold(&open.reports).status());
+        let running = open.running.is_some();
+        merge(
+            &mut status,
+            if running {
+                json!({ "rulesHeldByTurn": true, "rules": Value::Null })
+            } else {
+                json!({ "rulesHeldByTurn": false, "rules": self.permissions(request, false)? })
+            },
+        );
+        Ok(status)
     }
 
     /// What a response that may make a question due adds about it: the question out, if any, and
@@ -1913,6 +1987,7 @@ impl Bridge {
         let mcp_requested = bravebot_agent::servers::requested_by(&settings);
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
+        let reports = Arc::clone(&open.reports);
         let watches = Arc::clone(&open.watches);
         let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
 
@@ -1982,6 +2057,7 @@ impl Bridge {
                 session,
                 project,
                 state,
+                reports,
                 config,
                 attribution,
                 effort,
@@ -2399,6 +2475,8 @@ impl Bridge {
                 &bravebot_session::audit::Trail::default(),
             );
         }
+
+        crate::reports::hold(&open.reports).rewound(state);
 
         let standing = state.conversation.snapshot();
         Ok(json!({
@@ -3688,6 +3766,8 @@ struct Work {
     session: String,
     project: PathBuf,
     state: Arc<Mutex<State>>,
+    /// The session's report store, which the turn writes into as it runs (CMD-8).
+    reports: crate::reports::Shared,
     config: Config,
     /// What the settings say a commit message and a pull request this turn writes may carry.
     attribution: bravebot_config::Attribution,
@@ -3821,6 +3901,7 @@ fn work(work: Work) {
         session,
         project,
         state,
+        reports,
         mut config,
         attribution,
         effort,
@@ -3874,8 +3955,10 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut reporter =
-        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
+    crate::reports::hold(&reports).turn_started(turn, config.context_budget);
+    let mut reporter = BridgeReporter::new(emitter.clone(), &session)
+        .sharing(Arc::clone(&state.roster))
+        .holding(Arc::clone(&reports));
 
     // The session begins with its first turn (HOOK-10), here on the worker so the request that
     // sent the turn is answered at once, and before anything else the turn does, so a hook that
@@ -4115,6 +4198,7 @@ fn work(work: Work) {
             state.answered_by_mode |= permission_mode.has_bypassed();
             sink.write_notes();
             let archived = save(&project, &mut state, turn, sink.trail());
+            crate::reports::hold(&reports).turn_ended(&state, archived);
 
             let rules = rules_json(&state.answers.trust);
             // What the turn said, then each question it did not put because the person had
@@ -4196,7 +4280,8 @@ fn work(work: Work) {
             );
             state.answered_by_mode |= permission_mode.has_bypassed();
             sink.write_notes();
-            let _ = save(&project, &mut state, turn, sink.trail());
+            let archived = save(&project, &mut state, turn, sink.trail());
+            crate::reports::hold(&reports).turn_ended(&state, archived);
 
             let notices = [
                 session_began.as_slice(),
@@ -6332,6 +6417,11 @@ mod folders_tests;
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+// Beside the turn worker rather than the store, because one of them runs a turn.
+#[cfg(test)]
+#[path = "reports_tests.rs"]
+mod reports_tests;
 
 #[cfg(test)]
 #[path = "closing_tests.rs"]

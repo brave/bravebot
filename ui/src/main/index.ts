@@ -631,6 +631,13 @@ const ALLOWED = new Set([
   // native picker returned, so the window cannot name a folder for the agent to open and trust.
   'session.folders.list',
   'session.folders.close',
+  // What a chat has spent, what its last request was made of, and the request itself (CMD-15,
+  // CMD-19, TRACE-9), and the status of the chat (CMD-8). Read-only, and answered while a turn
+  // runs.
+  'session.report.cost',
+  'session.report.context',
+  'session.report.request',
+  'session.report.status',
   'turn.send',
   'turn.cancel',
   'turn.interject',

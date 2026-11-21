@@ -19,6 +19,7 @@ pub mod attached;
 pub mod backend;
 pub mod bedrock_refusals;
 pub mod bots;
+pub mod breakdown;
 pub mod calendar;
 pub mod chatgpt;
 pub mod classifier;
