@@ -138,7 +138,7 @@ the whole of what they asked for.
 `verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
 `verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
 `verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
-`verified-by: bravebot_session::jobs::starting_a_host_from_a_missing_program_is_a_start_error`
+`verified-by: bravebot_session::jobs::a_host_program_that_does_not_exist_starts_nothing_and_takes_back_its_line`
 `verified-by: bravebot_ui_bridge::background::each_refusal_of_bg_is_made_from_what_the_bridge_holds`
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_no_record_is_not_handed_to_the_background`
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_in_bypass_or_auto_is_not_handed_to_the_background`
