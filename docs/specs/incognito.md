@@ -68,6 +68,7 @@ can be changed; without the second, entering it once would quietly overwrite set
 made deliberately.
 
 `verified-by: bravebot_tui::incognito::a_choice_applies_to_the_session_and_is_not_recorded`
+`verified-by: bravebot_tui::incognito::a_choice_takes_effect_for_the_session_and_the_startup_reads_the_recorded_one`
 
 <a id="INCOG-3"></a>
 ### INCOG-3: no record of the session, and none that it happened
@@ -92,6 +93,7 @@ rather than after.
 
 `verified-by: bravebot_tui::incognito::no_session_record_is_written`
 `verified-by: bravebot_tui::incognito::naming_a_session_records_nothing`
+`verified-by: bravebot_tui::incognito_resume::an_ordinary_sessions_record_and_audit_are_left_as_they_were_by_an_incognito_one`
 
 <a id="INCOG-4"></a>
 ### INCOG-4: the audit trail stays in the session
@@ -281,6 +283,7 @@ own tool.
 
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
+`verified-by: bravebot_agent::incognito::a_private_session_goes_on_creating_and_editing_files_in_the_project`
 `verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`
 `verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_cli::chatgpt_account::an_incognito_session_writes_the_renewal_of_its_sign_in`

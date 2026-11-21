@@ -8133,6 +8133,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// PANEL-9. The branch of a session is read from the checkout when the session starts, when it
+    /// resumes and when it moves to another directory, and it is not read again between those, so
+    /// a checkout made during a turn shows from the next of them. The faults it rejects are a
+    /// session that starts with no branch, a resume that keeps the branch the record holds, and a
+    /// move that keeps the branch of the directory it left.
+    #[test]
+    fn the_branch_is_read_when_a_session_starts_resumes_and_moves_and_not_between() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let first = fake_checkout("branch-first", "ref: refs/heads/main\n");
+        let second = fake_checkout("branch-second", "ref: refs/heads/other\n");
+        let mut session = Handle::begin(&first, Front::Terminal, A_BUILD);
+        assert_eq!(
+            session.branch(),
+            Some("main"),
+            "a new session has no branch"
+        );
+
+        std::fs::write(first.join(".git").join("HEAD"), "ref: refs/heads/later\n")
+            .expect("write HEAD");
+        assert_eq!(
+            session.branch(),
+            Some("main"),
+            "the branch was read again between a start and the next resume or move"
+        );
+
+        let mut record =
+            a_record_left_by_a_session(&an_empty_project("bravebot-session-branch-resume"));
+        record.branch = Some("recorded".to_string());
+        let resumed = Handle::resuming(&first, &record, Front::Terminal, A_BUILD)
+            .expect("nothing holds a record that is not on disk under the checkout");
+        assert_eq!(
+            resumed.branch(),
+            Some("later"),
+            "a resumed session shows the branch its record holds, not the one checked out now"
+        );
+
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let trust = a_vouched_root(&second);
+        session.move_to(
+            &second,
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 0,
+                tokens: 0,
+                split: Default::default(),
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &trust,
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
+            },
+        );
+        assert_eq!(
+            session.branch(),
+            Some("other"),
+            "a session that moved shows the branch of the directory it left"
+        );
+
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
+    }
+
     /// Not every directory is a checkout, and that is not a failure to report.
     #[test]
     fn a_directory_that_is_not_a_checkout_has_no_branch() {

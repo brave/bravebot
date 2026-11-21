@@ -795,6 +795,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::tab_finishes_text_after_the_copy_command`
 `verified-by: bravebot_tui::app::tests::menu::copy_as_text_and_the_typed_command_put_the_same_words_on_the_clipboard`
 `verified-by: bravebot_tui::render::each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs`
+`verified-by: bravebot_tui::render::every_command_row_reads_the_label_the_spec_table_gives_it`
 `verified-by: bravebot_tui::render::every_row_is_queued_during_an_aside`
 `verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
 `verified-by: bravebot_tui::app::btw_typed_before_the_first_request_says_there_is_nothing_to_read`

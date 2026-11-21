@@ -25044,6 +25044,46 @@ mod tests {
         );
     }
 
+    /// LOAD-4: where a project skill's directory is a link, each file is judged by the trust map
+    /// under the name the link gives it and under the name where it lands. The regression it
+    /// rejects: the files being judged under one of the two names only, so a file the map
+    /// distrusts under the other name is still offered. `ok.md` is the control: it is trusted
+    /// under both names.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_of_a_linked_skill_is_judged_under_both_the_link_name_and_the_landed_name() {
+        let fixture = SkillFixture::new("skill-files-link-both-names");
+        let target = fixture.project.join("shared/lint");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(
+            target.join("SKILL.md"),
+            "---\nname: lint\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        for file in ["ok.md", "distrusted-landed.md", "distrusted-link.md"] {
+            std::fs::write(target.join(file), "x").unwrap();
+        }
+        std::fs::create_dir_all(fixture.project.join(".bravebot/skills")).unwrap();
+        std::os::unix::fs::symlink(&target, fixture.project.join(".bravebot/skills/lint")).unwrap();
+
+        let workspace = fixture.workspace();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("shared/lint/distrusted-landed.md");
+        store.distrust(".bravebot/skills/lint/distrusted-link.md");
+        let catalogue = crate::skills::resolved(
+            &workspace,
+            None,
+            store,
+            bravebot_core::permissions::Permissions::default(),
+            &mut RecordingSink::new(),
+        );
+
+        let skill = catalogue.get("lint").expect("offered");
+        assert_eq!(skill.landed.as_deref(), Some("shared/lint"));
+        assert_eq!(skill.files, ["ok.md"]);
+    }
+
     /// LOAD-4: a link that lands where the trust map distrusts the directory is named no landing,
     /// and the skill is still offered. A link that lands where a deny rule covers the directory is
     /// not offered at all, since the rule covers the `SKILL.md` in it (PERM-3). The regression it

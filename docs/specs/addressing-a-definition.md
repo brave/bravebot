@@ -551,8 +551,10 @@ so a name that matches nothing is said and survived. A refused model is not surv
 reason in [ADDRESS-11](#ADDRESS-11).
 
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_agent`
+`verified-by: bravebot_config::settings::an_agent_that_is_blank_or_not_a_string_names_nothing`
 `verified-by: bravebot_cli::running::a_run_with_no_agent_flag_works_under_the_agent_setting`
 `verified-by: bravebot_cli::running::the_agent_flag_outranks_the_agent_setting`
+`verified-by: bravebot_cli::running::a_recorded_definition_outranks_the_agent_setting_on_a_continued_run`
 `verified-by: bravebot_cli::running::a_checkouts_agent_setting_does_not_address_a_run`
 `verified-by: bravebot_cli::running::an_agent_setting_naming_nothing_is_said_and_the_run_goes_on`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_agent_is_not_obeyed`

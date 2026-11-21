@@ -1089,6 +1089,131 @@ fn the_scan_for_the_xai_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_
     }
 }
 
+/// The forms a shipped file writes to put a path on a turn's `dropped_text` or `attachments` list,
+/// which is what the turn reads unconfined and records a trust rule for. Read as text, so a file
+/// that builds the call from a name it computes is not seen. The leading dot keeps out a local
+/// variable that happens to be called `attachments`, as the ACP prompt's list is, which reaches the
+/// bridge through `turn.send` and is minted there.
+const SUPPLIES_A_DROP: [&str; 11] = [
+    ".with_dropped_text(",
+    ".with_attachment(",
+    ".dropped_text.push(",
+    ".dropped_text.extend(",
+    ".dropped_text = ",
+    ".attachments.push(",
+    ".attachments.extend(",
+    ".attachments = ",
+    "turn::Attachment {",
+    "dropped_text: ",
+    "attachments: ",
+];
+
+/// Whether `text` names the unconfined read a drop's path is given, `read_dropped_text` or
+/// `read_dropped_attachment`.
+fn reads_a_drop(text: &str) -> bool {
+    text.contains("read_dropped_text") || text.contains("read_dropped_attachment")
+}
+
+/// Whether `text` puts a path on a turn's list of dropped files.
+fn supplies_a_drop(text: &str) -> bool {
+    SUPPLIES_A_DROP.iter().any(|form| text.contains(form))
+}
+
+/// DROP-1 says nothing but the terminal's drop handling and the bridge's `dropped` and `attachments`
+/// lists mint a drop's trust grant. A drop is a path on `Task::dropped_text` or `Task::attachments`
+/// that the turn reads with `read_dropped_text` or `read_dropped_attachment` and records a rule for,
+/// and nothing about the path says a person dropped it. So the files that put a path on either list
+/// are the task's own builders, the terminal's turn and side request, and the bridge, and the files
+/// that name the reads are the turn, the attached-file reader and the workspace that defines them. A
+/// third file that built a task with a path of its own, a hook, a prompt from a server or a command
+/// line path, would give a model-proposed path the grant. A file a test module declares is a test,
+/// and is not read.
+#[test]
+fn a_dropped_file_reaches_a_turn_from_the_terminal_and_the_bridge_and_nothing_else() {
+    let sources = shipped::sources();
+    let names = |found: fn(&str) -> bool| -> BTreeSet<String> {
+        sources
+            .iter()
+            .filter(|source| found(&source.without_test_modules))
+            .map(|source| source.name.clone())
+            .collect()
+    };
+    assert_eq!(
+        names(supplies_a_drop),
+        [
+            "crates/agent/src/turn/task.rs",
+            "crates/tui/src/app/side_requests.rs",
+            "crates/tui/src/app/turns.rs",
+            "crates/ui-bridge/src/bridge.rs"
+        ]
+        .map(String::from)
+        .into(),
+        "a file that puts a path on a turn's dropped lists"
+    );
+    assert_eq!(
+        names(reads_a_drop),
+        [
+            "crates/agent/src/attached.rs",
+            "crates/agent/src/turn.rs",
+            "crates/agent/src/workspace.rs"
+        ]
+        .map(String::from)
+        .into(),
+        "a file that reads a path as a drop"
+    );
+}
+
+/// The scan above reads the way a file names the grant, so the ways it can be named are held here,
+/// run over the code the scan reads: each builder and each read is found, and a comment, a test
+/// module, a local list that is not the task's and a list that is emptied are not.
+#[test]
+fn the_scan_for_the_drop_grant_finds_each_way_to_name_it_and_not_a_comment_or_a_test_module() {
+    for supplies in [
+        "task = task.with_dropped_text(path);",
+        "task = task.with_attachment(path, media);",
+        "self.dropped_text.push(path.into());",
+        "task.dropped_text.extend(paths);",
+        "task.dropped_text = paths;",
+        "self.attachments.push(Attachment { name, media });",
+        "task.attachments.extend(found);",
+        "task.attachments = found;",
+        "Some(bravebot_agent::turn::Attachment { name, media })",
+        "Task { dropped_text: paths, ..Task::new(prompt) }",
+        "Task { attachments: found, ..Task::new(prompt) }",
+    ] {
+        let code = shipped::code_of(supplies).without_test_modules;
+        assert!(supplies_a_drop(&code), "{supplies}");
+    }
+    for quiet in [
+        "// task.with_dropped_text(path)\nfn f() {}",
+        "/// the task's `.attachments.push(` is the builder\nfn f() {}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    fn g() { Task::new(\"x\").with_attachment(\"a.png\", \"image/png\"); }\n}\nfn h() {}",
+        "let mut attachments = Vec::new();\nattachments.push(path);",
+        "bare.attachments.clear();\nbare.dropped_text.clear();",
+        "let seen = task.dropped_text.len() + task.attachments.len();",
+        "let same = task.attachments == other.attachments;",
+        "use super::attachments::previews_restaged;\nsuper::attachments::lines_in(&text);",
+    ] {
+        let code = shipped::code_of(quiet).without_test_modules;
+        assert!(!supplies_a_drop(&code), "{quiet}");
+    }
+    for reads in [
+        "workspace.read_dropped_text(policy, &path)?;",
+        "workspace.read_dropped_attachment(policy, &path, media)",
+    ] {
+        let code = shipped::code_of(reads).without_test_modules;
+        assert!(reads_a_drop(&code), "{reads}");
+    }
+    for quiet in [
+        "/// See [`Workspace::read_dropped_text`] for why that is the boundary.\nfn f() {}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    fn g() { w.read_dropped_text(p, q); }\n}\nfn h() {}",
+        "workspace.read_text(policy, &path)",
+    ] {
+        let code = shipped::code_of(quiet).without_test_modules;
+        assert!(!reads_a_drop(&code), "{quiet}");
+    }
+}
+
 /// BACKEND-70 says the window's AWS sign-in is started by its main process after its person said
 /// yes. The sign-in that can be stopped from another thread is that one: the agent's wrapper names
 /// it to reach the AWS crate, and the bridge's file for the AWS row is its only caller. The sign-in

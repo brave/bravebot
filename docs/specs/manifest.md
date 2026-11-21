@@ -158,9 +158,12 @@ plan is asked of does not add one ([BACKEND-15](backends.md#BACKEND-15)).
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 `verified-by: bravebot_agent::manifest::injected_text_in_a_file_cannot_add_a_step`
+`verified-by: bravebot_agent::manifest::the_driver_runs_every_step_of_the_plan_once_and_in_plan_order`
 `verified-by: bravebot_agent::manifest::the_planner_is_shown_capabilities_and_no_tool_names`
 `verified-by: bravebot_agent::manifest::the_planning_requests_through_a_gateway_carry_no_tool_list_the_models_options_state`
 `verified-by: bravebot_agent::manifest::the_registry_and_the_kernel_schema_describe_the_same_tools`
+`verified-by: bravebot_agent::manifest::the_registry_offers_exactly_the_capabilities_the_clause_allows`
+`verified-by: bravebot_core::manifest::the_schema_names_exactly_the_tools_the_clause_allows`
 `verified-by: bravebot_core::manifest::no_action_in_the_schema_fills_a_slot`
 `verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`
 
@@ -200,6 +203,10 @@ the text following the separator byte for byte, as the search tool does
 `verified-by: bravebot_agent::manifest::a_write_lands_where_the_plan_said_and_carries_what_it_never_read`
 `verified-by: bravebot_agent::manifest::a_listing_with_no_pattern_lists_the_tree`
 `verified-by: bravebot_agent::manifest::a_search_step_prints_the_line_unchanged_after_path_and_line_number`
+`verified-by: bravebot_agent::manifest::a_planned_write_goes_to_the_path_the_lock_holds_and_not_the_one_the_step_names`
+`verified-by: bravebot_agent::manifest::a_read_step_reads_the_path_the_lock_holds`
+`verified-by: bravebot_agent::manifest::a_listing_step_lists_the_directory_and_pattern_the_lock_holds`
+`verified-by: bravebot_agent::manifest::a_search_step_searches_the_pattern_directory_and_include_the_lock_holds`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`

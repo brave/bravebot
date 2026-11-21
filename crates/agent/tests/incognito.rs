@@ -26,6 +26,9 @@ mod repository;
 #[path = "../test-support/turns.rs"]
 mod turns;
 
+#[path = "../test-support/mock_model.rs"]
+mod mock_model;
+
 use bravebot_agent::remembered::Store;
 use bravebot_core::command::{Plan, Step, Steps};
 use bravebot_core::remembered::RememberedLine;
@@ -574,6 +577,79 @@ fn an_untrusted_write_to_a_memory_in_an_incognito_session_is_recorded() {
         bravebot_agent::memory::Record::new(&scratch.home, &directory).paths(),
         vec![format!("{directory}/.bravebot/memory/notes.md")],
         "an incognito session's write left a memory untrusted and recorded nothing"
+    );
+}
+
+/// INCOG-8: `write_file` and `edit_file` go on editing the project in a private session. A model
+/// that asks for one file to be created and another to be changed gets both, and nothing is added
+/// beside them in the state directory.
+///
+/// The regression it rejects: a build that treats the mode as a reason to refuse or skip workspace
+/// edits, which would leave a private session that answers and changes nothing. The two files are
+/// checked by their bytes on disk, since a refusal is also a tool result the turn goes on from.
+#[test]
+fn a_private_session_goes_on_creating_and_editing_files_in_the_project() {
+    let scratch = Scratch::new("edits-the-workspace");
+    assert!(
+        bravebot_core::incognito::engaged(),
+        "the fixture is meant to run as an incognito session"
+    );
+    let work = scratch.home.join("work");
+    std::fs::create_dir_all(&work).expect("create the working directory");
+    std::fs::write(work.join("existing.txt"), "keep\nold\ntail\n").expect("seed a file");
+    let workspace = bravebot_agent::Workspace::new(&work).expect("workspace");
+    let (endpoint, _received) = mock_model::serve_sequence(vec![
+        mock_model::tool_request(
+            "write_file",
+            r#"{"path":"created.txt","contents":"written body"}"#,
+        ),
+        mock_model::tool_request(
+            "edit_file",
+            r#"{"path":"existing.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        mock_model::reply_with("done"),
+    ]);
+    let config = mock_model::config_for(&endpoint);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &bravebot_agent::turn::Task::new("create created.txt and change existing.txt")
+            .with_home(Some(scratch.home.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut bravebot_core::event::RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(work.join("created.txt"))
+            .ok()
+            .as_deref(),
+        Some("written body"),
+        "a private session did not create the file it was asked to write"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("existing.txt"))
+            .ok()
+            .as_deref(),
+        Some("keep\nnew\ntail\n"),
+        "a private session did not make the edit it was asked for"
+    );
+    let beside: Vec<String> = std::fs::read_dir(&scratch.home)
+        .expect("the state directory")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        beside,
+        ["work"],
+        "the edits left something in the state directory"
     );
 }
 

@@ -7108,6 +7108,94 @@ mod tests {
         );
     }
 
+    /// RUN-15. A delegate never borrows the session's jobs, even from a task that was handed
+    /// them: what it starts ends with its own turn and the session's list stays empty. The same
+    /// line in a person's turn is left running in the session's list, so the delegate's empty
+    /// list is the rule and not a line that never started a job. A delegate that took the
+    /// session's jobs would leave its program running after the turn that spawned it ended.
+    #[test]
+    fn a_delegate_handed_the_sessions_jobs_ends_what_it_starts_with_its_own_turn() {
+        use crate::report::JobEvent;
+
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .unwrap();
+        for (tag, delegated, in_the_session, dropped) in
+            [("delegate", true, 0, 1), ("person", false, 1, 0)]
+        {
+            let scratch = crate::testutil::scratch_dir(&format!("delegate-borrows-no-jobs-{tag}"));
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let jobs = tools::SessionJobs::new();
+            let task = if delegated {
+                Task::delegated(a_delegate_spec("worker", held(&Task::new(""))))
+            } else {
+                Task::new("start it")
+            }
+            .keeping_jobs(jobs.clone());
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            crate::backend::scripted::script(vec![
+                ceiling::said(
+                    "",
+                    &[("run", r#"{"command":"sleep 30","background":true}"#)],
+                    None,
+                ),
+                ceiling::said("done", &[], None),
+            ]);
+            let outcome = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveRuns,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome;
+            crate::backend::scripted::clear();
+            outcome.expect("the turn runs");
+
+            let started = reporter
+                .jobs
+                .iter()
+                .filter(|event| matches!(event, JobEvent::Started { .. }))
+                .count();
+            assert_eq!(
+                started, 1,
+                "{tag}: the job did not start: {:?}",
+                reporter.jobs
+            );
+            assert_eq!(
+                jobs.lock().len(),
+                in_the_session,
+                "{tag}: the session's jobs after the turn"
+            );
+            let ended_with_the_turn = reporter
+                .jobs
+                .iter()
+                .filter(|event| matches!(event, JobEvent::Dropped { .. }))
+                .count();
+            assert_eq!(
+                ended_with_the_turn, dropped,
+                "{tag}: jobs the turn ended: {:?}",
+                reporter.jobs
+            );
+        }
+    }
+
     /// A turn holds a grant for each server the session reached and for no other. A worker it
     /// spawns holds the same ones, and a reader and a checker hold none, whatever servers the
     /// delegate's own task names: its grants are its spec's.

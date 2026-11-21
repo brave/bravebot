@@ -2700,6 +2700,18 @@ mod tests {
             .expect("a plan that validates")
     }
 
+    /// The routing the driver locks from `plan` before its first step, each value trusted and
+    /// public as the gate requires.
+    fn locked_from(plan: &Manifest) -> Routing {
+        let mut routing = Routing::new();
+        for (key, value) in plan.routing() {
+            routing
+                .insert(key, Labelled::new(value, Label::trusted_public()))
+                .expect("routing");
+        }
+        routing
+    }
+
     /// PROMPT-1, MANIFEST-10: a step that names a file draws it as every other prompt does, so a
     /// name with a space at its end, or with a bidirectional control in it, does not read as the
     /// name it resembles, and an ordinary name reads as it always did. The spelling follows the
@@ -2762,6 +2774,35 @@ mod tests {
         advertised.sort_unstable();
         validated.sort_unstable();
         assert_eq!(advertised, validated);
+    }
+
+    /// MANIFEST-5: the registry advertises exactly these capabilities and tools. There is no
+    /// capability that runs a command or starts a shell, so the planner is never offered one.
+    /// Rejects a registry that gains a capability the schema gains with it, which the test above
+    /// accepts because both tables agree.
+    #[test]
+    fn the_registry_offers_exactly_the_capabilities_the_clause_allows() {
+        let mut offered: Vec<(&str, &str)> = REGISTRY
+            .iter()
+            .map(|entry| (entry.capability, entry.tool))
+            .collect();
+        offered.sort_unstable();
+        assert_eq!(
+            offered,
+            vec![
+                ("ANSWER", "answer"),
+                ("APPLY", "apply"),
+                ("CONNECTOR_ACT", "connector_act"),
+                ("CONNECTOR_FETCH", "connector_fetch"),
+                ("FILE_LIST", "list_files"),
+                ("FILE_READ", "read_file"),
+                ("FILE_SEARCH", "search"),
+                ("FILE_WRITE", "write_file"),
+                ("SERVER_CALL", "mcp_call"),
+                ("SERVER_READ", "mcp_read"),
+                ("TRANSFORM", "process"),
+            ]
+        );
     }
 
     /// The tier a capability is advertised under is the tier its plan will be checked against,
@@ -3168,12 +3209,7 @@ mod tests {
                 .expect("a plan");
             drop(planning);
 
-            let mut routing = Routing::new();
-            for (key, value) in plan.routing() {
-                routing
-                    .insert(key, Labelled::new(value, Label::trusted_public()))
-                    .expect("routing");
-            }
+            let routing = locked_from(&plan);
             let authority =
                 bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work"));
             let mut sink = bravebot_core::event::RecordingSink::new();
@@ -3255,6 +3291,213 @@ mod tests {
             let (kept, error) = write_step(false);
             assert_eq!(error, None);
             assert_eq!(kept, "replaced\n");
+        }
+
+        /// MANIFEST-6: a write goes to the path the lock holds. The lock here is built from a
+        /// different plan, which names `b.txt`, while the step that runs names `a.txt`. Rejects a
+        /// write that takes its path from the step's own text, which lands on `a.txt`.
+        #[test]
+        fn a_planned_write_goes_to_the_path_the_lock_holds_and_not_the_one_the_step_names() {
+            let root = crate::testutil::scratch_dir("bravebot-manifest-write-decoy");
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("a.txt"), "original\n").unwrap();
+            std::fs::write(root.join("b.txt"), "decoy\n").unwrap();
+            let workspace = Workspace::new(&root).expect("workspace");
+            let writing = |path: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("write_file")
+                        .with_text("path", path)
+                        .with_text("contents", "replaced\n"),
+                ]))
+            };
+            let the_step = writing("a.txt");
+            let the_lock = writing("b.txt");
+
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = Policy::begin(
+                locked_from(&the_lock),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_file_authority(FileAuthority::new(TrustStore::new("/work")));
+            let mut person = SaysYes {
+                starts_a_program_on: None,
+                changes_the_files: None,
+            };
+            let outcome = write(
+                &mut policy,
+                &workspace,
+                crate::findings::Recording::default(),
+                &SlotStore::new(),
+                &mut person,
+                &crate::LiveMode::new(crate::PermissionMode::Ask),
+                0,
+                &the_step.steps()[0],
+            );
+            let at_the_step = std::fs::read_to_string(root.join("a.txt")).unwrap();
+            let at_the_lock = std::fs::read_to_string(root.join("b.txt")).unwrap();
+            drop(policy);
+            let _ = std::fs::remove_dir_all(&root);
+
+            assert_eq!(outcome.err(), None);
+            assert_eq!(
+                at_the_step, "original\n",
+                "the write went to the path the step names"
+            );
+            assert_eq!(
+                at_the_lock, "replaced\n",
+                "the write did not go to the path the lock holds"
+            );
+        }
+    }
+
+    /// MANIFEST-6: a fetch step reads each destination out of the lock and not out of itself.
+    /// Every test runs one step against a lock built from a different plan, whose destinations
+    /// give a different count from the step's own, so a destination read from the step changes
+    /// the note.
+    mod a_step_reads_its_destination_from_the_lock {
+        use super::*;
+
+        /// The note the first step of `run` gives when the driver locked `decoy` instead.
+        fn note_under_the_lock_of(
+            root: &std::path::Path,
+            run: &Manifest,
+            decoy: &Manifest,
+        ) -> String {
+            let workspace = Workspace::new(root).expect("workspace");
+            let config = Config::from_lookup(|key| {
+                match key {
+                    bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key"),
+                    bravebot_config::env_var::KEY_ID => Some("test-key-id"),
+                    bravebot_config::env_var::ENDPOINT => Some("https://example.invalid"),
+                    _ => None,
+                }
+                .map(str::to_string)
+            })
+            .expect("configured");
+            let egress = Egress::new();
+            let mut chat = Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin());
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = Policy::begin(
+                locked_from(decoy),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            let step = &run.steps()[0];
+            let done = run_step(
+                &mut crate::connectors::Connectors::default(),
+                &Servers::default(),
+                &egress,
+                None,
+                &mut policy,
+                &workspace,
+                crate::findings::Recording::default(),
+                &mut SlotStore::new(),
+                &mut chat,
+                &mut crate::confirm::Unattended,
+                &crate::LiveMode::new(crate::PermissionMode::Ask),
+                false,
+                false,
+                0,
+                false,
+                step,
+                registered_tool(step.tool()).expect("a registered tool"),
+                &mut Accounting::default(),
+                &mut crate::report::IgnoreReports,
+            )
+            .expect("the step runs");
+            done.note
+        }
+
+        fn scratch(name: &str) -> std::path::PathBuf {
+            let root = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            root
+        }
+
+        /// Rejects a read that takes its path from the step: `a.txt` has 4 bytes and `b.txt`,
+        /// which the lock names, has 16.
+        #[test]
+        fn a_read_step_reads_the_path_the_lock_holds() {
+            let root = scratch("bravebot-manifest-lock-read");
+            std::fs::write(root.join("a.txt"), "one\n").unwrap();
+            std::fs::write(root.join("b.txt"), "the decoy file\n\n").unwrap();
+            let reading = |path: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("read_file")
+                        .with_text("path", path)
+                        .with_text("out_slot", "s0"),
+                ]))
+            };
+
+            let note = note_under_the_lock_of(&root, &reading("a.txt"), &reading("b.txt"));
+            let _ = std::fs::remove_dir_all(&root);
+            assert_eq!(note, "16 bytes, read when something needs them");
+        }
+
+        /// Rejects a listing that takes its directory or its pattern from the step. The lock
+        /// names `y` and `*.md`, which hold two files. The step names `x`, which holds none that
+        /// end in `.md`, and `*.rs`, which nothing in `y` matches, so either field read from the
+        /// step lists nothing.
+        #[test]
+        fn a_listing_step_lists_the_directory_and_pattern_the_lock_holds() {
+            let root = scratch("bravebot-manifest-lock-list");
+            std::fs::create_dir_all(root.join("x")).unwrap();
+            std::fs::create_dir_all(root.join("y")).unwrap();
+            std::fs::write(root.join("x/one.txt"), "one\n").unwrap();
+            std::fs::write(root.join("y/two.txt"), "two\n").unwrap();
+            std::fs::write(root.join("y/three.md"), "three\n").unwrap();
+            std::fs::write(root.join("y/four.md"), "four\n").unwrap();
+            let listing = |directory: &str, pattern: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("list_files")
+                        .with_text("directory", directory)
+                        .with_text("pattern", pattern)
+                        .with_text("out_slot", "files"),
+                ]))
+            };
+
+            let note = note_under_the_lock_of(&root, &listing("x", "*.rs"), &listing("y", "*.md"));
+            let _ = std::fs::remove_dir_all(&root);
+            assert_eq!(note, "2 files");
+        }
+
+        /// Rejects a search that takes its pattern, directory or include from the step. The lock
+        /// names `beta`, `y` and `*.md`, which give three matches. Each of the three fields read
+        /// from the step instead gives a different count: `needle` is in no file of `y`, `x` holds
+        /// no `.md` file, and `*.rs` selects the one `.rs` file of `y`.
+        #[test]
+        fn a_search_step_searches_the_pattern_directory_and_include_the_lock_holds() {
+            let root = scratch("bravebot-manifest-lock-search");
+            std::fs::create_dir_all(root.join("x")).unwrap();
+            std::fs::create_dir_all(root.join("y")).unwrap();
+            std::fs::write(root.join("x/note.rs"), "needle\nbeta\n").unwrap();
+            std::fs::write(root.join("y/one.md"), "beta\n").unwrap();
+            std::fs::write(root.join("y/two.md"), "beta\nbeta\n").unwrap();
+            std::fs::write(root.join("y/three.rs"), "beta\n").unwrap();
+            let searching = |pattern: &str, directory: &str, include: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("search")
+                        .with_text("pattern", pattern)
+                        .with_text("directory", directory)
+                        .with_text("include", include)
+                        .with_text("out_slot", "hits"),
+                ]))
+            };
+
+            let note = note_under_the_lock_of(
+                &root,
+                &searching("needle", "x", "*.rs"),
+                &searching("beta", "y", "*.md"),
+            );
+            let _ = std::fs::remove_dir_all(&root);
+            assert_eq!(note, "3 matches");
         }
     }
 }

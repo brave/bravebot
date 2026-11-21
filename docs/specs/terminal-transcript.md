@@ -69,6 +69,7 @@ whatever the running turn adds to the transcript below it.
 `verified-by: bravebot_tui::render::the_end_of_a_wrapped_reply_is_visible_when_it_arrives`
 `verified-by: bravebot_tui::render::scrolling_back_changes_the_view`
 `verified-by: bravebot_tui::render::a_reply_arriving_does_not_drag_a_scrolled_back_view_to_the_tail`
+`verified-by: bravebot_tui::render::a_frame_of_a_held_view_counts_from_the_top_and_not_back_from_the_end`
 `verified-by: bravebot_tui::state::a_chunk_of_the_reply_leaves_a_view_scrolled_back_at_rest_where_it_was`
 `verified-by: bravebot_tui::state::nothing_a_running_turn_adds_moves_a_scrolled_back_view`
 
@@ -330,6 +331,7 @@ scheme's own foreground in roughly nine schemes out of ten.
 `verified-by: bravebot_tui::theme::a_light_background_takes_the_deeper_brand_primary`
 `verified-by: bravebot_tui::theme::colorfgbg_with_a_white_background_is_light`
 `verified-by: bravebot_tui::theme::an_osc_reply_with_a_pale_background_is_light`
+`verified-by: bravebot_tui::theme::a_terminal_that_will_not_say_gets_the_dark_shade`
 `verified-by: bravebot_tui::theme::brave_keeps_named_slots_for_the_terminals_own_meanings`
 `verified-by: bravebot_tui::theme::an_aside_is_a_shade_picked_for_the_background_rather_than_a_slot`
 `verified-by: bravebot_tui::theme::an_accent_is_a_shade_picked_for_the_background_rather_than_a_slot`
@@ -599,10 +601,14 @@ that has observed untrusted content those are untrusted bytes and it may not bra
 `verified-by: bravebot_tui::render::a_thought_the_model_wrote_into_the_reply_is_not_drawn`
 `verified-by: bravebot_tui::state::a_thought_arriving_is_not_drawn_at_the_tail`
 `verified-by: bravebot_tui::state::a_finished_reply_keeps_the_answer_and_not_the_thought`
+`verified-by: bravebot_tui::state::a_finished_reply_that_stopped_mid_thought_is_drawn_whole`
 `verified-by: bravebot_tui::state::a_round_that_thought_before_speaking_records_only_what_it_said`
 `verified-by: bravebot_tui::state::a_round_that_only_thought_leaves_no_entry`
+`verified-by: bravebot_tui::state::a_round_that_stopped_mid_thought_is_drawn_whole`
 `verified-by: bravebot_tui::state::a_resumed_reply_leaves_off_its_leading_reasoning_block`
 `verified-by: bravebot_tui::state::a_legacy_resumed_reply_leaves_off_its_leading_reasoning_block`
+`verified-by: bravebot_tui::state::a_resumed_reply_that_stopped_mid_thought_is_drawn_whole`
+`verified-by: bravebot_tui::state::a_legacy_resumed_reply_that_stopped_mid_thought_is_drawn_whole`
 
 
 <a id="VIEW-19"></a>
@@ -662,6 +668,7 @@ than cleared, which is what makes the variable a switch rather than an edit.
 `verified-by: bravebot_tui::logo::the_wordmark_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::logo::the_face_takes_no_colour_where_none_was_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+`verified-by: bravebot_tui::theme::the_live_path_reads_no_color_from_the_environment_by_presence`
 
 
 <a id="VIEW-21"></a>
@@ -691,6 +698,7 @@ which is drawn before any file this program reads has been looked for.
 `verified-by: bravebot_tui::indicator::motion_nobody_declined_still_moves`
 `verified-by: bravebot_tui::avatar::the_face_stays_at_rest_where_no_motion_is_asked_for`
 `verified-by: bravebot_tui::lib::a_presentation_variable_says_nothing_beyond_being_set`
+`verified-by: bravebot_tui::indicator::the_live_path_reads_no_motion_from_the_environment_by_presence`
 
 
 <a id="VIEW-22"></a>

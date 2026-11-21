@@ -243,6 +243,90 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
     assert_eq!(scratch.contents(), expected);
 }
 
+/// INCOG-2: the recorded choice an ordinary session made is what an incognito session starts on,
+/// and a choice made inside it takes effect for the session while the files stay as they were.
+///
+/// The session persists, so the only thing between its setters and the files is the mode. A setter
+/// that returned early under incognito would leave the session on the recorded choice, and a startup
+/// that skipped the read would open it on the default; both are told apart here by choosing values
+/// that differ from the recorded ones.
+#[test]
+fn a_choice_takes_effect_for_the_session_and_the_startup_reads_the_recorded_one() {
+    use bravebot_aichat::protocol::Effort;
+    use bravebot_tui::vim::Editing;
+
+    let scratch = Scratch::incognito("session-choices");
+    scratch.seed("model", "claude-sonnet-4-5\n");
+    scratch.seed("effort", "low\n");
+    scratch.seed("editor-mode", "vim\n");
+    let seeded = scratch.contents();
+    let config = bravebot_config::Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("a-signing-key".to_string()),
+        "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".to_string()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid".to_string()),
+        _ => None,
+    })
+    .expect("config");
+    let settings = bravebot_config::Settings::default();
+
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    session.adopt_model(&settings, &config);
+    session.adopt_effort(&settings);
+    session.adopt_editing(None);
+    assert_eq!(
+        session.model(),
+        Some("claude-sonnet-4-5"),
+        "the session did not start on the recorded model"
+    );
+    assert_eq!(
+        session.effort(),
+        Some(Effort::Low),
+        "the session did not start on the recorded effort level"
+    );
+    assert_eq!(
+        session.editing(),
+        Editing::Vi,
+        "the session did not start on the recorded style of editing"
+    );
+
+    session.choose_model("some-other-model", &config);
+    session.choose_effort(Some(Effort::Xhigh));
+    session.choose_editing(Editing::Ordinary);
+    assert_eq!(
+        session.model(),
+        Some("some-other-model"),
+        "an incognito session kept the model it started on after one was chosen"
+    );
+    assert_eq!(
+        session.effort(),
+        Some(Effort::Xhigh),
+        "an incognito session kept the effort level it started on after one was chosen"
+    );
+    assert_eq!(
+        session.editing(),
+        Editing::Ordinary,
+        "an incognito session kept the style of editing it started on after one was chosen"
+    );
+
+    // Asking for no level removes the record in an ordinary session, so it is the choice that would
+    // reach a seeded file here if the mode did not hold.
+    session.choose_effort(None);
+    assert_eq!(session.effort(), None, "choosing no level did not apply");
+
+    for (file, recorded) in [
+        ("model", "claude-sonnet-4-5\n"),
+        ("effort", "low\n"),
+        ("editor-mode", "vim\n"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(scratch.own_directory().join(file)).expect("the seeded file"),
+            recorded,
+            "an incognito session changed the recorded {file}"
+        );
+    }
+    assert_eq!(scratch.contents(), seeded);
+}
+
 /// INCOG-3: an incognito session leaves no record of itself, and none that it happened.
 #[test]
 fn no_session_record_is_written() {

@@ -5657,6 +5657,66 @@ fn doctor_names_a_restriction_that_names_nothing() {
     );
 }
 
+/// RUN-28 from the process that reads the file: `doctor` says, for each pattern in `run.scrubEnv`,
+/// the pattern and one variable it reached, in the order the entries are written, says nothing for
+/// an exact entry, and prints no value.
+///
+/// An implementation that leaves the pattern lines out of the report passes every test of the
+/// matching in `bravebot-config`, since none of them runs `doctor`. The exact entry names a
+/// variable this process holds, so a report that listed exact entries as well would print a line
+/// for it. The two patterns are written in the opposite order to their names, so a report that
+/// sorted them would swap the lines.
+#[test]
+fn doctor_names_what_a_pattern_in_the_scrub_list_reached() {
+    let scratch = Scratch::new("cli-running-scrub-pattern").with_settings(
+        r#"{"run": {"scrubEnv": ["BRAVEBOT_DOCTOR_ZED_?",
+                                 "BRAVEBOT_DOCTOR_EXACT",
+                                 "BRAVEBOT_DOCTOR_ALPHA_*"]}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+            ("BRAVEBOT_DOCTOR_ZED_1", "a-zed-value-nothing-prints"),
+            ("BRAVEBOT_DOCTOR_EXACT", "an-exact-value-nothing-prints"),
+            ("BRAVEBOT_DOCTOR_ALPHA_ONE", "an-alpha-value-nothing-prints"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+    let line_of = |needle: &str| {
+        stdout
+            .lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line holds `{needle}`: {stdout}"))
+    };
+    let zed = line_of("BRAVEBOT_DOCTOR_ZED_? selected BRAVEBOT_DOCTOR_ZED_1");
+    let alpha = line_of("BRAVEBOT_DOCTOR_ALPHA_* selected BRAVEBOT_DOCTOR_ALPHA_ONE");
+    assert!(
+        zed < alpha,
+        "the lines are not in the order the entries are written: {stdout}"
+    );
+    assert!(
+        !stdout.contains("BRAVEBOT_DOCTOR_EXACT"),
+        "an exact entry was given a line: {stdout}"
+    );
+    for value in [
+        "a-zed-value-nothing-prints",
+        "an-exact-value-nothing-prints",
+        "an-alpha-value-nothing-prints",
+    ] {
+        assert!(
+            !stdout.contains(value),
+            "the report printed the value of a variable: {stdout}"
+        );
+    }
+}
+
 /// BACKEND-36 for a repeated key, from the process that reads the file: a key one settings file
 /// writes twice is named with its file and key path, the values are not printed, a deny written
 /// first still applies, and the run passes.
@@ -10076,6 +10136,51 @@ fn a_settings_file_the_import_would_take_too_large_is_named_in_place_of_the_comm
     );
 }
 
+/// IMPORT-8: `doctor` repeats the refusal, so with something importable its report carries the
+/// line naming the source and the command that asks, asks nothing itself and writes nothing. Where
+/// the settings file is one the import cannot write, the file is named in place of the command. A
+/// `doctor` that printed the how-to without the import line passes the other `doctor` tests.
+#[test]
+fn doctor_with_something_importable_names_the_import_command_and_asks_nothing() {
+    let importable = Scratch::new("cli-running-doctor-import-importable")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let output = bravebot(&importable.path, NOTHING_CONFIGURED, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("Claude Code") && line.contains("bravebot auth login import")),
+        "the report did not name the source and the command: {stdout}{stderr}"
+    );
+    assert!(!stdout.contains("Import this"), "{stdout}");
+    assert!(
+        !importable.settings().exists(),
+        "doctor wrote settings: {stdout}"
+    );
+
+    let broken = r#"{"env": {"AWS_REGION": "eu-central-1",}"#;
+    let unwritable = Scratch::new("cli-running-doctor-import-unwritable")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(broken);
+
+    let output = bravebot(&unwritable.path, NOTHING_CONFIGURED, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("does not hold a settings document"),
+        "the report did not name the file: {stdout}{stderr}"
+    );
+    assert!(!stdout.contains("auth login import"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(unwritable.settings()).expect("read"),
+        broken
+    );
+}
+
 /// IMPORT-8: an import is a write, which an incognito session will not do.
 #[test]
 fn import_providers_is_refused_while_incognito() {
@@ -13396,6 +13501,70 @@ fn a_continued_run_given_the_workspace_flag_reads_a_project_file_as_trusted() {
     );
 }
 
+/// CLI-25. A run carrying on a session starts from the trust map its record holds, with no flag
+/// given, so a file the session's person vouched for reaches the planner as its own words. Rejects a
+/// continued run that starts from the fallback map and leaves the recorded one out. The control
+/// continues a record whose map has no rule for the file and reads it quarantined, so the words the
+/// planner sees are the recorded rule's doing. `--trust-workspace` is not given, since it trusts the
+/// working directory whichever map the run started from.
+#[test]
+fn a_continued_run_starts_from_the_trust_map_its_record_held() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-trust-recorded-continued");
+    let earlier = || {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--json", "-p", "hello"],
+        );
+        let (stdout, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"))
+    };
+    let (for_the_control, for_the_rule) = (earlier(), earlier());
+    assert_ne!(for_the_control, for_the_rule);
+    let _ = requests(&gateway);
+
+    let mut record = the_record(&scratch, &for_the_rule);
+    assert!(
+        record["trust"].is_array(),
+        "the first run recorded no trust map: {record}"
+    );
+    record["trust"] = serde_json::json!([{"path": "notes.md", "integrity": "trusted"}]);
+    std::fs::write(
+        the_record_file(&scratch, &for_the_rule),
+        serde_json::to_vec(&record).expect("encode the record"),
+    )
+    .expect("write the record back");
+
+    let without = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--resume", &for_the_control, "-p", "read the notes"],
+    );
+    let (_, stderr) = said(&without);
+    assert!(without.status.success(), "{stderr}");
+    assert!(
+        !the_planner_saw_the_notes(&gateway),
+        "the continued run trusted a file its record held no rule for"
+    );
+
+    let with = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--resume", &for_the_rule, "-p", "read the notes"],
+    );
+    let (_, stderr) = said(&with);
+    assert!(with.status.success(), "{stderr}");
+    assert!(
+        the_planner_saw_the_notes(&gateway),
+        "the continued run did not start from the trust map its record held"
+    );
+}
+
 /// CLI-1: in a one-shot run that trusts its workspace, an `allow` rule over a file lets an edit of it
 /// land, and a rule over another file does not. The trust map alone refuses the same edit
 /// (`a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`), so the
@@ -14107,6 +14276,47 @@ fn the_agent_flag_outranks_the_agent_setting() {
     let (stdout, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
     assert!(stdout.contains(r#""agent":"scribe""#), "{stdout}");
+}
+
+/// ADDRESS-13: the name a continued session's record carries outranks the `agent` setting, so a
+/// session does not change definition when the setting is edited. The setting names `scribe`
+/// throughout and the first run was started under `rule-reviewer` with the flag, so a run that put
+/// the setting above the record would be addressed to `scribe` and say the setting chose it.
+#[test]
+fn a_recorded_definition_outranks_the_agent_setting_on_a_continued_run() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-agent-setting-record")
+        .with_settings(&settings_naming_an_agent(&gateway, "scribe"))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        )
+        .with_state(
+            "agents/scribe.md",
+            &a_definition("scribe", "kind: reader\n"),
+        );
+
+    let (output, stdout, stderr) =
+        a_recorded_run(&scratch, &["--agent", "rule-reviewer", "-p", "FIRST"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    let _ = requests(&gateway);
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "SECOND", "--continue"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#""agent":"rule-reviewer""#) && !stdout.contains("scribe"),
+        "the setting outranked the recorded definition: {stdout}"
+    );
+    assert!(
+        !stderr.contains("the agent setting chose this definition"),
+        "the run said the setting chose its definition: {stderr}"
+    );
+    let sent = requests(&gateway).join("\n");
+    assert!(
+        sent.contains("addressed this turn to rule-reviewer")
+            && !sent.contains("addressed this turn to scribe"),
+        "the continued turn was not addressed to the recorded definition: {sent}"
+    );
 }
 
 /// ADDRESS-13: a checkout's `agent` key chooses nothing, because nobody vouched for the file that
@@ -18813,6 +19023,82 @@ fn a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on()
     );
 }
 
+/// CLI-15: `--vet` makes a check that finds nothing answer for the run, so the output the planner
+/// asked to read reaches it with nobody asked. The planner reads a file nobody vouched for, then
+/// asks `vet_content` to show it, and the check's word is `safe`. Without the flag the one-shot
+/// run has nobody to ask and the bytes are kept back, so the same script tells the two runs apart.
+/// Rejects a one-shot task built with auto-vetting off whatever the command line said, which
+/// leaves the notice on stderr (computed on its own) intact and keeps every verdict from answering.
+#[test]
+fn a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the_bytes() {
+    const WORDS: &str = "THE-WORDS-IN-THE-PROJECT-NOTES";
+    // The exit status is 0 for a run no gate refused anything in, and 4 for one whose release was
+    // refused.
+    let planner_rounds_with = |name: &str, extra: &[&str], status: i32| -> Vec<String> {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counted = rounds.clone();
+        let gateway = a_gateway(r#"["tools"]"#, move |body| {
+            // The check made of the file is not a round of the script.
+            if body.contains("prompt-injection classifier") {
+                return a_reply_from(
+                    "reasons-only",
+                    r#"{"verdict": "safe", "reason": "nothing addressed to a reader"}"#,
+                );
+            }
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                0 => a_tool_call_from("reasons-only", "read_file", r#"{"path":"notes.md"}"#),
+                1 => a_tool_call_from(
+                    "reasons-only",
+                    "vet_content",
+                    r#"{"ref":"ref:1","expects":"a few words of notes"}"#,
+                ),
+                _ => a_reply_from("reasons-only", "all done"),
+            }
+        });
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("create the project");
+        std::fs::write(project.join("notes.md"), WORDS).expect("write notes");
+        let mut arguments = extra.to_vec();
+        arguments.extend(["-p", "read the notes"]);
+
+        let output = bravebot_started_in(&scratch.path, &project, AT_A_GATEWAY, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{extra:?}: {stdout}{stderr}"
+        );
+        let bodies: Vec<String> = gateway
+            .asked
+            .try_iter()
+            .filter(|body| !body.contains("prompt-injection classifier"))
+            .collect();
+        assert_eq!(bodies.len(), 3, "{extra:?}: {bodies:?}");
+        assert!(
+            !bodies[1].contains(WORDS),
+            "{extra:?}: the file reached the planner before anything vouched for it: {}",
+            bodies[1]
+        );
+        bodies
+    };
+
+    let vetted = planner_rounds_with("cli-running-vet-flag", &["--vet"], 0);
+    assert!(
+        vetted[2].contains(WORDS),
+        "a check that found nothing did not release the bytes under --vet: {}",
+        vetted[2]
+    );
+
+    let unvetted = planner_rounds_with("cli-running-vet-flag-absent", &[], 4);
+    assert!(
+        !unvetted[2].contains(WORDS),
+        "the bytes reached the planner with nobody asked and no --vet: {}",
+        unvetted[2]
+    );
+}
+
 /// CLI-25: a one-shot run is written down, and its result object names the record. A script reads
 /// the id out of one run and hands it to the next, so a run that wrote nothing, or wrote it and
 /// said nothing, leaves the script restating everything each time.
@@ -19098,6 +19384,23 @@ fn the_record_file(scratch: &Scratch, id: &str) -> PathBuf {
         .path()
 }
 
+/// Every record file under `scratch`'s home, or none where no run created the sessions directory.
+fn the_record_files(scratch: &Scratch) -> Vec<PathBuf> {
+    let records = scratch.path.join(".bravebot").join("sessions");
+    std::fs::read_dir(records)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|project| std::fs::read_dir(project.path()).into_iter().flatten())
+        .flatten()
+        .map(|file| file.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect()
+}
+
 /// The record named `id` under `scratch`'s home, as it is on disk.
 fn the_record(scratch: &Scratch, id: &str) -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(the_record_file(scratch, id)).expect("read the record"))
@@ -19312,6 +19615,71 @@ fn a_program_a_continued_task_runs_is_a_gap_on_every_point_an_undo_could_reach()
     }
 }
 
+/// CLI-25 and CLI-1: a command the session's person vouched for is not handed to a continued run,
+/// which refuses the line because nobody is there to approve it, and the record still holds the
+/// vouch afterwards for the session that is next resumed interactively.
+///
+/// The faults this rejects: handing the record's vouched commands to the continued run, which then
+/// runs `echo hello` unasked and exits 0, and writing the record back without them, which leaves the
+/// next interactive resume asking again about a command its person had vouched for. The entry is the
+/// spelling a run of `echo hello` resolves to under the PATH below, so the refusal is the withholding
+/// and not an entry that never matched.
+#[cfg(unix)]
+#[test]
+fn a_continued_run_is_not_handed_the_commands_its_record_vouched_for_and_the_record_keeps_them() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch = Scratch::new("cli-running-continued-vouched-commands")
+        .with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+
+    let id = a_writing_run(&scratch, &project, &["-p", "FIRST-QUESTION"]);
+    // The file `echo` resolves to under the PATH the continued run is given below.
+    let echo = ["/usr/bin/echo", "/bin/echo"]
+        .into_iter()
+        .find(|candidate| Path::new(candidate).exists())
+        .expect("a system echo");
+    let vouched = serde_json::json!([{"program": echo, "args": ["hello"], "directory": ""}]);
+    let mut record = the_record(&scratch, &id);
+    assert_eq!(record["programs"], serde_json::json!([]));
+    record["programs"] = vouched.clone();
+    std::fs::write(
+        the_record_file(&scratch, &id),
+        serde_json::to_vec(&record).expect("a record serialises"),
+    )
+    .expect("write the record back");
+
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        &environment,
+        &["--json", "-p", "RUN-ECHO", "--continue"],
+    );
+    let (stdout, stderr) = said(&output);
+
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    let refusals = object["refusals"].as_array().expect(&stdout);
+    assert_eq!(refusals.len(), 1, "{stdout}");
+    assert_eq!(refusals[0]["gate"], "approval", "{stdout}");
+    assert_eq!(
+        refusals[0]["reason"], "run: the line was not approved and did not run",
+        "{stdout}"
+    );
+    assert_eq!(session_of(&stdout), Some(id.clone()), "{stdout}");
+    let after = the_record(&scratch, &id);
+    assert_eq!(
+        after["turns"], 2,
+        "the continued turn was not written: {after:#?}"
+    );
+    assert_eq!(
+        after["programs"], vouched,
+        "the record lost the commands its person vouched for: {after:#?}"
+    );
+}
+
 /// CLI-25 and CLI-3: piped input stays a reference across the continuation. The planner is never
 /// handed the bytes, in the first run or the follow-up, and the follow-up is told the reference it
 /// holds no longer names anything, which is what a record written without the quarantine says.
@@ -19388,6 +19756,74 @@ fn an_incognito_run_is_not_recorded_and_cannot_be_continued() {
     assert!(
         requests(&gateway).is_empty(),
         "a follow-up with nothing to carry on was sent"
+    );
+}
+
+/// CLI-25: a run that failed writes no record and says so by a null session, and `--continue`
+/// after it carries on the last turn that completed. A run that reported the id of a record
+/// anyway, or wrote one holding the failed turn, would have the follow-up answer a conversation
+/// that holds the prompt that never got a reply.
+#[test]
+fn a_failed_run_writes_no_record_and_a_continuation_carries_on_the_last_completed_turn() {
+    let reply = answered("a reply");
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        match body.contains("FAIL-NOW") {
+            true => http(500, r#"{"error": {"message": "nothing here answers"}}"#),
+            false => reply(body),
+        }
+    });
+    let scratch =
+        Scratch::new("cli-running-failed-run-session").with_settings(&settings_for(&gateway));
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "FAIL-NOW"]);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout} {stderr}");
+    assert!(stdout.contains(r#""ok":false"#), "{stdout}");
+    assert!(stdout.contains(r#""reason":"failed""#), "{stdout}");
+    assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    assert_eq!(session_of(&stdout), None, "{stdout}");
+    assert!(
+        the_record_files(&scratch).is_empty(),
+        "a failed first run left a record"
+    );
+    let _ = requests(&gateway);
+
+    let (_, first, _) = a_recorded_run(&scratch, &["-p", "FIRST-QUESTION"]);
+    let id = session_of(&first).expect("the first run named its session");
+    let before = std::fs::read(the_record_file(&scratch, &id)).expect("read the record");
+    let _ = requests(&gateway);
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "FAIL-NOW", "--continue"]);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout} {stderr}");
+    assert!(stdout.contains(r#""ok":false"#), "{stdout}");
+    assert!(stdout.contains(r#""session":null"#), "{stdout}");
+    assert_eq!(session_of(&stdout), None, "{stdout}");
+    assert_eq!(
+        the_record_files(&scratch).len(),
+        1,
+        "a failed run wrote a record"
+    );
+    assert_eq!(
+        std::fs::read(the_record_file(&scratch, &id)).expect("read the record"),
+        before,
+        "a failed run changed the record it continued"
+    );
+    let _ = requests(&gateway);
+
+    let (output, third, stderr) = a_recorded_run(&scratch, &["-p", "THIRD-QUESTION", "--continue"]);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(session_of(&third), Some(id), "{third}");
+    let sent = requests(&gateway);
+    let sent = sent.last().expect("the third task reached the gateway");
+    assert!(
+        sent.contains("FIRST-QUESTION") && sent.contains("THIRD-QUESTION"),
+        "the continuation lost the last turn that completed: {sent}"
+    );
+    assert!(
+        !sent.contains("FAIL-NOW"),
+        "the continuation carried the turn that failed: {sent}"
     );
 }
 
@@ -19855,6 +20291,85 @@ fn a_question_carries_the_commands_since_the_last_one_on_stdin() {
     assert_eq!(given, ["echo second-command"], "{output}");
     let (_, given) = what_a_question_was_given(&output, 2);
     assert!(given.is_empty(), "a repeated question was given {given:?}");
+}
+
+/// SHELLINT-2. A line that is `@bravebot` and nothing else is a question with no words after the
+/// name, and it is not recorded, so it is not part of the next question. The regression this
+/// rejects is a hook that skips only `@bravebot` followed by a space: the bare line would be
+/// recorded after it ran and would head the lines of the next question.
+#[cfg(unix)]
+#[test]
+fn a_question_with_no_words_after_the_name_is_not_recorded() {
+    let scratch = Scratch::new("cli-running-shell-init-bare-question");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo first-command",
+            "@bravebot",
+            "echo second-command",
+            "@bravebot \"and now?\"",
+        ],
+    );
+
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p", "{output}");
+    assert!(
+        given.contains(&"echo first-command".to_string()),
+        "the line before the bare question was not given: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 1);
+    assert_eq!(arguments, "-p and now?", "{output}");
+    assert_eq!(
+        given,
+        ["echo second-command"],
+        "the bare question was recorded: {output}"
+    );
+}
+
+/// SHELLINT-2. The suite runs the bash hook in a real `bash` and does not run zsh or fish, so the
+/// text of the two other hooks is read: the function each shell calls before a command records
+/// nothing for an empty line, for `@bravebot`, and for `@bravebot` followed by a space, and it
+/// says so before it writes. The regression this rejects is a hook of either shell that drops one
+/// of the three, which would record a question as part of the next one in that shell only.
+#[test]
+fn the_zsh_and_fish_hooks_skip_a_question_line_before_they_record() {
+    let scratch = Scratch::new("cli-running-shell-init-skip-arms");
+    for (shell, header, closing, skipped, write) in [
+        (
+            "zsh",
+            "__bravebot_record() {",
+            "}",
+            "''|'@bravebot'|'@bravebot'[[:space:]]*) ;;",
+            "print -r --",
+        ),
+        (
+            "fish",
+            "function __bravebot_record --on-event fish_preexec",
+            "end",
+            "case '' '@bravebot' '@bravebot *'",
+            "printf '%s\\n'",
+        ),
+    ] {
+        let script = a_shell_init_script(&scratch.path, shell);
+        let mut lines = script.lines();
+        assert!(
+            lines.by_ref().any(|line| line == header),
+            "{shell} defines no `{header}`: {script}"
+        );
+        let body: Vec<&str> = lines.take_while(|line| *line != closing).collect();
+        let skip = body
+            .iter()
+            .position(|line| line.trim() == skipped)
+            .unwrap_or_else(|| panic!("{shell} does not skip `{skipped}`: {body:?}"));
+        let record = body
+            .iter()
+            .position(|line| line.contains(write))
+            .unwrap_or_else(|| panic!("{shell} never writes with `{write}`: {body:?}"));
+        assert!(
+            skip < record,
+            "{shell} writes the line before it skips a question: {body:?}"
+        );
+    }
 }
 
 /// SHELLINT-2, SHELLINT-4. The directory and the file are the person's alone however the shell's

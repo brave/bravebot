@@ -579,6 +579,7 @@ resumable in its new home at all: until it is saved there, there is nothing ther
 `verified-by: bravebot_tui::sessions::a_session_that_changes_directory_is_recorded_where_it_moved_to`
 `verified-by: bravebot_tui::sessions::a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to`
 `verified-by: bravebot_tui::sessions::a_record_written_before_the_first_turn_follows_the_session_when_it_moves`
+`verified-by: bravebot_tui::sessions::a_move_splits_the_trail_and_a_resume_shows_only_the_directory_resumed_from`
 
 <a id="SESSION-14"></a>
 ### SESSION-14: the session someone was just in can be picked up without naming it
@@ -966,6 +967,8 @@ run to arrive.
 `verified-by: bravebot_tui::state::a_resumed_session_brings_its_asides_back`
 `verified-by: bravebot_agent::turn::an_answer_over_a_trusted_exchange_may_be_written_down`
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
+`verified-by: bravebot_tui::app::a_btw_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
+`verified-by: bravebot_tui::app::a_btw_asked_beside_a_turn_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
 
 
 <a id="SESSION-21"></a>
@@ -1707,6 +1710,7 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_tui::app::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
 `verified-by: bravebot_tui::app::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
 `verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
+`verified-by: bravebot_tui::app::a_handoff_links_the_new_record_to_the_session_it_came_from_and_a_clear_does_not`
 `verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
 `verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
 `verified-by: bravebot_tui::render::sessions_screen::the_details_give_the_id_size_agent_links_and_where_it_was_handed_off_from`

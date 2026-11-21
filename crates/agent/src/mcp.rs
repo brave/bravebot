@@ -2840,6 +2840,79 @@ mod tests {
         );
     }
 
+    /// An offer of two tools, the first under a wire name `padding` characters longer than the
+    /// second tool's, so the length of its definitions changes by one character for each step.
+    fn two_tools_padded_by(padding: usize) -> Offer {
+        let first = format!("mcp__weather__get_forecast{}", "x".repeat(padding));
+        offer_for_test(&[
+            (first.as_str(), "weather", "get_forecast"),
+            ("mcp__weather__get_alerts", "weather", "get_alerts"),
+        ])
+    }
+
+    /// SERVERS-16: the weight of an offer is the length of the definitions a backend is sent for
+    /// all of its tools, at four characters a token, rounded up.
+    ///
+    /// A wrong implementation divides by three or five, rounds down, counts one tool only, or
+    /// weighs a deferred offer by the tools loaded so far, which are none, so an offer past the
+    /// size would weigh nothing once it was deferred.
+    #[test]
+    fn an_offers_weight_is_the_length_of_its_definitions_at_four_characters_a_token_rounded_up() {
+        let mut remainders = BTreeSet::new();
+        for padding in 0..4 {
+            let offer = two_tools_padded_by(padding);
+            let sent: usize = offer
+                .functions()
+                .iter()
+                .map(|tool| {
+                    serde_json::to_string(tool)
+                        .expect("a definition serialises")
+                        .len()
+                })
+                .sum();
+            remainders.insert(sent % 4);
+            assert_eq!(
+                offer.weight(),
+                sent.div_ceil(4) as u64,
+                "{sent} characters of definitions"
+            );
+
+            let deferred = offer.clone().deferring_above(0);
+            assert!(deferred.is_deferred());
+            assert_eq!(deferred.weight(), offer.weight());
+        }
+        assert_eq!(
+            remainders.len(),
+            4,
+            "the lengths tried must leave every remainder of four, or rounding up is not told from \
+             rounding down: {remainders:?}"
+        );
+    }
+
+    /// SERVERS-16: an offer is deferred where its weight is greater than the threshold, so a
+    /// threshold equal to the weight offers every tool in full.
+    ///
+    /// A wrong implementation defers at the threshold (`>=`), or defers below it.
+    #[test]
+    fn an_offer_is_deferred_only_where_its_weight_is_greater_than_the_threshold() {
+        let offer = two_tools_padded_by(0);
+        let weight = offer.weight();
+        assert!(
+            weight > 1,
+            "the fixture must weigh more than one token: {weight}"
+        );
+
+        let deferred_at = |threshold: u64| offer.clone().deferring_above(threshold).is_deferred();
+        assert!(deferred_at(0));
+        assert!(deferred_at(weight - 1));
+        assert!(
+            !deferred_at(weight),
+            "a threshold equal to the weight defers"
+        );
+        assert!(!deferred_at(weight + 1));
+        assert!(!deferred_at(u64::MAX));
+    }
+
     fn pairs(typed: &str) -> Vec<(String, String)> {
         arguments_of(typed).unwrap_or_else(|why| panic!("{typed:?} did not parse: {why:?}"))
     }

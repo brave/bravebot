@@ -114,6 +114,7 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
 `verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::the_sections_turned_off_are_read_back_next_session_and_turning_them_on_replaces_them`
+`verified-by: bravebot_tui::app::a_resumed_session_opens_the_panel_as_the_files_say_and_not_as_the_record_does`
 `verified-by: bravebot_session::store::the_sidebar_file_is_its_trimmed_nonblank_lines_and_nothing_else`
 `verified-by: bravebot_session::store::an_oversize_sidebar_file_is_no_choice_and_one_at_the_bound_is_read`
 `verified-by: bravebot_session::store::a_pipe_where_the_sidebar_file_should_be_is_no_choice_and_holds_nothing_up`
@@ -297,6 +298,7 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::select::a_link_is_copied_as_the_text_it_shows`
 `verified-by: bravebot_tui::panel::control_characters_in_the_session_section_are_drawn_as_pictures`
 `verified-by: bravebot_tui::panel::a_long_directory_and_branch_keep_their_ends`
+`verified-by: bravebot_session::sessions::the_branch_is_read_when_a_session_starts_resumes_and_moves_and_not_between`
 `verified-by: bravebot_tui::panel::the_session_id_is_drawn_whole_over_two_rows`
 `verified-by: bravebot_tui::panel::the_id_row_follows_whether_the_session_has_a_record`
 `verified-by: bravebot_tui::panel::the_id_rows_count_toward_where_the_context_section_fits`
@@ -316,6 +318,9 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
+`verified-by: bravebot_tui::app::a_new_name_reaches_an_open_panel_on_the_next_pass_with_no_key`
+`verified-by: bravebot_tui::app::the_id_on_an_open_panel_follows_a_branch_and_a_clear_on_the_next_pass`
+`verified-by: bravebot_tui::app::the_directory_on_an_open_panel_is_written_from_the_home_directory`
 `verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 `verified-by: bravebot_tui::app::tests::herdr::sending_the_first_prompt_gives_the_panel_an_id_before_the_turn_ends`
 `verified-by: bravebot_tui::panel::a_section_turned_off_is_not_drawn_and_no_other_section_goes_with_it`
@@ -447,6 +452,7 @@ own sentence, and it would be in front of the person on every frame.
 No click on the panel changes this ([MOUSE-33](mouse.md#MOUSE-33)).
 
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
+`verified-by: bravebot_tui::panel::nothing_the_session_holds_from_outside_reaches_the_panel`
 `verified-by: bravebot_tui::panel::control_characters_in_a_link_row_are_drawn_as_pictures`
 `verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
 `verified-by: bravebot_tui::panel::a_line_of_the_file_that_names_no_section_is_never_drawn`
@@ -496,6 +502,7 @@ the session met opens the address built from the item's validated parts.
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_session::sessions::setting_a_link_neither_makes_nor_gives_up_a_rewind_point`
+`verified-by: bravebot_tui::app::a_link_set_cleared_or_refused_gives_up_no_rewind_point_during_a_turn_or_at_rest`
 `verified-by: bravebot_tui::app::links_from_the_command_line_replace_what_it_names_and_leave_the_other`
 `verified-by: bravebot_tui::app::the_command_line_links_and_prompt_reach_the_session_once_its_record_is_open`
 `verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`

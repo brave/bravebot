@@ -790,6 +790,141 @@ fn an_import_outside_the_workspace_is_left_as_written() {
         preamble.text
     );
     assert!(!preamble.text.contains("OUTSIDE-MUST-NOT-LOAD"));
+    // An absolute path and one above the root name no file the project holds, so neither is
+    // reported. A refusal notice for either would tell the person about a path nobody vouched for.
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// INSTR-11: a leading slash names no file the project holds. The regression it rejects: reading
+/// `@/docs/a.md` as `docs/a.md` under the project root, which loads a file the writer did not name.
+/// The file is there, so the import has something to read, and nothing is reported.
+#[test]
+fn a_leading_slash_import_is_not_read_as_relative_to_the_project() {
+    let preamble = composed(
+        "import-leading-slash",
+        &[
+            ("AGENTS.md", "ROOT @/docs/a.md"),
+            ("docs/a.md", "ROOT-RELATIVE-MUST-NOT-LOAD"),
+        ],
+        &["."],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT @/docs/a.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("ROOT-RELATIVE-MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+}
+
+/// INSTR-11: `~/.bravebot/AGENTS.md` is not expanded. The regression it rejects: expanding the
+/// home file's `@path` against the project, which puts a project file inside the person's own
+/// instructions. The project's own import in the same run is the control: it is expanded.
+#[test]
+fn the_home_agents_file_is_not_expanded() {
+    let scratch = Scratch::new("import-home");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::fs::write(home.join("AGENTS.md"), "HOME-RULES @docs/a.md").unwrap();
+    std::fs::write(project.join("AGENTS.md"), "PROJECT-RULES @docs/b.md").unwrap();
+    std::fs::write(project.join("docs/a.md"), "A-MUST-NOT-LOAD").unwrap();
+    std::fs::write(project.join("docs/b.md"), "B-LOADS").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+
+    assert!(
+        composed.text.contains("PROJECT-RULES B-LOADS"),
+        "the project's import was not expanded: {}",
+        composed.text
+    );
+    assert!(
+        composed.text.contains("HOME-RULES @docs/a.md"),
+        "{}",
+        composed.text
+    );
+    assert!(
+        !composed.text.contains("A-MUST-NOT-LOAD"),
+        "{}",
+        composed.text
+    );
+}
+
+/// INSTR-11: one refusal is reported once however many times the file is named. The regression it
+/// rejects: a notice for each mention, so a file imported three times is reported three times.
+#[test]
+fn one_refusal_is_reported_once_however_often_the_file_is_named() {
+    let preamble = composed_after_touching(
+        "import-refusal-once",
+        &[
+            ("AGENTS.md", "ROOT @docs/a.md @docs/a.md @docs/a.md"),
+            ("docs/a.md", "A-MUST-NOT-LOAD"),
+        ],
+        &[],
+        &["docs/a.md"],
+    );
+
+    assert!(
+        preamble
+            .text
+            .contains("ROOT @docs/a.md @docs/a.md @docs/a.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("A-MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert_eq!(preamble.notices.len(), 1, "{:?}", preamble.notices);
+    assert!(
+        preamble.notices[0].message.contains("docs/a.md"),
+        "{:?}",
+        preamble.notices
+    );
+}
+
+/// INSTR-11: an import the trust map distrusts stays as written, and the person is told which file
+/// and that it was not loaded because the directory is not trusted. The regression it rejects: an
+/// import left as written with no word to the person, or one told in other words, such as those
+/// for a `deny` rule. The trusted import beside it is the control: it is still expanded.
+#[test]
+fn an_import_of_a_distrusted_file_stays_as_written_and_is_reported_by_name() {
+    let preamble = composed_after_touching(
+        "import-distrusted",
+        &[
+            ("AGENTS.md", "ROOT @docs/a.md @docs/b.md"),
+            ("docs/a.md", "A-MUST-NOT-LOAD"),
+            ("docs/b.md", "B-LOADS"),
+        ],
+        &[],
+        &["docs/a.md"],
+    );
+
+    assert!(
+        preamble.text.contains("ROOT @docs/a.md B-LOADS"),
+        "{}",
+        preamble.text
+    );
+    assert!(
+        !preamble.text.contains("A-MUST-NOT-LOAD"),
+        "{}",
+        preamble.text
+    );
+    assert_eq!(
+        preamble
+            .notices
+            .iter()
+            .map(|notice| notice.message.as_str())
+            .collect::<Vec<_>>(),
+        ["docs/a.md was not loaded: this directory is not trusted"],
+    );
 }
 
 /// A directory nobody vouched for loads no instructions, so there is nothing to parse an import

@@ -957,6 +957,7 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
 `verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
 `verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
+`verified-by: bravebot_cli::running::a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the_bytes`
 
 <a id="CLI-16"></a>
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would
@@ -1728,6 +1729,9 @@ resumed it, or a running background session ([BG-9](background-sessions.md#BG-9)
 `verified-by: bravebot_session::sessions::continuing_a_record_with_no_history_gives_it_none`
 `verified-by: bravebot_session::sessions::a_completed_turn_starts_over_when_the_conversation_got_shorter`
 `verified-by: bravebot_cli::running::a_continued_task_adds_a_rewind_point_behind_the_ones_its_record_held`
+`verified-by: bravebot_cli::running::a_continued_run_starts_from_the_trust_map_its_record_held`
+`verified-by: bravebot_cli::running::a_failed_run_writes_no_record_and_a_continuation_carries_on_the_last_completed_turn`
+`verified-by: bravebot_cli::running::a_continued_run_is_not_handed_the_commands_its_record_vouched_for_and_the_record_keeps_them`
 
 <a id="CLI-26"></a>
 ### CLI-26: `--tools` and `--no-shell` offer the planner fewer tools for one run

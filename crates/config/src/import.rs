@@ -2102,6 +2102,147 @@ mod tests {
         assert_eq!(ids(&found), ["moved-place"]);
     }
 
+    /// IMPORT-2: opencode's files are merged weakest first, so the file `OPENCODE_CONFIG` names
+    /// wins over `opencode.jsonc`, which wins over `opencode.json`. Objects merge deeply and a
+    /// scalar or a list is replaced. An implementation that merged in the reverse order, left out
+    /// the named file, replaced an object whole or joined two lists would read another endpoint,
+    /// another model, another provider list or lose a field the weaker file alone stated.
+    #[test]
+    fn opencode_files_are_merged_weakest_first_objects_deep_and_scalars_replaced() {
+        let home = Scratch::new("import-merge-home");
+        let named = Scratch::new("import-merge-named");
+        let json = home.write(
+            ".config/opencode/opencode.json",
+            r#"{
+                "model": "a/one-model",
+                "disabled_providers": ["b"],
+                "provider": {
+                    "a": {"name": "Alpha", "options": {"baseURL": "https://one.invalid/v1"}},
+                    "b": {"options": {"baseURL": "https://b.invalid/v1"}}
+                }
+            }"#,
+        );
+        let jsonc = home.write(
+            ".config/opencode/opencode.jsonc",
+            r#"{
+                // the stronger of the two files in the directory
+                "model": "b/two-model",
+                "disabled_providers": ["c"],
+                "provider": {
+                    "a": {"options": {"baseURL": "https://two.invalid/v1"}},
+                    "c": {"options": {"baseURL": "https://c.invalid/v1"}}
+                }
+            }"#,
+        );
+        let strongest = named.write(
+            "elsewhere.json",
+            r#"{
+                "model": "a/three-model",
+                "provider": {"a": {"options": {"baseURL": "https://three.invalid/v1"}}}
+            }"#,
+        );
+        let set = [("OPENCODE_CONFIG", strongest.to_str().expect("utf-8"))];
+
+        let found = one(&home.path, &set, Source::Opencode);
+
+        assert_eq!(found.read, [json, jsonc, strongest]);
+        let alpha = gateway(&found, "a");
+        assert_eq!(
+            alpha.endpoint, "https://three.invalid/v1",
+            "the file OPENCODE_CONFIG names did not win"
+        );
+        assert_eq!(
+            alpha.entry.get("name").and_then(Value::as_str),
+            Some("Alpha"),
+            "an object in a stronger file replaced the weaker one whole"
+        );
+        assert_eq!(
+            found.model.as_deref(),
+            Some("a/three-model"),
+            "a scalar in a stronger file did not replace the weaker one"
+        );
+        // The list of the stronger file replaces the weaker one: `b` is offered, `c` is not. Two
+        // lists joined would disable both.
+        assert_eq!(ids(&found), ["a", "b"]);
+    }
+
+    /// IMPORT-2: an absolute `XDG_DATA_HOME` is where opencode keeps `auth.json`, and a relative
+    /// one is invalid by the XDG rule, so the default is read.
+    #[test]
+    fn xdg_data_home_moves_where_opencode_auth_is_read() {
+        fn held(found: &Found) -> String {
+            match &gateway(found, "openrouter").key {
+                Key::Held(key) => key.expose().to_string(),
+                other => panic!("the key was not held: {other:?}"),
+            }
+        }
+        let home = Scratch::new("import-xdg-data-home");
+        let data = Scratch::new("import-xdg-data-moved");
+        let default = home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"openrouter": {"type": "api", "key": "default-key"}}"#,
+        );
+        let moved = data.write(
+            "opencode/auth.json",
+            r#"{"openrouter": {"type": "api", "key": "moved-key"}}"#,
+        );
+
+        let set = [("XDG_DATA_HOME", data.path.to_str().expect("utf-8"))];
+        let found = one(&home.path, &set, Source::Opencode);
+        assert_eq!(found.read, [moved]);
+        assert_eq!(held(&found), "moved-key");
+
+        let set = [("XDG_DATA_HOME", "relative/share")];
+        let found = one(&home.path, &set, Source::Opencode);
+        assert_eq!(found.read, [default]);
+        assert_eq!(held(&found), "default-key");
+    }
+
+    /// IMPORT-2: of Claude Code's directory only `settings.json` is opened. A credentials file
+    /// there holds a sign-in, and an implementation that read it as well would take a Bedrock
+    /// setup from a file nobody approved reading.
+    #[test]
+    fn nothing_else_in_claude_codes_directory_is_opened() {
+        let home = Scratch::new("import-claude-only-settings");
+        let moved = Scratch::new("import-claude-only-settings-moved");
+        let credentials = r#"{"env": {"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-west-2"}}"#;
+
+        let places = Places::from_lookup(environment(&home.path, &[]));
+        let expected = [
+            home.path.join(".claude/settings.json"),
+            home.path.join(".config/opencode/opencode.json"),
+            home.path.join(".config/opencode/opencode.jsonc"),
+            home.path.join(".local/share/opencode/auth.json"),
+        ];
+        assert_eq!(
+            places.files().map(Path::to_path_buf).collect::<Vec<_>>(),
+            expected,
+            "a file other than the four the clause names would be opened"
+        );
+
+        home.write(".claude/.credentials.json", credentials);
+        let sources: Vec<&str> = found_in(&home.path, &[])
+            .iter()
+            .map(|found| found.source.name())
+            .collect();
+        assert!(
+            !sources.contains(&Source::ClaudeCode.name()),
+            "Claude Code's credentials file was read: {sources:?}"
+        );
+
+        // The same where the directory is moved, with a settings file beside the credentials.
+        let settings = moved.write("settings.json", BEDROCK);
+        moved.write(
+            ".credentials.json",
+            r#"{"env": {"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1"}}"#,
+        );
+        let set = [("CLAUDE_CONFIG_DIR", moved.path.to_str().expect("utf-8"))];
+        let found = one(&home.path, &set, Source::ClaudeCode);
+        assert_eq!(found.read, [settings]);
+        assert!(env_of(&found).contains(&("AWS_REGION", "us-west-2")));
+        assert!(!env_of(&found).contains(&("AWS_REGION", "eu-west-1")));
+    }
+
     /// IMPORT-3: Claude Code's Bedrock names are bravebot's own apart from the switch, and a tier
     /// word is copied where the tier it names was.
     #[test]

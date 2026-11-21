@@ -59,6 +59,8 @@ files on the clipboard reaches by the same route ([PASTE-12](pasting.md#PASTE-12
 `verified-by: bravebot_tui::app::tests::pasting::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_read_as_a_drop`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_attached_as_a_drop`
+`verified-by: bravebot_cli::layering::a_dropped_file_reaches_a_turn_from_the_terminal_and_the_bridge_and_nothing_else`
+`verified-by: bravebot_cli::layering::the_scan_for_the_drop_grant_finds_each_way_to_name_it_and_not_a_comment_or_a_test_module`
 
 <a id="DROP-2"></a>
 ### DROP-2: a drop makes that file trusted

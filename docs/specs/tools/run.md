@@ -926,6 +926,8 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_agent::exec::the_users_own_environment_still_reaches_a_program`
 `verified-by: bravebot_agent::exec::the_plumbing_a_program_needs_is_still_inherited`
 `verified-by: bravebot_agent::exec::the_filtering_can_be_switched_off_by_its_documented_spelling_only`
+`verified-by: bravebot_agent::exec::a_line_a_person_typed_keeps_the_credentials_a_program_the_planner_chose_loses`
+`verified-by: bravebot_agent::exec::a_line_a_person_typed_keeps_a_gateways_environment_token_the_planner_loses`
 `verified-by: bravebot_config::scrub::this_agents_credentials_are_withheld_without_being_configured`
 `verified-by: bravebot_config::scrub::the_crash_report_address_is_withheld_without_being_configured`
 `verified-by: bravebot_config::scrub::nothing_of_the_users_own_is_withheld_by_guesswork`
@@ -1269,9 +1271,12 @@ the job names the driver minted.
 `verified-by: bravebot_agent::tools::jobs_that_ignore_the_request_to_end_share_one_grace_at_the_turns_end`
 `verified-by: bravebot_agent::exec::a_background_pipeline_with_missing_resolutions_does_not_start`
 `verified-by: bravebot_agent::turn::a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session`
+`verified-by: bravebot_agent::turn::a_delegate_handed_the_sessions_jobs_ends_what_it_starts_with_its_own_turn`
 `verified-by: bravebot_tui::state::a_kept_job_is_still_running_and_listed_in_the_next_turn`
 `verified-by: bravebot_tui::state::a_kept_jobs_session_lists_only_what_is_still_running_in_the_next_turn`
 `verified-by: bravebot_tui::state::clearing_the_session_empties_the_job_list_and_goes_on_keeping_jobs`
+`verified-by: bravebot_tui::kept_jobs_tests::clearing_the_session_ends_the_program_a_kept_job_was_running`
+`verified-by: bravebot_tui::app::an_incognito_session_keeps_no_jobs_between_turns`
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
@@ -2698,6 +2703,7 @@ went out of date without saying so.
 `verified-by: bravebot_config::settings::a_scrub_name_is_read_without_the_whitespace_at_its_ends`
 `verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
 `verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
+`verified-by: bravebot_cli::running::doctor_names_what_a_pattern_in_the_scrub_list_reached`
 `verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 
 <a id="RUN-29"></a>

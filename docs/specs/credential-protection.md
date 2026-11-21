@@ -503,6 +503,8 @@ what that is worth and where it stops.
 `verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
 `verified-by: bravebot_agent::turn::a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there`
 `verified-by: bravebot_agent::turn::a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it`
+`verified-by: bravebot_agent::turn::a_credential_a_line_nobody_vouched_for_left_is_not_scanned`
+`verified-by: bravebot_agent::turn::a_credential_a_vouched_line_left_at_a_destination_the_map_distrusts_is_not_scanned`
 `verified-by: bravebot_agent::workspace::a_destination_that_is_not_there_has_no_text_to_scan`
 `verified-by: bravebot_agent::workspace::a_destination_exactly_the_size_of_the_budget_is_read_in_full`
 `verified-by: bravebot_agent::workspace::a_destination_one_byte_past_the_budget_is_not_read`

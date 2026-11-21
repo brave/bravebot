@@ -4021,18 +4021,28 @@ mod tests {
     }
 
     /// The documented asymmetry, and the reason for it: a rule that restricts should cover the
-    /// nested copy of what it named, and a rule that grants should cover what it named.
+    /// nested copy of what it named, in `deny` and in `ask`, and a rule that grants should cover
+    /// what it named. An implementation that floats only the `deny` list leaves the nested copy
+    /// unasked about.
     #[test]
     fn a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants() {
-        let denying = rules(&["Edit(src/**)"], &[], &[]);
-        assert_eq!(
-            denying.for_path(Subject::Edit, "src/app.ts"),
-            Decision::Ruled(Ruling::Deny)
-        );
-        assert_eq!(
-            denying.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
-            Decision::Ruled(Ruling::Deny)
-        );
+        for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+            let rule = "Edit(src/**)";
+            let restricting = match ruling {
+                Ruling::Deny => rules(&[rule], &[], &[]),
+                _ => rules(&[], &[rule], &[]),
+            };
+            assert_eq!(
+                restricting.for_path(Subject::Edit, "src/app.ts"),
+                Decision::Ruled(ruling),
+                "list {list}: src/** missed the workspace's own src"
+            );
+            assert_eq!(
+                restricting.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
+                Decision::Ruled(ruling),
+                "list {list}: src/** did not float to the nested copy"
+            );
+        }
 
         let allowing = rules(&[], &[], &["Edit(src/**)"]);
         assert_eq!(

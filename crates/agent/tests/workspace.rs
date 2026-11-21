@@ -10550,6 +10550,33 @@ fn the_sessions_own_directory_cannot_be_added_by_name() {
     assert!(workspace.added_directories().is_empty());
 }
 
+/// A directory inside it is refused as it is. An implementation that compared the name with the
+/// session's directory for equality refuses that one and opens `deeper`, which writes a rule over
+/// a directory that is reachable already and that carries none.
+#[test]
+fn a_directory_inside_the_sessions_own_directory_cannot_be_added_by_name() {
+    let project = Scratch::new("scratch-inside-not-addable");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let inside = given.path().join("deeper").join("deeper still");
+    std::fs::create_dir_all(&inside).expect("directories inside it");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    for refused in [given.path().join("deeper"), inside] {
+        let error = workspace
+            .add_directory(refused.to_str().expect("utf-8 path"))
+            .expect_err("a directory inside the session's own directory is not one to add");
+        assert!(
+            matches!(error, WorkspaceError::Invalid { .. }),
+            "{}: {error:?}",
+            refused.display()
+        );
+    }
+
+    assert!(workspace.added_directories().is_empty());
+}
+
 /// And it is not a working directory. The session removes it when it ends, so a root inside it is a
 /// root that goes while the session is still using it.
 #[test]
@@ -10686,6 +10713,113 @@ fn the_temporary_directory_around_it_stays_unreachable() {
             "{}: {error:?}",
             directory.display()
         );
+    }
+}
+
+/// Listing is a reach of its own, not a side effect of reading. A resolver that admitted the
+/// session's directory for a read and a write and listed an absolute directory against the project
+/// alone refuses the directory the session was given, and a turn cannot see the files it wrote
+/// there. The project holds a file of its own so a listing that fell back to the project for an
+/// absolute name is told apart from one that listed the directory named.
+#[test]
+fn a_file_in_the_sessions_own_directory_is_listed_by_its_absolute_path() {
+    let project = Scratch::new("scratch-list");
+    std::fs::write(project.path.join("project-only.txt"), "in the project").unwrap();
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(given.path().join("workings.txt"), "intermediate").unwrap();
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let listing = listing_under_a_directory_rule(&workspace, &given.path().display().to_string());
+
+    assert!(
+        listing
+            .files
+            .iter()
+            .any(|file| file.ends_with("workings.txt")),
+        "the file in the session's own directory was not listed: {:?}",
+        listing.files
+    );
+    assert!(
+        !listing
+            .files
+            .iter()
+            .any(|file| file.ends_with("project-only.txt")),
+        "the project was listed in place of the directory named: {:?}",
+        listing.files
+    );
+}
+
+/// A search is a reach of its own as a listing is. The project holds a file with the same word, so
+/// a search that ignored the absolute directory and walked the project is told apart from one that
+/// searched the session's own directory.
+#[test]
+fn a_file_in_the_sessions_own_directory_is_searched_by_its_absolute_path() {
+    let project = Scratch::new("scratch-search");
+    std::fs::write(
+        project.path.join("project-only.txt"),
+        "needle in the project",
+    )
+    .unwrap();
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(
+        given.path().join("workings.txt"),
+        "first pass\nneedle in the workings\n",
+    )
+    .unwrap();
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let found = search_at(
+        &workspace,
+        denying(&[]),
+        &given.path().display().to_string(),
+        None,
+    )
+    .expect("the session's own directory is searched by its absolute path");
+
+    let hits: Vec<(&str, usize, &str)> = found
+        .matches
+        .iter()
+        .map(|hit| (hit.path.as_str(), hit.line, hit.text.as_str()))
+        .collect();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].0.ends_with("workings.txt"), "{hits:?}");
+    assert_eq!(hits[0].1, 2, "{hits:?}");
+    assert!(hits[0].2.contains("needle in the workings"), "{hits:?}");
+}
+
+/// The directories around the session's own are not refused by `/add-dir`: the temporary directory
+/// and the directory the session's sits in are ones a person may open, and their answer about them
+/// is theirs to give. A refusal built as "the name and the session's directory overlap in either
+/// direction" turns away the directories that hold it as well as the ones inside it. A fresh
+/// workspace for each, because opening the outer one covers the inner.
+#[test]
+fn the_directories_around_the_sessions_own_can_be_added_by_name() {
+    let given = SessionScratch::create().expect("a directory of its own");
+    let holder = given
+        .path()
+        .parent()
+        .expect("the directory it sits in")
+        .to_path_buf();
+    let temporary = std::env::temp_dir().canonicalize().expect("temporary");
+
+    for around in [holder, temporary] {
+        let project = Scratch::new("scratch-around-addable");
+        let mut workspace = Workspace::new(&project.path).expect("workspace");
+        workspace.open_scratch(given.directory());
+
+        let added = workspace
+            .add_directory(around.to_str().expect("utf-8 path"))
+            .unwrap_or_else(|error| {
+                panic!("{} was refused: {error:?}", around.display());
+            });
+
+        assert_eq!(added, around);
+        assert_eq!(workspace.added_directories(), vec![around.clone()]);
+        assert_eq!(workspace.scratch(), Some(given.path()));
     }
 }
 

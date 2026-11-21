@@ -669,6 +669,7 @@ The parent is told beside each report how many commands the delegate ran and wri
 
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_delegates_rounds_time_and_cause_in_the_trail_never_reach_the_planner`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -688,6 +689,9 @@ Delegation saves context. It never saves an approval.
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
+`verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`
+`verified-by: bravebot_agent::mcp::a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked`
+`verified-by: bravebot_agent::mcp::an_approval_given_to_a_turn_or_a_worker_decides_no_other_call`
 
 <a id="DELEGATE-11"></a>
 ### DELEGATE-11: what a person vouched for outlives the delegate
@@ -870,6 +874,8 @@ something unrelated to it.
 `verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
 `verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
 `verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
+`verified-by: bravebot_agent::shared::two_delegates_reporting_at_once_are_taken_one_call_at_a_time`
+`verified-by: bravebot_agent::shared::two_delegates_recording_at_once_are_taken_one_call_at_a_time`
 
 <a id="DELEGATE-17"></a>
 ### DELEGATE-17: a delegate does not outlive the turn that spawned it

@@ -581,10 +581,7 @@ pub(super) fn run_turn_animated(
     // And what the session is working towards, where a person set a condition. Every turn under a
     // goal carries it, the first one included: the round that sets the direction is the one that
     // most needs to know what it is aiming at.
-    // A goal the person has held still is not aimed at: the turn is told nothing about it.
-    let working_towards = session
-        .goal_in_force()
-        .map(|goal| goal.condition().to_string());
+    let working_towards = goal_to_work_towards(session);
     // And whether this turn may arm a standing watch. Read here for the reason the mode is read
     // here: only the session can count what is live, and a tool answering out of a stale count
     // would tell the planner about a watch the session then refused.
@@ -1388,6 +1385,36 @@ pub(super) enum Wrote {
     ThePerson,
     /// This program, carrying the work on towards a condition the person set.
     TheDriver,
+}
+
+/// Whose line the prompt `App::submit` was handed is, which decides whether a `@path` in it
+/// vouches for a file.
+///
+/// Everything the person typed or queued is theirs. The sentence a goal carries the work on with
+/// is this program's, and so is the one a watch fires with (FSWATCH-4), so a session whose watch
+/// is firing answers [`Wrote::TheDriver`]. A fire must also not leave a loop behind repeating
+/// itself, which is the other thing this answers.
+///
+/// Split out from `App::submit` so it can be tested: that function needs a terminal.
+pub(super) fn whose_line(session: &Session) -> Wrote {
+    if session.watch_is_firing() {
+        Wrote::TheDriver
+    } else {
+        Wrote::ThePerson
+    }
+}
+
+/// The condition a turn starting now is told it is working towards, where there is one.
+///
+/// A goal the person has held still is not aimed at (GOAL-14, GOAL-18): the turn is told nothing
+/// about it, so this reads the goal in force and not the goal that is set.
+///
+/// Split out from the turn's start so it can be tested: the function that builds the turn's task
+/// needs a terminal and a backend.
+pub(super) fn goal_to_work_towards(session: &Session) -> Option<String> {
+    session
+        .goal_in_force()
+        .map(|goal| goal.condition().to_string())
 }
 
 /// The wait that starts a loop nobody typed `/loop` for, where there is one.
