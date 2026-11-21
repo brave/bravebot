@@ -30792,6 +30792,7 @@ mod tests {
             ("/plugin list", "list"),
             ("/plugin add ./demo", "add ./demo"),
             ("/plugin remove demo", "remove demo"),
+            ("/plugin update demo", "update demo"),
         ] {
             type_line(&mut session, line);
             assert_eq!(
@@ -30815,13 +30816,17 @@ mod tests {
     /// PLUGIN-1: a line that arrives by paste is text in the box, not the typed command, even where
     /// it reads as one and ends in a newline. Only the person's own Enter sends a line.
     ///
-    /// Rejects: a paste that carries `/plugin add` out, in one line or in a block that is folded.
+    /// Rejects: a paste that carries `/plugin add` or `/plugin update` out, in one line or in a
+    /// block that is folded.
     #[test]
     fn a_pasted_plugin_line_is_text_in_the_box_and_not_the_command() {
         for pasted in [
             "/plugin add /tmp/evil\n".to_string(),
             "/plugin add /tmp/evil".to_string(),
             format!("{}/plugin add /tmp/evil\n", "a line\n".repeat(40)),
+            "/plugin update demo\n".to_string(),
+            "/plugin update demo".to_string(),
+            format!("{}/plugin update demo\n", "a line\n".repeat(40)),
         ] {
             let mut session = Session::new("none");
             assert!(
@@ -30832,8 +30837,9 @@ mod tests {
                 session
                     .transcript
                     .iter()
-                    .all(|entry| !entry.text.contains("Installed")),
-                "a paste installed something"
+                    .all(|entry| !entry.text.contains("Installed")
+                        && !entry.text.contains("Updated")),
+                "a paste installed or updated something"
             );
         }
     }

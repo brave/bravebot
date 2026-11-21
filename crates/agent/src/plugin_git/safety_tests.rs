@@ -105,6 +105,15 @@ impl Asker for Yes {
         self.installs += 1;
         true
     }
+
+    fn confirm_update(
+        &mut self,
+        _staged: &crate::plugins::Staged,
+        _installed: &crate::plugins::Installed,
+        _before: &crate::plugins::Before,
+    ) -> bool {
+        false
+    }
 }
 
 fn source_at(url: &str, requested: Option<&str>) -> GitSource {
@@ -134,6 +143,15 @@ impl Asker for Tally {
     fn confirm_install(&mut self, _staged: &crate::plugins::Staged) -> bool {
         self.installs += 1;
         true
+    }
+
+    fn confirm_update(
+        &mut self,
+        _staged: &crate::plugins::Staged,
+        _installed: &crate::plugins::Installed,
+        _before: &crate::plugins::Before,
+    ) -> bool {
+        false
     }
 }
 

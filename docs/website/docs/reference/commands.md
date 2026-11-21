@@ -70,7 +70,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias> \| remove <alias>]` | List the MCP servers, start one that is not running, turn one off for the session, or remove one for good |
-| `/plugin` | `[add <path or git url[#ref]> \| list \| remove <name> \| enable <name> \| disable <name>]` | Install a plugin from a folder on this machine or from a git URL after you confirm it, list the installed ones, or remove, enable or disable one |
+| `/plugin` | `[add <path or git url[#ref]> \| list \| update <name> \| remove <name> \| enable <name> \| disable <name>]` | Install a plugin from a folder on this machine or from a git URL after you confirm it, list the installed ones, fetch an installed one's source again and update it after you confirm what changed, or remove, enable or disable one |
 | `/lsp` | | Say which language servers this session has started |
 | `/open` | `[edit] [n \| address \| path]` | List the links in the latest reply, and open one by its number, or open an address or a file you type |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
@@ -980,8 +980,11 @@ installed plugin's name, version, source, resolved commit, digest and whether it
 plugin's folder and its record, `disable` keeps it installed and offers nothing from it, and
 `enable` turns it back on without asking again for a folder that has not changed. All three take the
 plugin's name, and `remove` also withdraws the plugin's hook and server answers. A plugin's hooks and
-servers each ask their own question before they first run or start. `update` is not
-built. Every form waits for a running turn to end. See [Plugins](../customize/plugins.md).
+servers each ask their own question before they first run or start. `update <name>` fetches the
+plugin's recorded source again, and where the files differ shows what was added, removed or changed and
+replaces the plugin only after you answer `y`. It asks about the host first for a git source, asks
+nothing when the files are the same, and withdraws the answers for the plugin's hooks and servers so
+each asks again. Every form waits for a running turn to end. See [Plugins](../customize/plugins.md).
 
 ## `/caffeinate`
 

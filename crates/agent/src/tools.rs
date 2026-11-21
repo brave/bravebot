@@ -18424,10 +18424,12 @@ mod tests {
         }
     }
 
-    /// PLUGIN-1: no tool the planner or a delegate is offered installs, removes, enables, disables
-    /// or lists a plugin. The only way is the typed `/plugin` command.
+    /// PLUGIN-1: no tool the planner or a delegate is offered installs, updates, removes, enables,
+    /// disables or lists a plugin. The only way is the typed `/plugin` command. A tool that updates
+    /// a plugin is about plugins, so the same check refuses it as the one for an install does.
     ///
-    /// Rejects: a tool added to any offered list whose name or description is about plugins.
+    /// Rejects: a tool added to any offered list whose name or description is about plugins,
+    /// including one named for updating them.
     #[test]
     fn no_tool_offered_installs_or_changes_a_plugin() {
         use bravebot_core::delegate::{Definitions, Kind};

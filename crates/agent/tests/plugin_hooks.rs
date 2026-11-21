@@ -676,3 +676,118 @@ fn a_plugin_entry_naming_a_file_outside_the_directory_is_not_watched() {
         "relative\n"
     );
 }
+
+/// An asker for `/plugin update` that says yes to the update and has no host to ask about.
+struct UpdateYes;
+
+impl bravebot_agent::plugins::Asker for UpdateYes {
+    fn anybody_there(&self) -> bool {
+        true
+    }
+
+    fn confirm_fetch_host(&mut self, _request: &bravebot_agent::confirm::FetchRequest) -> bool {
+        false
+    }
+
+    fn confirm_install(&mut self, _staged: &bravebot_agent::plugins::Staged) -> bool {
+        false
+    }
+
+    fn confirm_update(
+        &mut self,
+        _staged: &bravebot_agent::plugins::Staged,
+        _installed: &bravebot_agent::plugins::Installed,
+        _before: &bravebot_agent::plugins::Before,
+    ) -> bool {
+        true
+    }
+}
+
+/// PLUGIN-7, PLUGIN-9: after an accepted update every hook of the plugin is asked about
+/// again, the one whose argv changed and the one whose hook entry did not change, because the
+/// approval is a digest that includes the plugin's tree. Before the update the same turn asks
+/// nothing, since both hooks have a recorded yes (the control).
+///
+/// Rejects: an approval digest that leaves the tree out, so the unchanged hook keeps running on
+/// a yes given for other files, and an update that leaves the old yes for the changed hook.
+#[test]
+fn after_an_update_every_hook_of_the_plugin_is_asked_about_again() {
+    let scratch = Scratch::new("plugin-hook-update-asks-again");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .expect("manifest");
+    let write_hooks = |first_argument: &str| {
+        std::fs::write(
+            source.join("hooks.json"),
+            format!(
+                r#"{{"hooks":[
+                    {{"on":"turn-started","run":["${{PLUGIN_ROOT}}/hook.sh","{first_argument}"]}},
+                    {{"on":"turn-finished","run":["${{PLUGIN_ROOT}}/hook.sh","unchanged"]}}
+                ]}}"#
+            ),
+        )
+        .expect("hooks");
+    };
+    write_hooks("before");
+    let marker = scratch.path.join("marker");
+    let script = source.join("hook.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    )
+    .expect("script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let home = scratch.path.join("state");
+    bravebot_agent::plugins::install(&source, &home).expect("install");
+    for moment in ["turn-started", "turn-finished"] {
+        a_recorded_yes(&home, moment);
+    }
+
+    let mut control = AnswersHooks::new(Decision::Approve);
+    a_turn(&workspace, &home, &AccountSession::begin(), &mut control);
+    assert!(
+        control.asked.is_empty(),
+        "control: a recorded yes asks nothing: {:?}",
+        control.asked
+    );
+    assert_eq!(ran(&marker), 2, "control: both recorded hooks fire");
+
+    write_hooks("after");
+    // Every line the person's yes left, kept so it can be put back after the update withdraws them.
+    let old_answers = std::fs::read_to_string(home.join("hooks-approved")).expect("answers");
+    assert_eq!(
+        bravebot_agent::plugins::update_typed("demo", &home, &mut UpdateYes),
+        Ok(bravebot_agent::plugins::Updated::Replaced)
+    );
+    assert!(
+        !home.join("hooks-approved").exists()
+            || std::fs::read_to_string(home.join("hooks-approved"))
+                .expect("answers")
+                .is_empty(),
+        "the update left an answer for the plugin"
+    );
+    // Put the old lines back as if the withdrawal had not happened: they are digests of the old
+    // tree, so a digest that includes the tree does not match them for any hook of the new tree.
+    std::fs::write(home.join("hooks-approved"), &old_answers).expect("put back");
+    let mut person = AnswersHooks::new(Decision::Approve);
+    a_turn(&workspace, &home, &AccountSession::begin(), &mut person);
+    let mut moments: Vec<&str> = person.asked.iter().map(|request| request.moment).collect();
+    moments.sort_unstable();
+    assert_eq!(
+        moments,
+        ["turn-finished", "turn-started"],
+        "the changed hook and the unchanged one are both asked about"
+    );
+    assert!(
+        std::fs::read_to_string(home.join("hooks-approved"))
+            .expect("recorded")
+            .lines()
+            .all(|line| line.ends_with(" demo")),
+        "only this plugin's lines"
+    );
+}

@@ -18555,6 +18555,172 @@ fn a_one_shot_task_opening_with_slash_plugin_add_installs_nothing() {
     );
 }
 
+/// A listener that counts the connections made to it. A git-source plugin is recorded with its
+/// address, so a request to the recorded source shows up here.
+struct ConnectionCounter {
+    port: u16,
+    count: Arc<AtomicUsize>,
+}
+
+impl ConnectionCounter {
+    fn start() -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let count = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&count);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if stream.is_ok() {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        Self { port, count }
+    }
+
+    fn connections(&self) -> usize {
+        self.count.load(Ordering::SeqCst)
+    }
+}
+
+/// PLUGIN-9: starting a session makes no network request for an installed plugin.
+/// The plugin is enabled, carries a hook, and is recorded as a git source at a listener this test
+/// owns, with a ref that is a branch name, so an update check at start would fetch it. The run
+/// reads the plugin's hooks and is given a prompt. The listener has taken no connection afterwards.
+/// The control is a connection the test makes itself, which the listener counts, so a counter that
+/// never counts cannot pass.
+///
+/// Rejects: a session start that fetches, resolves or otherwise contacts the recorded source of
+/// an installed plugin to look for an update.
+#[cfg(unix)]
+#[test]
+fn starting_a_session_makes_no_request_for_an_installed_git_source_plugin() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let scratch =
+        Scratch::new("cli-running-plugin-no-fetch-at-start").with_settings(&settings_for(&gateway));
+    let state = scratch.path.join(".bravebot");
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("hooks.json"),
+        r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+    )
+    .unwrap();
+    std::fs::write(source.join("hook.sh"), "#!/bin/sh\n").unwrap();
+    bravebot_agent::plugins::install(&source, &state).expect("install the plugin");
+    let digest = bravebot_agent::plugins::read_record(&state, "demo")
+        .expect("a record")
+        .digest;
+    let remote = ConnectionCounter::start();
+    std::fs::write(
+        state.join("plugins").join("demo.record"),
+        format!(
+            "source = https://127.0.0.1:{}/demo.git\nrequested-ref = main\ncommit = {}\n\
+             version = 1.0.0\nenabled = true\ndigest = {digest}\n",
+            remote.port,
+            "a".repeat(40)
+        ),
+    )
+    .unwrap();
+    let recorded = bravebot_agent::plugins::read_record(&state, "demo").expect("a git record");
+    assert!(
+        matches!(
+            recorded.source,
+            bravebot_agent::plugin_source::Source::Git { .. }
+        ),
+        "the record is a git source"
+    );
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("all done"), "{stdout}{stderr}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        remote.connections(),
+        0,
+        "a session start made a request to the recorded source"
+    );
+    let record_after = std::fs::read_to_string(state.join("plugins").join("demo.record")).unwrap();
+    assert!(record_after.contains("commit = aaaa"), "{record_after}");
+
+    std::net::TcpStream::connect(("127.0.0.1", remote.port)).expect("the control connects");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while remote.connections() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(remote.connections(), 1, "control: the counter counts");
+}
+
+/// PLUGIN-1, PLUGIN-9, CLI-31: a one-shot task opening with `/plugin update` changes nothing. A plugin
+/// is installed from a source that has since changed, so an update that ran would replace it, and
+/// the run is told `/plugin update demo` as its task. The plugin's record, its directory and the
+/// approval files are as they were, and the planner's request carries the line as the person's
+/// words. Rejects a one-shot path that dispatches the line to the plugin updater.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_task_opening_with_slash_plugin_update_changes_nothing() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+    let scratch =
+        Scratch::new("cli-running-one-shot-plugin-update").with_settings(&settings_for(&gateway));
+    let state = scratch.path.join(".bravebot");
+    let source = scratch.path.join("a-plugin-source");
+    std::fs::create_dir_all(source.join("skills").join("hello")).expect("a plugin directory");
+    let manifest = |version: &str| {
+        std::fs::write(
+            source.join("plugin.toml"),
+            format!(
+                "name = \"demo\"\nversion = \"{version}\"\ndescription = \"A demo\"\nskills = \"skills\"\n"
+            ),
+        )
+        .expect("a manifest");
+    };
+    manifest("1.0.0");
+    std::fs::write(
+        source.join("skills").join("hello").join("SKILL.md"),
+        "---\nname: hello\ndescription: Says hello.\n---\n\nBody.\n",
+    )
+    .expect("a skill");
+    bravebot_agent::plugins::install(&source, &state).expect("install the plugin");
+    manifest("2.0.0");
+    std::fs::write(
+        source.join("skills").join("hello").join("SKILL.md"),
+        "---\nname: hello\ndescription: Says more.\n---\n\nBody.\n",
+    )
+    .expect("an edited skill");
+    let record = state.join("plugins").join("demo.record");
+    let skill = state
+        .join("plugins")
+        .join("demo")
+        .join("skills")
+        .join("hello")
+        .join("SKILL.md");
+    let (record_before, skill_before) = (
+        std::fs::read(&record).expect("a record"),
+        std::fs::read(&skill).expect("a skill"),
+    );
+
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "/plugin update demo"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(std::fs::read(&record).expect("a record"), record_before);
+    assert_eq!(std::fs::read(&skill).expect("a skill"), skill_before);
+    assert!(!state.join("hooks-approved").exists());
+    assert!(!state.join("mcp-approved").exists());
+    let asked = requests(&gateway);
+    assert!(
+        asked.iter().any(|body| body.contains("/plugin update")),
+        "the line was not sent as words: {asked:?}"
+    );
+}
+
 /// A one-shot run answering `reply` at `gateway`, with `arguments` after the flags that ask for
 /// the result object.
 fn a_recorded_run(scratch: &Scratch, arguments: &[&str]) -> (Output, String, String) {

@@ -292,6 +292,79 @@ fn a_plugin_whose_files_changed_starts_no_server_before_or_after_its_question() 
     );
 }
 
+/// Answers the one question an update puts with a yes and no other.
+struct UpdateYes;
+
+impl crate::plugins::Asker for UpdateYes {
+    fn anybody_there(&self) -> bool {
+        true
+    }
+
+    fn confirm_fetch_host(&mut self, _: &crate::confirm::FetchRequest) -> bool {
+        false
+    }
+
+    fn confirm_install(&mut self, _: &crate::plugins::Staged) -> bool {
+        false
+    }
+
+    fn confirm_update(
+        &mut self,
+        _: &crate::plugins::Staged,
+        _: &crate::plugins::Installed,
+        _: &crate::plugins::Before,
+    ) -> bool {
+        true
+    }
+}
+
+/// PLUGIN-7, PLUGIN-9: a server of a plugin that an accepted update replaced is put to the person
+/// again, although its declaration is the same text. The approval is a digest that includes the
+/// digest of the plugin's tree, so the line a yes wrote for the old tree answers nothing about the
+/// new one. The old line is put back after the update, so what is shown is the digest alone and not
+/// the withdrawal. Before the update the same line starts the server with no question (the control).
+///
+/// Rejects: an approval digest of a plugin's server that leaves the tree out, so a server keeps
+/// running on a yes given for other files.
+#[test]
+fn a_server_of_an_updated_plugin_is_asked_about_again_though_its_declaration_is_the_same() {
+    let root = root("plugin-server-update-asks-again");
+    let home = install(&root, "home", "demo", WEATHER);
+    let mut yes = Asked::saying(Answer::Once);
+    settled(&root, &home, "demo_weather", Asking::Person, &mut yes);
+    let old_answer = recorded(&home);
+    assert!(old_answer.starts_with("plugin "), "control: {old_answer}");
+    let mut nobody = Asked::saying(Answer::No);
+    nobody.present = false;
+    let control = settled(&root, &home, "demo_weather", Asking::OneShot, &mut nobody);
+    assert_eq!(control.plans.len(), 1, "control: {:?}", control.notes);
+    assert!(
+        nobody.shown.is_empty(),
+        "control: a recorded yes asks nothing"
+    );
+
+    std::fs::write(
+        root.join("src-demo").join("server.sh"),
+        "#!/bin/sh\necho two\n",
+    )
+    .expect("edit the source");
+    assert_eq!(
+        crate::plugins::update_typed("demo", &home, &mut UpdateYes),
+        Ok(crate::plugins::Updated::Replaced)
+    );
+    assert_eq!(crate::plugins::tree_matches_record(&home, "demo"), Ok(()));
+    std::fs::write(mcp::approvals_file(&home), &old_answer).expect("put the old line back");
+
+    let mut asker = Asked::saying(Answer::No);
+    let after = settled(&root, &home, "demo_weather", Asking::Person, &mut asker);
+    assert!(after.plans.is_empty(), "{:?}", after.notes);
+    assert_eq!(
+        asker.shown.len(),
+        1,
+        "the server of an updated plugin is asked about again"
+    );
+}
+
 /// S23 and S24. A plugin that is turned off starts no server and keeps the answers recorded for
 /// it, and turning it on again asks nothing for an unchanged tree.
 ///

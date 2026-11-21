@@ -49,9 +49,11 @@ use mcp::{
 };
 pub use note::Noted;
 use pinned::{Drawn, Seen};
+pub use plugin::{
+    DefinitionRow, Delta, GitRows, InstallRequest, SkillRow, UpdateRequest, ask_install, ask_update,
+};
 #[cfg(test)]
-pub(crate) use plugin::ask_install_reading;
-pub use plugin::{DefinitionRow, GitRows, InstallRequest, SkillRow, ask_install};
+pub(crate) use plugin::{ask_install_reading, ask_update_reading};
 pub(crate) use run::scope_name;
 #[cfg(test)]
 use run::{RowsShown, RunDrawn, RunResponse, draw_run, run_answer_for};

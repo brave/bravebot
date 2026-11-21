@@ -12,8 +12,9 @@ and MCP servers under one name. `/plugin add <path>` installs one from a folder 
 the command, and you are shown every skill, definition, hook and server in the plugin before anything
 is copied.
 
-Only `/plugin update` is not built. A plugin's hooks and servers are installed with it, and each
-asks its own question before it first runs or starts.
+A plugin's hooks and servers are installed with it, and each
+asks its own question before it first runs or starts. `/plugin update <name>` fetches the source again
+and puts what changed to you, and nothing updates on its own.
 
 ## The commands
 
@@ -22,6 +23,7 @@ asks its own question before it first runs or starts.
 | `/plugin add <path>` | Reads the folder at `<path>`, shows what it holds and installs it if you say yes |
 | `/plugin add <git url>[#<ref>]` | Asks about the host, fetches the repository, shows what it holds and installs it if you say yes |
 | `/plugin list` | Prints each installed plugin's name, version, source, resolved commit, digest and whether it is enabled |
+| `/plugin update <name>` | Fetches the plugin's recorded source again, shows what was added, removed or changed, and replaces the plugin only if you say yes |
 | `/plugin remove <name>` | Withdraws the plugin's hook and server answers, then deletes the plugin's folder and its record |
 | `/plugin disable <name>` | Keeps the plugin installed and stops it offering anything: no hook fires and no server starts |
 | `/plugin enable <name>` | Turns a disabled plugin back on, and asks nothing new for a folder that has not changed |
@@ -142,7 +144,7 @@ nothing about a hook or a server: no line goes to `~/.bravebot/hooks-approved` o
 An install is refused, and nothing is copied, when:
 
 - a plugin of that name is already installed from another source, or from the same one (the same
-  URL and ref for a git source), since updating is not built
+  URL and ref for a git source). For the same source the refusal points at `/plugin update <name>`
 - the manifest has a key that names a decision: a permission rule, an allow list, a grant, a trusted
   path, a mode, a model, an endpoint or a setting. The refusal names the key, and the manifest is
   refused whole
@@ -223,15 +225,42 @@ A yes is recorded as a `plugin` line in `~/.bravebot/mcp-approved`.
 Before a hook fires or a server starts, the plugin's folder is hashed again. If it no longer matches
 the digest recorded at install, the hook or server is stopped and no question is put. A notice names
 the plugin once per session, in a plain sentence: "A hook of the plugin demo did not run: the
-plugin's files no longer match what was installed. Remove the plugin and install it again to use its
-hooks." The sentence for a server says the same of a server. To use the plugin's hooks or servers
-again, remove the plugin and install it again, since update is not built.
+plugin's files no longer match what was installed. Run /plugin update demo to use its hooks again if
+its source holds the files you want, or remove the plugin and add it again." The sentence for a
+server says the same of a server. To use the plugin's hooks or servers
+again, run `/plugin update <name>` if its source holds the files you want (see
+[Updating a plugin](#updating-a-plugin)), or remove the plugin and install it again.
 
 `/plugin disable` fires no hook and starts no server, and keeps your answers in `hooks-approved` and
 `mcp-approved`. `/plugin enable` asks nothing new for a folder that has not changed.
 `/plugin remove` withdraws the plugin's lines from `hooks-approved` and its `plugin` lines from
 `mcp-approved` before it deletes the folder and the record, so installing identical files again is
 asked about again.
+
+## Updating a plugin
+
+`/plugin update <name>` reads the plugin's record and fetches its source again: a git source at the ref
+recorded for it (the default branch where none was named), a local path from the same path. For a git
+source you are first asked about the host, as for an install, and no connection is made before you
+answer `y`. No permission mode and no allow rule answers it.
+
+- If the source holds the files that are installed, nothing is changed and nothing is asked. If the ref
+  now points at a newer commit with the same files, the notice says so and the record keeps the older
+  commit.
+- If a source was added at a full commit, there is nothing to update to, and the notice says so before
+  anything is fetched.
+- If the files differ, a box shows the plugin's name, its old and new version, its source and the old
+  and new commit, then each skill, definition, hook and server that was added, removed or changed, and
+  the files that differ. It is drawn behind the same margin as the install box, and `y` updates. `n`,
+  `Esc` and any other key leave the plugin as it was.
+- If the update would offer a skill or definition name that another installed plugin offers, it is
+  refused, naming both plugins, and nothing is asked.
+- Where nobody can be asked, such as a one-shot run, nothing is fetched and nothing is updated.
+
+A yes replaces the plugin's folder and its record. The plugin stays enabled or disabled as it was. The
+answers recorded for all of its hooks and servers are withdrawn, so each hook and each server asks
+its question again the next time it is used, whether or not its own entry changed. Nothing updates a
+plugin on its own, and starting a session makes no request for one.
 
 ## `${PLUGIN_ROOT}`
 
@@ -266,5 +295,7 @@ the script they name, before you answer its question.
 - **The desktop app and ACP cannot approve a plugin hook.** No plugin hook runs there.
 - **A notice is a plain sentence.** It names the plugin and is not drawn behind the untrusted
   content margin.
-- **A changed plugin folder stops its hooks and servers for good.** Remove the plugin and install
-  it again, since `/plugin update` is not built.
+- **A changed plugin folder stops its hooks and servers until it is updated.** Run
+  `/plugin update <name>`, or remove the plugin and install it again.
+- **Nothing looks for a newer version.** A plugin stays as installed until you type
+  `/plugin update <name>`.
