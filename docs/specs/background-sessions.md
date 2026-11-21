@@ -112,9 +112,12 @@ settings choose, with nothing said.
 
 The desktop window's Chat › Continue in Background… ([CMD-34](commands.md#CMD-34)) hands an open chat
 with no turn running to a background session as `/bg` does, through the bridge's
-`session.background`. The bridge starts the process with the `bravebot` program installed beside it,
-in the chat's project and permission mode, waits for the session to be listed as `/bg` does, and then
-closes the chat. It is refused, and the chat stays open, in bypass or auto, for an incognito chat or
+`session.background`. The bridge closes the chat first, because it holds the record's lock until the
+chat's work has ended ([SESSION-38](sessions.md#SESSION-38)), then starts the process with the
+`bravebot` program installed beside it, in the chat's project and permission mode, and waits for the
+session to be listed as `/bg` does. A start that fails or does not come up in time is said in a
+sentence, the chat stays closed, and its record is left to be opened again from the list. It is
+refused, and the chat stays open, in bypass or auto, for an incognito chat or
 one with no record yet, after Sandbox moved the chat to a mode other than the one its settings
 choose, while a turn, a compaction or a question beside the work runs, while a goal or a watch is
 set, on a system where background sessions do not run, and where the `bravebot` program is not
@@ -144,6 +147,8 @@ the whole of what they asked for.
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_in_bypass_or_auto_is_not_handed_to_the_background`
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_a_turn_running_is_not_handed_to_the_background`
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_whose_background_session_does_not_start_is_left_to_be_opened_again`
+`verified-by: bravebot_session::jobs::each_refusal_of_a_hand_over_is_its_own_and_comes_in_one_order`
 
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
