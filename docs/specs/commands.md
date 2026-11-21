@@ -812,6 +812,7 @@ carried out or queued as above.
 `verified-by: bravebot_ui_bridge::asking_aside::a_btw_still_out_when_the_turn_ends_is_answered_and_recorded`
 `verified-by: bravebot_ui_bridge::aside::an_empty_question_is_refused`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that only /btw and /btw <question> are the command, that the composer asks it from the typed line in submit, the queue key and the interject key before anything is sent or queued, that it goes to session.btw while a turn runs without reading the queue, and that its aside.done answer becomes a narration row and never a prompt; make check-ui runs it)`
+`verified-by: by-construction (ui/scripts/aside-command.test.mjs asserts that an answered aside.done is added to the window's asides, that a session opened or resumed seeds them from the asides the bridge returns, and that the Asides panel draws each question and answer as plain text; make check-ui runs it)`
 
 ## What a slash word is offered
 

@@ -2,7 +2,8 @@
 //
 // The real app and the real bridge, against a model service this script serves itself. A recap at
 // rest and a /btw asked while a turn is held are each answered as a row of the transcript, and the
-// next turn's request carries neither the question nor the answer.
+// next turn's request carries neither the question nor the answer. Both are listed in the Asides
+// panel, and are still listed there after the app is started again and the session reopened.
 //
 // Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`).
 // Pass `--theme dark` or `--theme light` to take the screenshots in that theme.
@@ -10,7 +11,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, SHOTS_DIR } from './drive-support.mjs'
+import { approveTrustIfAsked, COMPOSER_NAME, SHOTS_DIR, showSessions } from './drive-support.mjs'
 
 const theme = process.argv.includes('--theme') ? process.argv[process.argv.indexOf('--theme') + 1] : 'light'
 const RECAP = 'We looked around the project and found three files.'
@@ -78,6 +79,33 @@ try {
   await stop.waitFor({ state: 'hidden' })
   const next = requests.findLast((body) => body.includes('Next step'))
   for (const held of [RECAP, BTW, 'why is it slow', '/recap']) assert.ok(!next.includes(held), `the next turn's request does not hold ${held}`)
+
+  // ---- the Asides panel, now and after the session is opened again --------------------------------
+  // Read by textContent, which a folded column still has, and shown before the screenshot: the
+  // window may come up with the context column folded.
+  const listed = async () => page.locator('#panel-asides li').allTextContents()
+  const both = (rows) => rows.length === 2 && rows[0].includes('/recap') && rows[0].includes(RECAP)
+    && rows[1].includes('why is it slow') && rows[1].includes(BTW)
+  const showAsides = async (name) => {
+    const toggle = page.locator('[aria-controls="context-column"]').first()
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
+    await page.locator('#panel-asides').waitFor({ state: 'visible' })
+    await page.waitForTimeout(600) // the column's unfolding transition
+    await page.locator('#panel-asides').scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(output, `${name}-${theme}.png`) })
+  }
+  await until(async () => both(await listed()), 'the Asides panel lists the recap and the /btw')
+  await showAsides('aside-panel')
+  assert.deepEqual(errors, [])
+
+  await app.close()
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1200, height: 800 } }))
+  await page.emulateMedia({ colorScheme: theme === 'dark' ? 'dark' : 'light' })
+  await showSessions(page)
+  await page.locator('.session').first().click()
+  await approveTrustIfAsked(page)
+  await until(async () => both(await listed()), 'the reopened session lists both asides')
+  await showAsides('aside-panel-reopened')
 
   assert.deepEqual(errors, [])
   console.log(`PASS: /recap and /btw are answered as rows and the next turn holds neither. Screenshots in ${output}/aside-*-${theme}.png`)
