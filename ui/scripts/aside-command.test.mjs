@@ -70,6 +70,48 @@ test('an answer is a narration row and an aside, never a user bubble or a turn',
   assert.deepEqual(after.asides, [{ question: 'why', answer: 'It retries twice.', kept: true }])
 })
 
+test('an answer that comes in while a turn runs adds one line and leaves the turn and its queue alone (CMD-8)', () => {
+  const queued = [{ prompt: 'next prompt', attachments: [], staged: [] }, { prompt: '/recap', attachments: [], staged: [], aside: 'recap' }]
+  const before = live({ running: true, awaitingOrdinal: 3, queued, entries: [...live().entries, transcript.asideOut('why')] })
+  const after = heard(before, { event: 'aside.done', session: 's', data: { status: 'answered', question: 'why', recap: false, answer: 'It retries twice.', kept: true } })
+  assert.equal(after.running, true, 'the turn still runs')
+  assert.equal(after.awaitingOrdinal, 3, 'the prompt still waits for its ordinal')
+  assert.equal(after.queued, before.queued, 'the queue is the same queue')
+  assert.equal(after.entries.length, before.entries.length + 1, 'one line is added')
+  assert.deepEqual(after.entries.slice(0, -1), before.entries, 'no line before it changes')
+  assert.equal(after.entries.at(-1).kind, 'narration')
+  for (const status of ['stopped', 'failed']) {
+    const settled = heard(before, { event: 'aside.done', session: 's', data: { status, question: 'why', recap: false, message: 'the service refused' } })
+    assert.equal(settled.running, true, status)
+    assert.equal(settled.awaitingOrdinal, 3, status)
+    assert.equal(settled.queued, before.queued, status)
+    assert.equal(settled.entries.length, before.entries.length + 1, status)
+  }
+})
+
+test('a /btw asked beside a turn says it is out and names the Asides panel', () => {
+  const row = transcript.asideOut('why is it slow')
+  assert.equal(row.kind, 'narration')
+  assert.equal(row.command, '/btw')
+  assert.match(row.text, /^\/btw why is it slow: asked beside the turn\./)
+  assert.match(row.text, /Asides panel/)
+  const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const typedAside = '))
+  // Only an answer of besideTurn:true draws it; at rest the answer row is the only line.
+  assert.match(body, /if \(started\.besideTurn\) updateSession\(handle, \(old\) => old \? \{ \.\.\.old, entries: \[\.\.\.old\.entries, t\.asideOut\(question\)\] \} : old\)/)
+})
+
+test("the bridge's refusal of a /btw is drawn as an error note in its own words", () => {
+  const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const typedAside = '))
+  // A second question while one is out, and a question before the turn has sent anything, are
+  // refusals the bridge words (crates/ui-bridge/src/aside.rs); the window shows the sentence as is.
+  assert.match(body, /entries: \[\.\.\.old\.entries, t\.errored\(error instanceof RequestFailed \? error\.reason : String\(error\)\)\]/)
+  const note = transcript.errored('a question is already out; wait for its answer')
+  assert.equal(note.kind, 'error')
+  assert.equal(note.text, 'a question is already out; wait for its answer')
+})
+
 test('a recap is labelled as one, and an answer the record does not keep says so (WATCH-20)', () => {
   const after = heard(live(), { event: 'aside.done', session: 's', data: { status: 'answered', question: '/recap', recap: true, answer: 'We are adding retries.', kept: false } })
   const row = after.entries.at(-1)
