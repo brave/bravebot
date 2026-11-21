@@ -154,6 +154,11 @@ shows.
 `verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_that_waited_still_goes_with_it`
 `verified-by: bravebot_tui::app::tests::dropping::a_text_file_dropped_onto_a_question_is_sent_as_its_name`
 `verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
+`verified-by: bravebot_ui_bridge::dispatch::a_file_dropped_onto_a_schedule_line_is_carried_out_as_its_name`
+`verified-by: bravebot_ui_bridge::attached::a_command_line_names_each_dropped_file`
+`verified-by: bravebot_ui_bridge::attached::a_picture_pasted_onto_a_command_line_is_said_not_to_join_it`
+`verified-by: bravebot_ui_bridge::attached::an_interjected_picture_keeps_its_own_sentence`
+`verified-by: bravebot_ui_bridge::attached::malformed_markers_refuse_a_command_line`
 `verified-by: bravebot_tui::state::a_later_tick_of_a_loop_names_the_file_the_first_one_carried`
 `verified-by: bravebot_tui::loops::a_dropped_file_goes_to_one_tick_and_its_name_to_every_other`
 `verified-by: bravebot_agent::attached::a_dropped_picture_comes_back_as_the_bytes_a_request_can_hold`
@@ -389,7 +394,12 @@ The rest follows the terminal where a window can. Each file gets a marker at the
 from one counter per conversation, with a chip beside the box; the draft is what decides, so
 deleting the marker takes the file off and removing the chip deletes the marker
 ([DROP-6](#DROP-6)). A type nothing takes has its path written into the box as text and is granted
-nothing ([DROP-4](#DROP-4)). A folder is left out with a note ([DROP-5](#DROP-5)).
+nothing ([DROP-4](#DROP-4)). A folder is left out with a note ([DROP-5](#DROP-5)). The driver
+carries out a `/schedule` line itself, so the window sends the markers the line names with it, and
+the bridge writes each dropped file's name in place of its marker, and for a pasted picture the
+terminal's sentence that a picture cannot join that command ([DROP-4](#DROP-4)). Sending the line
+takes what it named off the box ([DROP-6](#DROP-6)), and a line that waits in the queue sends the
+same names when the queue reaches it.
 
 One part does not follow. A message queued while a turn runs keeps its grants and sends them as
 its own turn when the running one ends, where [DROP-8](#DROP-8) names the file instead. The

@@ -87,3 +87,23 @@ test('a folder list and a folder close forward the session and the folder, and n
     { session: 's1', path: '/Users/me/docs' },
   )
 })
+
+test('a schedule line forwards its argument with the names and markers, and no file or grant under any key', () => {
+  const forwarded = sanitised('schedule.command', {
+    session: 's1',
+    argument: 'add --cron "0 9 * * *" --prompt "look at [Image #1] and [Image #2]"',
+    files: [{ marker: '[Image #1]', name: 'shot.png', path: '/Users/me/.ssh/id_rsa', grant: 'g-1' }],
+    pictures: ['[Image #2]'],
+    drops: [{ marker: '[Image #1]', grant: 'g-1' }],
+    pastes: [{ marker: '[Image #2]', grant: 'p-1' }],
+    dropped: ['/Users/me/.ssh/id_rsa'],
+    images: [picture],
+    attachments: ['a-1'],
+  })
+  assert.deepEqual(forwarded, {
+    session: 's1',
+    argument: 'add --cron "0 9 * * *" --prompt "look at [Image #1] and [Image #2]"',
+    files: [{ marker: '[Image #1]', name: 'shot.png' }],
+    pictures: ['[Image #2]'],
+  })
+})

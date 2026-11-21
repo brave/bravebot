@@ -2945,12 +2945,17 @@ impl Bridge {
 
     /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
     ///
-    /// The window sends it only for a line a person typed (CMD-1). The session's sandbox mode is
-    /// not read: an entry added here holds read mode whatever mode the session is in.
+    /// `files` and `pictures`, both optional, name the markers on the line, as for
+    /// `turn.interject`. The window sends it only for a line a person typed (CMD-1). The session's
+    /// sandbox mode is not read: an entry added here holds read mode whatever mode the session is
+    /// in.
     fn schedule_command(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
         let argument = request.string("argument")?;
+        // Only names and sentences enter the line: no dropped file is opened, and a pasted
+        // picture is said not to join it (DROP-4).
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
         let open = self
             .open
             .get(&handle)

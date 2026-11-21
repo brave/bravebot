@@ -210,19 +210,23 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
    * turn ends (CMD-8). Nothing here reads the argument. A line typed while a `/schedule` line already
    * waits waits behind it, whatever it is, since the bridge cannot see this queue and would answer a
    * read before the write typed first (CMD-8).
+   *
+   * `staged` is what the line names. Only its markers and file names are sent, and the bridge puts
+   * each marker back into the argument as the file's name, or as the sentence that a picture cannot
+   * join a command (DROP-4). A line that waits keeps them for when it is asked again.
    */
-  const schedule = useCallback(async (handle: string, argument: string, line: string, queuedAlready = false) => {
+  const schedule = useCallback(async (handle: string, argument: string, line: string, staged: Staged[], queuedAlready = false) => {
     const waiting = !queuedAlready && openedLives.current.get(handle)?.queued?.some((item) => item.schedule !== undefined)
     if (waiting) {
-      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], schedule: argument }] } : old)
+      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, schedule: argument }] } : old)
       return
     }
     try {
-      const answer = await call<ScheduleAnswer>('schedule.command', { session: handle, argument })
+      const answer = await call<ScheduleAnswer>('schedule.command', { session: handle, argument, ...markersOf(staged) })
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.scheduleAnswered(answer)] } : old)
     } catch (error) {
       if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
-        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], schedule: argument }] } : old)
+        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, schedule: argument }] } : old)
         return
       }
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(String(error))] } : old)
@@ -244,7 +248,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       dequeuing.current.add(handle)
       // A waiting `/schedule` line is asked again and starts no turn.
       const settled = message.schedule !== undefined
-        ? schedule(handle, message.schedule, message.prompt, true)
+        ? schedule(handle, message.schedule, message.prompt, message.staged, true)
         : send(message.prompt, handle, message.attachments, message.staged)
       void settled.finally(() => {
         dequeuing.current.delete(handle)
@@ -331,8 +335,10 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const typed = scheduleArgument(draft)
     if (typed !== null && handleRef.current) {
       const handle = handleRef.current
+      const staged = named(live?.staging, draft)
       setDraft('')
-      void schedule(handle, typed, draft.trim())
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void schedule(handle, typed, draft.trim(), staged)
       return
     }
     setLive((old) => old ? {
@@ -348,14 +354,17 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
   const submit = useCallback(() => {
     const prompt = draft.trim()
     if (!handleRef.current || !canSend(live, backendReady, prompt)) return
-    setDraft('')
     const typed = scheduleArgument(prompt)
     if (typed !== null) {
-      void schedule(handleRef.current, typed, prompt)
+      const staged = named(live?.staging, prompt)
+      setDraft('')
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void schedule(handleRef.current, typed, prompt, staged)
       return
     }
+    setDraft('')
     void send(prompt)
-  }, [draft, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, backendReady])
+  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, backendReady])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
@@ -364,8 +373,10 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     if (!handle || !text || !live) return
     const typed = scheduleArgument(text)
     if (typed !== null) {
+      const staged = named(live.staging, text)
       setDraft('')
-      void schedule(handle, typed, text)
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void schedule(handle, typed, text, staged)
       return
     }
     if (route(live, named(live.staging, draft)) === 'queue') { queueDraft(); return }
