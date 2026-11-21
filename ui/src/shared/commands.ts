@@ -45,6 +45,7 @@ export type CommandId =
   | 'session.request'
   | 'session.compact'
   | 'session.handoff'
+  | 'session.background'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -207,6 +208,9 @@ export const COMMANDS: readonly Command[] = [
   // `/handoff <next goal>` (SESSION-34, CMD-34). Not while a turn runs, since the brief is written
   // from the conversation as it stands. No accelerator, because it asks for the goal first.
   { id: 'session.handoff', label: 'Hand Off to New Chat…', requires: 'forkable' },
+  // `/bg` (BG-2, CMD-34). Not while a turn runs, since the background session resumes the record
+  // the turn holds. No accelerator, because it asks to confirm first.
+  { id: 'session.background', label: 'Continue in Background…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',

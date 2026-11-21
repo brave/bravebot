@@ -8,6 +8,7 @@ import type {
   BridgeEvent,
   ForkedSession,
   NotedSession,
+  BackgroundedSession,
   OpenedSession,
   PermissionMode,
   SandboxMode,
@@ -68,6 +69,8 @@ import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
 import { AskDialog } from './components/AskDialog'
+import { BackgroundConfirm } from './components/BackgroundConfirm'
+import { continueInBackground } from './backgrounding'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
@@ -713,6 +716,28 @@ export function App(): React.JSX.Element {
     (goal: string) => (handingOff ? handoffs.ask(handingOff, goal) : Promise.resolve(true)),
     [handingOff, handoffs.ask],
   )
+  // The open chat's handle while Continue in Background… asks to confirm, and whether the bridge is
+  // starting the background session (BG-2, CMD-34).
+  const [backgrounding, setBackgrounding] = useState<{ handle: string; busy: boolean } | null>(null)
+  const askBackground = useCallback(() => {
+    if (liveRef.current) setBackgrounding({ handle: liveRef.current.handle, busy: false })
+  }, [])
+  const background = useCallback(async () => {
+    if (!backgrounding || backgrounding.busy) return
+    const handle = backgrounding.handle
+    setBackgrounding({ handle, busy: true })
+    const came = await continueInBackground(
+      (session) => call<BackgroundedSession>('session.background', { session }), handle)
+    setBackgrounding(null)
+    // The bridge has let go of the chat, so the window does too, as closing it does.
+    if (came.closed) {
+      openedLives.current.delete(handle)
+      if (handleRef.current === handle) setLive(null)
+      void refresh()
+    }
+    if ('toast' in came) showToast(came.toast.title, came.toast.body)
+    else setProblem(came.problem)
+  }, [backgrounding, refresh])
 
   const addNote = useCallback(async (text: string) => {
     if (!noting) return true
@@ -1026,6 +1051,7 @@ export function App(): React.JSX.Element {
     note: askNote,
     compact: askCompact,
     handoff: askHandoff,
+    background: askBackground,
     doctor: () => void doctor(),
     status: () => void status(),
     cost: () => void cost(),
@@ -1312,6 +1338,10 @@ export function App(): React.JSX.Element {
         <AskDialog title="Hand off to a new chat" subtitle="Writes a brief from this chat for you to read and edit. Sending it starts a new chat."
           label="Next goal" action="Write brief" rows={2} test="handoff" className="handoff-dialog"
           running={live.running} onCancel={() => setHandingOff(null)} onConfirm={handOff} />
+      )}
+      {backgrounding && live?.handle === backgrounding.handle && (
+        <BackgroundConfirm name={live.summary.title} busy={backgrounding.busy}
+          onCancel={() => { if (!backgrounding.busy) setBackgrounding(null) }} onConfirm={() => void background()} />
       )}
       {keepAwake.asking && (
         <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />

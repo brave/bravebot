@@ -649,6 +649,8 @@ const ALLOWED = new Set([
   // Asking for a brief to start a new chat from, and stopping that (SESSION-34, CMD-34).
   'session.handoff',
   'session.handoff.cancel',
+  // Handing an open chat to a background session, which closes it here (BG-2, CMD-34).
+  'session.background',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',
