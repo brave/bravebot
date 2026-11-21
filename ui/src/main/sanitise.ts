@@ -83,6 +83,18 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
       : undefined
     return { session: held.session, target: held.target, prompt: held.prompt, files, pictures: held.pictures }
   }
+  // A `/btw` question carries what was staged on its line (CMD-5) the way a turn does: pictures
+  // pasted and pictures or PDFs dropped, named by the ids this process minted and composed here,
+  // after whatever the window sent as `images`, `attachments` or `dropped` is gone. A text file on
+  // the line is its name (DROP-4), so `files` is only marker and name pairs the bridge puts back
+  // into the question as words.
+  if (method === 'session.btw') {
+    const files = Array.isArray(held.files)
+      ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
+      : undefined
+    const session = typeof held.session === 'string' ? held.session : ''
+    return withPastes(session, held.pastes, withDrops(session, held.drops, { session: held.session, question: held.question, model: held.model, files }))
+  }
   if (method !== 'turn.send') return held
   // `recall` and `definition` join the lists for a smaller reason than theirs. `recall` decides
   // whether a prompt is one a person can find again, and `definition` decides which definition a

@@ -162,6 +162,22 @@ test('a window’s turn carries what it dropped as dropped text and attachments,
   assert.deepEqual(forwarded, { session: 's1', prompt: '[File #1] [Image #2] [PDF #3]', files: [], dropped: [md], attachments: [png, pdf] })
 })
 
+// CMD-5: a `/btw` question carries the pictures and PDFs dropped on its line as the paths this
+// process granted, and a text file only as the marker and name the bridge puts back as words.
+test('a /btw carries its granted drops, and no picture, path or text file the window named', async () => {
+  const ids = [await grant('s1', png), await grant('s1', pdf)]
+  const forwarded = main.sanitised('session.btw', {
+    session: 's1', question: 'why [Image #1] and [File #2]', model: 'm', drops: ids,
+    files: [{ marker: '[File #2]', name: 'notes.md', path: '/etc/hosts' }],
+    dropped: ['/etc/hosts'], attachments: ['/Users/me/private.png'], images: [{ media: 'image/png', data: 'iVBORw0KGgo=' }],
+  })
+  assert.deepEqual(forwarded, {
+    session: 's1', question: 'why [Image #1] and [File #2]', model: 'm',
+    files: [{ marker: '[File #2]', name: 'notes.md' }], attachments: [png, pdf],
+  })
+  assert.throws(() => main.sanitised('session.btw', { session: 's1', question: 'q', drops: [png] }), main.SendRefused)
+})
+
 test('a path where a grant id goes, or another session’s grant, refuses the send', async () => {
   assert.throws(() => main.sanitised('turn.send', { session: 's1', prompt: 'p', drops: [png] }), main.SendRefused)
   const theirs = await grant('s2', png)

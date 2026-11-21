@@ -73,6 +73,16 @@ pub fn refusal(question: &str) -> Option<&'static str> {
         .then_some("/btw needs a question after it")
 }
 
+/// Why a `/btw` carrying a dropped file is refused while a turn runs, in the terminal's words
+/// (CMD-5, CMD-8). The read a dropped file needs is one the running turn's policy does not hold.
+pub const NO_FILES_BESIDE_A_TURN: &str =
+    "/btw does not read dropped files while a turn runs; ask again when it has ended";
+
+/// Why a `/btw` naming a dropped text file by path is refused: on a `/btw` line a text file is its
+/// name, put into the question by its marker (DROP-4), and never a file the request reads.
+pub const TEXT_FILE_IS_ITS_NAME: &str =
+    "a text file dropped on a /btw line goes as its name; `dropped` is not taken";
+
 /// Why a `/btw` asked while a turn runs is refused before the turn has sent its first request:
 /// there is no exchange of the turn's to ask it over yet (CMD-8).
 pub const NOTHING_SENT_YET: &str = "the turn has not sent anything to the model yet, so there is nothing to ask about; \

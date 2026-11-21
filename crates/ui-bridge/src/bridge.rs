@@ -2165,9 +2165,35 @@ impl Bridge {
             if let Some(refused) = crate::aside::refusal(&question) {
                 return Err(Failure::bad_request(refused));
             }
-            Some(question)
+            // A text file dropped on the line is its name (DROP-4), put back by its marker.
+            Some(crate::attached::in_words(request, &question)?)
         } else {
             None
+        };
+        // What was staged on the line goes with the question (CMD-5): pasted pictures as they
+        // are (PASTE-2), and dropped pictures and PDFs read before the request exists (DROP-4).
+        // A recap is the driver's own question and takes neither.
+        let (pasted, dropped) = if btw {
+            if request
+                .params
+                .get("dropped")
+                .and_then(Value::as_array)
+                .is_some_and(|entries| !entries.is_empty())
+            {
+                return Err(Failure::bad_request(crate::aside::TEXT_FILE_IS_ITS_NAME));
+            }
+            (
+                crate::attached::pasted(request)?,
+                crate::attached::dropped(request)?
+                    .into_iter()
+                    .map(|(path, media)| bravebot_agent::turn::Attachment {
+                        path,
+                        media: media.to_string(),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            (Vec::new(), Vec::new())
         };
 
         self.reap(&handle);
@@ -2189,6 +2215,16 @@ impl Bridge {
                 "a question asked beside the work is still out; wait for its answer or stop it",
             ));
         }
+        if beside_turn.is_some() && !dropped.is_empty() {
+            return Err(Failure::bad_request(crate::aside::NO_FILES_BESIDE_A_TURN));
+        }
+        // Built before the state is taken below, since building it takes the state itself.
+        let workspace = if dropped.is_empty() {
+            None
+        } else {
+            let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+            Some(session_workspace(open, &settings)?)
+        };
 
         let (model, config) = crate::models::chosen(
             requested_model,
@@ -2209,7 +2245,7 @@ impl Bridge {
                     return Err(Failure::bad_request(crate::aside::NOTHING_SENT_YET));
                 };
                 (
-                    bravebot_agent::aside::Question::over(fork, question, Vec::new()),
+                    bravebot_agent::aside::Question::over(fork, question, pasted),
                     account,
                     files,
                 )
@@ -2217,18 +2253,36 @@ impl Bridge {
             // Taken here, on the thread that holds the state, because a conversation is not
             // `Clone` and what crosses to the worker is the request and not the exchange.
             _ => {
-                let state = state.lock().map_err(|_| {
+                let mut state = state.lock().map_err(|_| {
                     Failure::new(ErrorCode::Internal, "the session's state is unavailable")
                 })?;
+                let asking = match &question {
+                    Some(question) => bravebot_agent::aside::Question::about(
+                        &state.conversation,
+                        question,
+                        pasted,
+                    ),
+                    None => bravebot_agent::aside::Question::recap(&state.conversation),
+                };
+                // Read here, under a policy holding the read alone, before the question's own
+                // policy exists (`bravebot_agent::attached`). The rule each drop records is the
+                // session's (DROP-2), so it goes into the session's trust map, which the
+                // question's file authority below is built from.
+                let asking = match &workspace {
+                    Some(workspace) => {
+                        let carried = bravebot_agent::attached::read(
+                            workspace,
+                            &dropped,
+                            &mut state.answers.trust,
+                            &mut bravebot_session::audit::Trail::new(),
+                        )
+                        .map_err(|error| Failure::bad_request(error.to_string()))?;
+                        asking.carrying(carried)
+                    }
+                    None => asking,
+                };
                 (
-                    match &question {
-                        Some(question) => bravebot_agent::aside::Question::about(
-                            &state.conversation,
-                            question,
-                            Vec::new(),
-                        ),
-                        None => bravebot_agent::aside::Question::recap(&state.conversation),
-                    },
+                    asking,
                     state.account.clone(),
                     bravebot_core::file_authority::FileAuthority::new(state.answers.trust.clone()),
                 )

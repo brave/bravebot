@@ -802,3 +802,146 @@ fn a_btw_still_out_when_the_turn_ends_is_answered_and_recorded() {
     assert_eq!(asides[0]["question"], question.as_str(), "{opened}");
     assert_eq!(asides[0]["answer"], BTW_REPLY, "{opened}");
 }
+
+/// The bytes of a picture staged on a `/btw` line, enough for the agent to carry: a PNG
+/// signature, then a little more so the payload is not only a signature.
+const PICTURE: &[u8] = b"\x89PNG\r\n\x1a\nnot-really-pixels";
+
+/// How a request holds [`PICTURE`].
+fn picture_uri() -> String {
+    use base64::Engine;
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(PICTURE)
+    )
+}
+
+/// CMD-5, PASTE-2: a picture pasted onto a `/btw` line at rest goes in the question's own message,
+/// and the next turn's request carries neither it nor the question.
+#[test]
+fn a_picture_pasted_on_a_btw_at_rest_goes_with_the_question_and_not_into_the_exchange() {
+    use base64::Engine;
+    let mut window = Window::open("bridge-aside-btw-pasted-picture");
+    window.say("look at src/net.rs");
+    let before = window.requests().len();
+    let session = window.session.clone();
+    let question = format!("{BTW_QUESTION} in [Image #1]");
+
+    let started = window.ask(
+        "session.btw",
+        json!({"session": session, "question": question, "images": [{
+            "media": "image/png",
+            "data": base64::engine::general_purpose::STANDARD.encode(PICTURE),
+        }]}),
+    );
+    assert_eq!(started["ok"]["started"], true, "{started}");
+    let done = until(&window.said, |m| m["event"] == "aside.done");
+
+    assert_eq!(done["data"]["status"], "answered", "{done}");
+    let last = last_message(&window.requests()[before]);
+    assert!(last.contains("[Image #1]"), "the marker is missing: {last}");
+    assert!(
+        last.contains(&picture_uri()),
+        "the picture is not in the question's message: {last}"
+    );
+
+    window.say("and the tests?");
+    let next = window.requests().last().unwrap().to_string();
+    assert!(next.contains("and the tests?"), "{next}");
+    assert!(
+        !next.contains(&picture_uri()),
+        "the picture entered the exchange: {next}"
+    );
+    assert!(
+        !next.contains(BTW_QUESTION),
+        "the question entered the exchange: {next}"
+    );
+}
+
+/// CMD-5, DROP-4: a picture dropped onto a `/btw` line at rest is read before the request and goes
+/// in the question's own message beside its path.
+#[test]
+fn a_picture_dropped_on_a_btw_at_rest_goes_with_the_question() {
+    let mut window = Window::open("bridge-aside-btw-dropped-picture");
+    window.say("look at src/net.rs");
+    let outside = window.scratch.path.join("pictures");
+    std::fs::create_dir_all(&outside).unwrap();
+    let shot = outside.join("shot.png");
+    std::fs::write(&shot, PICTURE).unwrap();
+    let before = window.requests().len();
+    let session = window.session.clone();
+
+    let started = window.ask(
+        "session.btw",
+        json!({"session": session, "question": format!("{BTW_QUESTION} in [Image #1]"),
+               "attachments": [shot.display().to_string()]}),
+    );
+    assert_eq!(started["ok"]["started"], true, "{started}");
+    let done = until(&window.said, |m| m["event"] == "aside.done");
+
+    assert_eq!(done["data"]["status"], "answered", "{done}");
+    let last = last_message(&window.requests()[before]);
+    assert!(
+        last.contains(&picture_uri()),
+        "the dropped picture is not in the question's message: {last}"
+    );
+    assert!(
+        last.contains("shot.png"),
+        "the dropped picture's path is missing: {last}"
+    );
+}
+
+/// DROP-4: a text file dropped onto a `/btw` line is its name in the question.
+#[test]
+fn a_text_file_dropped_on_a_btw_is_its_name_in_the_question() {
+    let mut window = Window::open("bridge-aside-btw-dropped-text");
+    window.say("look at src/net.rs");
+    let before = window.requests().len();
+    let session = window.session.clone();
+
+    let started = window.ask(
+        "session.btw",
+        json!({"session": session, "question": format!("{BTW_QUESTION} in [File #1]"),
+               "files": [{"marker": "[File #1]", "name": "notes.txt"}]}),
+    );
+    assert_eq!(started["ok"]["started"], true, "{started}");
+    until(&window.said, |m| m["event"] == "aside.done");
+
+    let last = last_message(&window.requests()[before]);
+    assert!(last.contains("in notes.txt"), "{last}");
+    assert!(!last.contains("[File #1]"), "{last}");
+}
+
+/// CMD-5, CMD-8: a `/btw` carrying a dropped file while a turn runs is refused in the terminal's
+/// words, and nothing reaches the service for it.
+#[test]
+fn a_btw_with_a_dropped_file_beside_a_turn_is_refused() {
+    let mut window = Window::open("bridge-aside-btw-dropped-beside-a-turn");
+    let outside = window.scratch.path.join("pictures");
+    std::fs::create_dir_all(&outside).unwrap();
+    let shot = outside.join("shot.png");
+    std::fs::write(&shot, PICTURE).unwrap();
+    window.begin(&format!("{HELD} for the turn"));
+    let before = window.requests().len();
+    let session = window.session.clone();
+
+    let refused = window.ask(
+        "session.btw",
+        json!({"session": session, "question": BTW_QUESTION,
+               "attachments": [shot.display().to_string()]}),
+    );
+
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("does not read dropped files while a turn runs")),
+        "{refused}"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        window.requests().len(),
+        before,
+        "a refused question reached the service"
+    );
+}

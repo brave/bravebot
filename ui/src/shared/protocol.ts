@@ -367,7 +367,17 @@ export interface SessionSettled extends ProjectQuestionsReport {
 }
 
 /** `session.btw`: a question asked over the exchange, at rest or beside the running turn (CMD-8). Answered with `AsideStarted`. */
-export interface BtwParams { session: string; question: string; model: string | null }
+export interface BtwParams {
+  session: string
+  question: string
+  model: string | null
+  /** Ids of pictures pasted on the line, which the main process resolves to `images` (CMD-5). */
+  pastes?: string[]
+  /** Ids of pictures and PDFs dropped on the line, which the main process resolves to `attachments`. */
+  drops?: string[]
+  /** Text files dropped on the line, each put back into the question as its name (DROP-4). */
+  files?: { marker: string; name: string }[]
+}
 /** `session.recap`: a recap of the exchange at rest (CMD-16). Refused with `turn_in_flight` while a turn runs. */
 export interface RecapParams { session: string; model: string | null }
 /** `session.aside.cancel`: stops the question that is out, if any. Answered with `{}`. */
