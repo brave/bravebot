@@ -2511,6 +2511,8 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::one_shot::a_write_the_credential_scan_found_a_value_in_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::a_run_asking_for_scopes_or_to_run_unconfined_is_not_put_to_a_program_that_approves_everything`
 `verified-by: bravebot_cli::one_shot::an_approving_program_cannot_answer_the_question_that_vouches_for_a_path`
+`verified-by: bravebot_cli::one_shot::a_program_over_lines_cannot_answer_a_question_that_proposes_a_rule`
+`verified-by: bravebot_cli::running::a_lines_run_refuses_a_rule_proposal`
 `verified-by: bravebot_cli::running::a_vouched_channel_without_the_approval_flag_is_not_asked_about_a_write`
 `verified-by: bravebot_cli::running::words_answer_a_question_on_a_vouched_channel`
 `verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for`
