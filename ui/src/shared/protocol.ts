@@ -139,6 +139,15 @@ export interface SessionNote {
   text: string
 }
 
+/**
+ * `session.background`'s answer (BG-2, CMD-34): the id of the record a background session now
+ * runs, and the word for the permission mode it runs in. The bridge has closed the chat by then.
+ */
+export interface BackgroundedSession {
+  handedOver: string
+  mode: string
+}
+
 /** `session.note`'s answer: what became of the text, and the session's notes as they now stand. */
 export interface NotedSession {
   noted: 'kept' | 'unwritable' | 'empty'

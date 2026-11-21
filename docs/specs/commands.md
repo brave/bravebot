@@ -2042,7 +2042,7 @@ shortcut.
   with a sentence saying why and nothing requested, with no goal and before a turn of the chat has
   ended. A brief from an exchange that met something untrusted is not offered, and a stopped or
   failed request says so. In each of those cases the message box is left as it was.
-- **Continue in Background** asks to confirm, hands the chat to a background session as `/bg` does
+- **Continue in Background…** asks to confirm, hands the chat to a background session as `/bg` does
   ([BG-2](background-sessions.md#BG-2)), through `session.background`, and closes the chat in the
   window. It is refused, and the chat stays open, in each case where `/bg` is refused that a chat can
   be in, on a system where background sessions do not run, and where the `bravebot` program is not
@@ -2073,4 +2073,4 @@ code the terminal calls, so both front ends send the same requests and refuse th
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_a_turn_running_is_not_handed_to_the_background`
 `verified-by: bravebot_ui_bridge::background::each_refusal_of_bg_is_made_from_what_the_bridge_holds`
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened`
-`verified-by: by-construction (the desktop menu and router are not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts the Compact Conversation…, Hand Off to New Chat… and Continue in Background rows, that each requires an open idle chat and that the router handles each, and ui/scripts/compacting.test.mjs asserts the notice each ending of a compaction gives; make check-ui runs both)`
+`verified-by: by-construction (the desktop menu and router are not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts the Compact Conversation…, Hand Off to New Chat… and Continue in Background… rows, that each requires an open idle chat and that the router handles each, and ui/scripts/compacting.test.mjs asserts the notice each ending of a compaction gives; make check-ui runs both)`

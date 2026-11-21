@@ -110,7 +110,7 @@ and the check compares with the mode start-up chose, so after `/cd` into or out 
 settings choose another mode the session is handed over and goes on in the mode that checkout's
 settings choose, with nothing said.
 
-The desktop window's Chat › Continue in Background ([CMD-34](commands.md#CMD-34)) hands an open chat
+The desktop window's Chat › Continue in Background… ([CMD-34](commands.md#CMD-34)) hands an open chat
 with no turn running to a background session as `/bg` does, through the bridge's
 `session.background`. The bridge starts the process with the `bravebot` program installed beside it,
 in the chat's project and permission mode, waits for the session to be listed as `/bg` does, and then

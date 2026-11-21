@@ -56,3 +56,45 @@ test('Hand Off to New Chat… is offered on an open chat with no turn running, a
   assert.match(allowed, /'session\.handoff',/)
   assert.match(allowed, /'session\.handoff\.cancel',/)
 })
+
+test('Continue in Background… is offered on an open chat with no turn running, and the menu and router reach it (BG-2, CMD-34)', () => {
+  const background = command('session.background')
+  assert.equal(background.label, 'Continue in Background…')
+  assert.equal(background.requires, 'forkable')
+  assert.equal(background.accelerator, undefined, 'it asks to confirm first, so it has no shortcut')
+  assert.equal(isEnabled(background.requires, NOTHING_OPEN), false)
+  assert.equal(isEnabled(background.requires, { ...NOTHING_OPEN, hasSession: true }), true)
+  assert.equal(isEnabled(background.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), false)
+  assert.match(readFileSync('src/main/menu.ts', 'utf8'), /item\('session\.background'\)/)
+  assert.match(readFileSync('src/renderer/commands.ts', 'utf8'), /case 'session\.background':\s*return act\.background\(\)/)
+  assert.match(readFileSync('src/main/index.ts', 'utf8'), /'session\.background',/)
+})
+
+// One bundle for both, so the error class thrown is the one `backgrounding.ts` checks for.
+const { continueInBackground, shortId, RequestFailed } = (() => {
+  const contents = "export * from './src/renderer/backgrounding.ts'\nexport { RequestFailed } from './src/renderer/rewind.ts'"
+  const source = buildSync({ stdin: { contents, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  return module.exports
+})()
+
+test('a chat handed to the background closes and the toast names the start of its id, as bravebot sessions shows it', async () => {
+  const id = '0123456789abcdef-0000'
+  const asked = []
+  const came = await continueInBackground(async (session) => { asked.push(session); return { handedOver: id, mode: 'ask' } }, 'h1')
+  assert.deepEqual(asked, ['h1'])
+  assert.equal(came.closed, true)
+  assert.equal(shortId(id), '01234567')
+  assert.equal(came.toast.body, 'It runs in ask mode. Join it with: bravebot attach 01234567')
+  assert.doesNotMatch(came.toast.body, /89abcdef/)
+})
+
+test('a refusal leaves the chat open and shows the bridge sentence, and a failure after the bridge closed it lets go of it', async () => {
+  const sentence = 'Continue in Background is not available in bypass or auto mode.'
+  const refused = await continueInBackground(async () => { throw new RequestFailed('bad_request', sentence) }, 'h1')
+  assert.deepEqual(refused, { closed: false, problem: sentence })
+  const late = await continueInBackground(async () => { throw new RequestFailed('internal', 'The chat was closed, and the background session did not start in time. Open it again from the list.') }, 'h1')
+  assert.equal(late.closed, true)
+  assert.match(late.problem, /Open it again from the list/)
+})

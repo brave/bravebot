@@ -221,6 +221,7 @@ export function installMenu(window: BrowserWindow): void {
         SEPARATOR,
         item('session.compact'),
         item('session.handoff'),
+        item('session.background'),
       ],
     },
     { role: 'windowMenu' },
