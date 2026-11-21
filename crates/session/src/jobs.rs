@@ -952,7 +952,9 @@ pub fn start_host(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Err(err) = command.spawn() {
+    // Under the spawn gate, because the desktop bridge starts this too, and there a program started
+    // beside a control channel being made would hold both its ends (RPCVIEW-8).
+    if let Err(err) = bravebot_sandbox::process::starting_a_program(|| command.spawn()) {
         let _ = roster.take_first_prompt(id);
         return Err(StartError::Spawn(err));
     }
@@ -1005,7 +1007,8 @@ fn ensure_supervisor(roster: &Roster, program: &Path) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let Ok(mut supervisor) = command.spawn() else {
+    let Ok(mut supervisor) = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+    else {
         return;
     };
     // Until it holds its lock, so that the next start finds it rather than starting another, or
