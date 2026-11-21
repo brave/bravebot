@@ -12,6 +12,7 @@ docs/specs/auto-mode.md:AUTO-9: a delegate is answered as the turn that spawned 
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
+docs/specs/background-sessions.md:BG-17: the desktop app lists the roster grouped by state, and a row only copies the attach command
 docs/specs/bots.md:BOT-6: the window reaches the writes of a bot only through the main process
 docs/specs/bots.md:BOT-7: the definition is written first, and the row only after it
 docs/specs/bots.md:BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
