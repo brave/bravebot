@@ -39,6 +39,7 @@ impl Scratch {
 
     /// One in a directory with a short name, for a home a background session binds its socket in:
     /// a socket's path is limited to about a hundred bytes.
+    #[cfg(unix)]
     fn short(name: &str) -> Self {
         Self::at(PathBuf::from(format!("/tmp/{name}-{}", std::process::id())))
     }
@@ -139,8 +140,8 @@ fn answer(mut stream: std::net::TcpStream, seen: &Mutex<Vec<Value>>) {
     let _ = stream.flush();
 }
 
-fn front_end(home: &Path, endpoint: &str) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
+fn front_end(bridge: &Path, home: &Path, endpoint: &str) -> Child {
+    Command::new(bridge)
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
@@ -205,8 +206,13 @@ impl Window {
     }
 
     fn open_in(scratch: Scratch) -> Self {
+        Self::open_with(scratch, Path::new(env!("CARGO_BIN_EXE_bravebot-rpc")))
+    }
+
+    /// One whose front end is the program at `bridge`, which finds the `bravebot` beside it.
+    fn open_with(scratch: Scratch, bridge: &Path) -> Self {
         let (endpoint, seen) = stub_service();
-        let mut child = front_end(&scratch.home(), &endpoint);
+        let mut child = front_end(bridge, &scratch.home(), &endpoint);
         let said = lines(child.stdout.take().expect("the front end answers"));
         let mut window = Self {
             child,
@@ -349,7 +355,48 @@ fn a_chat_with_a_turn_running_is_not_handed_to_the_background() {
     );
 }
 
+/// BG-2, CMD-34: the chat is closed before the background session is started, because this process
+/// holds the record's lock until the chat's work ends. A start that fails says so, the chat stays
+/// closed, and the record is left to be opened again from the list.
+#[cfg(unix)]
+#[test]
+fn a_chat_whose_background_session_does_not_start_is_left_to_be_opened_again() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::short("bbbf");
+    // The bridge beside a `bravebot` that cannot be run, so the start fails after the close.
+    let beside = scratch.path.join("bin");
+    std::fs::create_dir_all(&beside).unwrap();
+    let bridge = beside.join("bravebot-rpc");
+    std::fs::copy(env!("CARGO_BIN_EXE_bravebot-rpc"), &bridge).unwrap();
+    let program = beside.join("bravebot");
+    std::fs::write(&program, b"not a program").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let mut window = Window::open_with(scratch, &bridge);
+    window.say("look at src/net.rs");
+    let failed = window.background();
+    assert_eq!(failed["error"]["code"], "internal", "{failed}");
+    assert!(
+        failed["error"]["message"].as_str().is_some_and(
+            |m| m.contains("The chat was closed") && m.contains("Open it again from the list")
+        ),
+        "{failed}"
+    );
+    assert!(!window.still_open(), "the chat was not closed first");
+
+    let project = window.scratch.project().display().to_string();
+    let listed = window.ask("session.list", json!({"directory": project}));
+    let id = listed["ok"]["sessions"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the record is not listed: {listed}"))
+        .to_string();
+    let reopened = window.ask("session.open", json!({"directory": project, "id": id}));
+    assert!(reopened.get("ok").is_some(), "{reopened}");
+}
+
 /// The `bravebot` program the bridge under test finds beside itself, where it has been built.
+#[cfg(unix)]
 fn built_program() -> Option<PathBuf> {
     let program = Path::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
         .parent()?
