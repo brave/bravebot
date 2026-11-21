@@ -33,7 +33,7 @@ The supervisor and the restart of a process that ends between turns ([BG-11](#BG
 [BG-12](#BG-12)) are built. `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
 no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built.
 `bravebot sessions` on a terminal is a list grouped by state that attaches ([BG-16](#BG-16)). The
-desktop app's list of the same sessions ([BG-17](#BG-17)) is not built yet. A question from an
+desktop app's list of the same sessions ([BG-17](#BG-17)) is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
 resuming the record the process wrote after each turn (for `interrupted`, the terminal says first
@@ -644,7 +644,12 @@ is started again only by a terminal's `attach` or `reply` ([BG-2](#BG-2)). The d
 session and gives the person the command that opens it. With the rows and the words of BG-16, a
 session is named and placed the same way in both front ends.
 
-`verified-by: none`
+`verified-by: bravebot_ui_bridge::background::background_sessions_are_listed_in_state_order_and_most_recent_first_within_a_state`
+`verified-by: bravebot_ui_bridge::background::background_state_is_the_word_the_roster_json_uses`
+`verified-by: bravebot_ui_bridge::background::a_background_row_carries_only_the_listed_fields`
+`verified-by: bravebot_ui_bridge::background::an_empty_or_absent_background_roster_lists_no_sessions`
+`verified-by: bravebot_session::listing::a_control_character_in_a_roster_row_is_pictured`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/background-list.test.mjs holds the headings, their order and counts, Ready for idle and the state words; ui/scripts/drive-background-sessions.mjs drives the section in a real window against a mocked background.list: the headings and counts, a row's id, name, time and state, the 28-column cut, the selected row's directory and prompt, the selected row moving under its new heading, the copy button as its only action writing bravebot attach and the short id, no reads while the list is hidden, and no section while the roster is empty)`
 
 ## What this changes in other specs
 
