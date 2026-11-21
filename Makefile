@@ -845,9 +845,11 @@ check-ui-build: check-extension
 
 check-ui-walkthrough:
 	cd ui && if [ "$$(uname -s)" = Linux ]; then \
-		xvfb-run -a node scripts/drive-manual-walkthrough.mjs; \
+		xvfb-run -a node scripts/drive-manual-walkthrough.mjs && \
+		xvfb-run -a node scripts/drive-reports.mjs; \
 	else \
-		node scripts/drive-manual-walkthrough.mjs; \
+		node scripts/drive-manual-walkthrough.mjs && \
+		node scripts/drive-reports.mjs; \
 	fi
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
