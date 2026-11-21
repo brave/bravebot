@@ -224,6 +224,7 @@ export function installMenu(window: BrowserWindow): void {
         item('session.context'),
         item('session.request'),
         item('session.compact'),
+        item('session.handoff'),
       ],
     },
     { role: 'windowMenu' },

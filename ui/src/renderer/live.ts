@@ -1,4 +1,5 @@
 import type { Enhancement } from './enhancing'
+import type { Handoff } from './handoff'
 import type { RetryDue } from './retry'
 import type { FileAttachment } from '../shared/files'
 import type { Staged, Staging } from './staging'
@@ -218,6 +219,13 @@ export interface Live {
    * turn, and a message typed meanwhile waits for it rather than going into it.
    */
   compacting?: boolean
+  /** A Hand Off to New Chat… request that is out, or a brief in the box that Send starts a new chat from (SESSION-34). */
+  handoff?: Handoff | null
+  /**
+   * The chat this one was handed off from (SESSION-34). The title is carried for the reason
+   * `forkedFrom`'s is, and falls back to the id.
+   */
+  handedOffFrom?: { id: string; title: string } | null
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null

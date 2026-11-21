@@ -646,6 +646,9 @@ const ALLOWED = new Set([
   // Shortening the conversation from the Chat menu, and stopping that (CMD-34).
   'session.compact',
   'session.compact.cancel',
+  // Asking for a brief to start a new chat from, and stopping that (SESSION-34, CMD-34).
+  'session.handoff',
+  'session.handoff.cancel',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',

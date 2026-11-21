@@ -8,7 +8,7 @@ import { Button, TextArea } from '../nala'
  *
  * `optional` lets the action go with the field empty, as the focus of Compact Conversation… may be
  * (CMD-34). `test` names the hooks: `<test>-text`, `<test>-cancel` and `<test>-<action>`, with the
- * action's label in lower case.
+ * action's label in lower case with its spaces as hyphens.
  */
 export function AskDialog({ title, subtitle, label, action, optional = false, rows = 3, test, className, running, onCancel, onConfirm }: {
   title: string
@@ -43,7 +43,7 @@ export function AskDialog({ title, subtitle, label, action, optional = false, ro
         <Button kind="plain-faint" size="small" isDisabled={busy} onClick={onCancel} data-test={`${test}-cancel`}>
           Cancel
         </Button>
-        <Button kind="filled" size="small" isDisabled={blocked} onClick={() => void confirm()} data-test={`${test}-${action.toLowerCase()}`}>
+        <Button kind="filled" size="small" isDisabled={blocked} onClick={() => void confirm()} data-test={`${test}-${action.toLowerCase().replace(/\s+/g, '-')}`}>
           {action}
         </Button>
       </>}>
