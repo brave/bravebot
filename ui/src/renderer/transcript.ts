@@ -338,7 +338,7 @@ export const scheduleAnswered = (answer: { lines: string[]; refused: boolean }):
   ...(answer.refused ? { refused: true as const } : {}),
 })
 /** That a `/btw` asked beside the running turn is out (CMD-8). A narration, never part of the conversation. */
-export const asideOut = (question: string): Entry => narrated(`/btw ${question}: asked beside the turn. The answer is shown here when it is in.`, '/btw')
+export const asideOut = (question: string): Entry => narrated(`/btw ${question}: asked beside the turn. The answer goes in the Asides panel when it is in, and the turn goes on.`, '/btw')
 /**
  * What a `/btw` or `/recap` came back with, drawn as a narration: for the person to read and never
  * part of the conversation (CMD-8, CMD-16). An answer the record does not keep says so (WATCH-20).
