@@ -47,6 +47,10 @@ export interface CommandActions {
   /** Ask for a note to keep on the open chat's record. */
   note: () => void
   doctor: () => void
+  /** Show what the open session has spent, by turn (CMD-15). */
+  cost: () => void
+  /** Show what the open session's last request was made of, by section (CMD-19). */
+  context: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
   /** Open the session a right-click named. */
@@ -139,6 +143,10 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.undoTurn()
         case 'session.note':
           return act.note()
+        case 'session.cost':
+          return act.cost()
+        case 'session.context':
+          return act.context()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':

@@ -39,6 +39,8 @@ export type CommandId =
   | 'mode.cycle'
   | 'turn.rewind'
   | 'session.note'
+  | 'session.cost'
+  | 'session.context'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -188,6 +190,10 @@ export const COMMANDS: readonly Command[] = [
   // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the
   // turn holds the record until it ends.
   { id: 'session.note', label: 'Add Note…', requires: 'forkable' },
+  // The desktop's /cost and /context (CMD-15, CMD-19). Offered while a turn runs: the bridge answers
+  // both from a store the turn writes into, not from the state the turn holds (CMD-8).
+  { id: 'session.cost', label: 'Token Spend…', requires: 'session' },
+  { id: 'session.context', label: 'Context Breakdown…', requires: 'session' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',
