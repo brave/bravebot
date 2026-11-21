@@ -7,26 +7,24 @@
 //! CMD-34).
 //!
 //! The request is [`bravebot_agent::aside::Question::handoff`], the one the terminal's `/handoff`
-//! makes. This module holds the refusals made before it is sent, which are the terminal's, and turns
-//! its answer into the `handoff.done` event. It reads no word of the brief. Whether the brief is
-//! offered is whether the exchange kept it, which the aside's own policy decided from the labels.
+//! makes. This module holds the sentences for the refusals made before it is sent, which are
+//! decided by [`bravebot_agent::aside::handoff_refusal`] as the terminal's are, and turns its answer
+//! into the `handoff.done` event. It reads no word of the brief. Whether the brief is offered is
+//! whether the exchange kept it, which the aside's own policy decided from the labels.
 
-use bravebot_agent::aside::{Answered, AsideError, handoff_prompt};
+use bravebot_agent::aside::{Answered, AsideError, HandoffRefusal, handoff_prompt};
 use serde_json::{Value, json};
 
-/// Why a handoff toward `goal` may not be asked for yet, or `None` where it may.
-///
-/// The terminal's refusals: there is no goal, or no turn has ended or the session has no record,
-/// because the new chat links back to a record and there is none to link to. `turns` is how many
-/// turns the session has ended, and `recorded` whether it has a record on disk.
+/// Why a handoff toward `goal` may not be asked for yet, as the sentence the window is told, or
+/// `None` where it may. `turns` is how many turns the session has ended, and `recorded` whether it
+/// has a record on disk.
 pub fn refusal(goal: &str, turns: usize, recorded: bool) -> Option<&'static str> {
-    if goal.trim().is_empty() {
-        Some("Say what the next chat should do.")
-    } else if turns == 0 || !recorded {
-        Some("There is nothing to hand off until a turn of this chat has ended.")
-    } else {
-        None
-    }
+    bravebot_agent::aside::handoff_refusal(goal, turns, recorded).map(|refusal| match refusal {
+        HandoffRefusal::NoGoal => "Say what the next chat should do.",
+        HandoffRefusal::NothingToHandOff => {
+            "There is nothing to hand off until a turn of this chat has ended."
+        }
+    })
 }
 
 /// The `handoff.done` event's data for what the request came back with, and what it cost in tokens.
