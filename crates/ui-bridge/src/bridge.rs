@@ -2696,41 +2696,7 @@ impl Bridge {
     fn ask_aside(&mut self, request: &Request, btw: bool) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let requested_model = crate::models::selection(request.params.get("model"))?;
-        let question = if btw {
-            let question = request.string("question")?;
-            if let Some(refused) = crate::aside::refusal(&question) {
-                return Err(Failure::bad_request(refused));
-            }
-            // A text file dropped on the line is its name (DROP-4), put back by its marker.
-            Some(crate::attached::in_words(request, &question)?)
-        } else {
-            None
-        };
-        // What was staged on the line goes with the question (CMD-5): pasted pictures as they
-        // are (PASTE-2), and dropped pictures and PDFs read before the request exists (DROP-4).
-        // A recap is the driver's own question and takes neither.
-        let (pasted, dropped) = if btw {
-            if request
-                .params
-                .get("dropped")
-                .and_then(Value::as_array)
-                .is_some_and(|entries| !entries.is_empty())
-            {
-                return Err(Failure::bad_request(crate::aside::TEXT_FILE_IS_ITS_NAME));
-            }
-            (
-                crate::attached::pasted(request)?,
-                crate::attached::dropped(request)?
-                    .into_iter()
-                    .map(|(path, media)| bravebot_agent::turn::Attachment {
-                        path,
-                        media: media.to_string(),
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        let (question, pasted, dropped) = staged_aside(request, btw)?;
 
         self.reap(&handle);
 
@@ -2771,58 +2737,14 @@ impl Bridge {
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let (asking, account, files) = match (&question, beside_turn) {
-            // The turn holds the state, so the question is asked over the exchange the turn
-            // published at its latest request, under the turn's own file authority and account.
-            (Some(question), Some(_)) => {
-                let published = &open.published;
-                let (Some(fork), Some(files), Some(account)) =
-                    (published.exchange(), published.files(), published.account())
-                else {
-                    return Err(Failure::bad_request(crate::aside::NOTHING_SENT_YET));
-                };
-                (
-                    bravebot_agent::aside::Question::over(fork, question, pasted),
-                    account,
-                    files,
-                )
-            }
-            // Taken here, on the thread that holds the state, because a conversation is not
-            // `Clone` and what crosses to the worker is the request and not the exchange.
-            _ => {
-                let mut state = state.lock().map_err(|_| {
-                    Failure::new(ErrorCode::Internal, "the session's state is unavailable")
-                })?;
-                let asking = match &question {
-                    Some(question) => bravebot_agent::aside::Question::about(
-                        &state.conversation,
-                        question,
-                        pasted,
-                    ),
-                    None => bravebot_agent::aside::Question::recap(&state.conversation),
-                };
-                // Read here, under a policy holding the read alone, before the question's own
-                // policy exists (`bravebot_agent::attached`). The rule each drop records is the
-                // session's (DROP-2), so it goes into the session's trust map, which the
-                // question's file authority below is built from.
-                let asking = match &workspace {
-                    Some(workspace) => {
-                        let carried = bravebot_agent::attached::read(
-                            workspace,
-                            &dropped,
-                            &mut state.answers.trust,
-                            &mut bravebot_session::audit::Trail::new(),
-                        )
-                        .map_err(|error| Failure::bad_request(error.to_string()))?;
-                        asking.carrying(carried)
-                    }
-                    None => asking,
-                };
-                (
-                    asking,
-                    state.account.clone(),
-                    bravebot_core::file_authority::FileAuthority::new(state.answers.trust.clone()),
-                )
-            }
+            (Some(question), Some(_)) => asked_beside_turn(&open.published, question, pasted)?,
+            _ => asked_at_rest(
+                &state,
+                question.as_deref(),
+                pasted,
+                workspace.as_ref(),
+                &dropped,
+            )?,
         };
         let cancel = Cancel::new();
         let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2853,27 +2775,26 @@ impl Bridge {
             let asked = question.unwrap_or_else(|| crate::aside::RECAP_LABEL.to_string());
             let (event, aside, tokens) =
                 crate::aside::settle(done, cancel.is_cancelled(), asked, recap);
+            let say = || {
+                settled.store(true, std::sync::atomic::Ordering::Release);
+                emitter.send(Event::new("aside.done", &session, event));
+            };
             match state.try_lock() {
                 // Nothing holds the state, so the row is kept before the answer is said.
                 Ok(mut held) => {
                     keep_aside(&project, &mut held, aside, tokens);
                     drop(held);
-                    settled.store(true, std::sync::atomic::Ordering::Release);
-                    emitter.send(Event::new("aside.done", &session, event));
+                    say();
                 }
                 // A turn holds the state. The answer is said now, and becomes a row, with the
                 // record written again, once the turn lets go of it (CMD-8, WATCH-18).
                 Err(std::sync::TryLockError::WouldBlock) => {
-                    settled.store(true, std::sync::atomic::Ordering::Release);
-                    emitter.send(Event::new("aside.done", &session, event));
+                    say();
                     if let Ok(mut held) = state.lock() {
                         keep_aside(&project, &mut held, aside, tokens);
                     }
                 }
-                Err(std::sync::TryLockError::Poisoned(_)) => {
-                    settled.store(true, std::sync::atomic::Ordering::Release);
-                    emitter.send(Event::new("aside.done", &session, event));
-                }
+                Err(std::sync::TryLockError::Poisoned(_)) => say(),
             }
         });
         Ok(json!({ "started": true, "besideTurn": beside_turn.is_some() }))
@@ -5371,6 +5292,130 @@ pub(crate) fn save(
     );
     handle.append_audit(turn, trail.events());
     archived
+}
+
+/// What was staged on a `/btw` line: the person's question, its pasted pictures, and its dropped
+/// pictures and PDFs. A recap (`btw` unset) is the driver's own question and takes none of them.
+fn staged_aside(
+    request: &Request,
+    btw: bool,
+) -> Result<
+    (
+        Option<String>,
+        Vec<bravebot_agent::turn::PastedImage>,
+        Vec<bravebot_agent::turn::Attachment>,
+    ),
+    Failure,
+> {
+    if !btw {
+        return Ok((None, Vec::new(), Vec::new()));
+    }
+    let question = request.string("question")?;
+    if let Some(refused) = crate::aside::refusal(&question) {
+        return Err(Failure::bad_request(refused));
+    }
+    // A text file dropped on the line is its name (DROP-4), put back by its marker.
+    let question = crate::attached::in_words(request, &question)?;
+    // What was staged on the line goes with the question (CMD-5): pasted pictures as they are
+    // (PASTE-2), and dropped pictures and PDFs read before the request exists (DROP-4).
+    if request
+        .params
+        .get("dropped")
+        .and_then(Value::as_array)
+        .is_some_and(|entries| !entries.is_empty())
+    {
+        return Err(Failure::bad_request(crate::aside::TEXT_FILE_IS_ITS_NAME));
+    }
+    let pasted = crate::attached::pasted(request)?;
+    let dropped = crate::attached::dropped(request)?
+        .into_iter()
+        .map(|(path, media)| bravebot_agent::turn::Attachment {
+            path,
+            media: media.to_string(),
+        })
+        .collect();
+    Ok((Some(question), pasted, dropped))
+}
+
+/// The request for a `/btw` asked while a turn runs, with the account and file authority it is
+/// asked under.
+///
+/// The turn holds the state, so the question is asked over the exchange the turn published at its
+/// latest request, under the turn's own file authority and account. It is refused before the turn
+/// has sent anything.
+fn asked_beside_turn(
+    published: &crate::turn::Published,
+    question: &str,
+    pasted: Vec<bravebot_agent::turn::PastedImage>,
+) -> Result<
+    (
+        bravebot_agent::aside::Question,
+        bravebot_agent::chatgpt::AccountSession,
+        bravebot_core::file_authority::FileAuthority,
+    ),
+    Failure,
+> {
+    let (Some(fork), Some(files), Some(account)) =
+        (published.exchange(), published.files(), published.account())
+    else {
+        return Err(Failure::bad_request(crate::aside::NOTHING_SENT_YET));
+    };
+    Ok((
+        bravebot_agent::aside::Question::over(fork, question, pasted),
+        account,
+        files,
+    ))
+}
+
+/// The request for a question asked while no turn runs, over the session's conversation, with the
+/// account and file authority it is asked under.
+///
+/// Taken on the thread that holds the state, because a conversation is not `Clone` and what
+/// crosses to the worker is the request and not the exchange.
+fn asked_at_rest(
+    state: &Mutex<State>,
+    question: Option<&str>,
+    pasted: Vec<bravebot_agent::turn::PastedImage>,
+    workspace: Option<&Workspace>,
+    dropped: &[bravebot_agent::turn::Attachment],
+) -> Result<
+    (
+        bravebot_agent::aside::Question,
+        bravebot_agent::chatgpt::AccountSession,
+        bravebot_core::file_authority::FileAuthority,
+    ),
+    Failure,
+> {
+    let mut state = state
+        .lock()
+        .map_err(|_| Failure::new(ErrorCode::Internal, "the session's state is unavailable"))?;
+    let asking = match question {
+        Some(question) => {
+            bravebot_agent::aside::Question::about(&state.conversation, question, pasted)
+        }
+        None => bravebot_agent::aside::Question::recap(&state.conversation),
+    };
+    // Read here, under a policy holding the read alone, before the question's own policy exists
+    // (`bravebot_agent::attached`). The rule each drop records is the session's (DROP-2), so it
+    // goes into the session's trust map, which the question's file authority below is built from.
+    let asking = match workspace {
+        Some(workspace) => {
+            let carried = bravebot_agent::attached::read(
+                workspace,
+                dropped,
+                &mut state.answers.trust,
+                &mut bravebot_session::audit::Trail::new(),
+            )
+            .map_err(|error| Failure::bad_request(error.to_string()))?;
+            asking.carrying(carried)
+        }
+        None => asking,
+    };
+    Ok((
+        asking,
+        state.account.clone(),
+        bravebot_core::file_authority::FileAuthority::new(state.answers.trust.clone()),
+    ))
 }
 
 /// Keep what a question asked beside the work came to: its row, if it was answered, and its cost.
