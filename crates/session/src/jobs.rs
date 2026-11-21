@@ -805,6 +805,156 @@ fn lock(_file: &std::fs::File, hold: Hold) -> bool {
     matches!(hold, Hold::Exclusive)
 }
 
+/// Why [`start_host`] started no background session. Each front end says it in its own words.
+#[derive(Debug)]
+pub enum StartError {
+    /// The line the session starts with could not be left for it, or the program could not be
+    /// started.
+    Spawn(std::io::Error),
+    /// The program started but did not come up and listen in time.
+    NotStarted,
+    /// Background sessions are not kept on this platform (BG-1).
+    Unsupported,
+}
+
+/// Start the background process for `id`, which is `program` run as the hidden `__bg-host`, and
+/// wait until it is live and listening (BG-2).
+///
+/// `first` is the line the process starts with, left where only it can take it; an empty one
+/// starts the session idle. A session started again runs in the directory it worked in, since its
+/// record is found from there. The process runs in `mode` for as long as it runs (BG-8). Once it is
+/// live a supervisor is made sure of (BG-11). The line is taken back on every failure.
+#[cfg(unix)]
+pub fn start_host(
+    program: &Path,
+    roster: &Roster,
+    id: &str,
+    first: &str,
+    directory: Option<&Path>,
+    mode: Mode,
+) -> Result<(), StartError> {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    roster
+        .leave_first_prompt(id, first)
+        .map_err(StartError::Spawn)?;
+    // The socket of the process that ended, which would otherwise be taken for the new one's. A
+    // live process's socket is its own, and another terminal may have started it a moment ago.
+    if !roster.get(id).is_some_and(|seen| seen.live)
+        && let Some(socket) = roster.socket_of(id)
+    {
+        let _ = std::fs::remove_file(socket);
+    }
+    let mut command = host_command(program, id, directory, mode);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Err(err) = command.spawn() {
+        let _ = roster.take_first_prompt(id);
+        return Err(StartError::Spawn(err));
+    }
+    let until = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < until {
+        if roster.get(id).is_some_and(|seen| seen.live)
+            && roster.socket_of(id).is_some_and(|s| s.exists())
+        {
+            ensure_supervisor(roster, program);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = roster.take_first_prompt(id);
+    Err(StartError::NotStarted)
+}
+
+#[cfg(not(unix))]
+pub fn start_host(
+    _program: &Path,
+    _roster: &Roster,
+    _id: &str,
+    _first: &str,
+    _directory: Option<&Path>,
+    _mode: Mode,
+) -> Result<(), StartError> {
+    Err(StartError::Unsupported)
+}
+
+/// Make sure a supervisor is running, so the process just started is started again if it ends
+/// between turns (BG-11, BG-12).
+///
+/// Done once the process is alive, not before. A supervisor that is about to end lets go of its lock
+/// and then looks at the roster once more, so a process alive by the time this looks at the lock is
+/// one it finds; a lock this finds free belongs to no supervisor and a new one is started. That
+/// order is what leaves no moment in which a live process has neither.
+///
+/// The session is running whatever becomes of this, so it is not undone when the supervisor cannot
+/// be started.
+#[cfg(unix)]
+fn ensure_supervisor(roster: &Roster, program: &Path) {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    if roster.has_supervisor() {
+        return;
+    }
+    let mut command = supervisor_command(program);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let Ok(mut supervisor) = command.spawn() else {
+        return;
+    };
+    // Until it holds its lock, so that the next start finds it rather than starting another, or
+    // until it has ended: it does when nothing is alive for it to watch.
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && !roster.has_supervisor() {
+        if !matches!(supervisor.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The command that runs the supervisor: the hidden `__bg-supervisor`, from a directory that no
+/// terminal holds open.
+#[cfg(unix)]
+pub fn supervisor_command(program: &Path) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
+    );
+    command.arg("__bg-supervisor").current_dir("/");
+    command
+}
+
+/// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
+#[cfg(unix)]
+pub fn host_command(
+    program: &Path,
+    id: &str,
+    directory: Option<&Path>,
+    mode: Mode,
+) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+        // This program started again for the person; it keeps the environment they set (SANDBOX-30).
+        bravebot_sandbox::programs::CodeSelectors::Kept,
+    );
+    command.arg("__bg-host").arg(id).arg(mode.word());
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1223,5 +1373,24 @@ mod tests {
         assert_eq!(entry.last_turn, None);
         entry.is(State::Idle, None);
         assert!(entry.last_turn.is_some());
+    }
+
+    /// BG-2: a program that does not exist starts nothing, says the start failed, and takes back
+    /// the line it left for the session, so a later start does not run it.
+    #[cfg(unix)]
+    #[test]
+    fn a_host_program_that_does_not_exist_starts_nothing_and_takes_back_its_line() {
+        let (dir, roster) = roster();
+        let missing = dir.path().join("no-such-bravebot");
+        let started = start_host(&missing, &roster, A, "hello", None, Mode::Ask);
+        assert!(
+            matches!(
+                started,
+                Err(StartError::Spawn(ref err)) if err.kind() == std::io::ErrorKind::NotFound
+            ),
+            "{started:?}"
+        );
+        assert_eq!(roster.take_first_prompt(A), None);
+        assert!(!roster.has_supervisor());
     }
 }
