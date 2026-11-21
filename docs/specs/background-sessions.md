@@ -110,6 +110,17 @@ and the check compares with the mode start-up chose, so after `/cd` into or out 
 settings choose another mode the session is handed over and goes on in the mode that checkout's
 settings choose, with nothing said.
 
+The desktop window's Chat › Continue in Background ([CMD-34](commands.md#CMD-34)) hands an open chat
+with no turn running to a background session as `/bg` does, through the bridge's
+`session.background`. The bridge starts the process with the `bravebot` program installed beside it,
+in the chat's project and permission mode, waits for the session to be listed as `/bg` does, and then
+closes the chat. It is refused, and the chat stays open, in bypass or auto, for an incognito chat or
+one with no record yet, after Sandbox moved the chat to a mode other than the one its settings
+choose, while a turn, a compaction or a question beside the work runs, while a goal or a watch is
+set, on a system where background sessions do not run, and where the `bravebot` program is not
+installed beside the bridge. Each refusal is a sentence saying why, and nothing is started. A chat
+handed over is listed as running in the background, and opening it again is refused as BG-9 says.
+
 Nothing else starts one. The planner has no tool for it, a delegate cannot, and neither can a hook,
 a loop tick, a watch or a file the session read. A prompt that arrived on a pipe is untrusted input
 and does not start one either.
@@ -127,6 +138,12 @@ the whole of what they asked for.
 `verified-by: bravebot_cli::background::the_host_is_started_with_the_mode_it_runs_in`
 `verified-by: bravebot_cli::running::a_handed_over_session_runs_in_the_mode_it_was_given`
 `verified-by: bravebot_cli::running::bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal`
+`verified-by: bravebot_session::jobs::starting_a_host_from_a_missing_program_is_a_start_error`
+`verified-by: bravebot_ui_bridge::background::each_refusal_of_bg_is_made_from_what_the_bridge_holds`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_no_record_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_in_bypass_or_auto_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_with_a_turn_running_is_not_handed_to_the_background`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened`
 
 <a id="BG-3"></a>
 ### BG-3: the supervisor moves process state and decides nothing from content
