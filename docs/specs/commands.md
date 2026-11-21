@@ -661,6 +661,15 @@ does not read:
   an earlier moment. The report says they are held by the running turn and states neither, and shows
   them once the turn has ended.
 
+  The desktop window's Chat › Session Status… shows the same report through the bridge's
+  `session.report.status`, in the Notice dialog, and is offered while a turn runs. The bridge
+  answers it from the session it keeps open and the session's report store, not from the state the
+  turn holds. While a turn runs the answer sets `rulesHeldByTurn` and carries no rules, and the
+  dialog says the trust and the programs are held by the running turn. Between turns it lists the
+  rules as `permissions.list` gives them. The desktop report covers the project, the folders open
+  beside it, the model, the agent definition, the permission and sandbox modes, the session's id and
+  title, its turns and tokens, and the rules. It does not cover the rest of the terminal's report.
+
 **Why `/jobs stop` is in the first kind.** A job is the turn's, and stopping one changes what the
 turn is running. The command does it only by setting a token the driver made for that job, which the
 turn reads at its own next step ([RUN-27](tools/run.md#RUN-27)), as the turn reads the stop key. A
@@ -800,6 +809,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
 `verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
 `verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
+`verified-by: bravebot_ui_bridge::reports_tests::the_status_report_leaves_out_the_rules_a_running_turn_holds`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Session Status… is offered on an open chat during a turn and after it and is routed to its own action, and ui/scripts/reports.test.mjs that the status says the rules are held by the running turn when the bridge sets rulesHeldByTurn and lists them otherwise; make check-ui runs both)`
 
 ## What a slash word is offered
 

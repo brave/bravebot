@@ -12,9 +12,68 @@ function load(path) {
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   return module.exports
 }
-const { costNotice, contextNotice, tokens } = load('src/renderer/reports.ts')
+const { costNotice, contextNotice, statusNotice, tokens } = load('src/renderer/reports.ts')
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
+
+// Session Status… (CMD-8), from what session.report.status answers.
+const status = (overrides) => ({
+  project: '/work/app',
+  folders: ['/work/app', '/work/lib'],
+  model: 'local/test',
+  definition: null,
+  permissionMode: 'acceptEdits',
+  sandboxMode: 'workspace-write',
+  sessionId: 'abc123',
+  title: 'Fix the parser',
+  turns: 2,
+  tokens: 2400,
+  rulesHeldByTurn: false,
+  rules: { paths: [], commands: [] },
+  ...overrides,
+})
+
+test('the status names the session, where it works, its modes and what it has spent', () => {
+  const notice = statusNotice(status())
+  assert.equal(notice.title, 'Session status')
+  const lines = notice.body.split('\n')
+  assert.match(lines[0], /^Session +Fix the parser$/)
+  assert.match(lines[1], /^Session id +abc123$/)
+  assert.match(lines[2], /^Directory +\/work\/app$/)
+  assert.match(lines[3], /^Also open +\/work\/lib$/)
+  assert.match(lines[4], /^Model +local\/test$/)
+  assert.match(lines[5], /^Permissions +Accept edits$/)
+  assert.match(lines[6], /^Sandbox +Workspace write$/)
+  assert.match(lines[7], /^Spent +2 turns · 2\.4k tokens$/)
+  assert.doesNotMatch(notice.body, /Agent/)
+  assert.match(statusNotice(status({ title: null, sessionId: null })).body, /^Session +untitled, nothing sent yet\nDirectory/)
+})
+
+test('between turns the status lists the rules', () => {
+  const empty = statusNotice(status()).body
+  assert.match(empty, /\nTrust +nothing vouched for/)
+  assert.match(empty, /\nPrograms +every run is put to you/)
+  assert.doesNotMatch(empty, /held by the running turn/)
+  const listed = statusNotice(status({
+    rules: {
+      paths: [{ path: '', shownPath: '', integrity: 'trusted' }, { path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }],
+      commands: [{ display: 'cargo test', shownDirectory: '.' }],
+    },
+  })).body.split('\n')
+  const at = listed.findIndex((line) => line.startsWith('Trust '))
+  assert.match(listed[at], /^Trust +Project root · trusted$/)
+  assert.match(listed[at + 1], /^ +vendor · untrusted$/)
+  assert.match(listed[at + 2], /^Trusted commands +cargo test · in \.$/)
+})
+
+test('mid-turn the status says the rules are held by the running turn and states neither', () => {
+  const notice = statusNotice(status({ rulesHeldByTurn: true, rules: null }))
+  assert.match(notice.body, /\nTrust +held by the running turn$/m)
+  assert.match(notice.body, /\nPrograms +held by the running turn$/)
+  assert.match(notice.subtitle, /running turn holds the trust and the vouched programs\. They are shown once it ends\./)
+  assert.doesNotMatch(notice.body, /nothing vouched for|every run is put to you|Trusted commands/)
+  assert.equal(statusNotice(status()).subtitle, undefined)
+})
 
 // `Modal` draws through a portal, which one server pass cannot render, so it is drawn in place.
 const inPlaceModal = {

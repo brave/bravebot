@@ -219,6 +219,7 @@ export function installMenu(window: BrowserWindow): void {
         item('turn.rewind'),
         item('session.note'),
         SEPARATOR,
+        item('session.status'),
         item('session.cost'),
         item('session.context'),
         item('session.request'),

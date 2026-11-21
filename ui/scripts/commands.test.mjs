@@ -30,8 +30,8 @@ test('a note is offered on an open chat with no turn running, which holds the re
   assert.equal(isEnabled(note.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), false)
 })
 
-test('token spend, the context breakdown and the last request are offered on an open chat, during a turn as well as after it', () => {
-  for (const [id, label] of [['session.cost', 'Token Spend…'], ['session.context', 'Context Breakdown…'], ['session.request', 'Last Request…']]) {
+test('the session status, token spend, the context breakdown and the last request are offered on an open chat, during a turn as well as after it', () => {
+  for (const [id, label] of [['session.status', 'Session Status…'], ['session.cost', 'Token Spend…'], ['session.context', 'Context Breakdown…'], ['session.request', 'Last Request…']]) {
     const report = command(id)
     assert.equal(report.label, label)
     assert.equal(isEnabled(report.requires, NOTHING_OPEN), false, `${id} with nothing open`)
@@ -43,6 +43,7 @@ test('token spend, the context breakdown and the last request are offered on an 
 test('the menu places the reports in the Chat menu', () => {
   const menu = readFileSync('src/main/menu.ts', 'utf8')
   const chat = menu.slice(menu.indexOf("label: 'Chat'"), menu.indexOf("role: 'windowMenu'"))
+  assert.match(chat, /item\('session\.status'\)/)
   assert.match(chat, /item\('session\.cost'\)/)
   assert.match(chat, /item\('session\.context'\)/)
   assert.match(chat, /item\('session\.request'\)/)
@@ -56,9 +57,10 @@ test('the router sends each report command to its own action', () => {
   const called = []
   const actions = new Proxy({}, { get: (_, name) => () => called.push(name) })
   useCommandRouter(actions)
+  listener('session.status')
   listener('session.cost')
   listener('session.context')
   listener('session.request')
-  assert.deepEqual(called, ['cost', 'context', 'request'])
+  assert.deepEqual(called, ['status', 'cost', 'context', 'request'])
   delete globalThis.window
 })

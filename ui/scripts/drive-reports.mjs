@@ -1,4 +1,4 @@
-// Chat › Token Spend…, Context Breakdown… and Last Request… (CMD-15, CMD-19, TRACE-9), through the real menu,
+// Chat › Session Status…, Token Spend…, Context Breakdown… and Last Request… (CMD-8, CMD-15, CMD-19, TRACE-9), through the real menu,
 // Electron IPC and the Rust bridge. Only the model server and the folder picker are substituted.
 // Each report is opened before any turn, while a turn is held open by the model server (CMD-8),
 // and after the turn ends.
@@ -130,6 +130,12 @@ try {
   assert.equal((await report('session.cost', 'Token spend', 'token-spend-mid-turn')).body, 'Nothing spent yet.')
   assert.match((await report('session.context', 'Context breakdown')).body, /has not been measured yet/)
   assert.ok((await lastRequest()).spans.some(span => span.text === 'Say done.'), 'mid-turn, Last Request shows the request the running turn sent')
+  const heldStatus = await report('session.status', 'Session status', 'status-mid-turn')
+  assert.match(heldStatus.body, /\nTrust +held by the running turn$/m)
+  assert.match(heldStatus.body, /\nPrograms +held by the running turn$/m)
+  assert.match(heldStatus.whole, /They are shown once it ends\./)
+  assert.doesNotMatch(heldStatus.body, /nothing vouched for|every run is put to you|Project root/)
+  console.log(`PASS: mid-turn, Session Status says the rules are held by the turn:\n${heldStatus.body}`)
   console.log('PASS: during a turn the reports open without waiting for it')
   release()
   await until(async () => (await ended()).length > before, 'turn end')
@@ -145,6 +151,15 @@ try {
   assert.match(context.body, /^Last request +1\.2k tokens · context \d+%/)
   assert.match(context.body, /System prompt/)
   console.log(`PASS: after the turn, Token Spend lists turn 1 and Context Breakdown is approximate:\n${context.body}`)
+
+  // After the turn: the status lists the rules the turn held.
+  const afterStatus = await report('session.status', 'Session status', 'status')
+  assert.match(afterStatus.body, /^Session +Say done\./)
+  assert.match(afterStatus.body, /\nSpent +1 turn · /)
+  assert.match(afterStatus.body, /\nTrust +Project root · trusted/)
+  assert.match(afterStatus.body, /\nPrograms +every run is put to you/)
+  assert.doesNotMatch(afterStatus.body, /held by the running turn/)
+  console.log(`PASS: after the turn, Session Status lists the rules:\n${afterStatus.body}`)
 
   // After the turn: the instruction file with its bytes, then each span under its TRACE-9 label.
   // The project's AGENTS.md holds an escape and a bell, which the bridge sends as their pictures.
