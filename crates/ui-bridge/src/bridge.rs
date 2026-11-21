@@ -549,7 +549,13 @@ impl Bridge {
                 let directory = request.optional_string("directory").map(PathBuf::from);
                 let settings =
                     crate::settings::layers(directory.as_deref(), self.settings.as_deref());
-                Ok(crate::effort::get(&settings))
+                // The lock is held only to clone the handle on the session's account session.
+                let began = request
+                    .optional_string("session")
+                    .and_then(|handle| self.open.get(&handle))
+                    .and_then(|open| Some(open.state.lock().ok()?.account.clone()))
+                    .map(|account| account.effort());
+                Ok(crate::effort::get(&settings, began))
             }
             "effort.set" => crate::effort::set(request),
             "language.get" => Ok(crate::language::get(request)),
@@ -5666,7 +5672,7 @@ fn forget_trust(project: &Path) -> Result<(), Failure> {
 
 #[cfg(test)]
 #[path = "../../session/test-support/profile.rs"]
-mod test_profile;
+pub(crate) mod test_profile;
 
 #[cfg(test)]
 mod coverage_tests {

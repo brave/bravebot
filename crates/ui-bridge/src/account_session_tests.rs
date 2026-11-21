@@ -472,3 +472,72 @@ fn a_session_opens_with_the_level_its_project_settles_on() {
     assert_eq!(level(&outranked), Some(Effort::Max));
     assert_eq!(level(&free), Some(Effort::Low));
 }
+
+/// The window's picker names the level a ChatGPT conversation is sent (CHATGPT-10), so `effort.get`
+/// with an open session's handle reports the level that session began with beside the record. A
+/// level chosen after the session opened changes the record and leaves the starting level as it
+/// was, and a session that began with no level reports null.
+#[test]
+fn effort_get_names_the_level_an_open_session_began_with_whatever_is_chosen_after() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("a project directory");
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    let mut call = |method: &str, params: Value| {
+        let line = json!({"id": 1, "method": method, "params": params});
+        bridge
+            .dispatch(&Request::parse(&line.to_string()).unwrap())
+            .unwrap_or_else(|failure| panic!("{method} fails: {failure:?}"))
+    };
+    let open = |call: &mut dyn FnMut(&str, Value) -> Value| {
+        call("session.new", json!({"directory": directory.path()}))["session"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    call("effort.set", json!({"level": null}));
+    let unset = open(&mut call);
+    call("effort.set", json!({"level": "low"}));
+    let low = open(&mut call);
+    call("effort.set", json!({"level": "high"}));
+
+    let report = call(
+        "effort.get",
+        json!({"directory": directory.path(), "session": low}),
+    );
+    assert_eq!(report["recorded"], "high");
+    assert_eq!(report["sessionBegan"], "low");
+
+    let report = call(
+        "effort.get",
+        json!({"directory": directory.path(), "session": unset}),
+    );
+    assert_eq!(report["recorded"], "high");
+    let report = report.as_object().unwrap();
+    assert_eq!(report.get("sessionBegan"), Some(&Value::Null));
+}
+
+/// Bots and discovery calls name no open session, and a handle the bridge does not hold is not an
+/// error: either way the reply is the one before CHATGPT-10's desktop note, with no `sessionBegan`.
+#[test]
+fn effort_get_without_an_open_session_carries_no_starting_level() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("a project directory");
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    for params in [
+        json!({"directory": directory.path()}),
+        json!({"directory": directory.path(), "session": "no-such-session"}),
+    ] {
+        let line = json!({"id": 1, "method": "effort.get", "params": params});
+        let report = bridge
+            .dispatch(&Request::parse(&line.to_string()).unwrap())
+            .expect("effort.get answers");
+        let report = report.as_object().unwrap();
+        assert!(!report.contains_key("sessionBegan"), "{report:?}");
+        assert!(report.contains_key("recorded"));
+    }
+}
