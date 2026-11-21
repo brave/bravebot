@@ -245,6 +245,8 @@ struct AsideOut {
     /// Set by the worker once the answer is a row and the event has gone, so the next question
     /// may be asked.
     settled: Arc<std::sync::atomic::AtomicBool>,
+    /// The target of the turn it was asked beside, so stopping that turn stops it too (CMD-8).
+    beside_turn: Option<u64>,
 }
 
 impl AsideOut {
@@ -1888,6 +1890,9 @@ impl Bridge {
         if let Some(handing_off) = &open.handing_off {
             handing_off.cancel();
         }
+        if let Some(out) = open.aside.as_ref().filter(|out| out.beside_turn.is_some()) {
+            out.cancel.cancel();
+        }
         let workers = self.workers.remove(&handle).unwrap_or_default();
         // The end of a session that began is one of the workers this returns, so a host that waits for
         // them waits for it, and it follows the turn that was running (HOOK-10).
@@ -2682,9 +2687,12 @@ impl Bridge {
     /// [`bravebot_agent::aside::Question::recap`], the ones the terminal's `/btw` and `/recap`
     /// make at rest, over the exchange as it stands and with no tools. The conversation is not
     /// changed: the answer is kept as an aside in the session's record and comes back as an
-    /// `aside.done` event. Refused with `turn_in_flight` while a turn runs: `/recap` waits for the
-    /// turn (CMD-16), and a `/btw` beside a turn needs the exchange the turn published, which the
-    /// bridge does not hold yet.
+    /// `aside.done` event. A recap is refused with `turn_in_flight` while a turn runs, because
+    /// `/recap` waits for the turn (CMD-16). A `/btw` while a turn runs is asked with
+    /// [`bravebot_agent::aside::Question::over`] the exchange the turn published at its latest
+    /// request, under the turn's own file authority, and is stopped with the turn (CMD-8). It is
+    /// refused before the turn has sent anything. The answer is said at once and becomes a row
+    /// once the turn lets go of the session's state.
     fn ask_aside(&mut self, request: &Request, btw: bool) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let requested_model = crate::models::selection(request.params.get("model"))?;
@@ -2704,7 +2712,14 @@ impl Bridge {
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        open.ready_for_work()?;
+        // A `/btw` runs beside a turn (CMD-8); anything else waits for it (CMD-16).
+        let beside_turn = match (&question, &open.running) {
+            (Some(_), Some(running)) => Some(running.target),
+            _ => {
+                open.ready_for_work()?;
+                None
+            }
+        };
         if open.aside.as_ref().is_some_and(AsideOut::is_out) {
             return Err(Failure::bad_request(
                 "a question asked beside the work is still out; wait for its answer or stop it",
@@ -2719,24 +2734,41 @@ impl Bridge {
         )?;
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
-        // Taken here, on the thread that holds the state, because a conversation is not `Clone`
-        // and what crosses to the worker is the request and not the exchange.
-        let (asking, account, trust) = {
-            let state = state.lock().map_err(|_| {
-                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
-            })?;
-            (
-                match &question {
-                    Some(question) => bravebot_agent::aside::Question::about(
-                        &state.conversation,
-                        question,
-                        Vec::new(),
-                    ),
-                    None => bravebot_agent::aside::Question::recap(&state.conversation),
-                },
-                state.account.clone(),
-                state.answers.trust.clone(),
-            )
+        let (asking, account, files) = match (&question, beside_turn) {
+            // The turn holds the state, so the question is asked over the exchange the turn
+            // published at its latest request, under the turn's own file authority and account.
+            (Some(question), Some(_)) => {
+                let published = &open.published;
+                let (Some(fork), Some(files), Some(account)) =
+                    (published.exchange(), published.files(), published.account())
+                else {
+                    return Err(Failure::bad_request(crate::aside::NOTHING_SENT_YET));
+                };
+                (
+                    bravebot_agent::aside::Question::over(fork, question, Vec::new()),
+                    account,
+                    files,
+                )
+            }
+            // Taken here, on the thread that holds the state, because a conversation is not
+            // `Clone` and what crosses to the worker is the request and not the exchange.
+            _ => {
+                let state = state.lock().map_err(|_| {
+                    Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+                })?;
+                (
+                    match &question {
+                        Some(question) => bravebot_agent::aside::Question::about(
+                            &state.conversation,
+                            question,
+                            Vec::new(),
+                        ),
+                        None => bravebot_agent::aside::Question::recap(&state.conversation),
+                    },
+                    state.account.clone(),
+                    bravebot_core::file_authority::FileAuthority::new(state.answers.trust.clone()),
+                )
+            }
         };
         let cancel = Cancel::new();
         let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2744,6 +2776,7 @@ impl Bridge {
             open.aside = Some(AsideOut {
                 cancel: cancel.clone(),
                 settled: Arc::clone(&settled),
+                beside_turn,
             });
         }
         let emitter = self.emitter.clone();
@@ -2751,14 +2784,14 @@ impl Bridge {
         self.workers_of(&handle).spawn(move || {
             let egress = Egress::new();
             let mut sink = bravebot_session::audit::Trail::new();
-            let done = agent_turn::aside(
+            let done = agent_turn::aside_sharing(
                 &config,
                 &egress,
                 &account,
                 asking,
                 model.as_deref(),
                 &mut sink,
-                trust,
+                files,
                 |_written| {},
                 &cancel,
             );
@@ -2766,11 +2799,30 @@ impl Bridge {
             let asked = question.unwrap_or_else(|| crate::aside::RECAP_LABEL.to_string());
             let (event, aside, tokens) =
                 crate::aside::settle(done, cancel.is_cancelled(), asked, recap);
-            keep_aside(&project, &state, aside, tokens);
-            settled.store(true, std::sync::atomic::Ordering::Release);
-            emitter.send(Event::new("aside.done", &session, event));
+            match state.try_lock() {
+                // Nothing holds the state, so the row is kept before the answer is said.
+                Ok(mut held) => {
+                    keep_aside(&project, &mut held, aside, tokens);
+                    drop(held);
+                    settled.store(true, std::sync::atomic::Ordering::Release);
+                    emitter.send(Event::new("aside.done", &session, event));
+                }
+                // A turn holds the state. The answer is said now, and becomes a row, with the
+                // record written again, once the turn lets go of it (CMD-8, WATCH-18).
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    settled.store(true, std::sync::atomic::Ordering::Release);
+                    emitter.send(Event::new("aside.done", &session, event));
+                    if let Ok(mut held) = state.lock() {
+                        keep_aside(&project, &mut held, aside, tokens);
+                    }
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    settled.store(true, std::sync::atomic::Ordering::Release);
+                    emitter.send(Event::new("aside.done", &session, event));
+                }
+            }
         });
-        Ok(json!({ "started": true }))
+        Ok(json!({ "started": true, "besideTurn": beside_turn.is_some() }))
     }
 
     /// Stop the question asked beside the work, if one is out. Nothing out is not an error: the
@@ -3208,6 +3260,16 @@ impl Bridge {
                     .note(format!("client {client} cancelled the turn"));
             }
             running.cancel.cancel();
+            // A question asked beside the turn is stopped with it (CMD-8). One the turn ended
+            // before is left out: the turn it was asked beside is not what this stops.
+            if !running.is_finished()
+                && let Some(out) = open
+                    .aside
+                    .as_ref()
+                    .filter(|out| out.beside_turn == Some(running.target))
+            {
+                out.cancel.cancel();
+            }
         }
         // Cancel Turn is the window's stop key, and a compaction is what it stops while one runs
         // (CMD-34). A cancel that names a target names a turn or a run, and a compaction is
@@ -4710,6 +4772,7 @@ fn work(work: Work) {
     let task = task.with_file_authority(file_authority.clone());
     // A question asked beside this turn reads files under the turn's own authority (CMD-8).
     published.keep_files(file_authority.clone());
+    published.keep_account(state.account.clone());
     let programs = state.answers.programs.clone();
     // The session's language servers (LSP-8), taken for this turn and put back after it. The
     // first turn builds the set. Building it starts no server: one starts on the first question
@@ -5258,21 +5321,18 @@ pub(crate) fn save(
 
 /// Keep what a question asked beside the work came to: its row, if it was answered, and its cost.
 ///
-/// Waits for the session's state, which a turn holds while it runs, so an answer that arrives
-/// during a turn becomes a row once the turn has ended. The record is written again for the row,
-/// where the session has one; a session with none writes its asides with its first turn.
+/// The caller holds the session's state, which a turn holds while it runs, so an answer that
+/// arrives during a turn becomes a row once the turn has ended. The record is written again for
+/// the row, where the session has one; a session with none writes its asides with its first turn.
 fn keep_aside(
     project: &std::path::Path,
-    state: &Mutex<State>,
+    state: &mut State,
     aside: Option<bravebot_session::sessions::Aside>,
     tokens: u64,
 ) {
     if aside.is_none() && tokens == 0 {
         return;
     }
-    let Ok(mut state) = state.lock() else {
-        return;
-    };
     // Charged to the session as an aside is in the terminal: the request was made and spent what
     // it spent.
     state.tokens += tokens;
@@ -5283,7 +5343,7 @@ fn keep_aside(
         let turn = state.turns;
         save(
             project,
-            &mut state,
+            state,
             turn,
             &bravebot_session::audit::Trail::default(),
         );

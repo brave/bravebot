@@ -73,6 +73,11 @@ pub fn refusal(question: &str) -> Option<&'static str> {
         .then_some("/btw needs a question after it")
 }
 
+/// Why a `/btw` asked while a turn runs is refused before the turn has sent its first request:
+/// there is no exchange of the turn's to ask it over yet (CMD-8).
+pub const NOTHING_SENT_YET: &str = "the turn has not sent anything to the model yet, so there is nothing to ask about; \
+     ask again in a moment";
+
 /// The asides a record kept, as a window draws them on opening the session.
 ///
 /// `answer` is null where the record did not keep it, and the window says so rather than drawing

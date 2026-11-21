@@ -829,6 +829,11 @@ carried out or queued as above.
 `verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_in_the_record_when_the_session_is_opened_again`
 `verified-by: bravebot_ui_bridge::asking_aside::an_empty_btw_is_refused`
 `verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_while_one_is_out_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_before_the_turn_has_sent_anything_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_beside_a_turn_is_asked_over_the_turns_exchange_and_answered_while_it_runs`
+`verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_beside_a_turn_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::stopping_the_turn_stops_the_btw_beside_it`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_still_out_when_the_turn_ends_is_answered_and_recorded`
 `verified-by: bravebot_ui_bridge::aside::an_empty_question_is_refused`
 
 ## What a slash word is offered
