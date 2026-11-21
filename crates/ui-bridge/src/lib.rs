@@ -58,6 +58,7 @@ pub mod effort;
 pub mod emit;
 pub mod enhance;
 pub mod fork;
+pub mod handoff;
 pub mod help;
 pub mod hooks;
 #[cfg(unix)]

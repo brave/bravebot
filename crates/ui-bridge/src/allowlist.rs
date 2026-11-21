@@ -337,6 +337,10 @@ pub const DENIED: &[&str] = &[
     // only client of the host today has no menu to ask from.
     "session.compact",
     "session.compact.cancel",
+    // Asking for a brief to hand a chat off from, which a person asks for from the window's Chat
+    // menu (SESSION-34, CMD-34). The only client of the host today has no menu to ask from.
+    "session.handoff",
+    "session.handoff.cancel",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",
