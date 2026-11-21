@@ -1213,6 +1213,12 @@ export interface EventMap {
    * shown. `unusable` is an empty rewrite or one past `limit` characters. `failed` carries `message`.
    */
   'enhance.done': { status: 'ready' | 'untrusted' | 'unusable' | 'stopped' | 'failed'; text?: string; removed?: number; limit?: number; message?: string }
+  /**
+   * What a `session.compact` request came back with (CMD-34). `compacted` carries `summarised`, the
+   * messages no longer sent word for word, and `kept`, those still sent. `nothing` means there was
+   * nothing worth shortening. `failed` carries `message`.
+   */
+  'compact.done': { status: 'compacted' | 'nothing' | 'stopped' | 'failed'; summarised?: number; kept?: number; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */

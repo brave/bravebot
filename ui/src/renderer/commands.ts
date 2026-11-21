@@ -46,6 +46,8 @@ export interface CommandActions {
   changelog: () => void
   /** Ask for a note to keep on the open chat's record. */
   note: () => void
+  /** Ask for an optional focus, then shorten the open chat's conversation (CMD-34). */
+  compact: () => void
   doctor: () => void
   /** Show the open session's status, its rules only between turns (CMD-8). */
   status: () => void
@@ -155,6 +157,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.context()
         case 'session.request':
           return act.request()
+        case 'session.compact':
+          return act.compact()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':

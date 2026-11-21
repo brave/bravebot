@@ -43,6 +43,7 @@ export type CommandId =
   | 'session.cost'
   | 'session.context'
   | 'session.request'
+  | 'session.compact'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -199,6 +200,9 @@ export const COMMANDS: readonly Command[] = [
   { id: 'session.cost', label: 'Token Spend…', requires: 'session' },
   { id: 'session.context', label: 'Context Breakdown…', requires: 'session' },
   { id: 'session.request', label: 'Last Request…', requires: 'session' },
+  // `/compact [focus]` (CMD-34). Not while a turn runs, since the turn holds the conversation. No
+  // accelerator, because it asks for a focus first.
+  { id: 'session.compact', label: 'Compact Conversation…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',

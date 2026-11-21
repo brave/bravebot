@@ -643,6 +643,9 @@ const ALLOWED = new Set([
   'turn.interject',
   'session.enhance',
   'session.enhance.cancel',
+  // Shortening the conversation from the Chat menu, and stopping that (CMD-34).
+  'session.compact',
+  'session.compact.cancel',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',

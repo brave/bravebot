@@ -213,6 +213,11 @@ export interface Live {
   interjected?: Interjection[]
   /** The turn that is running is the bot's memory update, which takes no line from the person. */
   consolidating?: boolean
+  /**
+   * What is running is a Compact Conversation… request and not a turn (CMD-34). It is drawn as a
+   * turn, and a message typed meanwhile waits for it rather than going into it.
+   */
+  compacting?: boolean
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null

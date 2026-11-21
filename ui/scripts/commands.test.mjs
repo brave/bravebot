@@ -64,3 +64,18 @@ test('the router sends each report command to its own action', () => {
   assert.deepEqual(called, ['status', 'cost', 'context', 'request'])
   delete globalThis.window
 })
+
+test('Compact Conversation… is offered on an open chat with no turn running, and the menu and router reach it (CMD-34)', () => {
+  const compact = command('session.compact')
+  assert.equal(compact.label, 'Compact Conversation…')
+  assert.equal(compact.requires, 'forkable')
+  assert.equal(compact.accelerator, undefined, 'it asks for a focus first, so it has no shortcut')
+  assert.equal(isEnabled(compact.requires, NOTHING_OPEN), false)
+  assert.equal(isEnabled(compact.requires, { ...NOTHING_OPEN, hasSession: true }), true)
+  assert.equal(isEnabled(compact.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), false)
+  assert.match(readFileSync('src/main/menu.ts', 'utf8'), /item\('session\.compact'\)/)
+  assert.match(readFileSync('src/renderer/commands.ts', 'utf8'), /case 'session\.compact':\s*return act\.compact\(\)/)
+  const allowed = readFileSync('src/main/index.ts', 'utf8')
+  assert.match(allowed, /'session\.compact',/)
+  assert.match(allowed, /'session\.compact\.cancel',/)
+})

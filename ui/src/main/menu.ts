@@ -223,6 +223,7 @@ export function installMenu(window: BrowserWindow): void {
         item('session.cost'),
         item('session.context'),
         item('session.request'),
+        item('session.compact'),
       ],
     },
     { role: 'windowMenu' },

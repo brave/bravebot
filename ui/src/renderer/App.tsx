@@ -51,6 +51,7 @@ import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
 import { useEnhance } from './use-enhance'
+import { useCompact } from './use-compact'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, setExperience, dropConversation, experienceError } from './experience'
@@ -64,6 +65,7 @@ import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
+import { AskDialog } from './components/AskDialog'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
@@ -180,6 +182,7 @@ export function App(): React.JSX.Element {
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
+  const compaction = useCompact({ openedLives, updateSession, setProblem })
   const { chosen, writeAppearance } = useAppearance()
 
   // Read inside `showSession`, which is installed once for the same reason. The list lives in the
@@ -223,6 +226,7 @@ export function App(): React.JSX.Element {
     void readSummons()
     const stop = window.bravebot.onEvent((message: BridgeEvent) => {
       if (message.event === 'enhance.done' && message.session) enhancement.receive(message.session, message.data)
+      else if (message.event === 'compact.done' && message.session) compaction.receive(message.session, message.data)
       else if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
       // The list holds two things this window did not write — the session behind a bot and how
@@ -673,6 +677,14 @@ export function App(): React.JSX.Element {
   // The open chat's handle while its note dialog is up.
   const [noting, setNoting] = useState<string | null>(null)
   const askNote = useCallback(() => { if (liveRef.current) setNoting(liveRef.current.handle) }, [])
+  // The open chat's handle while the dialog asking for a compaction's focus is up (CMD-34).
+  const [compacting, setCompacting] = useState<string | null>(null)
+  const askCompact = useCallback(() => { if (liveRef.current) setCompacting(liveRef.current.handle) }, [])
+  const compact = useCallback(
+    (focus: string) => (compacting ? compaction.compact(compacting, focus) : Promise.resolve(true)),
+    [compacting, compaction.compact],
+  )
+
   const addNote = useCallback(async (text: string) => {
     if (!noting) return true
     try {
@@ -983,6 +995,7 @@ export function App(): React.JSX.Element {
     caffeinate: () => void caffeinate(),
     changelog: () => void changelog(),
     note: askNote,
+    compact: askCompact,
     doctor: () => void doctor(),
     status: () => void status(),
     cost: () => void cost(),
@@ -1256,6 +1269,11 @@ export function App(): React.JSX.Element {
       )}
       {noting && live?.handle === noting && (
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
+      )}
+      {compacting && live?.handle === compacting && (
+        <AskDialog title="Compact conversation" subtitle="Summarises earlier messages so less is sent to the model."
+          label="Focus (optional)" action="Compact" optional rows={2} test="compact" className="compact-dialog"
+          running={live.running} onCancel={() => setCompacting(null)} onConfirm={compact} />
       )}
       {keepAwake.asking && (
         <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />
