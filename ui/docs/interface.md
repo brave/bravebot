@@ -625,7 +625,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 
 | Key | Menu item | What |
 | --- | --- | --- |
-| `⌘N` | File › New Chat | Start a chat in the project used last, or pick a folder when there is none |
+| `⌘N` | File › New Chat | Start a chat in the project used last, or pick a folder when there is none. On macOS with every window closed it opens a window first and starts the chat there; the items that need a window are greyed until one is open |
 | `⇧⌘W` | File › Close Chat | Close the chat, `⌘W` still closes the window |
 | `⌘F` | View › Find in Conversation | Open the find bar and focus its field; needs a session |
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
@@ -751,8 +751,9 @@ crates/ui-bridge/     the Rust library and the bravebot-rpc binary
   src/bin/bravebot-rpc.rs   read stdin, frame stdout, nothing else
   tests/                    the integration suites, including the refusal guarantees
 crates/ui-files/  descriptor-based helper for previews and bot memory
-src/main/                   Electron main: one window, one child process, a narrow channel
+src/main/                   Electron main: one instance per profile, one window, one child process, a narrow channel
   index.ts                  the window, and the allow-list of what the renderer may call
+  single-instance.ts        the lock per user-data directory, and raising the main window for a second launch
   bridge.ts                 the child process, and its lifetime
   menu.ts                   the application menu, built from the shared command list
   bots.ts                   the bots, and the two files each one speaks through

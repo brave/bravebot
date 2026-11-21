@@ -97,6 +97,18 @@ matter:
   `schedule-command.test.mjs` pins the `/schedule` line in the composer: which typed lines go to the
   bridge as `schedule.command`, that the answer is drawn as a transcript row and never sent to the
   model, and that a `schedule.ran` event draws the line a `run-now` ends with.
+- `single-instance.test.mjs` and `single-instance-electron.test.mjs` pin the one-instance rule. The
+  first runs `src/main/single-instance.ts` against a fake `app` and fake windows (a launch that does
+  not get the lock quits, a second launch restores, shows and focuses a minimised main window,
+  builds one when there is none, never raises another window, and reads nothing the second process
+  passed) and reads `src/main/index.ts` as text for the lock coming before every window, bridge and
+  state read. The second starts the real Electron on Linux under `xvfb-run`, on one
+  `--user-data-dir` and on another: the second launch on a profile exits 0 with no window, the first
+  stays and raises its window, a launch on another profile runs beside it, and a restart through
+  `relaunchUnlessRunning` starts a process that holds the lock. Elsewhere it prints `skipped`, and
+  under `CI` on Linux a missing `xvfb-run` or Electron fails it. On macOS or Windows,
+  `SINGLE_INSTANCE_ELECTRON=1 node --test scripts/single-instance-electron.test.mjs` runs it on the
+  desktop with scratch profiles, `HOME` and `BRAVEBOT_HOME`; it opens and closes small windows.
 - After building, `node scripts/drive-turn-details.mjs`: notices, completed-turn usage,
   live and unavailable audits, background delivery, disclosure persistence, cancellation,
   focus restoration and the narrow context drawer, using an isolated profile and synthetic events.
@@ -158,6 +170,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
 | `pnpm run drive:session-list` | A list of 260 sessions: that it draws a page and a **Show more** row that moves focus to the first row it drew, that search reaches past the page, that the open session and a working one stay drawn past the page, that grouped every checkout keeps a heading counting all its sessions and a **Show more** row of its own, that the archive has its own page, and that a row's actions menu is mounted only while open and opens, shuts and returns focus by mouse and keyboard |
 | `node scripts/drive-close-chat.mjs` (after `pnpm run bridge && pnpm exec electron-vite build`) | **Close Chat** on a chat row's right-click menu, through the real menu and command router against a mocked bridge: a chat still working behind the open one is closed from its own row (the agent is told to close its handle, its working mark goes, the open chat stays open), as is a draft behind the open one, whose row id is the draft's and not a record's; the open draft's own row closes it; a row nothing is open for closes nothing |
+| `node scripts/drive-window-lifecycle.mjs` (after `pnpm run bridge && pnpm exec electron-vite build`; macOS only, it skips elsewhere because closing the last window quits the app) | **File › New Chat** after the main window was closed, twice, in real Electron with a scratch profile and state directory and a mocked bridge: no uncaught exception in the main process, Close Chat, Send, Cancel Turn and Find are greyed with no window while New Chat stays enabled, a command that needs a window builds none, and New Chat builds one window whose page starts a chat. The unit-level cases (a fake `electron`, Open Recent, a late close of an earlier window, a context menu with no window) are in `scripts/menu-window.test.mjs`, run by `node --test scripts/*.test.mjs` |
 | `pnpm run drive:window-fault` | A failure of the page ([DIAG-10](../../docs/specs/diagnostic-log.md#DIAG-10)), in a real window with a real agent and a scratch state directory: the browser refuses one `removeChild` with a `NotFoundError`, as it does when a node React expects to find has gone, and the window shows the fault screen, as an alert, with the error and the components React was drawing, writes one `window.fault` line holding the kind and the error's name and nothing of its message, and comes back on **Reload**. Screenshots in light and dark |
 | `pnpm run drive:pointer-crash` | The renderer process survives the pointer ([#3581](https://github.com/brave/bravebot/issues/3581)), in a real window with a real agent, a scratch state directory and Playwright's mouse: a session is written through the window, its record is marked as the terminal's, and in a window short enough that the inspector column scrolls the pointer is swept over the transcript in 8 launches (`POINTER_RUNS`). A page that ends (`crash` event, `window.fault kind=renderer_gone` line) fails the run. Not covered: the operating system's own pointer, which an attempt to post with CoreGraphics did not deliver to the page. The rule it protects is also pinned by `scripts/context-column-contain.test.mjs` |
 | `pnpm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
@@ -223,6 +236,11 @@ pinned to light and that its renderer bundle cannot switch appearance at runtime
 
 ### Which drivers touch your real profile
 
+The app is one instance per profile (`--user-data-dir`, or the default `userData`). A driver that
+launches without `--user-data-dir` while the app is open on the default profile, for example from
+`pnpm run dev`, now exits at once and the open app raises its window. A driver with a profile of its
+own, which is every driver that sets `--user-data-dir`, runs beside any other instance.
+
 **Many drivers run against the real user profile.** A driver that launches Electron without
 `--user-data-dir` uses the app's real `userData`, so it reads and writes your `bravebot-ui.json`
 (columns, bots, recents, theme) and `experience.json`, and the agent it starts uses your `HOME`,
@@ -287,7 +305,7 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
 `drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
-`drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
+`drive-ux-acceptance`, `drive-vetting`, `drive-visual`, `drive-window-lifecycle` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
 `drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-note-changelog-awake`, `drive-paste`,
