@@ -115,15 +115,19 @@ pub fn delete(request: &Request) -> Result<Value, Failure> {
     }
 }
 
+const LAST_EXACT_WHOLE_F64: f64 = 9_007_199_254_740_992.0;
+
 fn numbered_prompt(value: Option<&Value>) -> Option<u64> {
     let value = value.filter(|value| !value.is_null())?;
-    let number = value.as_u64().or_else(|| {
-        value.as_f64().and_then(|number| {
-            (number.fract() == 0.0 && number >= 0.0 && number <= u64::MAX as f64)
-                .then_some(number as u64)
-        })
-    })?;
-    Some(number)
+    if let Some(number) = value.as_u64() {
+        return Some(number);
+    }
+    let number = value.as_f64()?;
+    if !number.is_finite() || number < 0.0 || number.fract() != 0.0 || number > LAST_EXACT_WHOLE_F64
+    {
+        return None;
+    }
+    format!("{number:.0}").parse().ok()
 }
 
 pub fn record_conversation(request: &Request) -> Result<Value, Failure> {
@@ -286,6 +290,16 @@ mod tests {
     use super::*;
     use bravebot_agent::bots::{Problem, Reason};
     use std::path::Path;
+
+    #[test]
+    fn a_whole_number_is_a_prompt_ordinal_and_a_fraction_is_not() {
+        assert_eq!(numbered_prompt(Some(&json!(3))), Some(3));
+        assert_eq!(numbered_prompt(Some(&json!(1.0))), Some(1));
+        assert_eq!(numbered_prompt(Some(&json!(1.5))), None);
+        assert_eq!(numbered_prompt(Some(&json!(-1))), None);
+        assert_eq!(numbered_prompt(Some(&Value::Null)), None);
+        assert_eq!(numbered_prompt(None), None);
+    }
 
     fn problem() -> Problem {
         Problem {

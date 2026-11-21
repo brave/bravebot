@@ -48,6 +48,7 @@ mod usage;
 mod workspace;
 mod xai;
 use bravebot_agent::servers;
+use bravebot_tui::app::Ended;
 
 use crate::exit::{Ending, fail};
 use crate::finish::{
@@ -2733,9 +2734,7 @@ fn interactive(
             println!("{}", resume_hint(&left, workspace.root()));
             ExitCode::SUCCESS
         }
-        Ok(bravebot_tui::app::Ended::Left(None) | bravebot_tui::app::Ended::ToTheList { .. }) => {
-            ExitCode::SUCCESS
-        }
+        Ok(Ended::Left(None) | Ended::ToTheList { .. }) => ExitCode::SUCCESS,
         // After the terminal is handed back, so what it says survives on the screen. The process
         // that starts the background session is this one, run by the person (BG-2).
         Ok(bravebot_tui::app::Ended::Background { left, mode }) => {

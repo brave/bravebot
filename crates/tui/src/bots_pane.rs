@@ -505,8 +505,7 @@ impl State {
                 if count == 0 {
                     return;
                 }
-                self.selected =
-                    (self.selected as isize + step).clamp(0, count as isize - 1) as usize;
+                self.selected = Self::index_after(self.selected, step, count);
                 self.conversation_at = 0;
             }
             WhichList::Conversations => {
@@ -519,9 +518,19 @@ impl State {
                 if count == 0 {
                     return;
                 }
-                self.conversation_at =
-                    (self.conversation_at as isize + step).clamp(0, count as isize - 1) as usize;
+                self.conversation_at = Self::index_after(self.conversation_at, step, count);
             }
+        }
+    }
+
+    fn index_after(index: usize, step: isize, count: usize) -> usize {
+        let last = count.saturating_sub(1);
+        if step < 0 {
+            index.saturating_sub(step.unsigned_abs()).min(last)
+        } else {
+            index
+                .saturating_add(usize::try_from(step).unwrap_or(usize::MAX))
+                .min(last)
         }
     }
 

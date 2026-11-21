@@ -2167,80 +2167,27 @@ pub fn run(
                 start,
                 layout,
                 carrying,
-            } => {
-                if let Some(carried) = carrying {
-                    workspace = carried.workspace;
-                    sandbox = carried.sandbox;
-                }
-                let mut switch = None;
-                let mut layout_change = None;
-                let mut departure = None;
-                let ended = event_loop(
-                    &mut terminal,
+            } => phase_after_a_session(
+                &mut SessionStep {
+                    terminal: &mut terminal,
                     config,
-                    &workspace,
-                    &mut servers,
-                    Startup {
-                        confinement: confinement.clone(),
-                        sockets_with_a_path_reachable,
-                        sandbox: sandbox.clone(),
-                        layout,
-                        start,
-                        named: named.take(),
-                        links: std::mem::take(&mut links),
-                        skip_permissions,
-                        asked_for_auto,
-                        prompts: prompts.clone(),
-                        confirmed_cd: std::rc::Rc::clone(&confirmed_cd),
-                    },
+                    workspace: &mut workspace,
+                    sandbox: &mut sandbox,
+                    servers: &mut servers,
+                    confinement: &confinement,
+                    sockets_with_a_path_reachable,
+                    named: &mut named,
+                    links: &mut links,
+                    skip_permissions,
+                    asked_for_auto,
+                    prompts: &prompts,
                     moments,
-                    &mut switch,
-                    &mut layout_change,
-                    &mut departure,
-                );
-                if let Some(left) = departure {
-                    match left {
-                        bot::Departure::Bot {
-                            slug,
-                            conversation,
-                            workspace: next_workspace,
-                            sandbox: next_sandbox,
-                        } => {
-                            workspace = next_workspace;
-                            sandbox = next_sandbox;
-                            Phase::Session {
-                                start: Start::Bot { slug, conversation },
-                                layout: crate::layout::Layout::Bots,
-                                carrying: Some(Box::new(phase::Carrying {
-                                    workspace: workspace.clone(),
-                                    sandbox: sandbox.clone(),
-                                })),
-                            }
-                        }
-                        bot::Departure::List {
-                            workspace: next_workspace,
-                            sandbox: next_sandbox,
-                            notice,
-                        } => {
-                            workspace = next_workspace;
-                            sandbox = next_sandbox;
-                            Phase::NoSession(Screen::Bots {
-                                left: None,
-                                carrying: Some(Box::new(phase::Carrying {
-                                    workspace: workspace.clone(),
-                                    sandbox: sandbox.clone(),
-                                })),
-                                notice,
-                            })
-                        }
-                    }
-                } else {
-                    match layout_change {
-                        Some(change) => Phase::after_a_session_chose_a_layout(ended, change),
-                        None => Phase::after_a_session(ended, switch),
-                    }
-                }
-            }
+                    confirmed_cd: &confirmed_cd,
+                },
+                start,
+                layout,
+                carrying,
+            ),
             Phase::Over(ended) => break ended,
         };
     };
@@ -2254,6 +2201,103 @@ pub fn run(
     )?;
 
     result
+}
+
+struct SessionStep<'a> {
+    terminal: &'a mut Terminal<CrosstermBackend<io::Stdout>>,
+    config: &'a mut Config,
+    workspace: &'a mut Workspace,
+    sandbox: &'a mut crate::sandbox_command::Sandboxed,
+    servers: &'a mut crate::state::Servers,
+    confinement: &'a str,
+    sockets_with_a_path_reachable: bool,
+    named: &'a mut Option<String>,
+    links: &'a mut Links,
+    skip_permissions: bool,
+    asked_for_auto: bool,
+    prompts: &'a bravebot_agent::turn::SystemPrompts,
+    moments: &'a mut bravebot_agent::hooks::SessionMoments,
+    confirmed_cd: &'a std::rc::Rc<std::cell::RefCell<Vec<std::path::PathBuf>>>,
+}
+
+fn phase_after_a_session(
+    step: &mut SessionStep<'_>,
+    start: Start,
+    layout: crate::layout::Layout,
+    carrying: Option<Box<phase::Carrying>>,
+) -> Phase {
+    if let Some(carried) = carrying {
+        *step.workspace = carried.workspace;
+        *step.sandbox = carried.sandbox;
+    }
+    let mut switch = None;
+    let mut layout_change = None;
+    let mut departure = None;
+    let ended = event_loop(
+        step.terminal,
+        step.config,
+        step.workspace,
+        step.servers,
+        Startup {
+            confinement: step.confinement.to_string(),
+            sockets_with_a_path_reachable: step.sockets_with_a_path_reachable,
+            sandbox: step.sandbox.clone(),
+            layout,
+            start,
+            named: step.named.take(),
+            links: std::mem::take(step.links),
+            skip_permissions: step.skip_permissions,
+            asked_for_auto: step.asked_for_auto,
+            prompts: step.prompts.clone(),
+            confirmed_cd: std::rc::Rc::clone(step.confirmed_cd),
+        },
+        step.moments,
+        &mut switch,
+        &mut layout_change,
+        &mut departure,
+    );
+    if let Some(left) = departure {
+        match left {
+            bot::Departure::Bot {
+                slug,
+                conversation,
+                workspace: next_workspace,
+                sandbox: next_sandbox,
+            } => {
+                *step.workspace = next_workspace;
+                *step.sandbox = next_sandbox;
+                Phase::Session {
+                    start: Start::Bot { slug, conversation },
+                    layout: crate::layout::Layout::Bots,
+                    carrying: Some(Box::new(phase::Carrying {
+                        workspace: step.workspace.clone(),
+                        sandbox: step.sandbox.clone(),
+                    })),
+                }
+            }
+            bot::Departure::List {
+                workspace: next_workspace,
+                sandbox: next_sandbox,
+                notice,
+            } => {
+                *step.workspace = next_workspace;
+                *step.sandbox = next_sandbox;
+                Phase::NoSession(Screen::Bots {
+                    left: None,
+                    carrying: Some(Box::new(phase::Carrying {
+                        workspace: step.workspace.clone(),
+                        sandbox: step.sandbox.clone(),
+                    })),
+                    notice,
+                })
+            }
+        }
+    } else {
+        match layout_change {
+            Some(change) => Phase::after_a_session_chose_a_layout(ended, change),
+            None => Phase::after_a_session(ended, switch),
+        }
+    }
 }
 
 /// Give the terminal back for good at the end of [`run`], cursor and all. However the run ended, it
@@ -3060,7 +3104,7 @@ fn begin_session(
     // (the session record, where AGENTS.md is looked for) moves underneath.
     let mut workspace = workspace.clone();
     let mut opened_bot = None;
-    if let Start::Bot { slug, conversation } = std::mem::replace(&mut start, Start::Fresh) {
+    if let Start::Bot { slug, conversation } = start {
         let mut opened = match bot::open(&mut workspace, &slug, conversation.as_deref()) {
             Ok(opened) => opened,
             Err(notice) => {

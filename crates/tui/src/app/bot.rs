@@ -327,7 +327,6 @@ fn data_folder() -> Option<PathBuf> {
 mod tests {
     use super::{
         blocks_the_definition, directory_to_record, prompt_ordinal, settle_model_for_the_turn,
-        spelling_of_this_directory,
     };
     use bravebot_agent::Workspace;
 
@@ -362,18 +361,22 @@ mod tests {
         let canonical = std::fs::canonicalize(&link).expect("canonical");
         let linked = link.to_str().expect("utf-8");
         assert_eq!(
-            spelling_of_this_directory(&canonical, linked).as_deref(),
+            super::spelling_of_this_directory(&canonical, linked).as_deref(),
             Some(linked)
         );
         assert_eq!(
-            spelling_of_this_directory(&canonical, canonical.to_str().expect("utf-8")).as_deref(),
+            super::spelling_of_this_directory(&canonical, canonical.to_str().expect("utf-8"))
+                .as_deref(),
             Some(canonical.to_str().expect("utf-8"))
         );
         let slashed = format!("{linked}/");
-        assert_eq!(spelling_of_this_directory(&canonical, &slashed), None);
+        assert_eq!(
+            super::spelling_of_this_directory(&canonical, &slashed),
+            None
+        );
         let dotted = root.join("link").join(".").join("..").join("real");
         let dotted = dotted.to_str().expect("utf-8");
-        assert_eq!(spelling_of_this_directory(&canonical, dotted), None);
+        assert_eq!(super::spelling_of_this_directory(&canonical, dotted), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 
