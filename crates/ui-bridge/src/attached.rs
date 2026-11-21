@@ -97,6 +97,28 @@ fn too_large(size: usize) -> Failure {
 /// words are the ones the terminal uses, from `bravebot_filetype::markers`, so the two front ends
 /// hand the planner the same line.
 pub fn in_words(request: &Request, line: &str) -> Result<String, Failure> {
+    in_words_because(
+        request,
+        line,
+        "a picture cannot join a turn that is already running",
+    )
+}
+
+/// A line the driver carries out itself, such as `/schedule`, with each dropped file's marker
+/// replaced by the file's name and each pasted picture's marker by the sentence that it cannot
+/// join the command (DROP-4). The params are those of [`in_words`], and the sentence is the one the
+/// terminal writes for such a line, so nothing but names and sentences enters the line.
+pub fn in_words_for_a_command(request: &Request, line: &str) -> Result<String, Failure> {
+    in_words_because(
+        request,
+        line,
+        bravebot_filetype::markers::A_PICTURE_CANNOT_JOIN_A_COMMAND,
+    )
+}
+
+/// `line` with each marker in `files` replaced by the file's name, and each marker in `pictures`
+/// by a sentence saying the picture cannot be shown, for the reason `why`.
+fn in_words_because(request: &Request, line: &str, why: &str) -> Result<String, Failure> {
     let refused = |what: &str| Failure::bad_request(format!("`{what}` is malformed"));
     let mut named = Vec::new();
     match request.params.get("files") {
@@ -126,9 +148,7 @@ pub fn in_words(request: &Request, line: &str) -> Result<String, Failure> {
     }
     let line = bravebot_filetype::markers::put_back_to_names(line, named);
     Ok(bravebot_filetype::markers::put_back_to_words(
-        &line,
-        pictures,
-        "a picture cannot join a turn that is already running",
+        &line, pictures, why,
     ))
 }
 
@@ -257,5 +277,80 @@ fn word(kind: Kind) -> &'static str {
         Kind::Attachment(bravebot_core::vetting::PDF) => "pdf",
         Kind::Attachment(_) => "image",
         Kind::Text => "text",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bravebot_filetype::markers::{A_PICTURE_CANNOT_JOIN_A_COMMAND, picture_in_words};
+
+    fn request(params: Value) -> Request {
+        Request {
+            id: 1,
+            method: "schedule.command".to_string(),
+            params,
+        }
+    }
+
+    /// Rejects a command line that reaches the driver with a dropped file's marker in place of
+    /// its name (DROP-4).
+    #[test]
+    fn a_command_line_names_each_dropped_file() {
+        let request = request(json!({
+            "files": [{ "marker": "[Image #1]", "name": "shot.png" }],
+        }));
+        assert_eq!(
+            in_words_for_a_command(&request, "list [Image #1]").unwrap(),
+            "list shot.png"
+        );
+    }
+
+    /// Rejects a command line whose pasted picture is described with the interjection's reason,
+    /// or left as its marker, in place of the terminal's sentence for a command (DROP-4).
+    #[test]
+    fn a_picture_pasted_onto_a_command_line_is_said_not_to_join_it() {
+        let request = request(json!({ "pictures": ["[Image #2]"] }));
+        assert_eq!(
+            in_words_for_a_command(&request, "list [Image #2]").unwrap(),
+            format!(
+                "list {}",
+                picture_in_words("[Image #2]", A_PICTURE_CANNOT_JOIN_A_COMMAND)
+            )
+        );
+    }
+
+    /// Rejects a change to the sentence an interjected line gives a pasted picture (DROP-8).
+    #[test]
+    fn an_interjected_picture_keeps_its_own_sentence() {
+        let request = request(json!({ "pictures": ["[Image #2]"] }));
+        assert_eq!(
+            in_words(&request, "see [Image #2]").unwrap(),
+            format!(
+                "see {}",
+                picture_in_words(
+                    "[Image #2]",
+                    "a picture cannot join a turn that is already running"
+                )
+            )
+        );
+    }
+
+    /// Rejects a command line carried out with `files` or `pictures` of the wrong shape.
+    #[test]
+    fn malformed_markers_refuse_a_command_line() {
+        for params in [
+            json!({ "files": "shot.png" }),
+            json!({ "files": [{ "marker": "[Image #1]" }] }),
+            json!({ "pictures": [1] }),
+            json!({ "pictures": {} }),
+        ] {
+            let failure = in_words_for_a_command(&request(params.clone()), "list").unwrap_err();
+            assert_eq!(
+                failure.code,
+                crate::protocol::ErrorCode::BadRequest,
+                "{params}"
+            );
+        }
     }
 }

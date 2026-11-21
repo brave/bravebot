@@ -1023,3 +1023,59 @@ fn schedule_command_is_dispatched_to_the_shared_function() {
     .expect("answered");
     assert_eq!(unclosed["refused"], true, "{unclosed}");
 }
+
+/// Rejects a `/schedule` line that reaches the shared function with a dropped file's or a pasted
+/// picture's marker in it, or that is carried out when its `files` is not a list (DROP-4).
+///
+/// The line removes a schedule no entry is named by, so the shared function refuses it with the
+/// name it was given and nothing is written.
+#[test]
+fn a_file_dropped_onto_a_schedule_line_is_carried_out_as_its_name() {
+    let (mut bridge, _) = harness();
+    let handle = a_trusting_session(&mut bridge);
+    let shown = |answer: &Value| {
+        answer["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let named = call(
+        &mut bridge,
+        "schedule.command",
+        json!({
+            "session": &handle,
+            "argument": "remove [Image #1]",
+            "files": [{ "marker": "[Image #1]", "name": "shot.png" }],
+        }),
+    )
+    .expect("answered");
+    assert_eq!(named["refused"], true, "{named}");
+    assert!(shown(&named).contains("shot.png"), "{named}");
+    assert!(!shown(&named).contains("[Image #1]"), "{named}");
+
+    let pictured = call(
+        &mut bridge,
+        "schedule.command",
+        json!({
+            "session": &handle,
+            "argument": "remove '[Image #2]'",
+            "pictures": ["[Image #2]"],
+        }),
+    )
+    .expect("answered");
+    assert!(
+        shown(&pictured).contains(bravebot_filetype::markers::A_PICTURE_CANNOT_JOIN_A_COMMAND),
+        "{pictured}"
+    );
+
+    let malformed = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": &handle, "argument": "list", "files": "shot.png" }),
+    );
+    assert_eq!(malformed, Err(ErrorCode::BadRequest));
+}
