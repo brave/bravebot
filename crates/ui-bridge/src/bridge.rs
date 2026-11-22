@@ -2002,7 +2002,7 @@ impl Bridge {
     fn session_variant(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let requested_model = crate::models::selection(request.params.get("model"))?;
-        let asked = crate::variant::asked(request)?;
+        let word = crate::variant::word(request)?;
         let open = self
             .open
             .get_mut(&handle)
@@ -2014,8 +2014,9 @@ impl Bridge {
             self.settings.as_deref(),
         )?;
         let model = model.unwrap_or_else(|| config.default_model.clone());
+        let choice = config.choose_variant(&model, word);
         let offered = config.variants_offered(&model);
-        crate::variant::apply(asked, &mut open.variant, &model, &offered)
+        crate::variant::apply(choice, word, &mut open.variant, &model, &offered)
     }
 
     /// Choose the sandbox mode the session's next turn runs its programs under.

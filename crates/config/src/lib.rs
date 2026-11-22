@@ -1222,6 +1222,29 @@ pub enum Serves<'config, 'name> {
     Aichat,
 }
 
+/// The word `/variant` takes to drop the session's pick
+/// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)).
+pub const VARIANT_OFF: &str = "off";
+
+/// What a `/variant` word does under a model, as [`Config::choose_variant`] decides it
+/// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)).
+///
+/// `'config` is the configuration the offered names are read from. Each client turns this into
+/// its own words: the terminal into a note, the window into an answer or a refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariantChoice<'config> {
+    /// An empty word: change nothing, and name what the model offers, which may be nothing.
+    Read(Vec<&'config str>),
+    /// [`VARIANT_OFF`]: drop the pick, whatever the model offers.
+    Drop,
+    /// A name the model offers: make it the pick.
+    Pick(String),
+    /// A name, under a model that offers no variants: the pick is left as it was.
+    NoneOffered,
+    /// A name the model does not offer: the pick is left as it was, and these are offered.
+    NotOffered(Vec<&'config str>),
+}
+
 /// Everything needed to talk to the backends this build can reach.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -2076,6 +2099,28 @@ impl Config {
             .and_then(|(provider, wire)| provider.model(wire))
             .map(provider::Model::variant_names)
             .unwrap_or_default()
+    }
+
+    /// What `/variant <word>` does under `model`
+    /// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)), for every client that offers it.
+    ///
+    /// The word is trimmed. [`VARIANT_OFF`] drops the pick whatever the model offers, an empty word
+    /// reads, and a name is picked only where `model` offers it, so a typo changes nothing.
+    pub fn choose_variant(&self, model: &str, word: &str) -> VariantChoice<'_> {
+        let word = word.trim();
+        if word == VARIANT_OFF {
+            return VariantChoice::Drop;
+        }
+        let offered = self.variants_offered(model);
+        if word.is_empty() {
+            VariantChoice::Read(offered)
+        } else if offered.is_empty() {
+            VariantChoice::NoneOffered
+        } else if offered.contains(&word) {
+            VariantChoice::Pick(word.to_string())
+        } else {
+            VariantChoice::NotOffered(offered)
+        }
     }
 
     /// The name the ChatGPT account knows `model` by, where `model` is one of its models
@@ -3811,6 +3856,47 @@ mod tests {
         assert!(config.variants_offered("gw/bare").is_empty());
         assert!(config.variants_offered("nowhere/m").is_empty());
         assert!(config.variants_offered("unknown").is_empty());
+    }
+
+    /// BACKEND-66: `off` drops under any model, an empty word reads, an offered name is picked,
+    /// and any other name is refused with what is offered or with the word that nothing is.
+    #[test]
+    fn choose_variant_drops_reads_picks_and_refuses_on_the_same_rules_for_every_client() {
+        let settings = Settings::parse(
+            r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "terse": {"textVerbosity": "low"}
+                }}, "bare": {}}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+
+        assert_eq!(config.choose_variant("gw/m", " off "), VariantChoice::Drop);
+        assert_eq!(config.choose_variant("gw/bare", "off"), VariantChoice::Drop);
+        assert_eq!(
+            config.choose_variant("gw/m", "  "),
+            VariantChoice::Read(vec!["high", "terse"])
+        );
+        assert_eq!(
+            config.choose_variant("gw/bare", ""),
+            VariantChoice::Read(vec![])
+        );
+        assert_eq!(
+            config.choose_variant("gw/m", " terse "),
+            VariantChoice::Pick("terse".to_string())
+        );
+        assert_eq!(
+            config.choose_variant("gw/m", "typo"),
+            VariantChoice::NotOffered(vec!["high", "terse"])
+        );
+        assert_eq!(
+            config.choose_variant("gw/bare", "terse"),
+            VariantChoice::NoneOffered
+        );
     }
 
     /// A gateway is additive on the same terms a Bedrock block is. Naming one adds to what a person
