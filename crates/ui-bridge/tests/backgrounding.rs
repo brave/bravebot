@@ -449,6 +449,139 @@ fn a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened() {
     drop(stop);
 }
 
+/// BG-6, BG-11: `session.list` gives each row the state of the background process that holds it,
+/// and null for a record no background process ever held.
+#[cfg(unix)]
+#[test]
+fn session_list_says_which_chats_a_background_process_holds() {
+    if built_program().is_none() {
+        eprintln!("skipped: the bravebot program is not built beside bravebot-rpc");
+        return;
+    }
+    let mut window = Window::open_in(Scratch::short("bbbl"));
+    window.say("look at src/net.rs");
+    let handed = window.background();
+    let id = handed["ok"]["handedOver"]
+        .as_str()
+        .unwrap_or_else(|| panic!("not handed over: {handed}"))
+        .to_string();
+    let roster = bravebot_session::jobs::Roster::at(window.scratch.home().join(".bravebot/jobs"));
+    let stop = Stop(&roster, &id);
+
+    // A second chat in the same project, recorded and never handed over.
+    let project = window.scratch.project().display().to_string();
+    let opened = window.ask("session.new", json!({"directory": project}));
+    window.session = opened["ok"]["session"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no session was opened: {opened}"))
+        .to_string();
+    window.say("look at src/lib.rs");
+
+    // The background session reports `idle` once it has resumed the record.
+    let deadline = std::time::Instant::now() + PATIENCE;
+    let rows = loop {
+        let listed = window.ask("session.list", json!({"directory": project}));
+        let rows = listed["ok"]["sessions"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no sessions listed: {listed}"))
+            .clone();
+        let handed_row = rows.iter().find(|row| row["id"] == id.as_str());
+        if handed_row.is_some_and(|row| row["background"] == "idle")
+            || std::time::Instant::now() > deadline
+        {
+            break rows;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let (handed_rows, other_rows): (Vec<&Value>, Vec<&Value>) =
+        rows.iter().partition(|row| row["id"] == id.as_str());
+    assert_eq!(handed_rows.len(), 1, "{rows:?}");
+    assert_eq!(handed_rows[0]["background"], "idle", "{rows:?}");
+    assert!(other_rows[0]["background"].is_null(), "{rows:?}");
+    drop(stop);
+}
+
+/// The `background` word of the row for `id` in `session.list`, asked until it is `wanted` or the
+/// patience runs out.
+#[cfg(unix)]
+fn listed_background(window: &mut Window, id: &str, wanted: &str) -> Value {
+    let project = window.scratch.project().display().to_string();
+    let deadline = std::time::Instant::now() + PATIENCE;
+    loop {
+        let listed = window.ask("session.list", json!({"directory": project}));
+        let word = listed["ok"]["sessions"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no sessions listed: {listed}"))
+            .iter()
+            .find(|row| row["id"] == id)
+            .map(|row| row["background"].clone())
+            .unwrap_or(Value::Null);
+        if word == wanted || std::time::Instant::now() > deadline {
+            return word;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// BG-11: a chat handed to the background is stopped from the window as `bravebot sessions stop`
+/// stops it. Its roster entry says stopped and no process holds it, and its record is kept, so the
+/// chat opens again.
+#[cfg(unix)]
+#[test]
+fn a_chat_handed_to_the_background_is_stopped_from_the_window_and_keeps_its_record() {
+    use bravebot_session::jobs::State;
+    if built_program().is_none() {
+        eprintln!("skipped: the bravebot program is not built beside bravebot-rpc");
+        return;
+    }
+    let mut window = Window::open_in(Scratch::short("bbbs"));
+    window.say("look at src/net.rs");
+    let handed = window.background();
+    let id = handed["ok"]["handedOver"]
+        .as_str()
+        .unwrap_or_else(|| panic!("not handed over: {handed}"))
+        .to_string();
+    let roster = bravebot_session::jobs::Roster::at(window.scratch.home().join(".bravebot/jobs"));
+    let stop = Stop(&roster, &id);
+    assert_eq!(listed_background(&mut window, &id, "idle"), "idle");
+
+    let stopped = window.ask("session.background.stop", json!({"id": id}));
+    assert_eq!(stopped["ok"]["stopped"], "stopped", "{stopped}");
+    let seen = roster.get(&id).expect("the roster entry is kept");
+    assert!(!seen.live, "the background session is still running");
+    assert_eq!(seen.state(), State::Stopped);
+    assert_eq!(listed_background(&mut window, &id, "stopped"), "stopped");
+
+    let project = window.scratch.project().display().to_string();
+    let reopened = window.ask("session.open", json!({"directory": project, "id": id}));
+    assert!(reopened.get("ok").is_some(), "{reopened}");
+    drop(stop);
+}
+
+/// BG-11: stopping an entry no process holds answers `not-running` and leaves it stopped, and an
+/// id the roster has no entry for is no such session.
+#[test]
+fn stopping_a_background_session_that_is_not_running_says_so_and_an_unknown_id_is_no_such_session()
+{
+    use bravebot_session::jobs::{Job, Mode, Roster, State};
+    let mut window = Window::open("bridge-background-stop-dead");
+    let roster = Roster::at(window.scratch.home().join(".bravebot/jobs"));
+    let dead = "0a1b2c3d-0000-4000-8000-0000000000de";
+    let project = window.scratch.project();
+    roster
+        .publish(&Job::starting(dead.to_string(), &project, "go", Mode::Ask))
+        .expect("the entry is written");
+
+    let answered = window.ask("session.background.stop", json!({"id": dead}));
+    assert_eq!(answered["ok"]["stopped"], "not-running", "{answered}");
+    assert_eq!(roster.get(dead).expect("entry").state(), State::Stopped);
+
+    let unknown = "0a1b2c3d-0000-4000-8000-0000000000ff";
+    let missing = window.ask("session.background.stop", json!({"id": unknown}));
+    assert_eq!(missing["error"]["code"], "no_such_session", "{missing}");
+}
+
 /// Stops the background session when the test ends, however it ends.
 #[cfg(unix)]
 struct Stop<'a>(&'a bravebot_session::jobs::Roster, &'a str);

@@ -498,6 +498,7 @@ impl Bridge {
             "session.handoff" => self.handoff_brief(request),
             "session.handoff.cancel" => self.cancel_handoff(request),
             "session.background" => self.background_session(request),
+            "session.background.stop" => Self::stop_background(request),
             "session.recap" => self.ask_aside(request, false),
             "session.btw" => self.ask_aside(request, true),
             "session.aside.cancel" => self.cancel_aside(request),
@@ -692,6 +693,15 @@ impl Bridge {
             None => store::list_all(),
         };
 
+        // The roster is read once per call, not once per row.
+        let roster: std::collections::HashMap<String, bravebot_session::jobs::Seen> =
+            bravebot_session::jobs::Roster::readable()
+                .map(|roster| roster.list())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|seen| (seen.job.id.clone(), seen))
+                .collect();
+
         let sessions: Vec<Value> = listed
             .iter()
             .map(|entry| {
@@ -711,6 +721,10 @@ impl Bridge {
                     // Whether the record is a manifest run. A run has no conversation, so it
                     // is read with `manifest.read` and `session.open` refuses it.
                     "manifest": entry.summary.manifest,
+                    // The BG-6 state of the background process that holds or held the record, or
+                    // null where none ever has. A fixed word about the process, so nothing from
+                    // content reaches the row (BG-5).
+                    "background": roster.get(&entry.summary.id).map(|seen| seen.state().word()),
                 })
             })
             .collect();
@@ -2637,6 +2651,16 @@ impl Bridge {
             compacting.cancel.cancel();
         }
         Ok(json!({}))
+    }
+
+    /// Stop the background session whose whole record id is `id`, as `bravebot sessions stop`
+    /// does, and keep its record so the chat can be opened again (BG-11). A chat open in this
+    /// window has no roster entry, so it is answered as missing or not running and is not touched.
+    fn stop_background(request: &Request) -> Result<Value, Failure> {
+        let id = request.string("id")?;
+        let roster = bravebot_session::jobs::Roster::writable()
+            .ok_or_else(|| Failure::bad_request(crate::background::NO_HOME))?;
+        crate::background::stop(&roster, &id)
     }
 
     /// Hand an open chat to a background session, as the terminal's `/bg` does (BG-2, CMD-34), and

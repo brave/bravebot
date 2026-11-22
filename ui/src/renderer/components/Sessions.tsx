@@ -5,6 +5,7 @@ import { flushSync } from 'react-dom'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
+import { heldInBackground } from '../session-list'
 import { BackgroundSessions } from './BackgroundSessions'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
@@ -19,8 +20,11 @@ import { Icon, Menu, ProgressRing } from '../nala'
 import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
 import { pullRequestLink } from '../../shared/pull-request'
 
-/** What a row says about a session that is open somewhere: only what asks something of the reader. */
-export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
+/**
+ * What a row says about a session: what asks something of the reader in a chat open here, or, for
+ * `background`, that a background process is running it and it cannot be opened here.
+ */
+export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed' | 'background'
 
 export interface SessionInfoValue {
   bot?: { name: string; avatar: string }
@@ -33,6 +37,7 @@ const STATUS_WORDS: Record<SessionStatus, string> = {
   answer: 'Waiting for your answer',
   approval: 'Waiting for your approval',
   failed: 'The last turn failed',
+  background: 'Running in the background',
 }
 
 interface Props {
@@ -490,11 +495,11 @@ const Session = memo(function Session({
   const pr = pullRequestLink(session.pullRequest)
   return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`} data-session={key}>
     <button type="button" className={`session${current ? ' current' : ''}`} aria-current={current ? 'true' : undefined}
-      onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+      onClick={() => onOpen(session)} onContextMenu={contextMenu(heldInBackground(session) ? 'session-background' : 'session', session.id)}>
       <span className="session-meta">
         <span className="session-status" data-status={status} data-tooltip={status ? STATUS_WORDS[status] : info?.bot?.name}>
           {status === 'working' ? <ProgressRing className="session-spinner" />
-            : status ? <Icon name="dot" className={`status-dot ${status === 'failed' ? 'error' : 'warning'}`} />
+            : status ? <Icon name="dot" className={`status-dot ${status === 'failed' ? 'error' : status === 'background' ? 'info' : 'warning'}`} />
               : info?.bot ? <BotFace seed={info.bot.avatar} size={16} /> : <Icon name="folder-open" className="session-folder" />}
         </span>
         <span className="session-project">{session.project}</span>

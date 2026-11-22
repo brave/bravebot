@@ -188,6 +188,7 @@
 }
 .status-dot.warning { --leo-icon-color: var(--leo-color-systemfeedback-warning-icon); }
 .status-dot.error { --leo-icon-color: var(--leo-color-systemfeedback-error-icon); }
+.status-dot.info { --leo-icon-color: var(--status-info); }
 .bot-face { display: block; }
 
 .session-text,

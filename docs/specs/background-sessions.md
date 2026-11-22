@@ -403,6 +403,17 @@ the prompt on screen, so it could be taken for an answer to a write or a run it 
 `bravebot sessions stop <id>` stops a turn that is running, then ends the process and sets the state
 to `stopped`. The record is kept and is resumable. No session is without a way to be stopped.
 
+The desktop app's chat list shows a chat whose record a background process holds as running in the
+background. It does this while that process's state ([BG-6](#BG-6)) is `working`, `needs input` or
+`idle`. The bridge's `session.list` gives each chat that state word, or nothing for a chat with no
+roster entry, and gives no other fact about the process. The chat's right-click menu offers Stop
+Background Session and does not offer Open. Stop Background Session asks the bridge's
+`session.background.stop` with the chat's whole id. The bridge stops the session as `bravebot
+sessions stop` does, through the same roster call with the same five-second wait, and keeps the
+record. It answers `stopped`, or `not-running` for an entry whose process had already ended, or no
+such session for an id with no entry. A stopped chat opens again from the list, as a stopped session
+is resumed.
+
 There is one supervisor per account. A terminal that starts a session ([BG-2](#BG-2)), for the first
 time or again, starts the supervisor once that session's process is alive, unless one is running.
 It watches every process it finds alive and ends when none is. A supervisor already running is found
@@ -426,6 +437,14 @@ stays after its last session is a standing process the person did not ask for.
 `verified-by: bravebot_cli::supervisor::a_process_that_comes_alive_is_watched_within_a_few_ticks`
 `verified-by: bravebot_cli::background::the_supervisor_is_started_as_the_hidden_command_from_the_root`
 `verified-by: bravebot_session::jobs::the_supervisors_lock_is_not_an_entry_of_the_roster`
+`verified-by: bravebot_ui_bridge::backgrounding::session_list_says_which_chats_a_background_process_holds`
+`verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_is_stopped_from_the_window_and_keeps_its_record`
+`verified-by: bravebot_ui_bridge::backgrounding::stopping_a_background_session_that_is_not_running_says_so_and_an_unknown_id_is_no_such_session`
+`verified-by: bravebot_ui_bridge::background::a_stop_answers_stopped_or_not_running`
+`verified-by: bravebot_ui_bridge::background::a_stop_of_an_id_with_no_entry_is_no_such_session`
+`verified-by: bravebot_ui_bridge::background::a_stop_that_fails_is_internal_with_a_sentence`
+`verified-by: bravebot_ui_bridge::background::a_stop_of_a_dead_entry_marks_it_stopped`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs asserts that listSessions marks a chat with no open window whose state is working, needs-input or idle as running in the background and leaves a stopped, interrupted or absent state unmarked, and ui/scripts/commands.test.mjs asserts that such a row's menu holds Stop Background Session and not Open, that the router sends the chat's id to stopBackground, and the Stopped, Not running and problem notices each answer of session.background.stop gives; ui/scripts/drive-background.mjs stops a handed-over chat in a real window, finds it stopped in bravebot sessions, and opens it again; make check-ui runs the tests)`
 
 <a id="BG-12"></a>
 ### BG-12: a process that ends between turns is restarted, and one that ends in a turn is not repeated
@@ -691,7 +710,8 @@ it is stated.
   during a session.
 - **Whether a row can reply, stop or show more.** [BG-16](#BG-16) attaches and does nothing else.
   A row of the desktop app's list ([BG-17](#BG-17)) only copies the attach command, because the
-  desktop app has no terminal to attach in.
+  desktop app has no terminal to attach in. The desktop app's chat list stops a session from a
+  chat's menu ([BG-11](#BG-11)).
   Replying from a row is not specified. Stopping from a row, and a list of more than the background
   sessions, are in [sessions-screen.md](sessions-screen.md), which opens from a terminal with Left over an
   empty box. Showing what a session last wrote would put bytes a session produced in the list, which

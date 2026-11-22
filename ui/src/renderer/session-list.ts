@@ -11,6 +11,11 @@ export function hadConversation(bot: Bot, summary: { id: string; directory: stri
   return bot.conversations.some((each) => each.id === summary.id && each.directory === summary.directory)
 }
 
+/** Whether a background process is running this chat: it is working, needs input or is idle (BG-6). */
+export function heldInBackground(summary: SessionSummary): boolean {
+  return summary.background === 'working' || summary.background === 'needs-input' || summary.background === 'idle'
+}
+
 /** What a chat in a bot's home folder is listed under. */
 export const NO_PROJECT = 'No project'
 
@@ -63,7 +68,8 @@ export function listSessions({ sessions, opened, conversations, bots, now, curre
     const outstanding = current ? t.outstanding(current.entries) : undefined
     // Only what asks something of the reader. "Ready" and "Completed" were true of nearly
     // every row and so said nothing about any of them.
-    const status: SessionStatus | undefined = !current ? undefined
+    // A chat a background process holds cannot be opened here, so its row says why.
+    const status: SessionStatus | undefined = !current ? (heldInBackground(summary) ? 'background' : undefined)
       : outstanding ? (outstanding.kind === 'ask' ? 'answer' : 'approval')
         : current.running ? 'working'
           : current.entries.at(-1)?.kind === 'error' ? 'failed'

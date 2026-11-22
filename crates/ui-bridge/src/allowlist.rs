@@ -347,8 +347,10 @@ pub const DENIED: &[&str] = &[
     "session.handoff",
     "session.handoff.cancel",
     // Handing a chat to a background session on this machine, which a person asks for from the
-    // window's Chat menu (BG-2, CMD-34). The only client of the host today has no menu to ask from.
+    // window's Chat menu (BG-2, CMD-34), and stopping one, which a person asks for from the chat
+    // list's menu (BG-11). The only client of the host today has no menu to ask from.
     "session.background",
+    "session.background.stop",
     // A question asked beside the work, for the `/btw` or `/recap` line a person typed into the
     // window's own composer (CMD-1, CMD-8, CMD-16). A client of the host is a program, and a
     // program never types it.

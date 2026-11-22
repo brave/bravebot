@@ -673,6 +673,8 @@ const ALLOWED = new Set([
   'session.handoff.cancel',
   // Handing an open chat to a background session, which closes it here (BG-2, CMD-34).
   'session.background',
+  // Stopping a background session from a chat row's right-click menu, which keeps its record (BG-11).
+  'session.background.stop',
   // A typed `/btw` or `/recap` (CMD-8, CMD-16): a question over the exchange, never a turn.
   'session.btw',
   'session.recap',

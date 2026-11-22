@@ -9,6 +9,7 @@ import type {
   ForkedSession,
   NotedSession,
   BackgroundedSession,
+  StoppedBackground,
   OpenedSession,
   PermissionMode,
   SandboxMode,
@@ -71,7 +72,7 @@ import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
 import { AskDialog } from './components/AskDialog'
 import { BackgroundConfirm } from './components/BackgroundConfirm'
-import { continueInBackground } from './backgrounding'
+import { continueInBackground, stopBackground as askStopBackground } from './backgrounding'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
@@ -828,6 +829,33 @@ export function App(): React.JSX.Element {
   )
 
   /**
+   * Stop the background session holding a chat a right-click named (BG-11).
+   *
+   * The bridge waits for the process to end, for up to the stop grace period, so a second choice
+   * while one stop is pending does nothing. The record is kept, so after the refresh the row is an
+   * ordinary chat that opens here.
+   */
+  const stopping = useRef(false)
+  const stopBackground = useCallback(
+    async (id: string) => {
+      if (stopping.current) return
+      const found = sessions.find((session) => session.id === id)
+      if (!found) return
+      stopping.current = true
+      try {
+        const came = await askStopBackground(
+          (id) => call<StoppedBackground>('session.background.stop', { id }), found.id)
+        if ('toast' in came) showToast(came.toast.title, came.toast.body)
+        else setProblem(came.problem)
+        await refresh()
+      } finally {
+        stopping.current = false
+      }
+    },
+    [sessions, refresh],
+  )
+
+  /**
    * Begin a session from what was said before a prompt, with that prompt to edit.
    *
    * What crosses to the agent is the prompt's *place* — how many prompts precede it — and what
@@ -1073,6 +1101,7 @@ export function App(): React.JSX.Element {
     openSession,
     closeNamed,
     copyProjectPath,
+    stopBackground: (id) => void stopBackground(id),
     copyEntry,
     forkEntry: (id) => void forkFrom(id),
     rewindEntry,

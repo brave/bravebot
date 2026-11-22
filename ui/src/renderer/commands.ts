@@ -71,6 +71,8 @@ export interface CommandActions {
   closeNamed: (id: string) => void
   /** Put a named session's project directory on the clipboard. */
   copyProjectPath: (id: string) => void
+  /** Stop the background session holding a chat a right-click named, keeping its record (BG-11). */
+  stopBackground: (id: string) => void
   /** Put a named transcript entry's text on the clipboard. */
   copyEntry: (id: string) => void
   /**
@@ -127,6 +129,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return context && act.closeNamed(context.id)
         case 'context.session.copy-path':
           return context && act.copyProjectPath(context.id)
+        case 'context.session.stop-background':
+          return context && act.stopBackground(context.id)
         case 'context.entry.copy':
           return context && act.copyEntry(context.id)
         case 'context.entry.fork':

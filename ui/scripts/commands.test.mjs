@@ -120,7 +120,7 @@ test('Continue in Background… is offered on an open chat with no turn running,
 })
 
 // One bundle for both, so the error class thrown is the one `backgrounding.ts` checks for.
-const { continueInBackground, shortId, RequestFailed } = (() => {
+const { continueInBackground, stopBackground, shortId, RequestFailed } = (() => {
   const contents = "export * from './src/renderer/backgrounding.ts'\nexport { RequestFailed } from './src/renderer/rewind.ts'"
   const source = buildSync({ stdin: { contents, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text
   const module = { exports: {} }
@@ -146,4 +146,46 @@ test('a refusal leaves the chat open and shows the bridge sentence, and a failur
   const late = await continueInBackground(async () => { throw new RequestFailed('internal', 'The chat was closed, and the background session did not start in time. Open it again from the list.') }, 'h1')
   assert.equal(late.closed, true)
   assert.match(late.problem, /Open it again from the list/)
+})
+
+test('a chat a background process holds offers Stop Background Session and no Open, and the router and main process reach it (BG-11)', () => {
+  const { CONTEXT, parseContextRef } = load('src/shared/commands.ts')
+  const items = CONTEXT['session-background']
+  assert.deepEqual(items.map((item) => item.id), ['context.session.copy-path', 'context.session.stop-background'])
+  assert.equal(items.find((item) => item.id === 'context.session.stop-background').label, 'Stop Background Session')
+  assert.ok(!items.some((item) => item.id === 'context.session.open'), 'the bridge refuses to open a held chat')
+  assert.ok(!CONTEXT.session.some((item) => item.id === 'context.session.stop-background'))
+  assert.deepEqual(parseContextRef({ target: 'session-background', id: 's1' }), { target: 'session-background', id: 's1' })
+
+  let listener = null
+  globalThis.window = { bravebot: { onCommand: (handler) => { listener = handler; return () => {} } } }
+  const react = { useRef: (current) => ({ current }), useEffect: (effect) => { effect() } }
+  const { useCommandRouter } = load('src/renderer/commands.ts', { react })
+  const called = []
+  const actions = new Proxy({}, { get: (_, name) => (...args) => called.push([name, ...args]) })
+  useCommandRouter(actions)
+  listener('context.session.stop-background', { target: 'session-background', id: 's1' })
+  assert.deepEqual(called, [['stopBackground', 's1']])
+  delete globalThis.window
+
+  assert.match(readFileSync('src/main/index.ts', 'utf8'), /'session\.background\.stop',/)
+  assert.match(readFileSync('src/renderer/components/Sessions.tsx', 'utf8'), /heldInBackground\(session\) \? 'session-background' : 'session'/)
+})
+
+test('stopping a background session says it stopped and names the start of its id, says when it was not running, and shows the bridge sentence for a problem (BG-11)', async () => {
+  const id = '0123456789abcdef-0000'
+  const asked = []
+  const stopped = await stopBackground(async (each) => { asked.push(each); return { stopped: 'stopped' } }, id)
+  assert.deepEqual(asked, [id])
+  assert.equal(stopped.toast.title, 'Stopped')
+  assert.equal(stopped.toast.body, 'Its chat is kept. Join it with: bravebot attach 01234567')
+  assert.doesNotMatch(stopped.toast.body, /89abcdef/)
+
+  const idle = await stopBackground(async () => ({ stopped: 'not-running' }), id)
+  assert.equal(idle.toast.title, 'Not running')
+
+  const sentence = 'The background session could not be stopped: timed out.'
+  assert.deepEqual(await stopBackground(async () => { throw new RequestFailed('internal', sentence) }, id), { problem: sentence })
+  assert.deepEqual(await stopBackground(async () => { throw new RequestFailed('no_such_session', 'There is no background session with that id.') }, id),
+    { problem: 'There is no background session with that id.' })
 })

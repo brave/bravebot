@@ -7,15 +7,12 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
-use bravebot_session::jobs::{Lookup, Mode, Roster, Seen, StartError, State, Stopped};
+use bravebot_session::jobs::{Lookup, Mode, Roster, STOP_GRACE, Seen, StartError, State, Stopped};
 use bravebot_session::listing::{Reader, Task};
 use bravebot_tui::sessions_view::{Choice, Row};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-
-/// How long a stop waits for a session to end before it is killed.
-const GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The characters of an id a line shows, which is enough to name it to `attach` and `reply`.
 const ID_SHOWN: usize = 8;
@@ -155,7 +152,7 @@ fn stop(typed: &str) -> ExitCode {
             return fail(Ending::Argument, t!(sessions_ambiguous, id = shown(typed)));
         }
     };
-    match roster.stop(&seen.job.id, GRACE) {
+    match roster.stop(&seen.job.id, STOP_GRACE) {
         Ok(Stopped::Stopped) => {
             println!("{}", t!(sessions_stopped, name = shown(&seen.job.name)));
             ExitCode::SUCCESS
