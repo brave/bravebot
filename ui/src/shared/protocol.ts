@@ -539,6 +539,11 @@ export interface EffortReport {
   recorded: EffortLevel | null
   inForce: EffortLevel | null
   outranked: boolean
+  /**
+   * The level the open session began with, which a model of the ChatGPT account is sent for the
+   * whole session (CHATGPT-10); absent where the window named no open session.
+   */
+  sessionBegan?: EffortLevel | null
 }
 
 /** `language.get`: the catalog the window is read in, and the choice `/language` keeps. */

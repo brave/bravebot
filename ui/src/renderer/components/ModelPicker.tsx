@@ -217,6 +217,14 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const inUse = catalogue?.models.find((row) => row.id === (model ?? catalogue.defaultModel))
   const takesNoLevel = inUse?.readsEffort === false
   const effortLocked = !effort || effort.outranked || takesNoLevel
+  /** The level the column checks: the folder's where its settings outrank the record. */
+  const chosenLevel = effort ? (effort.outranked ? effort.inForce : effort.recorded) : null
+  // A model of the ChatGPT account is sent the level its conversation began with (CHATGPT-10), so
+  // where another is chosen the picker says which one the account gets. A model that takes no
+  // level says only that.
+  const keptForAccount = inUse?.providerKey === 'chatgpt' && !takesNoLevel
+    && effort?.sessionBegan !== undefined && chosenLevel !== effort.sessionBegan
+  const effortLabel = (level: EffortLevel | null | undefined) => EFFORT_ROWS.find((row) => row.level === (level ?? null))?.label ?? 'Default'
   const listTitle = searching ? 'Results' : shownRail === ALL ? 'All models' : providerName(shownRail)
 
   // Leo's React wrapper assigns `aria-label` as a property, and the button host
@@ -241,6 +249,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const chooseEffort = (level: EffortLevel | null) => {
     if (effortLocked) return
     const was = effort
+    // The spread keeps `sessionBegan`: choosing a level does not change what the session began with.
     setEffort((report) => report && { ...report, recorded: level, inForce: level })
     void window.bravebot.request<{ recorded: EffortLevel | null }>('effort.set', { level }).then((answer) => {
       if (answer.error) { setEffort(was); setEffortProblem(answer.error.message) } else setEffortProblem(null)
@@ -414,7 +423,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
             <div className="model-column-title" id={`${id}-effort-title`}>Reasoning</div>
             <div className="model-effort-rows" role="radiogroup" aria-labelledby={`${id}-effort-title`} aria-disabled={effortLocked ? 'true' : undefined}>
               {EFFORT_ROWS.map((row, index) => {
-                const checked = !!effort && (effort.outranked ? effort.inForce : effort.recorded) === row.level
+                const checked = !!effort && chosenLevel === row.level
                 return <leo-option key={row.label} id={`${id}-effort-${index}`} role="radio" aria-checked={checked ? 'true' : 'false'}
                   aria-disabled={effortLocked ? 'true' : undefined} data-is-interactive="true" data-level={row.level ?? 'default'}
                   data-current={checked ? 'true' : undefined} data-test={`model-effort-${row.level ?? 'default'}`}
@@ -433,6 +442,11 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
             {effortProblem && <p className="model-effort-note" role="alert">{effortProblem}</p>}
           </div>
         </div>
+        {/* Across the menu's width below the columns, which shrink and scroll before it is cut off:
+            the Reasoning column is too narrow and too short at the window's minimum to hold it. */}
+        {keptForAccount && <p className="model-effort-note model-kept-note" role="status" data-test="model-effort-kept">
+          This ChatGPT conversation keeps the level it began with, {effortLabel(effort?.sessionBegan)}. {effortLabel(chosenLevel)} applies to new conversations and to other models.
+        </p>}
         <Hr />
         <p className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'} The reasoning level applies to every conversation. Brave Bot uses text and tools; pricing is not supplied by this catalogue.</p>
       </div>
