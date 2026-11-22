@@ -17,8 +17,12 @@
 //! The listed rows are the ones the terminal list draws (BG-16), from [`listing::roster_rows`], in
 //! the order of [`listing::ROSTER_ORDER`] and most recent first within a state. Listing attaches
 //! to, replies to, stops or starts no session.
+//!
+//! [`stop`] answers `session.background.stop`. It stops a background session with
+//! [`Roster::stop`], as `bravebot sessions stop` does, and keeps its record (BG-11).
 
-use bravebot_session::jobs::{Handing, Mode, Refusal, Roster};
+use crate::protocol::{ErrorCode, Failure};
+use bravebot_session::jobs::{Handing, Mode, Refusal, Roster, STOP_GRACE, Stopped};
 use bravebot_session::listing::{self, Reader, RosterRow, Status};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -86,6 +90,32 @@ pub fn program_beside(executable: &Path) -> Option<PathBuf> {
         .parent()?
         .join(format!("bravebot{}", std::env::consts::EXE_SUFFIX));
     program.is_file().then_some(program)
+}
+
+/// The sentence for a stop asked where there is no state directory to keep a roster in.
+pub const NO_HOME: &str = "There is no state directory to find background sessions in.";
+
+/// Stop the background session whose whole record id is `id`, waiting [`STOP_GRACE`] for it to
+/// end, as `bravebot sessions stop` does (BG-11). The session record is not touched, so the chat
+/// can be opened again.
+pub fn stop(roster: &Roster, id: &str) -> Result<Value, Failure> {
+    stopped(roster.stop(id, STOP_GRACE))
+}
+
+/// The answer to `session.background.stop` for what [`Roster::stop`] returned.
+fn stopped(result: std::io::Result<Stopped>) -> Result<Value, Failure> {
+    match result {
+        Ok(Stopped::Stopped) => Ok(json!({ "stopped": "stopped" })),
+        Ok(Stopped::AlreadyNotRunning) => Ok(json!({ "stopped": "not-running" })),
+        Ok(Stopped::Missing) => Err(Failure::new(
+            ErrorCode::NoSuchSession,
+            "There is no background session with that id.",
+        )),
+        Err(problem) => Err(Failure::new(
+            ErrorCode::Internal,
+            format!("The background session could not be stopped: {problem}."),
+        )),
+    }
 }
 
 /// The roster's sessions as `{"groups": [...]}`: a group for each state of
@@ -181,6 +211,65 @@ mod tests {
         std::fs::write(&program, b"").unwrap();
         assert_eq!(program_beside(&me), Some(program));
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    fn code(answer: &Result<Value, Failure>) -> &'static str {
+        answer.as_ref().expect_err("a failure").code.as_str()
+    }
+
+    /// BG-11. A process that was running and is not is `stopped`, and an entry with none running
+    /// is `not-running`.
+    #[test]
+    fn a_stop_answers_stopped_or_not_running() {
+        assert_eq!(
+            stopped(Ok(Stopped::Stopped)).expect("answer"),
+            json!({ "stopped": "stopped" })
+        );
+        assert_eq!(
+            stopped(Ok(Stopped::AlreadyNotRunning)).expect("answer"),
+            json!({ "stopped": "not-running" })
+        );
+    }
+
+    /// BG-11. An id the roster has no entry for is no such session.
+    #[test]
+    fn a_stop_of_an_id_with_no_entry_is_no_such_session() {
+        assert_eq!(code(&stopped(Ok(Stopped::Missing))), "no_such_session");
+    }
+
+    /// BG-11. A process that would not end is an internal failure, with a sentence that names the
+    /// problem.
+    #[test]
+    fn a_stop_that_fails_is_internal_with_a_sentence() {
+        let failed = stopped(Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the process did not end",
+        )));
+        assert_eq!(code(&failed), "internal");
+        let message = &failed.as_ref().expect_err("a failure").message;
+        assert!(
+            message.starts_with("The background session could not be stopped")
+                && message.contains("the process did not end")
+                && message.ends_with('.'),
+            "{message}"
+        );
+    }
+
+    /// BG-11. Stopping an entry no process holds rewrites it as stopped, and an id with no entry
+    /// is no such session.
+    #[test]
+    fn a_stop_of_a_dead_entry_marks_it_stopped() {
+        let mut scratch = scratch();
+        scratch.publish(ONE, State::Idle, None, 100, false);
+        assert_eq!(
+            stop(&scratch.roster, ONE).expect("answer"),
+            json!({ "stopped": "not-running" })
+        );
+        assert_eq!(
+            scratch.roster.get(ONE).expect("entry").job.state,
+            State::Stopped
+        );
+        assert_eq!(code(&stop(&scratch.roster, TWO)), "no_such_session");
     }
 
     const ONE: &str = "0a1b2c3d-0000-4000-8000-000000000001";

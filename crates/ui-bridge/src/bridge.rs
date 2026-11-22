@@ -498,6 +498,7 @@ impl Bridge {
             "session.handoff" => self.handoff_brief(request),
             "session.handoff.cancel" => self.cancel_handoff(request),
             "session.background" => self.background_session(request),
+            "session.background.stop" => self.stop_background(request),
             "session.recap" => self.ask_aside(request, false),
             "session.btw" => self.ask_aside(request, true),
             "session.aside.cancel" => self.cancel_aside(request),
@@ -2650,6 +2651,16 @@ impl Bridge {
             compacting.cancel.cancel();
         }
         Ok(json!({}))
+    }
+
+    /// Stop the background session whose whole record id is `id`, as `bravebot sessions stop`
+    /// does, and keep its record so the chat can be opened again (BG-11). A chat open in this
+    /// window has no roster entry, so it is answered as missing or not running and is not touched.
+    fn stop_background(&mut self, request: &Request) -> Result<Value, Failure> {
+        let id = request.string("id")?;
+        let roster = bravebot_session::jobs::Roster::writable()
+            .ok_or_else(|| Failure::bad_request(crate::background::NO_HOME))?;
+        crate::background::stop(&roster, &id)
     }
 
     /// Hand an open chat to a background session, as the terminal's `/bg` does (BG-2, CMD-34), and
