@@ -210,3 +210,61 @@ export function statusNotice(report: StatusReport): ReportNotice {
   }
   return { title: 'Session status', body: table(rows) }
 }
+
+/** The figures `session.stats` answers for its total and for each model row (CLI-37). */
+export interface StatsSpent {
+  sessions: number
+  turns: number
+  tokens: number
+  read: number
+  written: number
+  /** Tokens of sessions that kept no split into read and written. */
+  unsplit: number
+}
+
+/**
+ * What `session.stats` answers: what the recorded sessions spent, as `bravebot stats --models`
+ * totals it (CLI-37). The bridge has already grouped and cleaned the model rows. `model` is null
+ * for the sessions whose record names no model.
+ */
+export interface StatsReport {
+  directory: string | null
+  days: number | null
+  total: StatsSpent
+  models: (StatsSpent & { model: string | null })[]
+  unreadable: number
+}
+
+/** A row of the spend table: a label, its six figures, and whether it is the Total row. */
+export interface StatsRow extends StatsSpent {
+  label: string
+  total: boolean
+}
+
+function spent(figures: StatsSpent): StatsSpent {
+  const { sessions, turns, tokens, read, written, unsplit } = figures
+  return { sessions, turns, tokens, read, written, unsplit }
+}
+
+/**
+ * The rows of the spend table in the order the terminal prints them: each model in the order the
+ * bridge sent, a model of null labelled `unknown` (`stats-model-unknown`), then `Total`
+ * (`stats-row-total`).
+ */
+export function statsRows(report: StatsReport): StatsRow[] {
+  const rows: StatsRow[] = report.models.map((row) => ({ label: row.model ?? 'unknown', total: false, ...spent(row) }))
+  rows.push({ label: 'Total', total: true, ...spent(report.total) })
+  return rows
+}
+
+/**
+ * The sentence saying which sessions the totals cover, the terminal's `stats-scope-*` strings.
+ * `days` is null for no limit and `directory` is null for every project.
+ */
+export function statsScope(days: number | null, directory: string | null): string {
+  const within = days === null ? null : days === 1 ? 'in the last day' : `in the last ${days} days`
+  if (directory === null) {
+    return within === null ? 'Every recorded session, in every project' : `Sessions last written ${within}, in every project`
+  }
+  return within === null ? `Every recorded session in ${directory}` : `Sessions last written ${within}, in ${directory}`
+}
