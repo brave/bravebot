@@ -26,7 +26,7 @@ fn said(word: &str) -> Vec<String> {
 }
 
 /// `/crash-reports off` writes `"crashReports": false` into `~/.bravebot/settings.json` and keeps
-/// the other keys. With `BRAVEBOT_CRASH_REPORTS=0`, `/crash-reports on` is refused, the refusal
+/// the other keys, and `/crash-reports on` then rewrites it to `true` and keeps them too. With `BRAVEBOT_CRASH_REPORTS=0`, `/crash-reports on` is refused, the refusal
 /// names the variable, and the file is left as it was (CRASH-11).
 #[test]
 fn the_command_writes_the_persons_key_and_refuses_where_the_environment_decides() {
@@ -49,6 +49,16 @@ fn the_command_writes_the_persons_key_and_refuses_where_the_environment_decides(
     assert_eq!(
         written["crashReports"],
         serde_json::Value::Bool(false),
+        "{lines:?}"
+    );
+    assert_eq!(written["theme"], "dark", "another key was lost");
+
+    let lines = said("on");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(
+        written["crashReports"],
+        serde_json::Value::Bool(true),
         "{lines:?}"
     );
     assert_eq!(written["theme"], "dark", "another key was lost");
