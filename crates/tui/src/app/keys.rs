@@ -133,6 +133,7 @@ pub enum Action {
         String,
         Vec<crate::state::AttachedImage>,
         Vec<crate::state::Attached>,
+        crate::state::NamesFrom,
     ),
     /// Start a new session here. Needs the conversation and the session record, which the loop owns.
     Clear,
@@ -1380,9 +1381,12 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // The marker is what says the pick stands: with it deleted the line is an ordinary prompt.
         KeyCode::Enter if session.pick_stands() && !session.completion_would_change_the_line() => {
             match session.take_summons() {
-                Some(commanded) => {
-                    Action::Address(commanded.line, commanded.pasted, commanded.attached)
-                }
+                Some(commanded) => Action::Address(
+                    commanded.line,
+                    commanded.pasted,
+                    commanded.attached,
+                    commanded.names,
+                ),
                 None => Action::None,
             }
         }
@@ -2567,6 +2571,9 @@ fn click_command(session: &mut Session, line: &str) -> Action {
         pasted: Vec::new(),
         attached: Vec::new(),
         typed_at: std::time::Instant::now(),
+        // A click stands for a command nobody typed in the box, so no line says which words were
+        // typed.
+        names: session.names_from_words_nobody_pasted(line),
     };
     if !matches!(session.status, Status::Working | Status::Running) {
         return dispatch_command(session, commanded);

@@ -2654,6 +2654,7 @@ mod tests {
             crate::loops::request("2d check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
@@ -2886,6 +2887,7 @@ mod tests {
             crate::loops::request("2d check the deploy"),
             Vec::new(),
             Vec::new(),
+            crate::state::NamesFrom::nothing(),
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);

@@ -187,8 +187,9 @@ impl Session {
         task: &str,
         pasted: Vec<AttachedImage>,
         attached: Vec<Attached>,
+        names: NamesFrom,
     ) -> String {
-        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+        self.begin_turn(task.to_string(), (attached, pasted), Vec::new(), names)
     }
 
     /// Load history from disk and keep writing to it.

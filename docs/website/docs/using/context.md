@@ -81,10 +81,12 @@ before anything is sent. The desktop app does not offer sessions in its message 
 The desktop app's message box works the same way: `@` opens the list over the project, Tab and the
 arrows choose, and Enter completes a half-typed name or sends a finished one.
 
-In both, a name that is not a text file inside the project stops the send and says which name it
-was, so nothing goes that you did not mean to send. The line stays in the box, a paste included, and
-removing the `@` sends the word as text. This applies to a handle in pasted text, such as
-`cc @alice`, as well as to a path.
+In both, a name you type that is not a text file inside the project stops the send and says which
+name it was, so nothing goes that you did not mean to send. The line stays in the box, a paste
+included, and removing the `@` sends the word as text. In the terminal, the words behind a folded
+paste marker are sent as text and name no file, so a handle in pasted text, such as `cc @alice`, does
+not stop the send. This holds for a line sent, a line queued behind a turn, and the argument of
+`/plan`, `/agent`, `/help`, `/review`, `/loop` and `/after`.
 
 :::caution
 Content you have not read is content you are vouching for. Be as careful naming a file as answering
@@ -111,7 +113,9 @@ Ctrl-V pastes. More than a couple of lines folds to a marker:
 The words around it are left alone, and the words themselves are put back where the line leaves the
 box, so the request, the transcript and your prompt history all hold the paste rather than the
 marker. Deleting the marker drops the words. A short paste lands whole, a paste into a command line
-is never folded, and a paste ending in a newline does not send.
+is never folded, and a paste ending in a newline does not send. An `@name` or `@session:<id>` inside
+a folded paste is sent as text, whichever command the line starts and on every run of a loop: it
+names no file, adds no session and vouches for nothing, and only a name you typed in the line does.
 
 **The marker goes no further than the box.** It is a handle on text that only the session holding it
 can put back. A prompt that comes back for editing after a stop does come back behind its marker,
