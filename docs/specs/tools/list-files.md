@@ -179,17 +179,22 @@ Output is capped, and the cap is reported. Reported to the planner whether or no
 names, since a listing handed over as one reference per entry is exactly the case where a notice
 inside the body reaches nobody.
 
-A listing given a depth shares the cap across directories: it takes at most 200 files from any one
-directory ([LIST-5](#LIST-5)), and a listing that left files out that way is reported as truncated
-too.
+A listing given a depth shares the cap across directories: it takes at most 200 files and at most
+200 subdirectories from any one directory ([LIST-5](#LIST-5)), and a listing that left files or
+subdirectories out that way is reported as truncated too.
 
 **Why.** Silence would let the planner conclude a file does not exist when the answer was cut off.
 
 `verified-by: bravebot_agent::workspace::a_listing_past_the_cap_reports_truncation`
 `verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_takes_at_most_the_cap_of_subdirectories_from_one_directory_and_goes_on`
+`verified-by: bravebot_agent::workspace::a_directory_of_exactly_the_subdirectory_cap_leaves_none_out_and_one_more_leaves_one_out`
+`verified-by: bravebot_agent::workspace::a_directory_cut_for_subdirectories_counts_as_one_entry_against_the_whole_walk_cap`
+`verified-by: bravebot_agent::workspace::the_whole_walk_cap_is_reported_where_several_directories_each_exceed_the_subdirectory_cap`
 `verified-by: bravebot_agent::workspace::a_listing_within_the_cap_reports_no_truncation`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_it_was_capped`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_subdirectories_a_cut_directory_left_out`
 `verified-by: bravebot_agent::turn::a_released_search_or_listing_keeps_its_cap_and_paging_notes`
 `verified-by: bravebot_agent::turn::a_search_or_listing_kept_back_after_asking_to_read_keeps_its_cap_and_paging_notes`
 
@@ -214,12 +219,23 @@ directory is refused where a path is expected, so the difference is enforced and
 A bounded walk takes at most 200 files from any one directory, counted after the pattern and the
 permission rules. A directory with more is named in the result with how many of its files were left
 out, the way a directory the walk stopped at is named, and listing it with no depth shows the rest.
-The count comes from directory entries and no file's bytes. A walk with no depth is not held to this,
-since it asked for every file, and keeps only the cap of [LIST-4](#LIST-4). In a quarantined listing
-the directory is a directory reference after the ones the walk stopped at, and the count travels
-beside the references paired with that reference, as the link count of [LIST-6](#LIST-6) does. It
-is released with the entry count and adds no use of `declassify`, and the reference it is paired
-with is chosen by position, never by a name.
+
+A bounded walk also takes at most 200 subdirectories from any one directory, whether it goes into
+them or stops at them. They are taken in the walk's sorted-name order, from a budget of their own
+that the directory's files do not spend, so a directory of 200 files and 200 subdirectories is
+listed whole. They are counted after the permission rules, so a subdirectory a rule covers is
+neither listed nor counted as left out. The pattern does not apply to directories, so it does not
+change which are taken or how many are left out. A directory with more is named in the result with
+how many of its subdirectories were left out, and a directory cut for both files and subdirectories
+is named once, with both counts. A listing with no depth names files only, so listing the directory
+that way shows the files under the subdirectories left out and names none of them.
+
+The counts come from directory entries and no file's bytes. A walk with no depth is not held to
+either bound, since it asked for every file, and keeps only the cap of [LIST-4](#LIST-4). In a
+quarantined listing the directory is a directory reference after the ones the walk stopped at, and
+the counts travel beside the references paired with that reference, as the link count of
+[LIST-6](#LIST-6) does. They are released with the entry count and add no use of `declassify`, and
+the reference they are paired with is chosen by position, never by a name.
 
 **Why.** Without a bound the only listing on offer is every path at every depth, which in a real
 repository is thousands of them. That is paid for in the planner's context, again on every round
@@ -239,6 +255,14 @@ endorse a file over a directory they own.
 directory that holds thousands of files and lists no directory after it. Those entries are paid for
 in the planner's context on every round that resends them.
 
+**Why subdirectories are bounded too.** Without a bound, one directory holding thousands of
+subdirectories at the depth limit fills the cap of 2000 entries, and the directories after it in
+name order are never listed, so a bound on files alone leaves the rest of the tree hidden. A
+directory the walk goes into adds its own entries to the listing, so one holding thousands of those
+fills the cap the same way, which is why the bound counts a subdirectory whether the walk goes into
+it or stops at it. The budget is separate from the one for files so that the count of files left out
+of a directory does not depend on how many subdirectories it holds.
+
 `verified-by: bravebot_agent::workspace::a_listing_given_a_depth_descends_no_further_than_that`
 `verified-by: bravebot_agent::workspace::a_depth_limited_listing_names_the_directories_it_stopped_at`
 `verified-by: bravebot_agent::workspace::a_pattern_does_not_hide_the_directories_a_bounded_walk_stopped_at`
@@ -247,9 +271,27 @@ in the planner's context on every round that resends them.
 `verified-by: bravebot_agent::workspace::a_bounded_listing_shares_its_cap_across_directories`
 `verified-by: bravebot_agent::workspace::an_unbounded_listing_takes_every_file_of_a_large_directory`
 `verified-by: bravebot_agent::workspace::a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_takes_at_most_the_cap_of_subdirectories_from_one_directory_and_goes_on`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_goes_into_at_most_the_cap_of_subdirectories_of_one_directory`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_cut_only_for_subdirectories_names_the_directory_once_with_the_count`
+`verified-by: bravebot_agent::workspace::a_bounded_listing_cut_for_files_and_subdirectories_names_the_directory_once_with_both_counts`
+`verified-by: bravebot_agent::workspace::a_directory_cut_for_subdirectories_keeps_its_own_count_when_an_entered_child_is_cut_too`
+`verified-by: bravebot_agent::workspace::a_subdirectory_a_rule_covers_is_neither_listed_nor_counted_as_left_out`
+`verified-by: bravebot_agent::workspace::a_pattern_does_not_change_how_many_subdirectories_a_bounded_listing_takes`
+`verified-by: bravebot_agent::workspace::an_unbounded_listing_goes_into_every_subdirectory_of_a_directory`
+`verified-by: bravebot_agent::workspace::a_directory_of_exactly_the_subdirectory_cap_leaves_none_out_and_one_more_leaves_one_out`
+`verified-by: bravebot_agent::workspace::a_directory_cut_for_subdirectories_counts_as_one_entry_against_the_whole_walk_cap`
+`verified-by: bravebot_agent::workspace::the_whole_walk_cap_is_reported_where_several_directories_each_exceed_the_subdirectory_cap`
 `verified-by: bravebot_agent::tools::tests::editing::a_bounded_listing_names_a_directory_it_cut_with_how_many_files_it_left_out`
+`verified-by: bravebot_agent::tools::tests::editing::a_bounded_listing_names_a_directory_it_cut_for_subdirectories_with_how_many_it_left_out`
+`verified-by: bravebot_agent::tools::tests::editing::a_bounded_listing_cut_for_files_and_subdirectories_names_the_directory_once_with_both_counts`
+`verified-by: bravebot_agent::tools::tests::editing::a_bounded_listing_cut_for_files_only_says_nothing_about_subdirectories`
 `verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_files_each_cut_directory_left_out`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_says_how_many_subdirectories_a_cut_directory_left_out`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_pairs_each_cut_directorys_counts_with_its_own_reference`
 `verified-by: bravebot_agent::turn::sentences::a_listing_cut_per_directory_names_each_reference_with_what_it_left_out`
+`verified-by: bravebot_agent::turn::sentences::a_listing_cut_for_subdirectories_names_each_reference_with_what_it_left_out`
+`verified-by: bravebot_agent::turn::sentences::a_listing_cut_for_files_and_subdirectories_names_each_reference_with_both_counts`
 `verified-by: bravebot_agent::turn::a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at`
 `verified-by: bravebot_core::policy::an_entry_that_is_a_directory_is_not_offered_as_a_file`
 `verified-by: bravebot_core::policy::a_directory_reference_is_refused_where_a_path_is_expected`

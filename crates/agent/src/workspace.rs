@@ -139,7 +139,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
-pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY};
+pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY, MAX_SUBDIRECTORIES_PER_DIRECTORY};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
@@ -2875,9 +2875,14 @@ struct Collected<'a> {
     links: usize,
     /// The most files taken from any one directory, or `None` for no such cap. Set only by a
     /// depth-bounded listing (LIST-5).
-    per_directory: Option<usize>,
-    /// Directories `per_directory` cut, each with how many of its files were left out.
-    partly_listed: Vec<(String, usize)>,
+    files_per_directory: Option<usize>,
+    /// The most subdirectories taken from any one directory, whether the walk goes into them or
+    /// stops at them, or `None` for no such cap. Set only by a depth-bounded listing (LIST-5), and
+    /// a budget of its own, so the files a directory holds do not spend it.
+    subdirectories_per_directory: Option<usize>,
+    /// Directories the two caps above cut, each with how many of its files and how many of its
+    /// subdirectories were left out, in that order. A directory is here once, however it was cut.
+    partly_listed: Vec<(String, usize, usize)>,
     /// How many files the walk met that the trust map does not vouch for, which
     /// [`WalkRules::keeping_only_vouched`] sets aside instead of collecting.
     ///
@@ -2887,7 +2892,8 @@ struct Collected<'a> {
 }
 
 impl Collected<'_> {
-    /// How much of the cap has been spent. A file set aside as unvouched is not counted.
+    /// How much of the cap has been spent. A file set aside as unvouched is not counted, and a
+    /// directory a per-directory cap cut is one entry however much it left out.
     fn len(&self) -> usize {
         self.files.len() + self.stopped_at.len() + self.partly_listed.len()
     }
@@ -3140,7 +3146,8 @@ impl Workspace {
                 links: 0,
                 // Only a bounded listing, whose purpose is the shape of the tree. An unbounded one
                 // asked for every file, and keeps the one cap over the whole walk.
-                per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
+                files_per_directory: depth.map(|_| MAX_FILES_PER_DIRECTORY),
+                subdirectories_per_directory: depth.map(|_| MAX_SUBDIRECTORIES_PER_DIRECTORY),
                 partly_listed: Vec::new(),
                 unvouched: 0,
             };
@@ -3184,7 +3191,7 @@ impl Workspace {
             // outside the boundary like the walk, and it can only lower the label.
             let mut keyed = self.walked_keys(&walk_names, &relative, &root, &found, true);
             keyed.extend(self.walked_keys(&walk_names, &relative, &root, &stopped_at, false));
-            let cut: Vec<String> = partly_listed.iter().map(|(name, _)| name.clone()).collect();
+            let cut: Vec<String> = partly_listed.iter().map(|(n, ..)| n.clone()).collect();
             keyed.extend(self.walked_keys(&walk_names, &relative, &root, &cut, false));
             // The walk above reads directory entries and no file's bytes, and runs outside the
             // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
@@ -3209,8 +3216,8 @@ impl Workspace {
             // is sorted here is what a walk kept, and sorting after a cap cannot choose what it
             // kept.
             //
-            // A directory the per-directory cap cut leaves files out as the whole-walk cap does, so
-            // the listing is reported as truncated either way (LIST-4).
+            // A directory a per-directory cap cut leaves files or subdirectories out as the
+            // whole-walk cap does, so the listing is reported as truncated either way (LIST-4).
             let at_the_cap = found.len() + stopped_at.len() + partly_listed.len() > MAX_ENTRIES;
             let truncated = at_the_cap || !partly_listed.is_empty();
             found.truncate(MAX_ENTRIES);
@@ -3293,7 +3300,8 @@ impl Workspace {
                 withheld: false,
                 unreadable: false,
                 links: 0,
-                per_directory: None,
+                files_per_directory: None,
+                subdirectories_per_directory: None,
                 partly_listed: Vec::new(),
                 unvouched: 0,
             };
@@ -3599,7 +3607,8 @@ impl Workspace {
                     withheld: false,
                     unreadable: false,
                     links: 0,
-                    per_directory: None,
+                    files_per_directory: None,
+                    subdirectories_per_directory: None,
                     partly_listed: Vec::new(),
                     unvouched: 0,
                 };
@@ -4551,13 +4560,16 @@ impl Workspace {
     /// one and stops only at the end of the tree or when the files it collects pass `limit`
     /// (MAP-5, Known costs).
     ///
-    /// `shown` is the name `directory` is reported under if the per-directory cap cuts it. The
+    /// `shown` is the name `directory` is reported under if a per-directory cap cuts it. The
     /// caller supplies it: the first call passes the root's name, and each recursive call passes
     /// the relative name it already built for the subdirectory. So the walk tests no name to tell
     /// the root from a subdirectory.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the walk's arguments plus the name a cut directory is reported under"
+        clippy::too_many_lines,
+        reason = "the walk's arguments plus the name a cut directory is reported under; the body \
+                  takes a directory's files and then its subdirectories in order, each counted \
+                  against its own cap after the rules"
     )]
     fn walk_filtered<S: Sink>(
         &self,
@@ -4606,7 +4618,7 @@ impl Workspace {
         files.sort();
         directories.sort();
 
-        // Files this directory gave the listing, and files past `per_directory` it did not.
+        // Files this directory gave the listing, and files past `files_per_directory` it did not.
         let mut taken = 0;
         let mut left_out = 0;
         for path in files {
@@ -4641,17 +4653,31 @@ impl Workspace {
             }
             // Counted after the include and the rules, so the number left out is of files the
             // listing would have shown, and the cap is decided from that count alone.
-            if collected.per_directory.is_some_and(|most| taken >= most) {
+            if collected
+                .files_per_directory
+                .is_some_and(|most| taken >= most)
+            {
                 left_out += 1;
                 continue;
             }
             taken += 1;
             collected.files.push(relative);
         }
+        // Where this directory is recorded in `collected.partly_listed`, once it is. One record
+        // however the directory was cut, so it is named once and is one entry against the cap.
+        let mut recorded = None;
         if left_out > 0 {
-            collected.partly_listed.push((shown.to_string(), left_out));
+            recorded = Some(collected.partly_listed.len());
+            collected
+                .partly_listed
+                .push((shown.to_string(), left_out, 0));
         }
 
+        // Subdirectories this directory gave the walk, whether it went into them or stopped at
+        // them, and subdirectories past `subdirectories_per_directory` it did not. Counted from the
+        // sorted names the walk already uses, after the rules below, so the cap is decided from the
+        // count alone and a directory a rule fences is neither kept nor counted as left out.
+        let mut taken_directories = 0;
         for path in directories {
             if collected.len() > limit {
                 return Ok(true);
@@ -4666,6 +4692,20 @@ impl Workspace {
                 }
                 continue;
             }
+            if collected
+                .subdirectories_per_directory
+                .is_some_and(|most| taken_directories >= most)
+            {
+                let at = *recorded.get_or_insert_with(|| {
+                    collected.partly_listed.push((shown.to_string(), 0, 0));
+                    collected.partly_listed.len() - 1
+                });
+                if let Some(record) = collected.partly_listed.get_mut(at) {
+                    record.2 += 1;
+                }
+                continue;
+            }
+            taken_directories += 1;
             if remaining.is_some_and(|left| left <= 1) {
                 collected.stopped_at.push(relative);
                 continue;

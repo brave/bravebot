@@ -2937,10 +2937,487 @@ fn a_bounded_listing_shares_its_cap_across_directories() {
     );
     assert_eq!(
         listing.partly_listed,
-        vec![(".aaa".to_string(), 1_801)],
+        vec![(".aaa".to_string(), 1_801, 0)],
         "the directory that was cut was not named with how many files it left out"
     );
     assert!(listing.truncated, "a per-directory cut was not reported");
+}
+
+/// LIST-5: a bounded listing also takes at most a fixed number of subdirectories from any one
+/// directory, so a directory of thousands of subdirectories at the depth limit that sorts first
+/// does not spend the whole cap and hide every directory after it. A walk that names every
+/// subdirectory it stops at reaches the cap inside `big` and lists nothing from `docs`, `src` or
+/// `tests`.
+#[test]
+fn a_bounded_listing_takes_at_most_the_cap_of_subdirectories_from_one_directory_and_goes_on() {
+    let scratch = Scratch::new("list-subdirectory-cap");
+    let crowded = scratch.path.join("big");
+    std::fs::create_dir_all(&crowded).unwrap();
+    for n in 0..2_001 {
+        std::fs::create_dir(crowded.join(format!("d{n:04}"))).unwrap();
+    }
+    for dir in ["docs", "src", "tests"] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+    }
+    std::fs::write(scratch.path.join("docs/a.md"), "a").unwrap();
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::write(scratch.path.join("tests/t.rs"), "t").unwrap();
+    std::fs::write(scratch.path.join("README.md"), "readme").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(2));
+
+    for later in ["README.md", "docs/a.md", "src/main.rs", "tests/t.rs"] {
+        assert!(
+            listing.files.iter().any(|f| f == later),
+            "{later} was crowded out by one directory's subdirectories"
+        );
+    }
+    let expected: Vec<String> = (0..200).map(|n| format!("big/d{n:04}")).collect();
+    assert_eq!(
+        listing.directories, expected,
+        "one directory contributed other than the first 200 of its subdirectories by name"
+    );
+    assert!(listing.truncated, "a subdirectory cut was not reported");
+    assert!(
+        !listing.at_the_cap,
+        "a listing that stopped at no whole-walk cap was reported as having stopped at it"
+    );
+}
+
+/// Makes `count` empty subdirectories of `parent`, named `{prefix}0000`, `{prefix}0001` and so on,
+/// which sort in the order they were made.
+fn make_subdirectories(parent: &std::path::Path, prefix: &str, count: usize) {
+    std::fs::create_dir_all(parent).unwrap();
+    for n in 0..count {
+        std::fs::create_dir(parent.join(format!("{prefix}{n:04}"))).unwrap();
+    }
+}
+
+/// Makes the directories `g00`, `g01` and so on under `scratch`, the nth holding `counts[n]` empty
+/// subdirectories.
+fn make_groups(scratch: &Scratch, counts: &[usize]) {
+    for (n, count) in counts.iter().enumerate() {
+        make_subdirectories(&scratch.path.join(format!("g{n:02}")), "d", *count);
+    }
+}
+
+/// The listing of `directory` to `depth`, narrowed by `pattern`, under the deny rules `rules`,
+/// released for the test to read.
+fn bounded_listing(
+    workspace: &Workspace,
+    rules: &[&str],
+    directory: &str,
+    pattern: Option<&str>,
+    depth: Option<usize>,
+) -> bravebot_agent::workspace::Listing {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(denying(rules));
+    let pattern = pattern.map(|pattern| Labelled::trusted(pattern.to_string()));
+    let listing = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(directory.to_string()),
+            pattern.as_ref(),
+            depth,
+        )
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    listing.declassify(&proof)
+}
+
+/// LIST-5: the subdirectory bound holds where the walk goes into the subdirectories as well as
+/// where it stops at them. A directory of 250 subdirectories, each holding a file and a
+/// subdirectory, listed three levels deep is entered at the first 200 by name, which name the
+/// subdirectory each holds as where the walk stopped. The other 50 are not entered and are counted
+/// as left out. A bound applied only to the subdirectories a walk stops at enters all 250.
+#[test]
+fn a_bounded_listing_goes_into_at_most_the_cap_of_subdirectories_of_one_directory() {
+    let scratch = Scratch::new("list-subdirectory-cap-descending");
+    let wide = scratch.path.join("wide");
+    make_subdirectories(&wide, "s", 250);
+    for n in 0..250 {
+        let each = wide.join(format!("s{n:04}"));
+        std::fs::create_dir(each.join("deeper")).unwrap();
+        std::fs::write(each.join("f.txt"), "x").unwrap();
+    }
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs/a.md"), "a").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(3));
+
+    let mut expected_files = vec!["docs/a.md".to_string()];
+    expected_files.extend((0..200).map(|n| format!("wide/s{n:04}/f.txt")));
+    assert_eq!(
+        listing.files, expected_files,
+        "the walk did not go into exactly the first 200 subdirectories of `wide` by name"
+    );
+    let expected_directories: Vec<String> =
+        (0..200).map(|n| format!("wide/s{n:04}/deeper")).collect();
+    assert_eq!(
+        listing.directories, expected_directories,
+        "a subdirectory past the cap was entered, or one inside the first 200 was not named"
+    );
+    assert_eq!(
+        listing.partly_listed,
+        vec![("wide".to_string(), 0, 50)],
+        "the subdirectories the walk did not enter were not counted as left out"
+    );
+    assert!(listing.truncated, "a subdirectory cut was not reported");
+    assert!(
+        !listing.at_the_cap,
+        "a listing that stopped at no whole-walk cap was reported as having stopped at it"
+    );
+}
+
+/// LIST-5: a directory cut only for its subdirectories is named in the result, once, with the
+/// count of subdirectories left out and no files left out. The walk root is `.` when it is the
+/// workspace root. A cut that is recorded again for each subdirectory left out names the directory
+/// five times, and one recorded under an empty name does not name the workspace root.
+#[test]
+fn a_bounded_listing_cut_only_for_subdirectories_names_the_directory_once_with_the_count() {
+    let scratch = Scratch::new("list-cut-only-subdirectories");
+    make_subdirectories(&scratch.path, "d", 205);
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(scratch.path.join(name), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(1));
+
+    assert_eq!(
+        listing.partly_listed,
+        vec![(".".to_string(), 0, 5)],
+        "the root was not named once, as `.`, with five subdirectories and no files left out"
+    );
+    let expected: Vec<String> = (0..200).map(|n| format!("d{n:04}")).collect();
+    assert_eq!(listing.directories, expected);
+    assert_eq!(
+        listing.files,
+        vec![
+            "a.txt".to_string(),
+            "b.txt".to_string(),
+            "c.txt".to_string()
+        ]
+    );
+    assert!(listing.truncated, "a subdirectory cut was not reported");
+    assert!(!listing.at_the_cap);
+}
+
+/// LIST-5: a directory cut for both its files and its subdirectories is named once, with both
+/// counts. The walk takes its files before its subdirectories, so the second cut has to find the
+/// record the first made. A walk that records each cut by itself names the directory twice, and
+/// one that does not find the record loses a count.
+#[test]
+fn a_bounded_listing_cut_for_files_and_subdirectories_names_the_directory_once_with_both_counts() {
+    let scratch = Scratch::new("list-cut-files-and-subdirectories");
+    let mixed = scratch.path.join("mixed");
+    make_subdirectories(&mixed, "d", 207);
+    for n in 0..205 {
+        std::fs::write(mixed.join(format!("f{n:04}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(2));
+
+    assert_eq!(
+        listing.partly_listed,
+        vec![("mixed".to_string(), 5, 7)],
+        "the directory was not named once with 5 files and 7 subdirectories left out"
+    );
+    assert_eq!(listing.files.len(), 200);
+    assert_eq!(listing.directories.len(), 200);
+    assert!(listing.truncated);
+    assert!(!listing.at_the_cap);
+}
+
+/// LIST-5: a directory cut for its subdirectories keeps its own count where the first subdirectory
+/// the walk goes into is cut as well. A directory cut for files has its record before the records
+/// of the subdirectories the walk enters, and the count of subdirectories it left out comes after
+/// them, so that count has to be added to the directory's own record. A walk that adds it to the
+/// record made last gives `parent/s0000` the subdirectories `parent` left out. The parent is cut
+/// for subdirectories only in one listing and for files as well in the other.
+#[test]
+fn a_directory_cut_for_subdirectories_keeps_its_own_count_when_an_entered_child_is_cut_too() {
+    let listing_of = |name: &str, files_in_parent: usize| {
+        let scratch = Scratch::new(name);
+        let parent = scratch.path.join("parent");
+        make_subdirectories(&parent, "s", 203);
+        for n in 0..files_in_parent {
+            std::fs::write(parent.join(format!("f{n:04}.txt")), "x").unwrap();
+        }
+        for n in 0..203 {
+            std::fs::write(parent.join("s0000").join(format!("f{n:04}.txt")), "x").unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        bounded_listing(&workspace, &[], ".", None, Some(3))
+    };
+    let records_of = |listing: &bravebot_agent::workspace::Listing, name: &str| {
+        listing
+            .partly_listed
+            .iter()
+            .filter(|(each, ..)| each == name)
+            .map(|(_, files, directories)| (*files, *directories))
+            .collect::<Vec<(usize, usize)>>()
+    };
+
+    let subdirectories_only = listing_of("list-cut-parent-subdirectories-child-files", 0);
+    assert_eq!(
+        records_of(&subdirectories_only, "parent/s0000"),
+        vec![(3, 0)],
+        "the entered subdirectory was not named once with the 3 files it left out and no \
+         subdirectories"
+    );
+    assert_eq!(
+        records_of(&subdirectories_only, "parent"),
+        vec![(0, 3)],
+        "the parent was not named once with the 3 subdirectories it left out and no files"
+    );
+    assert_eq!(
+        subdirectories_only.partly_listed.len(),
+        2,
+        "a directory other than the parent and its first subdirectory was named"
+    );
+    assert_eq!(subdirectories_only.files.len(), 200);
+    assert!(subdirectories_only.directories.is_empty());
+    assert!(subdirectories_only.truncated);
+    assert!(!subdirectories_only.at_the_cap);
+
+    let files_and_subdirectories = listing_of("list-cut-parent-both-child-files", 202);
+    assert_eq!(
+        records_of(&files_and_subdirectories, "parent/s0000"),
+        vec![(3, 0)],
+        "the entered subdirectory was not named once with the 3 files it left out and no \
+         subdirectories"
+    );
+    assert_eq!(
+        records_of(&files_and_subdirectories, "parent"),
+        vec![(2, 3)],
+        "the parent was not named once with the 2 files and 3 subdirectories it left out"
+    );
+    assert_eq!(
+        files_and_subdirectories.partly_listed.len(),
+        2,
+        "a directory other than the parent and its first subdirectory was named"
+    );
+    assert_eq!(files_and_subdirectories.files.len(), 400);
+    assert!(files_and_subdirectories.directories.is_empty());
+    assert!(files_and_subdirectories.truncated);
+    assert!(!files_and_subdirectories.at_the_cap);
+}
+
+/// LIST-5: a subdirectory a permission rule covers is neither listed nor counted as left out, and
+/// does not use up the cap. `wide` holds exactly 200 subdirectories no rule covers, and two
+/// covered ones, one sorting before them and one after. Counting a covered subdirectory before the
+/// rule is asked takes a place from one that is listed, or reports one as left out. The same tree
+/// without the rule has 202 to choose from, which shows the rule is what leaves them out.
+#[test]
+fn a_subdirectory_a_rule_covers_is_neither_listed_nor_counted_as_left_out() {
+    let scratch = Scratch::new("list-fenced-subdirectories");
+    let wide = scratch.path.join("wide");
+    make_subdirectories(&wide, "d", 200);
+    for fenced in ["aaa", "zzz"] {
+        std::fs::create_dir(wide.join(fenced)).unwrap();
+        std::fs::write(wide.join(fenced).join("key.pem"), "private").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let fenced = bounded_listing(
+        &workspace,
+        &["Read(wide/aaa/**)", "Read(wide/zzz/**)"],
+        ".",
+        None,
+        Some(2),
+    );
+
+    let expected: Vec<String> = (0..200).map(|n| format!("wide/d{n:04}")).collect();
+    assert_eq!(
+        fenced.directories, expected,
+        "a covered subdirectory was listed or took the place of one that is not covered"
+    );
+    assert!(
+        fenced.partly_listed.is_empty(),
+        "a covered subdirectory was counted as left out: {:?}",
+        fenced.partly_listed
+    );
+    assert!(!fenced.truncated);
+
+    let open = bounded_listing(&workspace, &[], ".", None, Some(2));
+    assert_eq!(
+        open.partly_listed,
+        vec![("wide".to_string(), 0, 2)],
+        "without the rule the tree does not hold more subdirectories than the cap"
+    );
+}
+
+/// LIST-5: the include pattern selects files and does not apply to directories, so it does not
+/// change which subdirectories a bounded walk takes or how many it leaves out. A walk that tested
+/// a subdirectory's name against the pattern before counting it lists none of them for `*.rs`.
+#[test]
+fn a_pattern_does_not_change_how_many_subdirectories_a_bounded_listing_takes() {
+    let scratch = Scratch::new("list-pattern-subdirectories");
+    make_subdirectories(&scratch.path.join("wide"), "d", 205);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let without = bounded_listing(&workspace, &[], ".", None, Some(2));
+    let with = bounded_listing(&workspace, &[], ".", Some("*.rs"), Some(2));
+
+    let expected: Vec<String> = (0..200).map(|n| format!("wide/d{n:04}")).collect();
+    assert_eq!(without.directories, expected);
+    assert_eq!(
+        with.directories, expected,
+        "a pattern changed which subdirectories were taken"
+    );
+    assert_eq!(
+        with.partly_listed,
+        vec![("wide".to_string(), 0, 5)],
+        "a pattern changed how many subdirectories were left out"
+    );
+    assert_eq!(with.partly_listed, without.partly_listed);
+    assert!(with.files.is_empty());
+}
+
+/// LIST-5: a walk with no depth is not held to the subdirectory bound, as it is not held to the
+/// file bound: it goes into every subdirectory, lists the files in each, and names no directory
+/// as cut. 450 subdirectories of one directory are all listed.
+#[test]
+fn an_unbounded_listing_goes_into_every_subdirectory_of_a_directory() {
+    let scratch = Scratch::new("list-unbounded-subdirectories");
+    let many = scratch.path.join("many");
+    make_subdirectories(&many, "s", 450);
+    for n in 0..450 {
+        std::fs::write(many.join(format!("s{n:04}")).join("f.txt"), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, None);
+
+    let expected: Vec<String> = (0..450).map(|n| format!("many/s{n:04}/f.txt")).collect();
+    assert_eq!(
+        listing.files, expected,
+        "an unbounded listing did not go into every subdirectory"
+    );
+    assert!(listing.partly_listed.is_empty());
+    assert!(listing.directories.is_empty());
+    assert!(!listing.truncated);
+    assert!(!listing.at_the_cap);
+}
+
+/// LIST-5: the cap is on more than 200. A directory of exactly 200 subdirectories leaves none out,
+/// and one of 201 leaves exactly one out, named by the name the call gave it. A comparison that
+/// lets one more through than the cap lists all 201.
+#[test]
+fn a_directory_of_exactly_the_subdirectory_cap_leaves_none_out_and_one_more_leaves_one_out() {
+    let scratch = Scratch::new("list-subdirectory-boundary");
+    make_subdirectories(&scratch.path.join("exact"), "d", 200);
+    make_subdirectories(&scratch.path.join("over"), "d", 201);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let exact = bounded_listing(&workspace, &[], "exact", None, Some(1));
+    let expected: Vec<String> = (0..200).map(|n| format!("exact/d{n:04}")).collect();
+    assert_eq!(exact.directories, expected);
+    assert!(
+        exact.partly_listed.is_empty(),
+        "a directory of exactly the cap had a subdirectory left out: {:?}",
+        exact.partly_listed
+    );
+    assert!(!exact.truncated);
+
+    let over = bounded_listing(&workspace, &[], "over", None, Some(1));
+    let expected: Vec<String> = (0..200).map(|n| format!("over/d{n:04}")).collect();
+    assert_eq!(
+        over.directories, expected,
+        "a directory of one more than the cap listed more than the cap"
+    );
+    assert_eq!(
+        over.partly_listed,
+        vec![("over".to_string(), 0, 1)],
+        "exactly one subdirectory should have been left out"
+    );
+    assert!(over.truncated);
+    assert!(!over.at_the_cap);
+}
+
+/// LIST-5, LIST-4: a directory cut for its subdirectories is one entry against the cap over the
+/// whole walk. Ten directories stop at 1999 subdirectories and name one cut directory, which is
+/// 2000 entries and within the cap, though the listing is truncated. One more subdirectory makes
+/// 2001, and the listing is then reported as stopped at the cap. A count that leaves the cut
+/// directory out of the total does not report the second.
+#[test]
+fn a_directory_cut_for_subdirectories_counts_as_one_entry_against_the_whole_walk_cap() {
+    let at_the_cap = |name: &str, last: usize| {
+        let scratch = Scratch::new(name);
+        let mut counts = vec![201];
+        counts.extend([200; 8]);
+        counts.push(last);
+        make_groups(&scratch, &counts);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        bounded_listing(&workspace, &[], ".", None, Some(2))
+    };
+
+    let within = at_the_cap("list-subdirectory-cut-within-cap", 199);
+    assert_eq!(
+        within.directories.len(),
+        1_999,
+        "the 1999 subdirectories the walk stopped at were not all named"
+    );
+    assert_eq!(within.partly_listed, vec![("g00".to_string(), 0, 1)]);
+    assert!(
+        !within.at_the_cap,
+        "2000 entries, the cut directory among them, were reported as past the cap"
+    );
+    assert!(
+        within.truncated,
+        "a listing with a cut directory was not truncated"
+    );
+
+    let past = at_the_cap("list-subdirectory-cut-past-cap", 200);
+    assert!(
+        past.at_the_cap,
+        "2001 entries, the cut directory among them, were not reported as past the cap"
+    );
+    assert!(past.truncated);
+    assert_eq!(
+        past.files.len() + past.directories.len() + past.partly_listed.len(),
+        2_000,
+        "the listing was not cut to the cap"
+    );
+}
+
+/// LIST-4, LIST-5: the whole-walk cap is still reported where several directories each hold more
+/// subdirectories than the per-directory cap. Eleven directories of 250 subdirectories give 200
+/// entries and a cut directory each, which is more than 2000 together, so the walk stops at the
+/// cap and says so as well as saying that directories were cut.
+#[test]
+fn the_whole_walk_cap_is_reported_where_several_directories_each_exceed_the_subdirectory_cap() {
+    let scratch = Scratch::new("list-several-cut-directories");
+    make_groups(&scratch, &[250; 11]);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(2));
+
+    assert!(
+        listing.at_the_cap,
+        "the walk went past 2000 entries and the listing was not reported as stopped at the cap"
+    );
+    assert!(listing.truncated);
+    assert!(
+        !listing.partly_listed.is_empty(),
+        "the cut directories the cap left room for were not named"
+    );
+    assert_eq!(
+        listing.files.len() + listing.directories.len() + listing.partly_listed.len(),
+        2_000,
+        "the listing was not cut to the cap"
+    );
 }
 
 /// LIST-5: a cut directory is named by where the walk found it. The walk root is `.` when it is
@@ -2981,7 +3458,7 @@ fn a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name() {
         .declassify(&proof);
     assert_eq!(
         from_the_root.partly_listed,
-        vec![(".".to_string(), 1), ("sub".to_string(), 1)],
+        vec![(".".to_string(), 1, 0), ("sub".to_string(), 1, 0)],
         "the workspace root was not named `.` or a subdirectory was not named by its name"
     );
 
@@ -2996,7 +3473,7 @@ fn a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name() {
         .declassify(&proof);
     assert_eq!(
         from_a_subdirectory.partly_listed,
-        vec![("sub".to_string(), 1), ("sub/deeper".to_string(), 1)],
+        vec![("sub".to_string(), 1, 0), ("sub/deeper".to_string(), 1, 0)],
         "a walk root that is not the workspace root was not named by its relative name"
     );
 }

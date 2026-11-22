@@ -152,36 +152,49 @@ the other shape facts of the result (the cap, the unreadable-directory flag) thr
 name or target in that sentence, or that read the target to decide what to say, would be a violation
 of shape 1 or 3 and is not covered by this paragraph.
 
-The same holds for the count of files a bounded listing left out of each directory it cut (LIST-5).
-In `walk_filtered` in `crates/agent/src/workspace.rs` the walk sorts a directory's files by name,
-drops each file the include pattern does not match or a permission rule covers, and keeps the first
-200 of the rest. Which 200 are kept is decided by that name order, which is the order that already
-decides what the cap over the whole walk keeps. The count of files left out is taken after the
-include pattern and the rules, which the walk applies to every file it reports whether or not a cap
-applies. A walk made for `repo_map` also sets aside each file the trust map does not vouch for and
-counts it as unvouched, without adding it to the files held against the cap. That is decided from
+The same holds for the counts of files and subdirectories a bounded listing left out of each
+directory it cut (LIST-5). In `walk_filtered` in `crates/agent/src/workspace.rs` the walk sorts a
+directory's files by name, drops each file the include pattern does not match or a permission rule
+covers, and keeps the first 200 of the rest. Which 200 are kept is decided by that name order, which
+is the order that already decides what the cap over the whole walk keeps. It then sorts the
+directory's subdirectories by name and keeps the first 200 of those the walk's existing filters
+leave (ignored directory names, links, the stores and the permission rules), whether it goes into
+them or stops at them, from a budget the files do not spend. The count of files left out is taken
+after the include pattern and the rules, which the walk applies to every file it reports whether or
+not a cap applies. The count of subdirectories left out is taken after the rules, so a subdirectory
+a rule covers is not counted, and the include pattern does not apply to directories. A walk made
+for `repo_map` also sets aside each file the trust map does not vouch for and counts it as
+unvouched, without adding it to the files held against the cap. That is decided from
 the trust map's answer for the file's path alone and no byte of the file is read. A cut directory is
 recorded under the name its caller passes to `walk_filtered`.
 `Workspace::list` passes the walk root's name once, `.` when the resolved directory argument is the
 workspace root and its relative name otherwise, and each recursive call passes the relative name it
 built for the subdirectory. No name read from a directory entry is tested to tell the root from a
-subdirectory. Each cut directory counts as one entry against the cap over the whole walk, in
-`Collected::len` during the walk and in `at_the_cap` after it. `Workspace::list` sets `at_the_cap`
-when the files, the directories stopped at and the cut directories together pass that cap, and sets
+subdirectory. A directory has one record in `partly_listed` however it was cut: the pass over its
+files adds the record when files were left out, and the pass over its subdirectories adds it when
+none exists and otherwise adds to the subdirectory count of the one that does. Each cut directory
+counts as one entry against the cap over the whole walk, in `Collected::len` during the walk and in
+`at_the_cap` after it. `Workspace::list` sets `at_the_cap` when the files, the directories stopped
+at and the cut directories together pass that cap, and sets
 `truncated` to `at_the_cap || !partly_listed.is_empty()`. It sorts the cut directories by name and
 truncates them to what the cap leaves after the files and the directories stopped at, the same sort
-by name and truncation it applies to those two lists. Each count and `at_the_cap` are released
-inside the existing release in `list_files`, and each count reaches the planner as a number beside
-the directory's reference. The driver branches on them in these places: the comparison of the
-files taken from a directory with 200, and whether its count is above zero, in the walk; whether
-any directory was cut and `at_the_cap`, which together choose the sentences in `list_files`
+by name and truncation it applies to those two lists. Each pair of counts and `at_the_cap` are
+released inside the existing release in `list_files`, as a pair of numbers for each directory, and
+each pair reaches the planner as numbers beside the directory's reference. The driver branches on
+them in these places: the comparison of the files taken from a directory with 200, whether the
+count of files left out is above zero, the comparison of the subdirectories taken from it with 200
+(`taken_directories >= most`, a count of directory entries kept by the filters above, no name
+read), and whether the directory already has a record, in the walk; whether any directory was cut,
+whether any cut left files out, whether any left
+subdirectories out and `at_the_cap`, which together choose the sentences in `list_files`
 (`listing.at_the_cap || !cut_per_directory`) and in `listing_capped_note` in
 `crates/agent/src/turn/sentences.rs` (`cut.is_empty() || at_the_cap`); and each count's value,
-which `tally` compares with 1 to write "file" or "files". Apart from the include pattern, the
-rules, the resolved directory argument and the name order above, no name is in any of these
-conditions. A change that put the directory's name in the sentence, or chose which directories to
-cut or how to word the sentence from a name, would be a violation of shape 1 or 3 and is not
-covered by this paragraph.
+which `left_out_clause` compares with zero to decide whether to say it and `tally` compares with 1
+to write "file" or "files" and "subdirectory" or "subdirectories". Apart from the include pattern,
+the rules, the fixed list of ignored directory names, the resolved directory argument and the name
+order above, no name is in any of these conditions. A change that put the directory's name in the
+sentence, or chose which directories to cut or how to word the sentence from a name, would be a
+violation of shape 1 or 3 and is not covered by this paragraph.
 
 The reason in the sentence for a checkout's refused filesystem entry (SANDBOX-25) is chosen from
 the entry's spelling by `resolve` in `bravebot-sandbox`, which already decides from that spelling

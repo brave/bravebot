@@ -101,13 +101,14 @@ pub struct Entries {
     /// one reference at a time rather than as a number: handed a listing of files alone it sees a
     /// tree with no branches.
     pub directories: usize,
-    /// How many files were left out of each directory the per-directory cap cut (LIST-5), in the
-    /// order of the last of `paths`, which are those directories. Counts of directory entries,
-    /// released with `count`, so the turn can say beside the references how much each one holds
-    /// that is not listed.
-    pub left_out: Vec<usize>,
-    /// Whether the listing reached the cap over the whole walk, as against leaving files out by
-    /// the per-directory cap alone. Shape like `count`, from the same release.
+    /// How many files and how many subdirectories were left out of each directory a per-directory
+    /// cap cut (LIST-5), in the order of the last of `paths`, which are those directories. Counts
+    /// of directory entries, released with `count`, so the turn can say beside the references how
+    /// much each one holds that is not listed.
+    pub left_out: Vec<(usize, usize)>,
+    /// Whether the listing reached the cap over the whole walk, as against leaving files or
+    /// subdirectories out by the per-directory caps alone. Shape like `count`, from the same
+    /// release.
     pub at_the_cap: bool,
 }
 
@@ -5962,8 +5963,8 @@ fn list_files<S: Sink>(
                 // The second is what keeps the quarantined listing describing the same tree the
                 // trusted one does, where a directory is rendered with a trailing slash among the
                 // files. The third says whether a pattern selected anything.
-                // The fourth is how many files each directory the per-directory cap cut left out,
-                // a count of directory entries like the others.
+                // The fourth is how many files and how many subdirectories each directory a
+                // per-directory cap cut left out, counts of directory entries like the others.
                 let (count, directories, files, left_out, at_the_cap) = {
                     let shaped = policy.render_in_place("list_files", &listing, |listing| {
                         (
@@ -5975,27 +5976,32 @@ fn list_files<S: Sink>(
                             listing
                                 .partly_listed
                                 .iter()
-                                .map(|(_, left_out)| *left_out)
-                                .collect::<Vec<usize>>(),
+                                .map(|(_, files, directories)| (*files, *directories))
+                                .collect::<Vec<(usize, usize)>>(),
                             listing.at_the_cap,
                         )
                     });
                     let proof = policy.authorise_display_release(
                         "how many entries a listing has, how many of them it stopped at, how \
-                         many are files, how many files each directory it cut left out and \
-                         whether it reached the cap over the whole walk",
+                         many are files, how many files and subdirectories each directory it cut \
+                         left out and whether it reached the cap over the whole walk",
                     );
                     shaped.declassify(&proof)
                 };
                 // The directories last, which is the order the kernel reads the two apart by. A
-                // directory the per-directory cap cut is a directory reference like one the walk
+                // directory a per-directory cap cut is a directory reference like one the walk
                 // stopped at, so it is named the only way a quarantined listing names anything.
                 // Those come after the ones the walk stopped at, so which references they are is
                 // decided by the counts alone and `left_out` lines up with the last of them.
                 let paths = policy.render_in_place("list_files", &listing, |listing| {
                     let mut paths = listing.files.clone();
                     paths.extend(listing.directories.iter().cloned());
-                    paths.extend(listing.partly_listed.iter().map(|(name, _)| name.clone()));
+                    paths.extend(
+                        listing
+                            .partly_listed
+                            .iter()
+                            .map(|(name, _, _)| name.clone()),
+                    );
                     paths
                 });
                 // A call that asked to read gets the listing as one document too, under the
@@ -6032,7 +6038,7 @@ fn list_files<S: Sink>(
                     listing
                         .partly_listed
                         .iter()
-                        .map(|(name, _)| format!("{name}/")),
+                        .map(|(name, _, _)| format!("{name}/")),
                 );
                 entries.sort();
                 entries.join("\n")
@@ -6050,6 +6056,30 @@ fn list_files<S: Sink>(
     }
 }
 
+/// What a directory a per-directory cap cut left out, worded for the end of its line in a listing:
+/// its files, its subdirectories, or both. A count of directory entries and no name. `more` puts
+/// "more" before the noun, as a listing's own line does, and leaves it out of the sentence a
+/// quarantined listing carries beside its references.
+pub(crate) fn left_out_clause(files: usize, directories: usize, more: bool) -> String {
+    let (file, many_files, directory, many_directories) = if more {
+        (
+            "more file",
+            "more files",
+            "more subdirectory",
+            "more subdirectories",
+        )
+    } else {
+        ("file", "files", "subdirectory", "subdirectories")
+    };
+    let files = (files > 0).then(|| tally(files, file, many_files));
+    let directories = (directories > 0).then(|| tally(directories, directory, many_directories));
+    [files, directories]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>()
+        .join(" and ")
+}
+
 /// A listing as the planner reads it where it may: one entry a line, a directory with a trailing
 /// slash, and the driver's sentences about a cap, a pattern that matched nothing, a directory that
 /// could not be opened and links not entered. Rendered inside the kernel under the listing's label.
@@ -6065,16 +6095,26 @@ fn render_listing<S: Sink>(
         let selected_no_file = listing.files.is_empty();
         let mut entries: Vec<String> = listing.files.clone();
         entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
-        // A directory the per-directory cap cut, with how many of its files are not shown,
-        // so the planner knows to list it by name for the rest (LIST-5).
-        entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
-            format!(
-                "{name}/ ({} not listed)",
-                tally(*left_out, "more file", "more files")
-            )
-        }));
+        // A directory a per-directory cap cut, with how many of its files and subdirectories are
+        // not shown, so the planner knows the listing of it is incomplete (LIST-5).
+        entries.extend(
+            listing
+                .partly_listed
+                .iter()
+                .map(|(name, files, directories)| {
+                    format!(
+                        "{name}/ ({} not listed)",
+                        left_out_clause(*files, *directories, true)
+                    )
+                }),
+        );
         entries.sort();
         let cut_per_directory = !listing.partly_listed.is_empty();
+        let files_cut = listing.partly_listed.iter().any(|(_, files, _)| *files > 0);
+        let directories_cut = listing
+            .partly_listed
+            .iter()
+            .any(|(_, _, directories)| *directories > 0);
         let listing = Listing {
             files: entries,
             directories: Vec::new(),
@@ -6098,9 +6138,10 @@ fn render_listing<S: Sink>(
         } else if listing.truncated {
             // Said plainly, because a model given a silently capped listing will treat
             // it as the whole tree and conclude a file does not exist. Each cap that left
-            // files out has its own sentence, as `listing_capped_note` does for a
-            // quarantined listing: "stopped at N files" misstates a per-directory cut,
-            // and the per-directory sentence alone hides that the walk stopped as well.
+            // files or subdirectories out has its own sentence, as `listing_capped_note`
+            // does for a quarantined listing: "stopped at N files" misstates a
+            // per-directory cut, and the per-directory sentences alone hide that the walk
+            // stopped as well.
             let mut body = listing.files.join("\n");
             if listing.at_the_cap || !cut_per_directory {
                 body.push_str(&format!(
@@ -6109,7 +6150,7 @@ fn render_listing<S: Sink>(
                     listing.files.len()
                 ));
             }
-            if cut_per_directory {
+            if files_cut {
                 // A listing of that directory with a depth is cut the same way, so the
                 // rest is reached with none.
                 body.push_str(&format!(
@@ -6117,6 +6158,19 @@ fn render_listing<S: Sink>(
                      is incomplete; to see the rest of a directory marked \"not \
                      listed\", list that directory by its name with no depth)",
                     crate::workspace::MAX_FILES_PER_DIRECTORY
+                ));
+            }
+            if directories_cut {
+                // A listing with no depth walks into every subdirectory and names files only, so
+                // it shows what is under the subdirectories left out and none of them by name.
+                // No other tool is named: this sentence is written without the turn's list of
+                // tools (TOOL-6).
+                body.push_str(&format!(
+                    "\n\n(this listing took at most {} subdirectories from any one directory \
+                     and is incomplete; for a directory marked \"not listed\", list it by its \
+                     name with no depth to see the files under all of its subdirectories, \
+                     since a listing with no depth names files only)",
+                    crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
                 ));
             }
             body

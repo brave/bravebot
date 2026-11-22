@@ -828,6 +828,146 @@ fn a_bounded_listing_cut_per_directory_and_at_the_cap_says_both() {
     );
 }
 
+/// The sentence a bounded listing ends with when a directory lost files to the per-directory cap.
+const SAID_FILES_CUT: &str = "(this listing took at most 200 files from any one directory and is incomplete; to see the rest of a directory marked \"not listed\", list that directory by its name with no depth)";
+
+/// The sentence a bounded listing ends with when a directory lost subdirectories to the
+/// per-directory cap. It says what a listing with no depth shows, since that listing names files
+/// only and does not reveal the subdirectories that were left out.
+const SAID_SUBDIRECTORIES_CUT: &str = "(this listing took at most 200 subdirectories from any one directory and is incomplete; for a directory marked \"not listed\", list it by its name with no depth to see the files under all of its subdirectories, since a listing with no depth names files only)";
+
+/// A listing as the planner reads it: one entry to a line, then each sentence after a blank line.
+fn listing_told(entries: Vec<String>, sentences: &[&str]) -> String {
+    let mut told = entries.join("\n");
+    for sentence in sentences {
+        told.push_str("\n\n");
+        told.push_str(sentence);
+    }
+    told
+}
+
+/// LIST-5 for a listing the planner may read: a directory the per-directory cap cut for its
+/// subdirectories is named with how many are not shown, and the sentence for the planner says what
+/// a listing with no depth does and does not show. The regressions it rejects: the cut directory
+/// missing from the body, its count dropped or worded as files, the sentence about files said for a
+/// directory that lost no file, no sentence about subdirectories, and the whole-walk wording for a
+/// listing that stopped at no such cap.
+#[test]
+fn a_bounded_listing_names_a_directory_it_cut_for_subdirectories_with_how_many_it_left_out() {
+    let scratch = Scratch::new("list-cut-subdirectories-trusted");
+    std::fs::create_dir(scratch.path.join("wide")).unwrap();
+    for n in 0..203 {
+        std::fs::create_dir(scratch.path.join(format!("wide/d{n:03}"))).unwrap();
+    }
+    std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(
+        &mut policy,
+        &workspace,
+        &json!({"directory": ".", "depth": 2}),
+    );
+    assert!(
+        produced.incomplete,
+        "a subdirectory cut was not reported as incomplete"
+    );
+    let told = super::arguments::told(&mut policy, &produced.text);
+
+    let mut entries = vec![
+        "README.md".to_string(),
+        "wide/ (3 more subdirectories not listed)".to_string(),
+    ];
+    entries.extend((0..200).map(|n| format!("wide/d{n:03}/")));
+    assert_eq!(
+        told,
+        listing_told(entries, &[SAID_SUBDIRECTORIES_CUT]),
+        "the listing did not name the directory with its subdirectory count and say what a listing \
+         with no depth shows"
+    );
+}
+
+/// LIST-5 for a listing the planner may read: a directory cut for both its files and its
+/// subdirectories is named once with both counts, and each cut has its own sentence. The
+/// regressions it rejects: one count shown and the other dropped, the two counts swapped, the
+/// directory named twice, and the sentence for one cut standing in for the other.
+#[test]
+fn a_bounded_listing_cut_for_files_and_subdirectories_names_the_directory_once_with_both_counts() {
+    let scratch = Scratch::new("list-cut-both-trusted");
+    std::fs::create_dir(scratch.path.join("mixed")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("mixed/f{n:03}.txt")), "x").unwrap();
+    }
+    for n in 0..202 {
+        std::fs::create_dir(scratch.path.join(format!("mixed/d{n:03}"))).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(
+        &mut policy,
+        &workspace,
+        &json!({"directory": ".", "depth": 2}),
+    );
+    assert!(
+        produced.incomplete,
+        "a cut for both files and subdirectories was not reported as incomplete"
+    );
+    let told = super::arguments::told(&mut policy, &produced.text);
+
+    let mut entries = vec!["mixed/ (1 more file and 2 more subdirectories not listed)".to_string()];
+    entries.extend((0..200).map(|n| format!("mixed/d{n:03}/")));
+    entries.extend((0..200).map(|n| format!("mixed/f{n:03}.txt")));
+    assert_eq!(
+        told,
+        listing_told(entries, &[SAID_FILES_CUT, SAID_SUBDIRECTORIES_CUT]),
+        "the directory was not named once with both counts, or a sentence for one of the cuts was \
+         missing"
+    );
+}
+
+/// LIST-5 for a listing the planner may read: a directory cut for files only reads as it always
+/// has, with a file count, the sentence about files and nothing about subdirectories. The
+/// regressions it rejects: a subdirectory count or the subdirectory sentence added to a listing
+/// that left no subdirectory out, and the file wording changed.
+#[test]
+fn a_bounded_listing_cut_for_files_only_says_nothing_about_subdirectories() {
+    let scratch = Scratch::new("list-cut-files-only-trusted");
+    std::fs::create_dir(scratch.path.join("crowded")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("crowded/f{n:03}.txt")), "x").unwrap();
+    }
+    std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(
+        &mut policy,
+        &workspace,
+        &json!({"directory": ".", "depth": 2}),
+    );
+    assert!(produced.incomplete, "a per-directory cut was not reported");
+    let told = super::arguments::told(&mut policy, &produced.text);
+
+    assert!(
+        !told.contains("subdirector"),
+        "a listing that left no subdirectory out spoke of subdirectories: {told}"
+    );
+    let mut entries = vec![
+        "README.md".to_string(),
+        "crowded/ (1 more file not listed)".to_string(),
+    ];
+    entries.extend((0..200).map(|n| format!("crowded/f{n:03}.txt")));
+    assert_eq!(
+        told,
+        listing_told(entries, &[SAID_FILES_CUT]),
+        "a cut for files only was worded differently from before"
+    );
+}
+
 /// LIST-6 for a listing the planner may not read: the count travels beside the references,
 /// because a sentence written into the quarantined body reaches nobody. The regression it
 /// rejects: the count kept only for the trusted rendering.
