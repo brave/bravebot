@@ -143,6 +143,7 @@ crates/core/src/command.rs::discards: assumes external_body
 crates/core/src/command.rs::clone: assumes external
 crates/core/src/compare.rs::same_path_buf: assumes external_body
 crates/core/src/compare.rs::is_number: assumes external_body
+crates/core/src/credentials.rs::escape_at: assumes requires
 crates/core/src/policy.rs::Declassification: assumes external_body
 crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification

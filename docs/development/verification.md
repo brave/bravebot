@@ -100,7 +100,10 @@ pub fn meet(self, other: Self) -> Self {
 ```
 
 - `requires` states what the caller owes, `ensures` what the function returns, and a loop takes
-  `invariant` and `decreases` the same way, on the loop.
+  `invariant` and `decreases` the same way, on the loop. Verus checks a `requires` only at a
+  caller it verifies, so a function with a caller Verus does not verify checks its input and
+  states the result in `ensures` instead. The ledger lists each `requires` as an assumption, so a
+  new one shows in the diff with its callers for a reviewer to check.
 - A module that holds a contract imports `vstd::prelude::*` behind `cfg(verus_keep_ghost)`, and
   a crate with a contract on a loop enables `proc_macro_hygiene` behind the same cfg, as
   `crates/core/src/lib.rs` does.
@@ -134,7 +137,7 @@ Then:
   contract that is removed, added or weakened shows in the diff. It fails the same way when an
   assumption is added or removed in a file that holds Verus code: an `external_body`, `external`,
   `external_*_specification`, `assume_termination` or `assume_compatibility_with_trait_spec`
-  attribute, an `assume` or `admit`, or an `assume_specification`. Verus verifies a crate with
+  attribute, an `assume` or `admit`, an `assume_specification`, or a contract with a `requires`. Verus verifies a crate with
   any of these, so the ledger is what shows a reviewer each one. CI runs it in the Security job.
 - `make check-verus` runs Verus. Each crate in `CRATES` in `contrib/check-verus.py` has to verify,
   each mutation has to be refused, each change `contrib/check-verus-sweep.py` makes has to be
