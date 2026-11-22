@@ -19,8 +19,11 @@ import { Icon, Menu, ProgressRing } from '../nala'
 import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
 import { pullRequestLink } from '../../shared/pull-request'
 
-/** What a row says about a session that is open somewhere: only what asks something of the reader. */
-export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
+/**
+ * What a row says about a session: what asks something of the reader in a chat open here, or, for
+ * `background`, that a background process is running it and it cannot be opened here.
+ */
+export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed' | 'background'
 
 export interface SessionInfoValue {
   bot?: { name: string; avatar: string }
@@ -33,6 +36,7 @@ const STATUS_WORDS: Record<SessionStatus, string> = {
   answer: 'Waiting for your answer',
   approval: 'Waiting for your approval',
   failed: 'The last turn failed',
+  background: 'Running in the background',
 }
 
 interface Props {
@@ -494,7 +498,7 @@ const Session = memo(function Session({
       <span className="session-meta">
         <span className="session-status" data-status={status} data-tooltip={status ? STATUS_WORDS[status] : info?.bot?.name}>
           {status === 'working' ? <ProgressRing className="session-spinner" />
-            : status ? <Icon name="dot" className={`status-dot ${status === 'failed' ? 'error' : 'warning'}`} />
+            : status ? <Icon name="dot" className={`status-dot ${status === 'failed' ? 'error' : status === 'background' ? 'info' : 'warning'}`} />
               : info?.bot ? <BotFace seed={info.bot.avatar} size={16} /> : <Icon name="folder-open" className="session-folder" />}
         </span>
         <span className="session-project">{session.project}</span>

@@ -304,7 +304,15 @@ export interface SessionSummary {
    * Absent from an older bridge.
    */
   handedOffFrom?: string | null
+  /**
+   * The state of the background process that holds this chat (BG-6), in the roster's words, or
+   * null for a chat no background process has held. Absent from an older bridge.
+   */
+  background?: BackgroundState | null
 }
+
+/** A background session's state, spelled as `State::word()` in `crates/session/src/jobs.rs` (BG-6). */
+export type BackgroundState = 'working' | 'needs-input' | 'idle' | 'stopped' | 'interrupted'
 
 export interface SessionRecord {
   id: string
