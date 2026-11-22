@@ -365,6 +365,10 @@ pub struct Lease {
     _file: std::fs::File,
 }
 
+/// How long [`Roster::stop`] waits for a session to end before it is killed, for every client
+/// that stops one (BG-11).
+pub const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The roster directory.
 #[derive(Debug, Clone)]
 pub struct Roster {
