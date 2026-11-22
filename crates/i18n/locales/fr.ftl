@@ -3338,8 +3338,8 @@ update-not-installed-by-us =
 crash-reports-notice =
     si bravebot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version,
     votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos
-    invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre
-    fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
+    invites, vos fichiers ni vos clés. Pour l'éviter, lancez /crash-reports off, mettez crashReports
+    à false dans votre fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
 usage-ping-notice =
     une fois par jour, bravebot envoie à Brave un signal d'utilisation anonyme : la version, votre
     système d'exploitation, la façon dont bravebot a été installé, l'interface et le type de service

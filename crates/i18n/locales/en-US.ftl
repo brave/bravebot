@@ -4453,13 +4453,14 @@ update-not-installed-by-us =
     there is no update command for this copy: it was not installed by the npm package, the install
     script, Homebrew, WinGet, apt or dnf. A build from source is updated by pulling and building
     again.
-# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The key
-# and the variable are the two ways of turning it off, and are not a translator's to reword.
+# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The
+# command, the key and the variable are the ways of turning it off, and are not a translator's to
+# reword.
 crash-reports-notice =
     if bravebot crashes, a report is sent to Brave on the next launch. It holds the version, your
     operating system and the line of bravebot's source that failed, and never your prompts, files
-    or keys. To turn this off, set crashReports to false in your settings file, or set
-    BRAVEBOT_CRASH_REPORTS=0.
+    or keys. To turn this off, run /crash-reports off, set crashReports to false in your settings
+    file, or set BRAVEBOT_CRASH_REPORTS=0.
 # Said once, before the first usage ping is sent: on the startup screen, or on standard error for a
 # run without one. The command, the key and the variable are the ways of turning it off, and are not a
 # translator's to reword.
