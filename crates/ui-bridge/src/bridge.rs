@@ -692,6 +692,15 @@ impl Bridge {
             None => store::list_all(),
         };
 
+        // The roster is read once per call, not once per row.
+        let roster: std::collections::HashMap<String, bravebot_session::jobs::Seen> =
+            bravebot_session::jobs::Roster::readable()
+                .map(|roster| roster.list())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|seen| (seen.job.id.clone(), seen))
+                .collect();
+
         let sessions: Vec<Value> = listed
             .iter()
             .map(|entry| {
@@ -711,6 +720,10 @@ impl Bridge {
                     // Whether the record is a manifest run. A run has no conversation, so it
                     // is read with `manifest.read` and `session.open` refuses it.
                     "manifest": entry.summary.manifest,
+                    // The BG-6 state of the background process that holds or held the record, or
+                    // null where none ever has. A fixed word about the process, so nothing from
+                    // content reaches the row (BG-5).
+                    "background": roster.get(&entry.summary.id).map(|seen| seen.state().word()),
                 })
             })
             .collect();

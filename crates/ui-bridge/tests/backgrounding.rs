@@ -449,6 +449,59 @@ fn a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened() {
     drop(stop);
 }
 
+/// BG-6, BG-11: `session.list` gives each row the state of the background process that holds it,
+/// and null for a record no background process ever held.
+#[cfg(unix)]
+#[test]
+fn session_list_says_which_chats_a_background_process_holds() {
+    if built_program().is_none() {
+        eprintln!("skipped: the bravebot program is not built beside bravebot-rpc");
+        return;
+    }
+    let mut window = Window::open_in(Scratch::short("bbbl"));
+    window.say("look at src/net.rs");
+    let handed = window.background();
+    let id = handed["ok"]["handedOver"]
+        .as_str()
+        .unwrap_or_else(|| panic!("not handed over: {handed}"))
+        .to_string();
+    let roster = bravebot_session::jobs::Roster::at(window.scratch.home().join(".bravebot/jobs"));
+    let stop = Stop(&roster, &id);
+
+    // A second chat in the same project, recorded and never handed over.
+    let project = window.scratch.project().display().to_string();
+    let opened = window.ask("session.new", json!({"directory": project}));
+    window.session = opened["ok"]["session"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no session was opened: {opened}"))
+        .to_string();
+    window.say("look at src/lib.rs");
+
+    // The background session reports `idle` once it has resumed the record.
+    let deadline = std::time::Instant::now() + PATIENCE;
+    let rows = loop {
+        let listed = window.ask("session.list", json!({"directory": project}));
+        let rows = listed["ok"]["sessions"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no sessions listed: {listed}"))
+            .clone();
+        let handed_row = rows.iter().find(|row| row["id"] == id.as_str());
+        if handed_row.is_some_and(|row| row["background"] == "idle")
+            || std::time::Instant::now() > deadline
+        {
+            break rows;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let (handed_rows, other_rows): (Vec<&Value>, Vec<&Value>) =
+        rows.iter().partition(|row| row["id"] == id.as_str());
+    assert_eq!(handed_rows.len(), 1, "{rows:?}");
+    assert_eq!(handed_rows[0]["background"], "idle", "{rows:?}");
+    assert!(other_rows[0]["background"].is_null(), "{rows:?}");
+    drop(stop);
+}
+
 /// Stops the background session when the test ends, however it ends.
 #[cfg(unix)]
 struct Stop<'a>(&'a bravebot_session::jobs::Roster, &'a str);
