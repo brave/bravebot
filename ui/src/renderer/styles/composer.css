@@ -319,6 +319,27 @@
   color: var(--status-error);
 }
 
+/* ---- options variant */
+
+/* The refusal floats above the trigger, so the toolbar keeps its height. */
+.variant-picker { position: relative; flex: none; display: inline-flex; }
+.variant-current { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variant-refused {
+  position: absolute;
+  inset-inline-end: 0;
+  bottom: calc(100% + var(--leo-spacing-s));
+  z-index: 1;
+  width: max-content;
+  max-width: 320px;
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  font: var(--type-meta);
+  color: var(--status-error);
+  text-wrap: pretty;
+}
+
 /* ---- attachments */
 
 .attachment-chips {

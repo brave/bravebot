@@ -13,6 +13,7 @@ import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { SessionControlsMenu } from './SessionControlsMenu'
 import { SpendLimit } from './SpendLimit'
+import { VariantPicker } from './VariantPicker'
 import { typing } from '../avatar/clock'
 import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
@@ -504,6 +505,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             {onMode && <SpendLimit key={`limit-${session}`} session={session} running={running} pending={pending} />}
             <SessionControlsMenu key={`controls-${session}`} permissionMode={permissionMode} onPermissionMode={onMode}
               sandboxMode={sandboxMode} onSandboxMode={onSandbox} />
+            <VariantPicker key={`variant-${session}`} session={session} model={model} running={running} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
               shortcut={running ? '⌘.' : '⌘↩'}
