@@ -306,11 +306,9 @@ fn carry_out_while_working(
         Action::Note(text) => {
             session.answer_while_working(|session| note_session(session, beside.stored, &text));
         }
-        Action::Link(kind, argument) => {
-            session.answer_while_working(|session| {
-                link_session(session, beside.stored, kind, &argument);
-            });
-        }
+        Action::Link(kind, argument) => session.answer_while_working(|session| {
+            link_session(session, beside.stored, kind, &argument);
+        }),
         Action::ForgetTrust => session.answer_while_working(|session| {
             session.note(forget_trust(beside.home, beside.root));
         }),
@@ -369,10 +367,9 @@ fn carry_out_while_working(
         Action::Export(path) => session.answer_while_working(|session| {
             export_session(session, beside.stored, beside.root, path.as_deref());
         }),
-        Action::ChooseModel(scope) => {
-            session
-                .answer_while_working(|session| open_model_picker(session, beside.config, scope));
-        }
+        Action::ChooseModel(scope) => session.answer_while_working(|session| {
+            open_model_picker(session, beside.config, scope);
+        }),
         // The sessions beside this one can be looked at, stopped, named, archived and deleted while
         // a turn runs. Opening one ends this session, which a turn in flight does not allow
         // without being stopped, and that is asked once (SCREEN-15).
