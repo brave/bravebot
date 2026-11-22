@@ -1024,9 +1024,11 @@ edited afterwards changes the next conversation.
   `deny` and `ask` rules the conversation holds, so you can check the steps against them.
 
 A folded note at the top of the conversation says what a settings file wrote that is not in
-force: an entry that is not a rule, a project's `allow` rule not granted, or a named directory
-not opened, with the reason where it could not be opened. It also lists the project's rules you
-granted, which are in force, and where the grant is kept or that it holds for this chat only.
+force: an entry that is not a rule, a key that was not read as written (a key nothing reads, a key
+a file wrote twice, or a managed `retrieval` value that pins nothing), a project's `allow` rule
+not granted, or a named directory not opened, with the reason where it could not be opened. It
+also lists the project's rules you granted, which are in force, and where the grant is kept or
+that it holds for this chat only.
 **Permissions…**, in the header's **More** menu, lists the rules in force. They cannot be
 revoked there, since they are changed in their file.
 

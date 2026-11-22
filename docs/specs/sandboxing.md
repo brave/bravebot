@@ -3231,7 +3231,10 @@ rule and is returned to the caller to report. A host that is an IP address, in b
 compared in one form, an IPv4 address inside an IPv6 one (IPv4-mapped, `::ffff:0:0/96`, or NAT64,
 `64:ff9b::/96`) as that IPv4 address, so a denied `93.184.216.34` also refuses
 `[::ffff:93.184.216.34]` and `[64:ff9b::5db8:d822]`. The deprecated IPv4-compatible form
-`::a.b.c.d` is an IPv6 address. A denied entry wins over an allowed one in either order, and a
+`::a.b.c.d` is an IPv6 address. Every other numeric spelling of an address, such as `2130706433`,
+`0x7f000001`, `0177.0.0.1` and `127.1`, is a name in this comparison, although
+`canonical_host` in `bravebot-core` reads each as an address. What such a name resolves to is checked
+as below. A denied entry wins over an allowed one in either order, and a
 name no allowed entry covers is refused, so an empty list refuses every host. No list
 means no proxy and no filtering. The defaults a caller adds to a list are code: `github.com`,
 `api.github.com` and `*.githubusercontent.com` for a stage carrying the remote scope, and for a
@@ -3504,6 +3507,9 @@ says nothing about them.
 `verified-by: bravebot_sandbox::proxy::the_trail_records_the_host_as_the_request_spelled_it`
 `verified-by: bravebot_sandbox::address::every_class_the_issue_names_is_not_public`
 `verified-by: bravebot_sandbox::address::an_ipv4_address_in_ipv6_clothes_is_classified_as_the_ipv4_address`
+`verified-by: bravebot_agent::two_implementations_agree::an_ipv4_address_inside_an_ipv6_one_is_read_as_that_ipv4_address_by_core_and_by_the_host_list`
+`verified-by: bravebot_agent::two_implementations_agree::an_address_is_classified_as_the_address_it_carries`
+`verified-by: bravebot_agent::two_implementations_agree::a_number_written_another_way_is_an_address_to_core_and_a_name_to_the_host_list`
 `verified-by: bravebot_agent::confine::the_trail_names_the_hosts_asked_for_and_what_the_list_decided`
 `verified-by: bravebot_agent::confine::the_trail_carries_no_byte_of_a_name_that_is_not_a_host`
 `verified-by: bravebot_agent::confine::the_trail_names_the_entry_that_decided_and_a_session_without_a_list_records_nothing`
@@ -3625,7 +3631,9 @@ compared this way; a name without one is resolved by the volume. The comparison 
 the name as written, or both sides in canonical decomposition with case folded out as
 [TRUST-2](trust-map.md#TRUST-2) folds it, whatever the volume does, since asking the volume would
 need a file made in the tree and a refusal that names a file the volume holds apart errs toward holding
-back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
+back. The sandbox keeps its own copy of that fold, since it does not depend on the trust map, and a
+test in `bravebot-agent` holds the copy to `canonical_key`. A glob in `allowRead` is compared exactly,
+since an allowance that names more adds reach the
 person did not write.
 
 A relative entry is read from a directory, and a name in that directory is a name and not a
@@ -3739,6 +3747,9 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_sandbox::rules::a_question_mark_in_a_deny_glob_meets_a_letter_with_its_marks`
 `verified-by: bravebot_sandbox::rules::a_question_mark_in_a_deny_glob_meets_a_syllable_and_a_letter_that_folds_to_two`
 `verified-by: bravebot_sandbox::rules::a_deny_glob_still_meets_every_name_it_met_as_written`
+`verified-by: bravebot_agent::two_implementations_agree::the_trust_maps_fold_joins_the_names_the_table_lists`
+`verified-by: bravebot_agent::two_implementations_agree::a_deny_glob_names_a_file_wherever_the_trust_maps_fold_joins_the_two_names`
+`verified-by: bravebot_agent::two_implementations_agree::a_deny_glob_names_no_file_the_trust_maps_fold_holds_apart`
 `verified-by: bravebot_sandbox::rules::an_allow_glob_meets_names_exactly`
 `verified-by: bravebot_sandbox::rules::a_match_is_judged_where_it_leads_and_the_directory_it_is_read_from_is_not_a_pattern`
 `verified-by: bravebot_sandbox::rules::a_request_under_a_denial_of_the_person_is_refused`
@@ -3791,6 +3802,8 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_tui::status::filesystem_rules_are_reported_by_count_and_file_and_never_by_path`
 `verified-by: bravebot_tui::logo::filesystem_rules_are_named_on_the_opening_screen_and_none_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not`
+`verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case`
+`verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_unicode_form`
 `verified-by: bravebot_agent::confine::a_denied_read_holds_back_a_directory_the_base_reads`
 `verified-by: bravebot_agent::confine::an_allowed_read_lifts_the_table_and_never_reaches_a_private_key`
 `verified-by: bravebot_agent::confine::the_narrower_of_an_allowed_and_a_denied_write_decides`

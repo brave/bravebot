@@ -8306,6 +8306,116 @@ fn a_project_relative_deny_rule_refuses_a_redirection_that_reads_the_file() {
     );
 }
 
+/// PERM-3, PERM-7: a `deny` rule naming a directory without `/**` covers the files under it in a
+/// `run` line as it does in a turn's file tools. A `run` line meets a path rule only through its
+/// redirections, where `<` is a read and `>` is a write, so the rule is asked about the file the
+/// redirection opens. `cat < secrets/key > copy.txt` reads under the rule and writes outside it,
+/// and the copy shows whether the line ran.
+///
+/// The controls are the same line under a rule on another directory, which runs, and the same line
+/// on `secrets-old`, whose name only starts as the rule's does, which runs under the rule. A rule
+/// that covered a prefix of the name instead of the directory fails the second, and a gate that
+/// asked the rules only about file rules fails the refusal.
+#[test]
+fn a_denied_directory_written_without_a_double_star_is_not_read_by_a_redirection_in_a_run_line() {
+    let scratch = Scratch::new("permissions-run-read-denied-directory");
+    for directory in ["secrets", "secrets-old", "other"] {
+        std::fs::create_dir_all(scratch.path.join(directory)).unwrap();
+    }
+    std::fs::write(scratch.path.join("secrets/key"), "TOKEN=hunter2").unwrap();
+    std::fs::write(scratch.path.join("secrets-old/key"), "TOKEN=swordfish").unwrap();
+
+    let told = run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "cat < secrets/key > copy-refused.txt" }),
+        "Read(./secrets/)",
+    );
+    assert!(
+        told.contains("a deny rule") && told.contains("Do not retry"),
+        "the planner was not told a rule refused the read of a file under the directory: {told}"
+    );
+    assert!(
+        !scratch.path.join("copy-refused.txt").exists(),
+        "a line that reads a file under a denied directory ran: {told}"
+    );
+
+    run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "cat < secrets/key > copy-other-rule.txt" }),
+        "Read(./other/)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copy-other-rule.txt")).ok(),
+        Some("TOKEN=hunter2".to_string()),
+        "a rule on another directory stopped the line, so the refusal above is not the rule's"
+    );
+
+    run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "cat < secrets-old/key > copy-sibling.txt" }),
+        "Read(./secrets/)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copy-sibling.txt")).ok(),
+        Some("TOKEN=swordfish".to_string()),
+        "a rule naming `secrets/` covered `secrets-old/`, a directory it does not name"
+    );
+}
+
+/// PERM-3, PERM-7: the write half of the same reading. `echo overwritten > secrets/key` writes a
+/// file under a directory an `Edit` rule names without `/**`, and a `Read` rule on it stops the
+/// write as well, since a file nothing may read is not protected if it can be replaced. The
+/// controls are the same line under a rule on another directory, and a write into `secrets-old`
+/// under the rule, which a rule that covered a prefix of the name would stop.
+#[test]
+fn a_denied_directory_written_without_a_double_star_is_not_written_into_by_a_redirection_in_a_run_line()
+ {
+    let scratch = Scratch::new("permissions-run-write-denied-directory");
+    for directory in ["secrets", "secrets-old", "other"] {
+        std::fs::create_dir_all(scratch.path.join(directory)).unwrap();
+    }
+    std::fs::write(scratch.path.join("secrets/key"), "original").unwrap();
+
+    for deny in ["Edit(./secrets/)", "Read(./secrets/)"] {
+        let told = run_under_a_deny_rule(
+            &scratch,
+            json!({ "command": "echo overwritten > secrets/key" }),
+            deny,
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("secrets/key")).unwrap(),
+            "original",
+            "{deny} did not stop a redirection into a file under the directory: {told}"
+        );
+        assert!(
+            told.contains("a deny rule") && told.contains("Do not retry"),
+            "{deny}: the planner was not told a rule refused the write: {told}"
+        );
+    }
+
+    run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "echo written > secrets-old/key" }),
+        "Edit(./secrets/)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("secrets-old/key")).ok(),
+        Some("written\n".to_string()),
+        "a rule naming `secrets/` covered `secrets-old/`, a directory it does not name"
+    );
+
+    run_under_a_deny_rule(
+        &scratch,
+        json!({ "command": "echo written > secrets/key" }),
+        "Edit(./other/)",
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("secrets/key")).unwrap(),
+        "written\n",
+        "a rule on another directory stopped the line, so the refusals above are not the rule's"
+    );
+}
+
 /// CMDLINE-5, PERM-7: a redirection's source is asked of the rules again when it is opened. A link or
 /// hard link an earlier part of the line left at the name approved leads to the denied file, which
 /// the check before the line could not see, so the run opened it and fed it to a program.
@@ -67150,6 +67260,135 @@ fn an_addressed_turn_works_in_the_working_directory_and_says_its_checkout_is_not
         outcome.notices.iter().any(|notice| notice == said),
         "the turn's account did not say the checkout was not applied: {:?}",
         outcome.notices
+    );
+}
+
+/// What a project definition writes after the two restriction keys. None of it is printed by
+/// anything, so a notice or request holding one of these repeated a value from the file.
+const RESTRICTION_VALUES: [&str; 3] = [
+    "a-tool-nobody-prints",
+    "another-tool-nobody-prints",
+    "a-mode-nobody-prints",
+];
+
+/// A trusted project definition that declares the two keys other agents read as restrictions.
+fn write_definition_declaring_restrictions(root: &std::path::Path) {
+    let directory = root.join(".bravebot/agents");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("auditor.md"),
+        "---\nname: auditor\ndescription: Audits.\nkind: worker\n\
+         disallowedTools: a-tool-nobody-prints, another-tool-nobody-prints\n\
+         permissionMode: a-mode-nobody-prints\n---\n\nAUDIT-WITH-CARE\n",
+    )
+    .unwrap();
+}
+
+/// The task one delegate of the built-in reader kind is given, from the kernel as a turn would.
+fn a_reader_delegates_task() -> Task {
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("task", "look it up");
+    let mut sink = RecordingSink::new();
+    let mut policy = bravebot_core::policy::Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::FileRead,
+            bravebot_core::capability::Capability::WebFetch,
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+    let spec = policy
+        .before_delegate(
+            &bravebot_core::value::Labelled::trusted("reader".to_string()),
+            &bravebot_core::value::Labelled::trusted("look it up".to_string()),
+            None,
+        )
+        .expect("a trusted run may delegate");
+    Task::delegated(spec)
+}
+
+/// Every notice the reporter was given by one turn in a workspace the person vouched for.
+fn notices_reported_by(scratch: &Scratch, task: &Task) -> Vec<String> {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![reply_with("done")]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    reporter.notices
+}
+
+/// The notices that name one of the two restriction keys.
+fn naming_a_restriction_key(said: &[String]) -> Vec<&String> {
+    said.iter()
+        .filter(|notice| notice.contains("disallowedTools") || notice.contains("permissionMode"))
+        .collect()
+}
+
+/// DELEGATE-19. A definition declaring `disallowedTools` and `permissionMode` is loaded with both
+/// ignored, and the person starting a turn is told so once, by key and never by value. The
+/// loader's own tests pass when the turn start never hands its notices to the reporter, which
+/// leaves the author of the file reading the keys as applied; this test rejects a turn start that
+/// drops the notice, one that reports it twice, and one that repeats a value from the file.
+#[test]
+fn a_turn_tells_the_reporter_once_that_a_definitions_restriction_keys_are_not_applied() {
+    let scratch = Scratch::new("restriction-notice-main");
+    write_definition_declaring_restrictions(&scratch.path);
+
+    let said = notices_reported_by(&scratch, &Task::new("audit the change"));
+
+    let named = naming_a_restriction_key(&said);
+    assert_eq!(
+        named.len(),
+        1,
+        "the restriction notice was not delivered exactly once: {said:?}"
+    );
+    assert!(
+        named[0].contains(".bravebot/agents/auditor.md")
+            && named[0].contains("disallowedTools")
+            && named[0].contains("permissionMode"),
+        "the notice did not name the definition and both keys: {named:?}"
+    );
+    for value in RESTRICTION_VALUES {
+        assert!(
+            said.iter().all(|notice| !notice.contains(value)),
+            "a value from the definition reached the reporter: {said:?}"
+        );
+    }
+}
+
+/// DELEGATE-19. A delegate discovers the same definition files as the turn that started it, so
+/// its notices repeat that turn's and are not reported again. The control is a person's own turn
+/// over the same workspace, which reports the restriction notice: without it, a delegate turn that
+/// found no definition would pass for the wrong reason. This test rejects a turn start that
+/// reports the loader's notices on a delegate's turn too.
+#[test]
+fn a_delegates_turn_does_not_repeat_the_restriction_notice_of_the_turn_that_started_it() {
+    let scratch = Scratch::new("restriction-notice-delegate");
+    write_definition_declaring_restrictions(&scratch.path);
+
+    let person = notices_reported_by(&scratch, &Task::new("audit the change"));
+    let delegate = notices_reported_by(&scratch, &a_reader_delegates_task());
+
+    assert_eq!(
+        naming_a_restriction_key(&person).len(),
+        1,
+        "the person's own turn did not report the restriction notice: {person:?}"
+    );
+    assert!(
+        naming_a_restriction_key(&delegate).is_empty(),
+        "a delegate's turn reported the restriction notice: {delegate:?}"
     );
 }
 

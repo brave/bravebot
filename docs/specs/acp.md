@@ -231,3 +231,19 @@ service wrote, as the category's name does not.
 `verified-by: bravebot_ui_bridge::acp::a_turn_that_failed_on_the_xai_account_tells_the_editor_which_command_signs_in`
 `verified-by: bravebot_ui_bridge::acp::a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_told_the_wait_a_refusal_asked_for_and_no_status`
+
+<a id="ACP-10"></a>
+### ACP-10: a session an editor opens is told the settings keys that were not read
+
+Before the reply to its first prompt, a session says as messages each key of the settings in force
+that nothing reads, each key a settings file or the managed file wrote twice and a managed
+`retrieval` value that pins nothing, once each. The sentences are the ones `doctor` uses, made from
+the key path or the value and the file and never from what a key was set to, with each control
+character drawn as its picture. They come with the file `--settings` names being read as a
+checkout's file where the platform cannot hold it back ([PERM-14](permissions.md#PERM-14) has the
+reason), which is said in the same place.
+
+**Why.** An editor has no terminal and its person does not run `doctor`, so a misspelled key in a
+file the editor's session reads would otherwise read to its writer as a restriction in force.
+
+`verified-by: bravebot_ui_bridge::acp::a_session_an_editor_opens_is_told_the_keys_its_settings_dropped`

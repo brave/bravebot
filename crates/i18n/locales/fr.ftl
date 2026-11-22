@@ -4915,6 +4915,7 @@ ui-rules-note-granted-this-chat = Elles ne sont accordées que pour cette conver
 ui-rules-note-proposed = Ces règles d'autorisation que proposent les réglages du projet n'ont pas été accordées. Une règle d'autorisation répond à une question à votre place : seule une règle que vous accordez, ou une de votre propre fichier de réglages, est en vigueur. On vous demandera encore :
 ui-rules-note-directories = Un fichier de réglages nomme ces dossiers, et ils ne sont pas ouverts :
 ui-rules-note-refused = Ces dossiers qu'un fichier de réglages nomme ne peuvent pas être ouverts :
+ui-rules-note-dropped = Ces clés n'ont pas été lues telles qu'elles sont écrites :
 gcloud-not-installed = La CLI Google Cloud (`gcloud`) est introuvable. Installez-la et lancez `gcloud auth application-default login`, ou définissez GOOGLE_API_KEY pour utiliser Google Vertex AI avec une clé.
 gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail }). Lancez `gcloud auth application-default login`.
 gcloud-no-token = la réponse n'était pas un jeton

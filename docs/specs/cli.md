@@ -196,6 +196,13 @@ given `--json-stream` writes them ahead of that object, and nothing else is on t
 given `--input-format lines` writes a result object for each turn it runs, and the three events of
 CLI-36 beside the others.
 
+A one-shot run also says on stderr, before its task starts, each settings key nothing reads, each
+key a settings file or the managed file wrote twice and a managed `retrieval` value that pins
+nothing, once each. The sentences are the ones `doctor` uses: the key path or the value and the file,
+with each control character drawn as its picture, and never what the key was set to. A run nobody
+watches does not run `doctor`, so a misspelled key in a checkout's file would otherwise read as a
+restriction in force.
+
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
 
 `verified-by: bravebot_cli::main::stdout_carries_the_reply_and_nothing_else`
@@ -205,6 +212,8 @@ CLI-36 beside the others.
 `verified-by: bravebot_cli::main::a_reply_not_written_to_a_terminal_keeps_its_exact_bytes`
 `verified-by: bravebot_cli::running::a_manifest_answer_piped_onward_keeps_the_bytes_the_slot_held`
 `verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
+`verified-by: bravebot_cli::finish::a_one_shot_run_says_what_its_managed_layer_dropped`
+`verified-by: bravebot_cli::running::a_one_shot_run_names_the_keys_its_settings_dropped_on_stderr`
 
 <a id="CLI-6"></a>
 ### CLI-6: a failure exits with a status that says which failure, and says an identifier

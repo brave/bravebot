@@ -1750,7 +1750,8 @@ export function RulesBanner({ rules, refused: folders = [] }: { rules: SettingsR
   const ignored = rules.filesystemIgnored ?? []
   const granted = rules.granted ?? []
   const { closed, refused: unlisted } = unopened(rules, folders)
-  const count = rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + refused.length + ignored.length + (rules.namedWithheld ? 1 : 0)
+  const dropped = rules.droppedKeys ?? []
+  const count = rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + refused.length + ignored.length + dropped.length + (rules.namedWithheld ? 1 : 0)
   return (
     <details className="rules-banner" role="note" data-test="rules-note">
       <summary className="session-notice">
@@ -1785,6 +1786,16 @@ export function RulesBanner({ rules, refused: folders = [] }: { rules: SettingsR
         </div>
       )}
       {rules.namedWithheld && <p>{rules.namedWithheld}</p>}
+      {dropped.length > 0 && (
+        <>
+          <p>{words.uiRulesNoteDropped()}</p>
+          <ul data-test="rules-note-dropped">
+            {dropped.map((said, index) => (
+              <li key={index}>{said}</li>
+            ))}
+          </ul>
+        </>
+      )}
       {rules.unreadable.length > 0 && (
         <>
           <p>These entries could not be read as rules, so they decide nothing:</p>

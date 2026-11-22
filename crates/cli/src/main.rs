@@ -1337,6 +1337,9 @@ fn prepare_the_run(
             bravebot_agent::permissions::said_in_a_session(problem, progress::described(problem))
         );
     }
+    // The keys nothing reads, the keys a file wrote twice and a managed `retrieval` value that pins
+    // nothing, said as the rejected rules above are: a run nobody watches does not run `doctor`.
+    crate::finish::say_dropped_keys(&mut std::io::stderr().lock(), &settings);
 
     // Bypassing where the flag was given, accepting edits where the narrower one was, and asking
     // otherwise. There is no mode key here: a one-shot run has no session to hold a mode and

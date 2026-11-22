@@ -58,6 +58,8 @@ pub mod usage_ping;
 pub mod web_search_key;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub use managed::{ManagedFileOnThisThread, managed_file_on_this_thread};
 pub use named_reach::{
     add_writable_directory, added_writable_directories, close_writable_directory, lies_inside,
     withholds as named_file_withheld,

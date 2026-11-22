@@ -2522,6 +2522,142 @@ fn a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not() {
     assert_eq!(neighbour.stdout, "held\n", "{neighbour:?}");
 }
 
+/// The regression it rejects: a `denyRead` glob compared with names by exact case, so that
+/// `**/*.pem` does not name `SERVER.PEM` and a stage reads the file the person meant to hold back
+/// (SANDBOX-25). A second wrong implementation is a refusal that holds for the spelling the listing
+/// returned and not for the spelling a program opens the file under. `cat` opens the file under the
+/// stored spelling and under the other case, and the stage without the list reads the file, which
+/// is the control that the refusal is the list's.
+///
+/// A volume that folds case opens `server.pem` as `SERVER.PEM`, so the stage is refused that
+/// read. On a volume that does not fold, `server.pem` is a different name that is not there, which
+/// the glob does not need to name, and the read fails in the control as well. The test asks the
+/// volume which it is and holds the other spelling only to what is true on both: the contents are
+/// not printed.
+#[cfg(unix)]
+#[test]
+fn a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("filesystem-deny-read-case");
+    for (file, contents) in [("SERVER.PEM", "held-pem\n"), ("notes.txt", "kept-notes\n")] {
+        std::fs::write(places.session.join(file), contents).expect("a file");
+    }
+    let folds_case = std::fs::read_to_string(places.session.join("server.pem"))
+        .is_ok_and(|read| read == "held-pem\n");
+    let listed = places
+        .confinement()
+        .with_filesystem(&written(&[], &["**/*.pem"], &[], &[]));
+
+    for spelling in ["SERVER.PEM", "server.pem"] {
+        let line = format!("cat {spelling}");
+        let opens = spelling == "SERVER.PEM" || folds_case;
+        let control = places.run(&line, None);
+        assert_eq!(
+            control.ended_well, opens,
+            "{spelling} without the list: {control:?}"
+        );
+        if opens {
+            assert_eq!(
+                control.stdout, "held-pem\n",
+                "{spelling} is there to be read"
+            );
+        }
+        let ran = places.run(&line, Some(&listed));
+        assert!(
+            !ran.ended_well && !ran.stdout.contains("held-pem"),
+            "{spelling} was read: {ran:?}"
+        );
+        if opens {
+            assert!(
+                !ran.stderr.contains("No such file"),
+                "{spelling} was refused as missing and not by the list: {ran:?}"
+            );
+        }
+    }
+    let neighbour = places.run("cat notes.txt", Some(&listed));
+    assert_eq!(neighbour.stdout, "kept-notes\n", "{neighbour:?}");
+}
+
+/// The regression it rejects: a `denyRead` glob compared with names as written, so that
+/// `R\u{e9}sum\u{e9}*` does not name a file stored as `Re\u{301}sume\u{301}.txt` and the reverse,
+/// and a stage reads a file the person meant to hold back (SANDBOX-25). The file is read under both
+/// spellings of its name, and the stage without the list reads it, which is the control that the
+/// refusal is the list's. A file with the unaccented name `Resume.txt` is not named by either glob
+/// and is still read, which rejects a refusal that drops the accents and holds back more than the
+/// glob names.
+///
+/// A volume that opens a name under every canonically equivalent form (APFS) opens the other
+/// spelling of the stored name, so the stage is refused that read. On a volume that holds the two
+/// forms apart, the other spelling is a different name that is not there, which the glob does not
+/// need to name, and the read fails in the control as well. The test asks the volume which it is and
+/// holds the other spelling only to what is true on both: the contents are not printed.
+#[cfg(unix)]
+#[test]
+fn a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_unicode_form() {
+    if !can_confine() {
+        return;
+    }
+    const COMPOSED: &str = "R\u{e9}sum\u{e9}";
+    const DECOMPOSED: &str = "Re\u{301}sume\u{301}";
+    let places = Places::new("filesystem-deny-read-form");
+    // The directory, the form the file is stored under, the form the glob is written in, and the
+    // contents. The two cases have their own directories, since a volume that opens either form
+    // holds one file for both.
+    let cases = [
+        ("decomposed-file", DECOMPOSED, COMPOSED, "held-decomposed\n"),
+        ("composed-file", COMPOSED, DECOMPOSED, "held-composed\n"),
+    ];
+    for (directory, stored, globbed, contents) in cases {
+        let folder = places.session.join(directory);
+        std::fs::create_dir_all(&folder).expect("a directory");
+        std::fs::write(folder.join(format!("{stored}.txt")), contents).expect("a file");
+        std::fs::write(folder.join("Resume.txt"), "kept-plain\n").expect("a file");
+        let other = if stored == COMPOSED {
+            DECOMPOSED
+        } else {
+            COMPOSED
+        };
+        let normalises = std::fs::read_to_string(folder.join(format!("{other}.txt")))
+            .is_ok_and(|read| read == contents);
+        let glob = format!("{directory}/{globbed}*");
+        let listed =
+            places
+                .confinement()
+                .with_filesystem(&written(&[], &[glob.as_str()], &[], &[]));
+
+        for spelling in [COMPOSED, DECOMPOSED] {
+            let line = format!("cat '{directory}/{spelling}.txt'");
+            let opens = spelling == stored || normalises;
+            let control = places.run(&line, None);
+            assert_eq!(
+                control.ended_well, opens,
+                "{directory} {spelling} without the list: {control:?}"
+            );
+            if opens {
+                assert_eq!(
+                    control.stdout, contents,
+                    "{directory} {spelling} is there to be read"
+                );
+            }
+            let ran = places.run(&line, Some(&listed));
+            assert!(
+                !ran.ended_well && !ran.stdout.contains(contents.trim_end()),
+                "{directory} {spelling} was read: {ran:?}"
+            );
+            if opens {
+                assert!(
+                    !ran.stderr.contains("No such file"),
+                    "{directory} {spelling} was refused as missing and not by the list: {ran:?}"
+                );
+            }
+        }
+        let plain = places.run(&format!("cat {directory}/Resume.txt"), Some(&listed));
+        assert_eq!(plain.stdout, "kept-plain\n", "{directory}: {plain:?}");
+    }
+}
+
 /// The regression it rejects: a refusal that holds only where the table already did. The `gh`
 /// configuration is read by every stage, since the base does not refuse it, and the person's own
 /// refusal of the directory takes it from the same stage; without the list it is there to be read.

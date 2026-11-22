@@ -214,6 +214,12 @@ export interface SettingsRules {
   shownGrantedRecord?: string | null
   /** The agent's sentence for the file `--settings` named where it is read as a checkout's file, or null. Absent from an older bridge. */
   namedWithheld?: string | null
+  /**
+   * Keys of the settings and managed values that were not read as written (an unread key, a key a file
+   * wrote twice, a managed `retrieval` value that pins nothing), each as the agent's sentence with
+   * the key and file spelled as a name is (PROMPT-1). Absent from an older bridge.
+   */
+  droppedKeys?: string[]
 }
 
 export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'

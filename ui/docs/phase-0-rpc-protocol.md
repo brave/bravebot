@@ -2022,7 +2022,7 @@ Still open:
   own. A `remember: true` sent where `mayStand` is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork`, `trust.reply`, `rules.reply` and
   `permissions.list` carry `settingsRules`:
-  `{ deny, ask, allow, unreadable, proposed, granted, grantedRecord, directories, filesystem, filesystemIgnored, namedWithheld }`. The first three are the rules in
+  `{ deny, ask, allow, unreadable, proposed, granted, grantedRecord, directories, filesystem, filesystemIgnored, namedWithheld, droppedKeys }`. The first three are the rules in
   force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same
   lists spelled as text. `unreadable` holds `{ rule, shownRule, said }` for each entry that is
   not a rule, where `shownRule` is `rule` spelled as text and `said` is the agent's sentence about
@@ -2039,7 +2039,10 @@ Still open:
   folders instead. `shownDirectories` holds the same names spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
   each entry of `filesystemIgnored` carries `shownFile`, spelled the same way. `namedWithheld` is
   the agent's sentence for the file `--settings` named where it is read as a checkout's file (PERM-14),
-  or null.
+  or null. `droppedKeys` holds the agent's sentence for each settings key nothing reads, each key a
+  file wrote twice and a managed `retrieval` value that pins nothing, with the key and the file
+  spelled as `shownPath` is and no value in it (BACKEND-36, RETRIEVE-23). It is empty where there is
+  none and absent from an older bridge.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules. The agent's runner reads the `Mcp` rules and no

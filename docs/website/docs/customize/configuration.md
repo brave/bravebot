@@ -353,8 +353,9 @@ A key written twice inside one file is read the same way, since a JSON parser wo
 and say nothing. Two blocks written under one key are combined, a list that only refuses keeps the
 entries of both (`permissions.deny`, `permissions.ask`, `run.scrubEnv`, `sandbox.filesystem.denyRead`
 and `denyWrite`, `sandbox.network.deniedHosts`), and any other repeated key is read as the later copy.
-`bravebot doctor` names each repeated key with the file and the key's path, and never its value. A key
-written once in each of two files is the layering above and is not a repeat.
+`bravebot doctor` and the session as it opens name each repeated key with the file and the key's path,
+and never its value. A key written once in each of two files is the layering above and is not a
+repeat.
 
 `allow` goes the other way, which is why it is the one list a checkout cannot write by itself. An
 entry there stops a prompt appearing, so one in `.bravebot/settings.json` or
@@ -436,7 +437,8 @@ In `env`, only string values: a number or a boolean is skipped rather than coerc
 
 A key beside those configures nothing and restricts nothing, which is worth saying plainly for
 `sandbox` and `hooks`: a block pasted from another tool's file reads as a restriction in force and is
-not one here. `doctor` names the key and the file, and never what the key was set to.
+not one here. `doctor` and the session as it opens name the key and the file, and never what the key
+was set to.
 
 **The file is the same shape as Claude Code's `~/.claude/settings.json`**, so a block that configures
 one largely configures the other unedited. The three files resolve in the same order Claude Code's do,

@@ -2758,8 +2758,21 @@ impl StartFacts {
     }
 }
 
-/// The notes said once the trust answer is in: a newer release, the crash report notice and why a
-/// server the checkout asked for is absent.
+/// The keys and managed values the readers of `settings` and of the machine's managed layer dropped
+/// or combined, each said once as a note in the words `doctor` uses (BACKEND-36, RETRIEVE-23). Each
+/// reads to whoever wrote it as a restriction in force, and the file is otherwise applied with
+/// nothing said. The managed layer is the one `bravebot_agent::dropped_keys` reads itself.
+fn say_dropped_keys(session: &mut Session, settings: &bravebot_config::Settings) {
+    for said in bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+        settings,
+        bravebot_agent::dropped_keys::Spelling::Drawn,
+    ) {
+        session.note(said);
+    }
+}
+
+/// The notes said once the trust answer is in: a newer release, the crash report notice, why a
+/// server the checkout asked for is absent, and the keys of the settings that nothing read.
 fn say_startup_notes(
     session: &mut Session,
     config: &Config,
@@ -2792,6 +2805,7 @@ fn say_startup_notes(
     for note in absent {
         session.note(note);
     }
+    say_dropped_keys(session, settings);
 }
 
 /// Put the directories the settings name to the person or open them, by how the trust map was
@@ -25700,6 +25714,109 @@ mod tests {
         .expect("config")
     }
 
+    /// BACKEND-36, RETRIEVE-23: the notes said when a terminal session opens name each key the
+    /// settings dropped or combined, once, in the sentences `doctor` uses, with no value. The unread
+    /// key, a key a settings file wrote twice, a key the managed file wrote twice and the managed
+    /// `retrieval` value that pins nothing are four facts, so a start that says three fails.
+    ///
+    /// Rejects a start that leaves these to `doctor`, one that says a key once per layer, one that
+    /// prints what a key was set to, and a sentence that differs from `doctor`'s. The update check
+    /// is switched off by the file itself so the start asks nothing of a network.
+    #[test]
+    fn the_startup_notes_name_each_dropped_key_once_in_doctors_sentences_and_no_value() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let settings_file = directory.path().join("settings.json");
+        std::fs::write(
+            &settings_file,
+            r#"{"updateCheck": false,
+                "permissions": {"denyy": ["Read(a-rule-nobody-prints)"], "deny": [], "deny": []},
+                "statusLine": "a-command-nobody-prints"}"#,
+        )
+        .expect("write the settings file");
+        let settings = bravebot_config::Settings::layered(None, None, Some(&settings_file));
+        let managed_file = directory.path().join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .expect("write the managed file");
+        let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        let mut session = Session::new("none");
+
+        say_startup_notes(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &settings,
+            Vec::new(),
+        );
+
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        for sentence in bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+            &settings,
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        ) {
+            assert_eq!(
+                said.iter().filter(|line| **line == sentence).count(),
+                1,
+                "the sentence doctor says is not said once: {sentence}\n{said:?}"
+            );
+        }
+        let named = |needle: &str| said.iter().filter(|line| line.contains(needle)).count();
+        assert_eq!(named("permissions.denyy in "), 1, "{said:?}");
+        assert_eq!(named("statusLine in "), 1, "{said:?}");
+        assert_eq!(
+            named("permissions.deny is written more than once in "),
+            1,
+            "{said:?}"
+        );
+        assert_eq!(named("models is written more than once in "), 1, "{said:?}");
+        assert_eq!(named("retrieval in "), 1, "{said:?}");
+        for value in [
+            "a-rule-nobody-prints",
+            "a-command-nobody-prints",
+            "a-model-nobody-prints",
+        ] {
+            assert!(
+                said.iter().all(|line| !line.contains(value)),
+                "a value is said: {said:?}"
+            );
+        }
+    }
+
+    /// Settings whose keys are all read add no note about dropped keys. Rejects a start that says a
+    /// line for each file.
+    #[test]
+    fn the_startup_notes_say_nothing_about_dropped_keys_where_every_key_was_read() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let settings = bravebot_config::Settings::parse(
+            r#"{"updateCheck": false, "permissions": {"deny": ["Read(.env)"]}}"#,
+        );
+        let mut session = Session::new("none");
+        let _machine = bravebot_config::managed_file_on_this_thread(std::path::Path::new(
+            "no-managed-file-is-here.json",
+        ));
+
+        say_startup_notes(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &settings,
+            Vec::new(),
+        );
+
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter()
+                .all(|line| !line.contains("not read by this build")
+                    && !line.contains("written more than once")),
+            "{said:?}"
+        );
+    }
+
     /// Addresses whatever the session's line addressed, as the loop does once it has read the set.
     fn addressing(session: &mut Session, argument: &str, model: Option<&str>) -> Action {
         address(
@@ -43297,6 +43414,88 @@ mod tests {
             );
             followed = own;
         }
+    }
+
+    /// BACKEND-36, RETRIEVE-23: a session the terminal begins says what the managed layer the machine
+    /// holds dropped: the key the managed file wrote twice and the `retrieval` value that pins
+    /// nothing, once each, in the sentences `doctor` uses, and no value.
+    ///
+    /// Rejects a start whose notes leave the machine's managed layer out, which leaves every managed
+    /// key to `doctor`. The note tests above put a layer in front of `say_startup_notes` and pass on
+    /// such a start, so only a test that begins the session reaches this.
+    #[test]
+    fn a_session_begun_says_what_its_managed_layer_dropped() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-begin-managed-notes");
+        std::fs::create_dir_all(&root).expect("create");
+        let managed_file = root.join("managed.json");
+        std::fs::write(
+            &managed_file,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .expect("write the managed file");
+        let _machine = bravebot_config::managed_file_on_this_thread(&managed_file);
+        let expected = bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+            &bravebot_config::Settings::default(),
+            bravebot_agent::dropped_keys::Spelling::Drawn,
+        );
+        assert_eq!(
+            expected.len(),
+            2,
+            "the fixture drops a repeated key and a retrieval value: {expected:?}"
+        );
+        let workspace = Workspace::new(&root).expect("a workspace");
+        // Never drawn on: a session opened bypassing every permission is not asked about the
+        // directory it opens in.
+        let mut terminal = ratatui::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 20, 5)),
+            },
+        )
+        .expect("a terminal");
+        let mut config = a_config_needing_no_sign_in();
+        let mut servers = crate::state::Servers::default();
+
+        let begun = begin_session(
+            &mut terminal,
+            &mut config,
+            &workspace,
+            &mut servers,
+            Startup {
+                confinement: String::new(),
+                sockets_with_a_path_reachable: false,
+                sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                start: Start::Fresh,
+                named: None,
+                links: Links::default(),
+                skip_permissions: true,
+                asked_for_auto: false,
+                prompts: bravebot_agent::turn::SystemPrompts::default(),
+            },
+        )
+        .unwrap_or_else(|ended| panic!("the session did not begin: {ended:?}"));
+
+        let said: Vec<&str> = begun
+            .session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        for sentence in &expected {
+            assert_eq!(
+                said.iter().filter(|line| *line == sentence).count(),
+                1,
+                "the sentence doctor says is not said once: {sentence}\n{said:?}"
+            );
+        }
+        assert!(
+            said.iter()
+                .all(|line| !line.contains("a-model-nobody-prints")),
+            "a value is said: {said:?}"
+        );
     }
 
     /// `/clear` begins a session nobody has asked anything. A program vouched for, a server

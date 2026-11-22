@@ -41,6 +41,13 @@ terminal and the desktop app show, and the three share one record, so a person t
 told in another. Nothing is written to standard output outside the protocol, and a launch that is
 not reporting says nothing. See [`crashReports`](../customize/configuration.md#crashreports).
 
+## Settings that were not read
+
+Before the reply to your first prompt in a session, the editor shows a message for each key in your
+settings that Brave Bot does not read, each key a settings file wrote twice, and a managed
+`retrieval` value that pins nothing. Each message names the key and the file and never the value. They
+are the same sentences `bravebot doctor` prints, which an editor has no terminal to run.
+
 ## What the editor can send
 
 Text you type is a prompt, exactly as in the terminal, and a `/` word in it is text for the model,

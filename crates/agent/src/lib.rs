@@ -32,6 +32,7 @@ pub mod connectors;
 pub mod conversation;
 pub mod delegate;
 pub mod diff;
+pub mod dropped_keys;
 pub mod exec;
 pub mod file_preview;
 pub mod findings;
