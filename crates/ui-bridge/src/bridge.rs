@@ -616,6 +616,7 @@ impl Bridge {
                 self.settings.as_deref(),
             )),
             "window.fault" => crate::window_fault::record(request),
+            "window.title" => crate::window_title::title(request),
             "opener.judge" => crate::opener_names::judge(request),
             "accounts.list" => crate::accounts::list_asked(
                 request,

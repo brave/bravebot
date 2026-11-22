@@ -1841,6 +1841,10 @@ Still open:
   text. Where the build carries none for that version they are the newest release's, `version`
   names that release and `running` is false. `notes` is null where the build carries no release.
   Nothing is read or fetched, and the window shows `notes` as plain text (CMD-25).
+- `window.title` takes `{ name, state }`, where `state` is `ready`, `working` or `waiting`, and
+  returns `{ title }`: the window's title for the session on screen, built by the same code as the
+  terminal's title, with control characters made visible and cut to 60 characters (PANEL-19). It
+  reads nothing, and a client of the local host is refused it.
 - `caffeinate.confirmed` takes no parameters and returns `{ confirmed }`: whether
   `~/.bravebot/caffeinate` says the person agreed to keeping the computer awake, as `/caffeinate`
   reads it. `caffeinate.confirm` writes that agreement and returns `{ kept }`, false where the

@@ -708,6 +708,8 @@ const ALLOWED = new Set([
   'permissions.revoke',
   'doctor',
   'changelog.read',
+  // The text of the window's own title, for the name and state the window gives (PANEL-19).
+  'window.title',
   'schedule.command',
   'hooks.inspect',
   'effort.get',

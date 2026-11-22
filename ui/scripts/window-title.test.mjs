@@ -1,66 +1,11 @@
-// The desktop window's title text, case for case with the tests in crates/tui/src/title.rs.
+// What the desktop window tells the bridge about the session on screen, and how it writes the
+// title the bridge answers with. The title's text is built in Rust, by `bravebot_agent::title`
+// and `bravebot_ui_bridge::window_title`, whose tests pin it.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { loadSync } from './render-support.mjs'
-
-const source = fileURLToPath(new URL('../src/shared/window-title.ts', import.meta.url))
-const { windowTitle, PREFIX, MOST_COLUMNS } = loadSync(source)
-
-const points = (text) => Array.from(text).length
-
-test('the title names the session behind the prefix', () => {
-  assert.equal(PREFIX, 'Bravebot')
-  assert.equal(windowTitle('fix', 'ready'), 'Bravebot · fix')
-  assert.equal(windowTitle('  fix  ', 'ready'), 'Bravebot · fix')
-})
-
-test('each state puts its marker in front', () => {
-  assert.equal(windowTitle('fix', 'working'), '✦ Bravebot · fix')
-  assert.equal(windowTitle('fix', 'waiting'), '[!] Bravebot · fix')
-})
-
-test('a session with no name gets the bare prefix and its marker', () => {
-  assert.equal(windowTitle('', 'ready'), 'Bravebot')
-  assert.equal(windowTitle('   ', 'ready'), 'Bravebot')
-  assert.equal(windowTitle('', 'working'), '✦ Bravebot')
-  assert.equal(windowTitle('  ', 'waiting'), '[!] Bravebot')
-})
-
-test('control characters in a name are replaced by visible ones', () => {
-  const title = windowTitle('fix\x07\x1b]0;owned\x1b\\\u009c\x1b[2J\nnext\x7f', 'ready')
-  assert.doesNotMatch(title, /[\u0000-\u001f\u007f-\u009f]/)
-  assert.ok(title.startsWith('Bravebot · fix␇␛]0;owned'), title)
-  assert.ok(title.includes('‹U+009C›'), title)
-  assert.ok(title.includes('␊next␡'), title)
-})
-
-test('a long name is cut to sixty code points ending in …', () => {
-  const long = 'a'.repeat(200)
-  const cut = windowTitle(long, 'ready')
-  assert.equal(MOST_COLUMNS, 60)
-  assert.equal(points(cut), MOST_COLUMNS)
-  assert.ok(cut.startsWith('Bravebot · aaa'))
-  assert.ok(cut.endsWith('…'))
-  assert.equal(windowTitle('short', 'ready'), 'Bravebot · short')
-})
-
-test('the marker leads the title and counts toward the sixty', () => {
-  const long = 'a'.repeat(200)
-  for (const [state, marker] of [['working', '✦'], ['waiting', '[!]']]) {
-    const cut = windowTitle(long, state)
-    assert.ok(cut.startsWith(`${marker} Bravebot · `), cut)
-    assert.equal(points(cut), MOST_COLUMNS)
-    assert.ok(cut.endsWith('…'))
-  }
-})
-
-test('a name made of characters outside the basic plane is cut by code point', () => {
-  const cut = windowTitle('😀'.repeat(100), 'ready')
-  assert.equal(points(cut), MOST_COLUMNS)
-  assert.ok(cut.endsWith('😀…'), cut)
-})
 
 const { sessionStatus, titleState } = loadSync(fileURLToPath(new URL('../src/renderer/session-list.ts', import.meta.url)))
 const live = (over = {}) => ({ handle: 'h', summary: { id: 's', title: 'fix', project: 'p', branch: null, directory: '/p' }, entries: [], running: false, bot: null, ...over })
@@ -92,16 +37,52 @@ test('a question waiting outranks a running turn', () => {
   assert.equal(titleState(both), 'waiting')
 })
 
-const { writeTitle } = loadSync(fileURLToPath(new URL('../src/renderer/window-title.ts', import.meta.url)))
+const { titleWriter } = loadSync(fileURLToPath(new URL('../src/renderer/window-title.ts', import.meta.url)))
 
-test('an unchanged title is not written twice', () => {
+/** A page that records each title written, and an ask that answers as `answer` says. */
+function harness(answer = (name, state) => Promise.resolve(`${state}:${name}`)) {
   const writes = []
+  const asks = []
   const page = { get title() { return writes.at(-1) ?? '' }, set title(text) { writes.push(text) } }
-  const last = { current: null }
-  writeTitle(page, last, 'Bravebot · fix')
-  writeTitle(page, last, 'Bravebot · fix')
-  writeTitle(page, last, '✦ Bravebot · fix')
-  writeTitle(page, last, '✦ Bravebot · fix')
-  writeTitle(page, last, 'Bravebot')
-  assert.deepEqual(writes, ['Bravebot · fix', '✦ Bravebot · fix', 'Bravebot'])
+  const write = titleWriter(page, (name, state) => {
+    asks.push([name, state])
+    return answer(name, state)
+  })
+  return { write, writes, asks }
+}
+
+test('an unchanged name and state ask nothing and write nothing', async () => {
+  const { write, writes, asks } = harness()
+  await write('fix', 'ready')
+  await write('fix', 'ready')
+  await write('fix', 'working')
+  await write('fix', 'working')
+  await write('', 'ready')
+  assert.deepEqual(asks, [['fix', 'ready'], ['fix', 'working'], ['', 'ready']])
+  assert.deepEqual(writes, ['ready:fix', 'working:fix', 'ready:'])
+})
+
+test('an answer that is the title already shown is not written again', async () => {
+  const { write, writes } = harness(() => Promise.resolve('Bravebot'))
+  await write('', 'ready')
+  await write('   ', 'ready')
+  assert.deepEqual(writes, ['Bravebot'])
+})
+
+test('an answer overtaken by a newer request is dropped', async () => {
+  const pending = []
+  const { write, writes } = harness((name) => new Promise((resolve) => pending.push([name, resolve])))
+  const first = write('old', 'ready')
+  const second = write('new', 'ready')
+  pending[1][1]('Bravebot · new')
+  await second
+  pending[0][1]('Bravebot · old')
+  await first
+  assert.deepEqual(writes, ['Bravebot · new'])
+})
+
+test('a failed ask leaves the title as it is', async () => {
+  const { write, writes } = harness(() => Promise.reject(new Error('no bridge')))
+  await write('fix', 'ready')
+  assert.deepEqual(writes, [])
 })
