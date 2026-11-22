@@ -13342,6 +13342,155 @@ fn a_quarantined_listing_of_exactly_the_cap_cut_per_directory_says_only_the_cut(
     );
 }
 
+/// LIST-5 for a listing the planner may not read: a directory the per-directory cap cut for its
+/// subdirectories is handed over as a reference, and how many subdirectories were left out travels
+/// beside that reference, since a sentence in the body reaches nobody. The sentence says what a
+/// listing with no depth shows. The regressions it rejects: the count dropped, so the planner reads
+/// 200 subdirectories as the whole directory; the count worded as files; the cap worded as 200
+/// files; no sentence about what a listing with no depth names; and any directory's name in the
+/// sentence.
+#[test]
+fn a_quarantined_listing_says_how_many_subdirectories_a_cut_directory_left_out() {
+    let scratch = Scratch::new("list-cut-subdirectories-quarantined");
+    std::fs::write(scratch.path.join("file-tango.txt"), "x").unwrap();
+    std::fs::create_dir(scratch.path.join("dir-wide")).unwrap();
+    for n in 0..201 {
+        std::fs::create_dir(scratch.path.join(format!("dir-wide/sub{n:03}"))).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for name in ["file-tango", "dir-wide", "sub000", "sub200"] {
+        assert!(
+            !second.contains(name),
+            "a name out of an unvouched directory reached the planner: {second}"
+        );
+    }
+    assert!(
+        second.contains("Its 202 entries are quarantined"),
+        "the cut directory was not counted among the entries: {second}"
+    );
+    assert!(
+        second.contains("took at most 200 subdirectories from any one directory")
+            && second.contains("Not listed: 1 subdirectory of [ref:202]."),
+        "the count of subdirectories left out did not reach the planner beside the reference: \
+         {second}"
+    );
+    assert!(
+        !second.contains("took at most 200 files") && !second.contains("1 file of"),
+        "a subdirectory cut was worded as a cut of files: {second}"
+    );
+    assert!(
+        !second.contains("stopped at that many entries"),
+        "a per-directory cut was worded as the cap over the whole walk: {second}"
+    );
+    assert!(
+        second.contains("the subdirectories left out are in it")
+            && second.contains("A listing with no depth names files only"),
+        "the sentence did not say what a listing with no depth shows: {second}"
+    );
+}
+
+/// LIST-5 for a listing the planner may not read, with three cut directories: one cut for files,
+/// one for subdirectories and one for both. Each count is paired with its directory's reference by
+/// position, the last references in the order the directories were cut, and a directory cut for
+/// both has both counts beside its one reference. The regressions it rejects: the counts paired
+/// with the first references, the counts swapped between files and subdirectories, one count
+/// dropped for the directory cut both ways, and a directory's name in the sentence.
+#[test]
+fn a_quarantined_listing_pairs_each_cut_directorys_counts_with_its_own_reference() {
+    let scratch = Scratch::new("list-cut-both-quarantined");
+    // `dir-a` loses one file, `dir-b` loses one subdirectory and `dir-c` loses one file and two
+    // subdirectories. At depth 2 the listing holds 400 files, 400 directories the walk stopped at
+    // and the 3 cut directories, which are the last references in name order: 801, 802 and 803.
+    std::fs::create_dir(scratch.path.join("dir-a")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("dir-a/f{n:03}.txt")), "x").unwrap();
+    }
+    std::fs::create_dir(scratch.path.join("dir-b")).unwrap();
+    for n in 0..201 {
+        std::fs::create_dir(scratch.path.join(format!("dir-b/sub{n:03}"))).unwrap();
+    }
+    std::fs::create_dir(scratch.path.join("dir-c")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("dir-c/f{n:03}.txt")), "x").unwrap();
+    }
+    for n in 0..202 {
+        std::fs::create_dir(scratch.path.join(format!("dir-c/sub{n:03}"))).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    for name in ["dir-a", "dir-b", "dir-c", "sub000", "f000.txt"] {
+        assert!(
+            !second.contains(name),
+            "a name out of an unvouched directory reached the planner: {second}"
+        );
+    }
+    assert!(
+        second.contains("Its 803 entries are quarantined"),
+        "the fixture does not hold 400 files, 400 directories stopped at and 3 cut directories: \
+         {second}"
+    );
+    assert!(
+        second.contains("took at most 200 files and 200 subdirectories from any one directory"),
+        "the caps of both cuts were not said: {second}"
+    );
+    assert!(
+        second.contains(
+            "Not listed: 1 file of [ref:801], 1 subdirectory of [ref:802], 1 file and 2 \
+             subdirectories of [ref:803]."
+        ),
+        "the counts were not paired with the last references by position: {second}"
+    );
+    assert!(
+        second.contains("the files and subdirectories left out are in it")
+            && second.contains("A listing with no depth names files only"),
+        "the sentence did not name what was left out and what a listing with no depth shows: \
+         {second}"
+    );
+}
+
 /// LIST-6: a listing the planner may not read still says how many symbolic links it did not enter,
 /// as a number and with no name. The regression it rejects: a count kept only in the body, which
 /// reaches nobody when the entries are handed over as references, so a directory made of links

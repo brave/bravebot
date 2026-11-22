@@ -1070,10 +1070,13 @@ fn table(
                              you can see where the tree continues: with a trailing / where you \
                              are shown the names, and as a reference that says it is a \
                              directory where they are quarantined. A directory with more than \
-                             {per} files gives {per} of them and says how many it left out; list \
-                             it with no depth to see the rest. Omit it to walk the whole tree, \
+                             {per} files gives {per} of them, and one with more than {dirs} \
+                             subdirectories gives {dirs} of them, and the listing says how many it \
+                             left out; list it with no depth to see the rest of its files and the \
+                             files under its subdirectories. Omit it to walk the whole tree, \
                              which in a large project is thousands of paths.",
-                            per = crate::workspace::MAX_FILES_PER_DIRECTORY
+                            per = crate::workspace::MAX_FILES_PER_DIRECTORY,
+                            dirs = crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
                         ),
                         "minimum": 1
                     },

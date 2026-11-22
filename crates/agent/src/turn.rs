@@ -4501,13 +4501,14 @@ where
                 // and the planner is not being given the body: it gets the references, and a
                 // capped sample of a tree read as the whole of it is how a planner concludes a
                 // file it cannot find does not exist.
-                // The directories the per-directory cap cut are the last references, so each is
-                // paired with its count by position and never by a name.
-                let cut: Vec<(String, usize)> = ids
+                // The directories a per-directory cap cut are the last references, so each is
+                // paired with its counts by position and never by a name.
+                let cut: Vec<(String, usize, usize)> = ids
                     [ids.len().saturating_sub(entries.left_out.len())..]
                     .iter()
                     .map(ToString::to_string)
                     .zip(entries.left_out.iter().copied())
+                    .map(|(reference, (files, directories))| (reference, files, directories))
                     .collect();
                 let capped =
                     sentences::listing_capped_note(output.incomplete, entries.at_the_cap, &cut);
