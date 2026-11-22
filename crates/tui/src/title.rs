@@ -11,8 +11,7 @@ use std::sync::{Mutex, PoisonError};
 /// What every title starts with, so a tab running this is recognisable before its name is read.
 const PREFIX: &str = "bravebot";
 
-/// The most columns a title takes, since a tab bar shows a fraction of a long one anyway.
-const MOST_COLUMNS: usize = 60;
+use bravebot_agent::title::MOST_COLUMNS;
 
 /// xterm's request to push the window and icon titles onto its stack.
 const PUSH: &str = "\x1b[22;0t";
@@ -23,28 +22,8 @@ const POP: &str = "\x1b[23;0t";
 /// An empty title, written before the pop for a terminal that ignores the pop.
 const EMPTY: &str = "\x1b]0;\x07";
 
-/// What the session is doing, as the title says it. Chosen by the driver from its own state: whether
-/// a turn is running or a prompt to the person is open, and never from anything a turn produced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum State {
-    /// Nothing is running and nothing is asked: the box is waiting for a prompt.
-    Ready,
-    /// A turn or a command is running.
-    Working,
-    /// An approval, a question or a confirmation is open and the run is waiting for the person.
-    Waiting,
-}
-
-impl State {
-    /// The fixed text in front of the title, so a tab bar that cuts the title still shows it.
-    const fn marker(self) -> Option<&'static str> {
-        match self {
-            Self::Ready => None,
-            Self::Working => Some("✦"),
-            Self::Waiting => Some("[!]"),
-        }
-    }
-}
+/// What the session is doing, as the title says it, the same states the desktop window's title has.
+pub(crate) use bravebot_agent::title::State;
 
 /// One run's worth of title, kept between frames so an unchanged title is not written again.
 #[derive(Debug)]
@@ -104,7 +83,6 @@ impl Title {
         }
         let text = match self.name.as_str() {
             "" if self.shown.is_none() && self.state == State::Ready => return Ok(()),
-            "" => marked(PREFIX.to_string(), self.state),
             name => text(name, self.state),
         };
         if self.pushed && self.shown.as_deref() == Some(text.as_str()) {
@@ -133,24 +111,16 @@ impl Title {
     }
 }
 
-/// The title for a session named `name` in `state`, safe to write inside an escape sequence.
+/// The title for a session named `name` in `state`, safe to write inside an escape sequence, cut to
+/// the columns a title takes with the marker counted.
 ///
-/// Control characters are replaced by visible ones, as they are anywhere on the screen: an escape or
-/// a bell in a name would otherwise end the sequence early and let the rest act on the terminal.
+/// [`bravebot_agent::title::text`] replaces control characters by visible ones, so an escape or a
+/// bell in a name cannot end the sequence early and let the rest act on the terminal.
 pub(crate) fn text(name: &str, state: State) -> String {
-    marked(
-        format!("{PREFIX} · {}", crate::render::printable(name)),
-        state,
+    crate::status::cut(
+        &bravebot_agent::title::text(PREFIX, name, state),
+        MOST_COLUMNS,
     )
-}
-
-/// `title` behind the marker for `state`, cut to the columns a title takes with the marker counted.
-fn marked(title: String, state: State) -> String {
-    let title = match state.marker() {
-        Some(marker) => format!("{marker} {title}"),
-        None => title,
-    };
-    crate::status::cut(&title, MOST_COLUMNS)
 }
 
 /// The run's title. One per process, because one process owns the terminal it is the title of.

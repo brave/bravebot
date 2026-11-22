@@ -109,6 +109,7 @@ pub mod subscription;
 #[cfg(test)]
 mod testutil;
 pub mod timing;
+pub mod title;
 pub mod tools;
 pub mod transport;
 pub mod trusted;
