@@ -4527,6 +4527,35 @@ mod tests {
             }
         }
 
+        /// A setting that has git read attributes from a file or a tree other than the ones in the
+        /// repository refuses the checkout before anything is written, whichever way its section
+        /// and key are cased. An implementation that read only the attributes files inside the
+        /// repository would make the checkout and write files as stored that git would convert.
+        #[test]
+        fn a_config_naming_an_attributes_file_elsewhere_refuses_the_checkout() {
+            for config in [
+                "[core]\n\tattributesFile = /tmp/attributes\n",
+                "[Core]\n\tATTRIBUTESFILE = /tmp/attributes\n",
+                "[attr]\n\ttree = HEAD\n",
+                "[ATTR]\n\tTree = HEAD\n",
+            ] {
+                let repo = Repo::new("checkout-attributes-elsewhere");
+                let readme = repo.blob("hello\n");
+                committed(&repo, &[("100644", "README", readme)]);
+                repo.put("config", config);
+                let refused = made(&repo).expect_err(config);
+                assert_eq!(refused, Refused::Declined(Declined::Elsewhere), "{config}");
+                nothing_written(&repo, &refused);
+            }
+
+            // A setting that names no attributes source does not refuse.
+            let repo = Repo::new("checkout-attributes-in-repository");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            repo.put("config", "[core]\n\tbare = false\n");
+            made(&repo).expect("made");
+        }
+
         /// An attribute that turns a conversion off, or one that writes a file as it is stored
         /// here, does not refuse.
         #[test]

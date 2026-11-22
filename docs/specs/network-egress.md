@@ -275,6 +275,8 @@ that nothing is trusted.
 `verified-by: bravebot_net::transport::a_certificate_file_a_settings_file_names_is_what_is_trusted`
 `verified-by: bravebot_net::transport::exported_roots_replace_the_files_rather_than_joining_them`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
+`verified-by: bravebot_net::transport::a_client_built_from_named_certificates_trusts_exactly_those`
+`verified-by: bravebot_net::lib::named_roots_decide_who_a_handshake_trusts`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 
 <a id="NET-8"></a>

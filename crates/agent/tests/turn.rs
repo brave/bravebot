@@ -30180,6 +30180,173 @@ fn the_preamble_is_not_stored_in_the_conversation() {
     );
 }
 
+/// INSTR-5. The standing instructions and the skill listing are in the system message of every
+/// request and in no other message of it, and the conversation holds neither. A build that sent
+/// them as the first user message of each request keeps one copy in each request and nothing in the
+/// stored conversation, so the count in `the_preamble_is_not_stored_in_the_conversation` does not
+/// tell it from the required one: this test reads which message holds the words. The listing is the
+/// built-in `loop` line, the only skill the default listing names (SKILL-18).
+#[test]
+fn the_standing_instructions_and_the_skill_listing_are_in_the_system_message_alone() {
+    const LISTING: &str = "- loop: How a repeating turn works";
+    let scratch = Scratch::new("preamble-system-message");
+    std::fs::write(
+        scratch.path.join("AGENTS.md"),
+        "STANDING-INSTRUCTION-SYSTEM",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    for prompt in ["first", "second"] {
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new(prompt),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+    }
+
+    for turn_number in ["first", "second"] {
+        let body = received.recv().expect("a request");
+        let system = system_prompt_of(&body);
+        for words in ["STANDING-INSTRUCTION-SYSTEM", LISTING] {
+            assert!(
+                system.contains(words),
+                "the {turn_number} request's system message does not hold {words}: {system}"
+            );
+        }
+        let sent: serde_json::Value = serde_json::from_str(&body).expect("a JSON request");
+        for (at, message) in sent["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .enumerate()
+            .skip(1)
+        {
+            let words = message_words(message);
+            assert!(
+                !words.contains("STANDING-INSTRUCTION-SYSTEM") && !words.contains(LISTING),
+                "message {at} of the {turn_number} request holds the instructions or the listing: {words}"
+            );
+        }
+    }
+    let stored = serde_json::to_string(&conversation.snapshot()).expect("serialises");
+    assert!(
+        !stored.contains("STANDING-INSTRUCTION-SYSTEM") && !stored.contains(LISTING),
+        "the conversation holds the instructions or the listing: {stored}"
+    );
+}
+
+/// Two turns over one conversation in a workspace that was opened before the first of them, with
+/// `between` run after the first, as a session does when a file is written in the middle of it.
+/// Returns the body of the request each turn sent.
+fn the_requests_of_two_turns_with_a_change_between(
+    scratch: &Scratch,
+    between: impl FnOnce(&std::path::Path),
+) -> (String, String) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let mut run_a_turn = |prompt: &str| {
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new(prompt),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+    };
+    run_a_turn("first");
+    between(&scratch.path);
+    run_a_turn("second");
+
+    let first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    (first, second)
+}
+
+/// INSTR-7. An `AGENTS.md` written after the first turn of a conversation is in the system prompt
+/// of the second request and not of the first. A turn that resolved the instructions once, when
+/// the conversation began, or kept the first turn's text, would send the second request without
+/// the file that was just written.
+#[test]
+fn an_agents_file_written_between_two_turns_reaches_the_second_turns_system_prompt() {
+    let scratch = Scratch::new("instr-7-agents-file-between-turns");
+    let (first, second) = the_requests_of_two_turns_with_a_change_between(&scratch, |root| {
+        std::fs::write(root.join("AGENTS.md"), "LATE-CONVENTION").unwrap();
+    });
+
+    let before = system_prompt_of(&first);
+    assert!(
+        !before.contains("LATE-CONVENTION"),
+        "the first request held a file that did not exist yet: {before}"
+    );
+    let after = system_prompt_of(&second);
+    assert!(
+        after.contains("LATE-CONVENTION"),
+        "the second request's system prompt does not hold the file written after the first turn: {after}"
+    );
+}
+
+/// INSTR-7. A project skill written after the first turn of a conversation reaches the planner in
+/// the second request and in no part of the first. The default listing names only the built-in
+/// skills, so the late skill arrives in the one-time message that counts and names the skills the
+/// listing leaves out (SKILL-19); a turn that discovered skills once, when the conversation began,
+/// would never say it.
+#[test]
+fn a_skill_written_between_two_turns_is_named_to_the_planner_in_the_second_request() {
+    const SKILL: &str = "late-skill-marker";
+    let scratch = Scratch::new("instr-7-skill-between-turns");
+    let (first, second) = the_requests_of_two_turns_with_a_change_between(&scratch, |root| {
+        write_project_skill(root, SKILL, SKILL, "a skill written mid-session");
+    });
+
+    assert!(
+        !first.contains(SKILL),
+        "the first request named a skill that did not exist yet: {first}"
+    );
+    let messages = what_the_backend_received_after_the_system_prompt(&second);
+    assert!(
+        messages.iter().any(|words| words.contains(SKILL)),
+        "no message of the second request names the skill written after the first turn: {messages:?}"
+    );
+}
+
 /// A state directory holding one public fact, and a workspace beside it.
 fn a_home_with_a_deploy_fact(scratch: &Scratch, body: &str) -> (std::path::PathBuf, Workspace) {
     let home = scratch.path.join("home");
@@ -33114,6 +33281,112 @@ fn a_line_a_person_vouched_for_does_not_trust_the_file_it_wrote() {
     assert!(
         !outcome.trust.is_trusted("vendor/page.txt"),
         "a file still holding bytes from the web was recorded as trusted"
+    );
+}
+
+/// A line a person vouched for that completes keeps the trust its destination already had: an
+/// append onto a file the person vouched for adds the line's own words to a file nobody
+/// quarantined. Recording the destination as untrusted on every redirection would make a person
+/// vouch again for a file only their own programs wrote, and a read of it would cost a prompt each
+/// time.
+#[test]
+fn a_trusted_line_appending_to_a_trusted_file_leaves_it_trusted() {
+    let scratch = Scratch::new("run-append-trusted");
+    std::fs::write(scratch.path.join("notes.txt"), "mine\n").unwrap();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    assert!(
+        trust.is_trusted("notes.txt"),
+        "the fixture did not start with a trusted destination"
+    );
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn_with_trust(
+        &scratch,
+        r#"{"command":"echo ours >> notes.txt"}"#,
+        &mut confirmer,
+        vouching_for_writing("echo", &["ours"], &scratch.path, "notes.txt", true),
+        trust,
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "mine\nours\n",
+        "the append did not add to what the file held"
+    );
+    assert!(
+        outcome.trust.is_trusted("notes.txt"),
+        "a vouched line that completed distrusted a destination that was trusted before it ran"
+    );
+}
+
+/// A line that exits non-zero has not completed, so the effect on its destination is not taken
+/// and the destination is recorded as untrusted, although the line is vouched for and the file was
+/// trusted before it ran. Completing the effect whatever the exit status would keep the old trust
+/// for a file the failed program may have left half written.
+#[test]
+fn a_trusted_line_that_exits_nonzero_leaves_its_destination_untrusted() {
+    let scratch = Scratch::new("run-append-failed");
+    std::fs::write(scratch.path.join("notes.txt"), "mine\n").unwrap();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    assert!(
+        trust.is_trusted("notes.txt"),
+        "the fixture did not start with a trusted destination"
+    );
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn_with_trust(
+        &scratch,
+        r#"{"command":"false >> notes.txt"}"#,
+        &mut confirmer,
+        vouching_for_writing("false", &[], &scratch.path, "notes.txt", true),
+        trust,
+    )
+    .expect("the turn runs");
+
+    assert!(
+        !outcome.trust.is_trusted("notes.txt"),
+        "a vouched line that exited non-zero left its destination trusted"
+    );
+}
+
+/// A vouched line that completes cannot raise a destination the map already holds as untrusted:
+/// `>>` keeps the bytes the file held, so the line's own trust says nothing about them. Taking the
+/// line's label for the destination instead of the meet with what it held would hand back older
+/// untrusted bytes as trusted.
+#[test]
+fn a_trusted_line_appending_to_an_untrusted_file_leaves_it_untrusted() {
+    let scratch = Scratch::new("run-append-onto-untrusted");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/page.txt"), "from the web\n").unwrap();
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    trust.distrust("vendor");
+    assert!(
+        !trust.is_trusted("vendor/page.txt"),
+        "the fixture did not start with an untrusted destination"
+    );
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = a_run_turn_with_trust(
+        &scratch,
+        r#"{"command":"echo ours >> vendor/page.txt"}"#,
+        &mut confirmer,
+        vouching_for_writing("echo", &["ours"], &scratch.path, "vendor/page.txt", true),
+        trust,
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("vendor/page.txt")).unwrap(),
+        "from the web\nours\n",
+        "the append did not add to what the file held"
+    );
+    assert!(
+        !outcome.trust.is_trusted("vendor/page.txt"),
+        "a vouched line raised a destination that held untrusted bytes"
     );
 }
 
@@ -57116,6 +57389,196 @@ fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_re
     );
 }
 
+/// DELEGATE-9, TRACE-8: the driver's count of a delegate's rounds and time and the fixed name of
+/// how it failed go to the trail and to the person's note, and none of them is in a request the
+/// planner sends. A delegate that answered and one that did not finish are both run, since each
+/// builds the planner's message in a different function.
+///
+/// Rejects: a planner message that repeats the person's `answered after 1 round` note, one that
+/// carries the trail's `ended after Ns and N of 60 rounds` line or only its elapsed time, and one
+/// that carries the `(refused)` name or the `could not finish (` note the person is shown. The
+/// bound sentence (DELEGATE-26) and the four named categories (BACKEND-37) are told to the planner
+/// and are not asserted here.
+#[test]
+fn a_delegates_rounds_time_and_cause_in_the_trail_never_reach_the_planner() {
+    let elapsed = |detail: &str| -> String {
+        let (seconds, _) = detail
+            .strip_prefix("d1: ended after ")
+            .and_then(|rest| rest.split_once("s and "))
+            .expect("the trail does not say how long the delegate ran");
+        format!("{seconds}s")
+    };
+    let planner_requests = |received: &MockRequests, marker: &str| -> Vec<String> {
+        every_request(received)
+            .into_iter()
+            .filter(|body| body.contains(marker))
+            .collect()
+    };
+    let never_in = |requests: &[String], words: &[&str], what: &str| {
+        for body in requests {
+            for word in words {
+                assert!(
+                    !body.contains(word),
+                    "{what} reached the planner as {word:?}: {body}"
+                );
+            }
+        }
+    };
+
+    // A delegate that answered after one of its 60 rounds.
+    let scratch = Scratch::new("delegate-count-answered");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-ONE-THAT-REPORTS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"LOOK-AT-THE-NOTES"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "LOOK-AT-THE-NOTES",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                reply_with("WHAT-THE-NOTES-HELD"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-ONE-THAT-REPORTS"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    // The trail and the note hold what the planner must not, so the absence below is not vacuous.
+    let ends = delegate_ends(&sink);
+    let [(_, trail)] = ends.as_slice() else {
+        panic!("the trail did not record the delegate ending once: {ends:?}");
+    };
+    assert!(
+        trail.ends_with("s and 1 of 60 rounds: it answered"),
+        "the trail does not say how the delegate ended: {trail}"
+    );
+    let (_, note, failed) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        !failed && note.contains("a reader delegate answered after 1 round"),
+        "the person was not told how many rounds the delegate made: {note}"
+    );
+
+    let planner = planner_requests(&received, "SEND-ONE-THAT-REPORTS");
+    assert!(
+        planner
+            .iter()
+            .any(|body| body.contains("WHAT-THE-NOTES-HELD")),
+        "the report was never put in front of the planner: {planner:?}"
+    );
+    let seconds = elapsed(trail);
+    never_in(
+        &planner,
+        &[
+            "ended after",
+            "answered after",
+            " of 60 rounds",
+            &seconds,
+            "a reader delegate answered",
+        ],
+        "an answered delegate's rounds or time",
+    );
+
+    // A delegate whose request the service refuses.
+    let scratch = Scratch::new("delegate-count-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut script = vec![
+        tool_request(
+            "spawn_agent",
+            r#"{"kind":"reader","task":"NOTHING-WILL-REPLY-TO-THIS"}"#,
+        ),
+        reply_with("waiting"),
+        reply_with("it failed"),
+    ]
+    .into_iter();
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        match body.contains("SEND-ONE-THAT-IS-REFUSED") {
+            true => script.next().map(Some),
+            false => None,
+        }
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-ONE-THAT-IS-REFUSED"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn survives a delegate that did not");
+
+    let ends = delegate_ends(&sink);
+    let [(_, trail)] = ends.as_slice() else {
+        panic!("the trail did not record the delegate ending once: {ends:?}");
+    };
+    assert!(
+        trail.ends_with("s and 0 of 60 rounds: it did not finish (refused)"),
+        "the trail does not say how the delegate ended: {trail}"
+    );
+    let (_, note, failed) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        *failed && note.contains("could not finish (refused)"),
+        "the person was not told how the delegate failed: {note}"
+    );
+
+    let planner = planner_requests(&received, "SEND-ONE-THAT-IS-REFUSED");
+    assert!(
+        planner
+            .iter()
+            .any(|body| body.contains("The delegate d1 did not finish.")),
+        "the planner was never told the delegate did not finish: {planner:?}"
+    );
+    let seconds = elapsed(trail);
+    never_in(
+        &planner,
+        &[
+            "ended after",
+            " of 60 rounds",
+            &seconds,
+            "(refused)",
+            "could not finish (",
+        ],
+        "a failed delegate's rounds, time or cause",
+    );
+}
+
 /// Answers a request carrying `failing` with `status` and an empty body, and every other request
 /// from `script`, in order. The requests the client sends are retried on a 429 or a 503, so a
 /// delegate asked for a failing task sees the status on every attempt. A `status` of 0 hangs up
@@ -62571,6 +63034,146 @@ fn a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout() {
             .any(|body| body.contains("READ-THE-KEY-APART") && body.contains("deny rule")),
         "the delegate was not told a deny rule refused the read"
     );
+}
+
+/// CHECKOUT-9. A delegate under a definition that keeps a memory is told where the memory is when
+/// it works in the working directory, and is told nothing of one when it works in a checkout,
+/// because the memory file is in the working directory the delegate does not reach. A driver that
+/// told it anyway would send the delegate to keep notes in a file its definition never reads.
+#[test]
+fn a_delegate_in_a_checkout_is_not_told_of_its_definitions_memory() {
+    let said_to_the_delegate = |tag: &str, spawn: &str| -> String {
+        let scratch = Scratch::new(&format!("checkout-memory-told-{tag}"));
+        let home = Scratch::new(&format!("checkout-memory-told-{tag}-home"));
+        define(
+            &home,
+            "notes-keeper",
+            "kind: worker\nmemory: project\n",
+            "KEEP-NOTES",
+        );
+        repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "HAVE-A-KEEPER-LOOK",
+                vec![
+                    tool_request("spawn_agent", spawn),
+                    reply_with("waiting"),
+                    reply_with("relayed"),
+                ],
+            ),
+            ("CHECK-THE-NOTES", vec![reply_with("nothing kept")]),
+        ]);
+        let (asked, _) = run_in_a_repository(
+            &workspace,
+            &home.path,
+            &endpoint,
+            &received,
+            "HAVE-A-KEEPER-LOOK",
+        );
+        let delegate = asked
+            .iter()
+            .find(|body| body.contains("CHECK-THE-NOTES") && !body.contains("HAVE-A-KEEPER-LOOK"))
+            .expect("the delegate never ran");
+        said_in(delegate)
+    };
+
+    let beside = said_to_the_delegate(
+        "beside",
+        r#"{"kind":"notes-keeper","task":"CHECK-THE-NOTES"}"#,
+    );
+    assert!(
+        beside.contains("keeps its memory in"),
+        "a delegate in the working directory was not told where its memory is: {beside}"
+    );
+    let apart = said_to_the_delegate(
+        "apart",
+        r#"{"kind":"notes-keeper","task":"CHECK-THE-NOTES","isolation":"checkout"}"#,
+    );
+    assert!(
+        apart.contains("working in a checkout of commit"),
+        "the delegate did not work in a checkout: {apart}"
+    );
+    assert!(
+        !apart.contains("keeps its memory in") && !apart.contains("notes-keeper.md"),
+        "a delegate in a checkout was told of a memory: {apart}"
+    );
+}
+
+/// CHECKOUT-9. A delegate in a checkout has no state directory to record an untrusted memory in,
+/// so a line nobody vouched for that would leave a file at a memory's path untrusted does not
+/// open it, as it does not in a session with no state directory. A driver that gave the checkout
+/// the session's state directory would let the line write a memory the record does not name.
+#[test]
+fn a_line_in_a_checkout_does_not_write_a_memory_nothing_could_record() {
+    let scratch = Scratch::new("checkout-memory-write");
+    let home = Scratch::new("checkout-memory-write-home");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "committed\n"), (".bravebot/memory/.keep", "")],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let redirect = tool_request(
+        "run",
+        &json!({ "command": "echo FROM-A-PAGE > .bravebot/memory/notes-keeper.md" }).to_string(),
+    );
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HAVE-A-DELEGATE-WRITE-A-NOTE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"WRITE-THE-NOTE-APART","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        ("WRITE-THE-NOTE-APART", vec![redirect, reply_with("ran it")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-A-DELEGATE-WRITE-A-NOTE").with_home(Some(home.path.clone())),
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let seen = confirmer.seen.lock().unwrap();
+    assert_eq!(
+        seen.len(),
+        1,
+        "the delegate's line was not put to the person in its checkout"
+    );
+    assert!(
+        seen[0]
+            .plan
+            .directory
+            .starts_with(home.path.canonicalize().unwrap().join("checkouts")),
+        "the line did not run in the checkout: {:?}",
+        seen[0].plan.directory
+    );
+    let relative = ".bravebot/memory/notes-keeper.md";
+    assert!(
+        !scratch.path.join(relative).exists(),
+        "the line wrote the working directory"
+    );
+    for checkout in checkouts_under(&home.path) {
+        assert!(
+            !checkout.join(relative).exists(),
+            "a line in a checkout wrote a memory that nothing could record"
+        );
+    }
 }
 
 /// CHECKOUT-7. Remote-tracking refs, tags and the stash live in the repository's common directory.
@@ -78792,6 +79395,79 @@ fn a_stopped_hook_says_the_timeout_it_declared() {
             "the bound the entry declared, not the default: {}",
             said[0]
         );
+        assert!(
+            said[0].contains("turn-finished"),
+            "the moment the hook is declared on: {}",
+            said[0]
+        );
+    }
+}
+
+/// HOOK-7: the sentence for a hook that ended badly, and the one for a hook that could not be
+/// started, each name the moment the hook is declared on and the program it runs, in the turn's
+/// account and to the reporter. A sentence built without the moment, without the program, or with
+/// the two swapped tells a person that a hook failed and leaves them to guess which.
+#[cfg(unix)]
+#[test]
+fn a_hook_that_ended_badly_says_the_moment_and_the_program() {
+    let scratch = Scratch::new("hooks-ended-badly");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let sour = a_hook_script(&scratch.path, "sour-formatter", "#!/bin/sh\nexit 3\n");
+    let missing = scratch.path.join("no-such-starter");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"turn-finished\", \"run\": [{sour}]}}, \
+             {{\"on\": \"turn-started\", \"run\": [{missing:?}]}}"
+        ),
+    );
+
+    let (endpoint, _received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something").with_home(Some(home)),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("a hook that goes wrong does not fail the turn");
+
+    for notices in [&outcome.notices, &reporter.notices] {
+        let about = |program: &str| -> Vec<&String> {
+            notices
+                .iter()
+                .filter(|said| said.contains(program))
+                .collect()
+        };
+
+        let ended = about("sour-formatter");
+        assert_eq!(
+            ended.len(),
+            1,
+            "one sentence for the hook that ended badly: {notices:?}"
+        );
+        assert!(
+            ended[0].contains("turn-finished") && !ended[0].contains("turn-started"),
+            "the moment the failed hook is declared on: {}",
+            ended[0]
+        );
+
+        let unstarted = about("no-such-starter");
+        assert_eq!(
+            unstarted.len(),
+            1,
+            "one sentence for the hook that could not start: {notices:?}"
+        );
+        assert!(
+            unstarted[0].contains("turn-started") && !unstarted[0].contains("turn-finished"),
+            "the moment the unstarted hook is declared on: {}",
+            unstarted[0]
+        );
     }
 }
 
@@ -84726,6 +85402,28 @@ fn a_run_turn_scanning_asking<C: bravebot_agent::confirm::Confirmer + Send>(
     String,
     bravebot_agent::Work,
 ) {
+    a_run_turn_scanning_under(
+        workspace,
+        command,
+        programs,
+        confirmer,
+        trusting_the_workspace(),
+    )
+}
+
+/// The same, under `trust` in place of a map that vouches for the whole tree.
+fn a_run_turn_scanning_under<C: bravebot_agent::confirm::Confirmer + Send>(
+    workspace: &Workspace,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+    confirmer: &mut C,
+    trust: bravebot_core::trust::TrustStore,
+) -> (
+    Scratch,
+    bravebot_agent::report::RecordingReporter,
+    String,
+    bravebot_agent::Work,
+) {
     // Named after the tree it holds the record for, so two tests running at once do not write
     // into one file and read each other's findings back.
     let home = Scratch::new(&format!(
@@ -84751,7 +85449,7 @@ fn a_run_turn_scanning_asking<C: bravebot_agent::confirm::Confirmer + Send>(
         confirmer,
         &mut reporter,
         &mut sink,
-        trusting_the_workspace(),
+        trust,
         programs,
         None,
         &bravebot_core::cancel::Cancel::new(),
@@ -84849,6 +85547,151 @@ fn a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there() {
     assert!(
         !told.contains(DECLARED_KEY),
         "the value itself was put on the screen: {told}"
+    );
+}
+
+/// `cat .env > .env.bak` in a tree whose `.env` holds a credential, run under `trust`. The line is
+/// vouched for (every step, and the route to `.env.bak`) only where `vouched` is set, which is
+/// what decides the label the destination is scanned at.
+fn the_backup_a_run_line_makes_of_a_credential(
+    name: &str,
+    vouched: bool,
+    trust: bravebot_core::trust::TrustStore,
+) -> (
+    Scratch,
+    Scratch,
+    bravebot_agent::report::RecordingReporter,
+    String,
+) {
+    let scratch = Scratch::new(name);
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &env).unwrap();
+    let programs = match vouched {
+        true => vouching_for_writing("cat", &[".env"], &scratch.path, ".env.bak", false),
+        false => bravebot_core::programs::TrustedPrograms::new(),
+    };
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (home, reporter, answered, _work) = a_run_turn_scanning_under(
+        &workspace,
+        "cat .env > .env.bak",
+        programs,
+        &mut bravebot_agent::confirm::ApproveRuns,
+        trust,
+    );
+    (scratch, home, reporter, answered)
+}
+
+/// What the person was shown about the turn's lines, as one string.
+fn what_the_person_was_told(reporter: &bravebot_agent::report::RecordingReporter) -> String {
+    reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// CRED-11. What a line left is scanned at the label the line's own output carries, and a line none
+/// of whose steps anybody vouched for carries `(U,priv)`. The driver does not read those bytes to
+/// decide whether to refuse, so the backup stays in the tree with the credential in it and the
+/// person is told nothing about one.
+///
+/// Rejects a scan that reads the destination at a raised label whatever the line, which would
+/// refuse this line and put the backup back: that examines bytes nobody vouched for in order to
+/// decide, which the guarantee forbids. The destination is kept before the line runs only where
+/// the scan could reach it, and the label the scan reads it at is built after the line stops, so
+/// the two places are faulted together to show the test fails. The control runs the same line
+/// vouched for in the same tree and has the backup taken out again, so the fixture is one the
+/// scan reaches.
+#[test]
+fn a_credential_a_line_nobody_vouched_for_left_is_not_scanned() {
+    let (scratch, _home, reporter, answered) = the_backup_a_run_line_makes_of_a_credential(
+        "credential-run-unvouched",
+        false,
+        trusting_the_workspace(),
+    );
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env.bak")).ok(),
+        Some(env.clone()),
+        "what a line nobody vouched for left was read and taken back out: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        env,
+        "the file the line read was changed"
+    );
+    assert!(
+        !answered.contains("refused"),
+        "a line nobody vouched for was refused for what it left: {answered}"
+    );
+    let told = what_the_person_was_told(&reporter);
+    assert!(
+        !told.contains("an AWS access key id"),
+        "a finding was made from bytes nobody vouched for: {told}"
+    );
+
+    let (control, _home, _reporter, said) = the_backup_a_run_line_makes_of_a_credential(
+        "credential-run-unvouched-control",
+        true,
+        trusting_the_workspace(),
+    );
+    assert!(
+        !control.path.join(".env.bak").exists(),
+        "the vouched line was not scanned, so the fixture does not reach the check: {said}"
+    );
+}
+
+/// CRED-11. The label a destination is scanned at is the line's own met with what the trust map
+/// already said about the path, so a destination the map distrusts is not scanned even where the
+/// line is vouched for. Its bytes are an earlier writer's that nobody vouched for, and what the
+/// line adds to them is read only through them.
+///
+/// Rejects a scan that takes the line's label alone, which refuses this line and puts the backup
+/// back. That label is the one the control below is scanned at, and the map's answer is held in
+/// two places: the integrity the destination is kept under before the line runs, and the label the
+/// scan reads it at afterwards. Both are faulted together to show the test fails. The control is
+/// the same vouched line with the map trusting the whole tree, which has the backup taken out.
+#[test]
+fn a_credential_a_vouched_line_left_at_a_destination_the_map_distrusts_is_not_scanned() {
+    let mut distrusting = trusting_the_workspace();
+    distrusting.distrust(".env.bak");
+    let (scratch, _home, reporter, answered) = the_backup_a_run_line_makes_of_a_credential(
+        "credential-run-distrusted-destination",
+        true,
+        distrusting,
+    );
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env.bak")).ok(),
+        Some(env.clone()),
+        "a destination the map distrusts was read and taken back out: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        env,
+        "the file the line read was changed"
+    );
+    assert!(
+        !answered.contains("refused"),
+        "a line was refused for what it left at a destination the map distrusts: {answered}"
+    );
+    let told = what_the_person_was_told(&reporter);
+    assert!(
+        !told.contains("an AWS access key id"),
+        "a finding was made from a destination the map distrusts: {told}"
+    );
+
+    let (control, _home, _reporter, said) = the_backup_a_run_line_makes_of_a_credential(
+        "credential-run-distrusted-destination-control",
+        true,
+        trusting_the_workspace(),
+    );
+    assert!(
+        !control.path.join(".env.bak").exists(),
+        "the same line under a map trusting the tree was not scanned, so the fixture does not reach the check: {said}"
     );
 }
 
@@ -93900,8 +94743,8 @@ fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
 }
 
 /// TOOL-4, PATHREQ-2: the sentence the planner reads names the path as it typed it, so a name a link
-/// lands on, which whoever made the link chose, is not in the driver's own words. The grant and the
-/// prompt stay on where the link lands.
+/// lands on, which whoever made the link chose, is not in the driver's own words. The grant, the
+/// prompt and the record in the trail stay on where the link lands.
 #[cfg(unix)]
 #[test]
 fn an_approved_path_is_worded_as_typed_and_not_as_a_link_landed() {
@@ -93939,6 +94782,16 @@ fn an_approved_path_is_worded_as_typed_and_not_as_a_link_landed() {
     let held = turn.workspace.path_reach();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].path, landing, "the grant stays on where it lands");
+    // A record written from the typed name would hold the link and not the landing.
+    let recorded = gate_in(&turn.events, "path_reach");
+    assert!(
+        recorded.contains(&landing.display().to_string()),
+        "the record holds where the link lands: {recorded}"
+    );
+    assert!(
+        !recorded.contains(&link.display().to_string()),
+        "the record holds the typed link: {recorded}"
+    );
 }
 
 /// TOOL-5, PATHREQ-1: a request for a path runs the same with any reason or with none. A refusal

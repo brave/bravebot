@@ -534,6 +534,9 @@ no effect and changes no decision. A failed attempt to open a destination is con
 its possible effects; an approval alone changes nothing.
 
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
+`verified-by: bravebot_agent::turn::a_trusted_line_appending_to_a_trusted_file_leaves_it_trusted`
+`verified-by: bravebot_agent::turn::a_trusted_line_appending_to_an_untrusted_file_leaves_it_untrusted`
+`verified-by: bravebot_agent::turn::a_trusted_line_that_exits_nonzero_leaves_its_destination_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_writes_through_a_link_into_the_stores_is_refused`
 `verified-by: bravebot_agent::tools::tests::arguments::a_foreground_line_whose_substitution_redirects_a_script_s_output_leaves_it_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_substitutions_redirection_in_a_foreground_line_leaves_its_destination_untrusted`
@@ -763,7 +766,9 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::pure::recursion_that_follows_symlinks_proves_nothing`
 `verified-by: bravebot_core::pure::an_unlisted_option_proves_nothing`
 `verified-by: bravebot_core::pure::an_abbreviated_long_option_proves_nothing`
+`verified-by: bravebot_core::pure::an_abbreviation_of_a_listed_option_proves_nothing`
 `verified-by: bravebot_core::pure::an_option_value_is_never_counted_as_a_path`
+`verified-by: bravebot_core::pure::an_option_value_attached_to_its_option_leaves_the_next_word_a_path`
 `verified-by: bravebot_core::pure::a_context_option_given_its_value_apart_proves_nothing`
 `verified-by: bravebot_core::pure::an_option_after_an_operand_proves_nothing`
 `verified-by: bravebot_core::pure::an_option_bundled_with_others_is_still_looked_up`
@@ -802,6 +807,7 @@ interpreters, and `awk`'s `system()` reaches the shell this repository excludes.
 `verified-by: bravebot_core::policy::a_program_named_by_path_is_not_proven`
 `verified-by: bravebot_core::policy::a_program_resolving_inside_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_is_not_proven`
+`verified-by: bravebot_core::policy::a_line_running_outside_the_project_root_has_the_opaque_output_label`
 `verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
 `verified-by: bravebot_core::policy::a_program_in_the_checkout_above_the_working_directory_is_not_proven`
 `verified-by: bravebot_core::policy::a_delegate_in_a_checkout_is_refused_programs_from_the_directory_it_was_made_from`

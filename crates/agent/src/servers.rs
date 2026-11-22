@@ -6571,6 +6571,40 @@ mod tests {
         assert_eq!(asked.into_inner(), ["REGION"]);
     }
 
+    /// SERVERS-10: a named variable this process holds is handed to the server, and one it does
+    /// not hold is left out of the server's environment. The regression it rejects is an
+    /// environment that sets the missing variable to an empty value, which a server reads as
+    /// configured with nothing.
+    #[test]
+    fn a_named_variable_the_process_does_not_hold_is_left_out_and_not_set_empty() {
+        let root = scratch("cli-servers-unheld");
+        let bin = root.join("bin");
+        let program = installed(&bin, "weather-mcp");
+        let env = [("PATH".to_string(), bin.to_str().unwrap().to_string())].into();
+        let declaration =
+            Declaration::stdio(words(&["weather-mcp"]), words(&["HELD", "REGION"]), None)
+                .and_then(|declaration| declaration.storing(env))
+                .expect("a declaration");
+        let environment = |name: &str| (name == "HELD").then(|| OsString::from("from HELD"));
+
+        let Ok(Plan::Stdio {
+            program: found,
+            variables,
+            ..
+        }) = planned(&declaration, &environment)
+        else {
+            panic!("no local plan");
+        };
+
+        assert_eq!(found, program);
+        assert_eq!(
+            variables,
+            Variables::new()
+                .with("HELD", "from HELD")
+                .with("PATH", &bin)
+        );
+    }
+
     fn digested(argv: &[&str]) -> Digest {
         Declaration::stdio(words(argv), vec!["PATH".to_string()], None)
             .expect("declaration")
@@ -7999,6 +8033,142 @@ done
             !notes.iter().any(|note| note.contains("handshake")),
             "{notes:?}"
         );
+    }
+
+    /// Declares prompts and answers `initialize`, each `tools/list` page and each `prompts/list`
+    /// page after the seconds `initialize`, `tools` and `prompts` give, so a bound on one request
+    /// decides whether that request's answer is read.
+    #[cfg(unix)]
+    fn listing_server(initialize: &str, tools: &str, prompts: &str) -> String {
+        format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      sleep {initialize}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2025-06-18","capabilities":{{"prompts":{{}}}},"serverInfo":{{"name":"fake","version":"1"}}}}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      sleep {tools}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[]}}}}\n' "$id"
+      ;;
+    *'"prompts/list"'*)
+      sleep {prompts}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"prompts":[]}}}}\n' "$id"
+      ;;
+  esac
+done
+"#
+        )
+    }
+
+    /// The startup bound is given to `tools/list` and not only to `initialize`: a server that
+    /// answers `initialize` at once and never answers `tools/list` is left out at the startup
+    /// bound, with the request named.
+    ///
+    /// A wrong implementation switches to the call bound, 120 seconds here, after `initialize`.
+    /// The handshake is then given up on at three times the startup bound and five seconds, and
+    /// the note says only that the handshake was too slow.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_not_answering_tools_list_within_its_startup_bound_is_left_out_at_that_bound() {
+        let root = scratch("cli-servers-startup-bound-tools-list");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(1), None).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let Some(reached) =
+            started_slow(&root, &listing_server("0", "30", "0"), timeouts, &mut notes)
+        else {
+            return;
+        };
+
+        assert!(reached.is_empty(), "a server that never listed was kept");
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "tools/list was waited on past the startup bound: {:?}",
+            started.elapsed()
+        );
+        let about_handshake: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.contains("handshake"))
+            .collect();
+        let [note] = about_handshake.as_slice() else {
+            panic!("notes were {notes:?}");
+        };
+        assert!(
+            note.contains("weather") && note.contains("tools/list timed out after 1 seconds"),
+            "{note}"
+        );
+    }
+
+    /// The startup bound is given to `prompts/list` for a server that declared prompts: one that
+    /// answers `initialize` and `tools/list` and never answers `prompts/list` is left out at the
+    /// startup bound, with the request named.
+    ///
+    /// A wrong implementation switches to the call bound once the tools are listed.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_not_answering_prompts_list_within_its_startup_bound_is_left_out_at_that_bound() {
+        let root = scratch("cli-servers-startup-bound-prompts-list");
+        let mut notes = Vec::new();
+        let timeouts = Timeouts::new(Some(1), None).expect("timeouts");
+
+        let started = std::time::Instant::now();
+        let Some(reached) =
+            started_slow(&root, &listing_server("0", "0", "30"), timeouts, &mut notes)
+        else {
+            return;
+        };
+
+        assert!(reached.is_empty(), "a server that never listed was kept");
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "prompts/list was waited on past the startup bound: {:?}",
+            started.elapsed()
+        );
+        let about_handshake: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.contains("handshake"))
+            .collect();
+        let [note] = about_handshake.as_slice() else {
+            panic!("notes were {notes:?}");
+        };
+        assert!(
+            note.contains("weather") && note.contains("prompts/list timed out after 1 seconds"),
+            "{note}"
+        );
+    }
+
+    /// A handshake is given up on after three times the startup bound and five seconds, for a
+    /// declared bound and for the default of 60 seconds.
+    ///
+    /// A wrong implementation waits twice the bound, no slack, a different slack, four times the
+    /// bound, or the call bound, and each of those is a different instant here.
+    #[test]
+    fn a_handshake_is_given_up_on_after_three_times_its_startup_bound_and_five_seconds() {
+        for (startup, bound, given_up_after) in [
+            (Some(1), 1, 8),
+            (Some(10), 10, 35),
+            (Some(100), 100, 305),
+            (None, 60, 185),
+        ] {
+            let timeouts = Timeouts::new(startup, Some(7)).expect("timeouts");
+            let before = Instant::now();
+            let (alias, deadline, seconds) = wait_for("weather", timeouts);
+            let after = Instant::now();
+
+            let wait = Duration::from_secs(given_up_after);
+            assert_eq!(alias, "weather");
+            assert_eq!(seconds, bound, "the bound the note names, for {startup:?}");
+            assert!(
+                deadline >= before + wait && deadline <= after + wait,
+                "a handshake with a startup bound of {startup:?} is given up on after \
+                 {:?}, not {wait:?}",
+                deadline.saturating_duration_since(before)
+            );
+        }
     }
 
     /// Once the handshake is done a server is held to the call bound its declaration gives, which

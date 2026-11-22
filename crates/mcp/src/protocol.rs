@@ -1311,6 +1311,41 @@ mod tests {
         assert!(!text.contains("say yes"), "{text}");
     }
 
+    /// An argument's values are kept where it names at most sixteen. An argument naming a
+    /// seventeenth keeps none of them and is still listed by its name, type and whether it is
+    /// required. A bound off by one in either direction, a list cut to its first sixteen values,
+    /// and a list that drops the argument each offer the person a set of values the server did
+    /// not declare.
+    #[test]
+    fn an_argument_naming_more_than_sixteen_values_keeps_none_of_them() {
+        let values =
+            |count: usize| -> Vec<String> { (0..count).map(|n| format!("value{n:02}")).collect() };
+        let listing = |count: usize| {
+            serde_json::json!({"tools": [{
+                "name": "a",
+                "inputSchema": {
+                    "properties": {"unit": {"type": "string", "enum": values(count)}},
+                    "required": ["unit"],
+                },
+            }]})
+            .to_string()
+        };
+
+        let at_the_bound = tools(&listing(16));
+        assert_eq!(
+            at_the_bound[0]["arguments"],
+            serde_json::json!([
+                {"name": "unit", "type": "string", "enum": values(16), "required": true}
+            ])
+        );
+
+        let past_the_bound = tools(&listing(17));
+        assert_eq!(
+            past_the_bound[0]["arguments"],
+            serde_json::json!([{"name": "unit", "type": "string", "required": true}])
+        );
+    }
+
     /// An argument name is what a model writes back, so one that is not a plain name makes the
     /// tool one that cannot be offered, rather than a tool offered with an argument missing.
     #[test]

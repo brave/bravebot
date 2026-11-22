@@ -1447,6 +1447,204 @@ mod tests {
         }
     }
 
+    /// IMPORT-4: where a person can be asked, everything found and left is said under its source,
+    /// by name and with the sentence for its own reason, for every reason, and nothing is written.
+    /// An `offer` that drops the lines, or says a name with another reason's sentence, fails.
+    #[test]
+    fn what_was_found_and_left_is_said_with_its_reason_where_a_person_is_asked() {
+        struct Case {
+            files: &'static [(&'static str, &'static str)],
+            exported: &'static [(&'static str, &'static str)],
+            running: Option<Found>,
+            source: &'static str,
+            asks: bool,
+            left: &'static [(&'static str, &'static str)],
+            secrets: &'static [&'static str],
+        }
+        const ANTHROPIC: &str = "a setting for Anthropic's own API, which is not carried over: add a provider.anthropic block that names where the key lives";
+        let cases = [
+            Case {
+                files: &[(
+                    ".claude/settings.json",
+                    r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "secret-token-nobody-may-see"}}"#,
+                )],
+                exported: &[],
+                running: None,
+                source: "Claude Code",
+                asks: false,
+                left: &[("ANTHROPIC_AUTH_TOKEN", ANTHROPIC)],
+                secrets: &["nobody-may-see"],
+            },
+            Case {
+                files: &[(
+                    ".claude/settings.json",
+                    r#"{"env": {"CLAUDE_CODE_USE_VERTEX": "1"}}"#,
+                )],
+                exported: &[],
+                running: None,
+                source: "Claude Code",
+                asks: false,
+                left: &[(
+                    "CLAUDE_CODE_USE_VERTEX",
+                    "Google Vertex AI without a Google Cloud project, or through Google Cloud credentials, neither of which a service here reaches",
+                )],
+                secrets: &[],
+            },
+            Case {
+                files: &[(
+                    ".claude/settings.json",
+                    r#"{"env": {"AWS_BEARER_TOKEN_BEDROCK": "secret-bearer-nobody-may-see"}}"#,
+                )],
+                exported: &[],
+                running: None,
+                source: "Claude Code",
+                asks: false,
+                left: &[(
+                    "AWS_BEARER_TOKEN_BEDROCK",
+                    "a Bedrock API key; bravebot signs Bedrock requests through the AWS credential chain instead",
+                )],
+                secrets: &["nobody-may-see"],
+            },
+            Case {
+                files: &[(
+                    ".claude/settings.json",
+                    r#"{"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}}"#,
+                )],
+                exported: &[],
+                running: None,
+                source: "Claude Code",
+                asks: false,
+                left: &[(
+                    "CLAUDE_CODE_USE_BEDROCK",
+                    "Bedrock with no region to sign for",
+                )],
+                secrets: &[],
+            },
+            Case {
+                files: &[(
+                    ".local/share/opencode/auth.json",
+                    r#"{
+                        "anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 1},
+                        "google": {"type": "api", "key": "a-key-nobody-may-see"},
+                        "somewhere-else": {"type": "api", "key": "another-key-nobody-may-see"}
+                    }"#,
+                )],
+                exported: &[],
+                running: None,
+                source: "opencode",
+                asks: false,
+                left: &[
+                    ("anthropic", "a sign-in that belongs to opencode"),
+                    (
+                        "google",
+                        "an entry reached through an SDK other than an OpenAI-compatible one",
+                    ),
+                    (
+                        "somewhere-else",
+                        "no reachable endpoint is stated or known for it",
+                    ),
+                ],
+                secrets: &["nobody-may-see"],
+            },
+            Case {
+                files: &[(
+                    ".config/opencode/opencode.json",
+                    r#"{"provider": {"prefixed": {"options": {
+                        "baseURL": "https://a.invalid/v1", "apiKey": "Bearer {env:GW_TOKEN}"
+                    }}}}"#,
+                )],
+                exported: &[],
+                running: None,
+                source: "opencode",
+                asks: false,
+                left: &[(
+                    "prefixed",
+                    "its key is built from an opencode substitution inside a longer value, which bravebot does not make",
+                )],
+                secrets: &["GW_TOKEN", "a.invalid"],
+            },
+            Case {
+                files: &[],
+                exported: &[("OLLAMA_HOST", "example.com")],
+                running: None,
+                source: "Ollama",
+                asks: false,
+                left: &[(
+                    "OLLAMA_HOST",
+                    "names an address other than this machine's loopback, which is not asked",
+                )],
+                secrets: &["example.com"],
+            },
+            Case {
+                files: &[],
+                exported: &[],
+                running: Some(import::running(
+                    Source::Ollama,
+                    "http://localhost:11434",
+                    vec![import::Installed {
+                        name: "an-embedding-model".to_string(),
+                        modified_at: "2026-09-18T14:07:58-04:00".to_string(),
+                        capabilities: Some(vec!["completion".to_string()]),
+                        window: None,
+                    }],
+                )),
+                source: "Ollama",
+                asks: false,
+                left: &[(
+                    "http://localhost:11434",
+                    "running there, with no model that can call tools",
+                )],
+                secrets: &["an-embedding-model"],
+            },
+            // Beside an entry that is offered, so the question is asked and the lines are part of
+            // what it shows.
+            Case {
+                files: &[(
+                    ".claude/settings.json",
+                    r#"{"apiKeyHelper": "print-a-key", "model": "sonnet"}"#,
+                )],
+                exported: &[],
+                running: None,
+                source: "Claude Code",
+                asks: true,
+                left: &[(
+                    "model",
+                    "a word Claude Code turns into a model, which bravebot cannot do for Anthropic's API: set the `model` key, or export the key and start bravebot again to be asked which model to use",
+                )],
+                secrets: &["print-a-key"],
+            },
+        ];
+
+        for (index, case) in cases.into_iter().enumerate() {
+            let scratch = Scratch::new(&format!("cli-import-left-{index}"));
+            for (file, text) in case.files {
+                scratch.write(file, text);
+            }
+            let mut found = scratch.found_exporting(case.exported);
+            found.extend(case.running);
+
+            let (said, offered) =
+                asked_about(&scratch, found, "n\n", &Managed::default(), &|_| None);
+
+            assert_eq!(offered.asked, case.asks, "case {index}: {said}");
+            assert!(offered.imported.is_empty(), "case {index}: {said}");
+            assert!(
+                said.contains(&format!("Found in {} and not imported:", case.source)),
+                "case {index}: {said}"
+            );
+            for (name, sentence) in case.left {
+                assert!(
+                    said.contains(&format!("- {name}: {sentence}")),
+                    "case {index} did not say {name}: {said}"
+                );
+            }
+            for secret in case.secrets {
+                assert!(!said.contains(secret), "case {index} drew {secret}: {said}");
+            }
+            assert!(!scratch.settings().exists(), "case {index} wrote");
+        }
+    }
+
     /// IMPORT-7: an entry the file already has keeps its name, so an exported key offers no second
     /// one, and the line naming it is the one said.
     #[test]

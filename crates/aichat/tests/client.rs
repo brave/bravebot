@@ -3083,6 +3083,176 @@ fn a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refu
     }
 }
 
+/// Points the process-wide diagnostic log at a directory and away again when it is dropped, a
+/// panic among the assertions included. Held with [`DIAG_LOG`] locked.
+struct DiagnosticLogAt;
+
+impl DiagnosticLogAt {
+    fn begin(dir: &std::path::Path) -> Self {
+        bravebot_diag::configure(bravebot_diag::Level::Debug, Some(dir.to_path_buf()));
+        Self
+    }
+}
+
+impl Drop for DiagnosticLogAt {
+    fn drop(&mut self) {
+        bravebot_diag::configure(bravebot_diag::Level::Error, None);
+    }
+}
+
+/// Everything the diagnostic log wrote under `dir`, and nothing when it wrote no file.
+fn diagnostic_log_under(dir: &std::path::Path) -> String {
+    std::fs::read_dir(dir.join("logs"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect()
+}
+
+/// A Vertex key is a credential, so it is in no error, no recorded event and no line of the
+/// diagnostic log of a request the service refused, on either path and whatever the status. The
+/// service here repeats the key in the body of its refusal, which is what a service that echoes a
+/// request does, so an implementation that quoted the body into an error, an event or a log line
+/// would carry it. The refusals the test above makes have no body to quote.
+#[test]
+fn a_vertex_key_the_service_echoes_in_its_refusal_is_in_no_error_event_or_log_line() {
+    const KEY: &str = "placeholder-key-e41b7d";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let diagnostic_log = DiagnosticLogAt::begin(dir.path());
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    for status in [401, 403, 404] {
+        for streaming in [false, true] {
+            let (endpoint, received) = serve_attempts(vec![Attempt::Refused(
+                status,
+                format!(r#"{{"error":{{"message":"API key {KEY} not valid"}}}}"#),
+            )]);
+            let config = config_for(&endpoint);
+            let provider = vertex_at(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let error = {
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::WebFetch]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut client = AichatClient::new(&config, &egress).for_gateway(
+                    &provider,
+                    "google/gemini-2.5-flash",
+                    Some(bravebot_config::Secret::new(KEY)),
+                );
+                let request = ChatRequest::new(
+                    "google-vertex/google/gemini-2.5-flash",
+                    vec![Message::user("hello")],
+                );
+                if streaming {
+                    client.complete_streaming(&mut policy, &request, |_| {})
+                } else {
+                    client.complete(&mut policy, &request)
+                }
+                .expect_err("the service refused")
+            };
+
+            let sent = received.recv().expect("the request arrived");
+            assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+            assert_eq!(sent.header("authorization"), None);
+            let what = format!("status {status}, streaming {streaming}");
+            said.push((what.clone(), error.to_string()));
+            said.push((what.clone(), format!("{error:?}")));
+            said.push((what, format!("{:?}", sink.events())));
+        }
+    }
+
+    let log = diagnostic_log_under(dir.path());
+    drop(diagnostic_log);
+    assert!(
+        !log.is_empty(),
+        "nothing was logged, so the log was not read"
+    );
+    said.push(("the diagnostic log".into(), log));
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
+/// A Vertex key is in no event, no line of the diagnostic log and nothing a completed reply holds
+/// of a request the service answered, on either path. The refusals above are the only requests the
+/// other tests read the record of, so an implementation that recorded the prepared request's
+/// headers when it was sent, and not only when it failed, would pass them.
+#[test]
+fn a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request() {
+    const KEY: &str = "placeholder-key-0b96f3";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let diagnostic_log = DiagnosticLogAt::begin(dir.path());
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    for streaming in [false, true] {
+        let reply = if streaming {
+            Attempt::Frames(vec![
+                frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+                frame("[DONE]"),
+            ])
+        } else {
+            Attempt::Json(REPLY.into())
+        };
+        let (endpoint, received) = serve_attempts(vec![reply]);
+        let config = config_for(&endpoint);
+        let provider = vertex_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let (completion, request) = {
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut client = AichatClient::new(&config, &egress).for_gateway(
+                &provider,
+                "google/gemini-2.5-flash",
+                Some(bravebot_config::Secret::new(KEY)),
+            );
+            let request = ChatRequest::new(
+                "google-vertex/google/gemini-2.5-flash",
+                vec![Message::user("hello")],
+            );
+            let completion = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .expect("the reply was read");
+            (completion, request)
+        };
+
+        let sent = received.recv().expect("the request arrived");
+        assert_eq!(sent.header("x-goog-api-key"), Some(KEY));
+        assert_eq!(sent.header("authorization"), None);
+        let what = format!("streaming {streaming}");
+        said.push((format!("the reply, {what}"), format!("{completion:?}")));
+        said.push((format!("the request, {what}"), format!("{request:?}")));
+        said.push((
+            format!("the events, {what}"),
+            format!("{:?}", sink.events()),
+        ));
+    }
+
+    // An answered request may write no line, so an empty log is read as it is.
+    let log = diagnostic_log_under(dir.path());
+    drop(diagnostic_log);
+    said.push(("the diagnostic log".into(), log));
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
 /// The bearer key of an `openai` entry is a credential, so it is in no text a refusal produces, in
 /// no event the run recorded, in no line of the diagnostic log and in nothing a completed reply
 /// holds, on the roster path and on both chat paths. The service here repeats the key in the body

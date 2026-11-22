@@ -3918,4 +3918,47 @@ mod tests {
         assert!(!printed.contains("sentinel-value"), "{printed}");
         assert!(!printed.contains("body-sentinel"), "{printed}");
     }
+
+    /// NET-7: the certificates a transport names are what a handshake is put to, and they replace
+    /// the built-in set. Rejects a client that ignores the named roots (the handshake with the test
+    /// authority's server then fails), one that trusts the built-in set alone, and one that trusts
+    /// whatever it is shown (a handshake with an authority that did not sign the server then
+    /// succeeds).
+    #[test]
+    fn named_roots_decide_who_a_handshake_trusts() {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let authority = directory.path().join("authority.pem");
+        let other = directory.path().join("other.pem");
+        fixtures::write_authority(&authority);
+        fixtures::STRANGER.write_certificate(&other);
+        let server = fixtures::Server::start(false, vec![fixtures::ok("answered")], None);
+        let reached_by = |roots: TrustRoots| {
+            let egress =
+                Egress::with_transport(Timeouts::default(), &Transport::stated(roots, None, None));
+            sent_to_a_provider(&egress, Request::get(server.url("/v1/models")))
+        };
+
+        let named = reached_by(TrustRoots::Named {
+            file: Some(authority),
+            directory: None,
+        });
+        let built_in = reached_by(TrustRoots::Bundled);
+        let another = reached_by(TrustRoots::Named {
+            file: Some(other),
+            directory: None,
+        });
+
+        assert!(
+            matches!(&named, Ok(response) if response.status == 200),
+            "the authority that signed the server is trusted when it is named: {named:?}"
+        );
+        assert!(
+            matches!(built_in, Err(EgressError::Transport { .. })),
+            "the built-in set does not hold the test authority: {built_in:?}"
+        );
+        assert!(
+            matches!(another, Err(EgressError::Transport { .. })),
+            "naming a different authority does not leave the built-in set or the first one trusted: {another:?}"
+        );
+    }
 }

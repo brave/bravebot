@@ -3731,6 +3731,38 @@ mod tests {
             );
         }
 
+        /// SCROLL-5. The footer names the match the view is on, so it follows `n` and `N` and
+        /// wraps with them. A footer that always said `1 of 3` would pass every assertion on the
+        /// first match, and a person walking the matches would be told they had not moved.
+        #[test]
+        fn the_footer_says_which_match_the_view_is_on_after_it_has_moved() {
+            let mut session = searching("needle");
+            let (_, laid) = lay_out(&session, 90, 24);
+            let rows = laid.matches;
+            assert_eq!(rows.len(), 3, "the fixture holds three matches: {rows:?}");
+
+            let says = |session: &Session, at: usize| {
+                let (drawn, _) = screen(session);
+                let ours = format!("{at} of 3");
+                let others: Vec<String> = (1..=3)
+                    .filter(|other| *other != at)
+                    .map(|other| format!("{other} of 3"))
+                    .collect();
+                drawn.contains(&ours) && others.iter().all(|other| !drawn.contains(other))
+            };
+
+            assert!(says(&session, 1), "the footer did not start on the first");
+            session.to_a_match(&rows, true);
+            assert!(says(&session, 2), "n did not move the footer to the second");
+            session.to_a_match(&rows, true);
+            assert!(says(&session, 3), "n did not move the footer to the third");
+            session.to_a_match(&rows, false);
+            assert!(says(&session, 2), "N did not move the footer back");
+            session.to_a_match(&rows, true);
+            session.to_a_match(&rows, true);
+            assert!(says(&session, 1), "the footer did not wrap to the first");
+        }
+
         /// What is counted is matches, not the lines holding one. A person shown `1 of 1` beside
         /// two highlighted words has been told a number the screen contradicts, and `n` has
         /// nowhere to take them for the second.
@@ -5650,6 +5682,123 @@ mod tests {
 
             session.toggle_expanded(as_last_drawn);
             assert_eq!(as_text(&session), before);
+        }
+
+        /// Three calls, each with a result of forty lines the agent kept and five it glimpses. The
+        /// lines of each start with its call's letter, so the text says which call expanded.
+        fn three_calls_with_long_results(height: u16) -> Session {
+            let mut session = working();
+            for letter in ["a", "b", "c"] {
+                session.finish_activity(Activity::running("Run", letter).done("ok"));
+                session.landed(Landing::Context);
+                let lines: Vec<String> = (0..40).map(|n| format!("{letter}-{n}")).collect();
+                session.returned(Returned {
+                    lines: lines[..5].to_vec(),
+                    total: 40,
+                    from_the_end: false,
+                    whole: lines,
+                });
+            }
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = height;
+            session.laid = as_last_drawn(&session);
+            session
+        }
+
+        /// SCROLL-10: with several expandable calls on the screen the key takes the one nearest the
+        /// top. An implementation that takes the last one on the screen expands the third call.
+        #[test]
+        fn the_expand_key_takes_the_topmost_of_several_calls_on_the_screen() {
+            let mut session = three_calls_with_long_results(20);
+            session.scroller_to_first_row();
+            let bottom = session.top_row() + session.laid.height;
+            let calls: Vec<_> = session.laid.calls().collect();
+            assert_eq!(calls.len(), 3, "{calls:?}");
+            assert!(
+                calls.iter().all(|(start, _, _)| *start < bottom),
+                "all three calls must start on the screen: {calls:?} in {bottom} rows"
+            );
+
+            session.toggle_expanded(as_last_drawn);
+            let text = as_text(&session);
+            assert!(
+                text.contains("a-39"),
+                "the topmost call did not expand: {text}"
+            );
+            assert!(!text.contains("b-39"), "{text}");
+            assert!(!text.contains("c-39"), "{text}");
+        }
+
+        /// SCROLL-10: a call whose last row is above the view is skipped, and the next one on the
+        /// screen expands. An implementation that takes the first call whose start is above the
+        /// bottom of the view expands the one scrolled out of sight.
+        #[test]
+        fn the_expand_key_skips_a_call_scrolled_above_the_view() {
+            let mut session = three_calls_with_long_results(8);
+            let calls: Vec<_> = session.laid.calls().collect();
+            assert_eq!(calls.len(), 3, "{calls:?}");
+            let (_, first_end, _) = calls[0];
+            session.scroller_to_first_row();
+            session.scroller_on(first_end + 1);
+            let top = session.top_row();
+            let bottom = top + session.laid.height;
+            assert_eq!(
+                top,
+                first_end + 1,
+                "the view did not move past the first call"
+            );
+            assert!(
+                calls[1].1 >= top && calls[1].0 < bottom,
+                "the second call must be on the screen: {calls:?} in rows {top}..{bottom}"
+            );
+
+            session.toggle_expanded(as_last_drawn);
+            let text = as_text(&session);
+            assert!(
+                text.contains("b-39"),
+                "the call on the screen did not expand: {text}"
+            );
+            assert!(
+                !text.contains("a-39"),
+                "a call above the view expanded: {text}"
+            );
+            assert!(!text.contains("c-39"), "{text}");
+        }
+
+        /// SCROLL-10: a write with more than twelve changes is a call the key expands, and a second
+        /// press collapses it. A write is a target only through its change count, so an
+        /// implementation that makes only results with kept lines expandable leaves the key inert
+        /// on a write.
+        #[test]
+        fn the_expand_key_expands_a_write_and_a_second_press_collapses_it() {
+            let mut session = working();
+            session.finish_activity(
+                Activity::running("Write", "out.txt")
+                    .done("wrote 20 lines")
+                    .with_changes(
+                        (0..MAX_DIFF_LINES + 8)
+                            .map(|n| Change::Added(format!("change {n}")))
+                            .collect(),
+                    ),
+            );
+            session.open_scroller();
+            session.laid.width = 80;
+            session.laid.height = 10;
+            session.laid = as_last_drawn(&session);
+            let last = format!("change {}", MAX_DIFF_LINES + 7);
+            let collapsed = as_text(&session);
+            assert!(!collapsed.contains(&last), "{collapsed}");
+            assert!(collapsed.contains("8 more"), "{collapsed}");
+
+            session.toggle_expanded(as_last_drawn);
+            let expanded = as_text(&session);
+            assert!(expanded.contains(&last), "{expanded}");
+            assert!(!expanded.contains("more"), "{expanded}");
+
+            session.laid = as_last_drawn(&session);
+            session.toggle_expanded(as_last_drawn);
+            assert_eq!(as_text(&session), collapsed);
         }
 
         /// SCROLL-10: a call with nothing past its glimpse is not toggled, and the view stays put.
@@ -7750,6 +7899,139 @@ mod tests {
         assert!(labelled(&row_for(&output, 120, "/compact"), "queued"));
         assert!(labelled(&row_for(&output, 120, "/model"), "now/queued"));
         assert!(labelled(&row_for(&output, 120, "/theme [name]"), "now"));
+    }
+
+    /// CMD-8. Every command row reads the label the table of kinds gives its command, with the
+    /// expected labels written out here by command and not read from the table the rows are drawn
+    /// from. Rejects a command whose kind is changed in the table without the spec changing (for
+    /// example `/style` made to wait, which its row would then call `queued`), a label shared by a
+    /// whole group of rows, and a command added to the table that no list here places.
+    #[test]
+    fn every_command_row_reads_the_label_the_spec_table_gives_it() {
+        /// The labels a row carries, read from the row whose first word is `name`.
+        fn labels_on(output: &str, width: u16, name: &str) -> Vec<&'static str> {
+            let cells: Vec<char> = output.chars().collect();
+            let row = cells
+                .chunks(usize::from(width))
+                .map(|row| row.iter().collect::<String>())
+                .find(|row| row.split_whitespace().find(|word| word.starts_with('/')) == Some(name))
+                .unwrap_or_else(|| panic!("{name} has no row"));
+            ["now", "queued", "now/queued"]
+                .into_iter()
+                .filter(|label| labelled(&row, label))
+                .collect()
+        }
+
+        // Carried out as it is typed, whatever waits ahead of it.
+        const NOW: &[&str] = &[
+            "/cost",
+            "/context",
+            "/lsp",
+            "/open",
+            "/limit",
+            "/status",
+            "/copy",
+            "/export",
+            "/issues",
+            "/prs",
+            "/config",
+            "/language",
+            "/watch",
+            "/jobs",
+            "/outputs",
+            "/panel",
+            "/sidebar",
+            "/diff",
+            "/todos",
+            "/caffeinate",
+            "/redraw",
+            "/thinking",
+            "/request",
+            "/changelog",
+            "/btw",
+            "/theme",
+        ];
+        // Carried out or waiting, by the words after it and by what already waits.
+        const EITHER: &[&str] = &[
+            "/rename",
+            "/note",
+            "/issue",
+            "/pr",
+            "/forget-trust",
+            "/sandbox",
+            "/model",
+            "/effort",
+            "/advisor",
+            "/style",
+            "/loop",
+            "/goal",
+            "/schedule",
+            "/mcp",
+        ];
+        // Waits for the turn to end.
+        const QUEUED: &[&str] = &[
+            "/add-dir",
+            "/cd",
+            "/mode",
+            "/help",
+            "/compact",
+            "/recap",
+            "/clear",
+            "/handoff",
+            "/branch",
+            "/resume",
+            "/bg",
+            "/reach",
+            "/after",
+            "/checkouts",
+            "/plan",
+            "/manifest",
+            "/agent",
+            "/memory",
+            "/unfinished",
+            "/init",
+            "/review",
+            "/commit-message",
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/exit",
+            "/plugin",
+        ];
+        // No label is expected of these two, because the CMD-8 table and the code disagree. The
+        // table lists `/variant` among the commands carried out as typed and no paragraph of CMD-8
+        // says it waits behind a line, while the code gives it the kind of `/model` (`now/queued`).
+        // `/sessions` is no entry of the table, so by the table it waits, while SCREEN-1 says it
+        // works while a turn runs and the code carries it out as typed (`now`).
+        const UNSETTLED: &[&str] = &["/sessions", "/variant"];
+
+        let commands = crate::command_table::commands();
+        for command in &commands {
+            let placed = [NOW, EITHER, QUEUED, UNSETTLED]
+                .iter()
+                .filter(|kind| kind.contains(&command.name))
+                .count();
+            assert_eq!(placed, 1, "{} is placed in {placed} lists", command.name);
+        }
+        assert_eq!(
+            NOW.len() + EITHER.len() + QUEUED.len() + UNSETTLED.len(),
+            commands.len(),
+            "a listed word is no command in the table"
+        );
+
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit().expect("the prompt is sent");
+        session.type_char('/');
+        let width = 200;
+        let height = u16::try_from(commands.len() + 30).expect("a terminal height");
+
+        let output = rendered_at(&session, width, height);
+        for (kind, label) in [(NOW, "now"), (EITHER, "now/queued"), (QUEUED, "queued")] {
+            for name in kind {
+                assert_eq!(labels_on(&output, width, name), [label], "{name}");
+            }
+        }
     }
 
     /// Rejects: a `now` label on a command that Enter would queue, because a line of the same
@@ -10259,6 +10541,59 @@ mod tests {
         assert!(
             !arriving.contains("reply number 39"),
             "a chunk of the reply dragged the view back to the tail: {arriving}"
+        );
+    }
+
+    /// A frame of a held view counts its rows from the top of the transcript, so the rows a reply
+    /// adds below the view leave the rows on screen as they were. An offset counted back from the
+    /// end of the transcript, by the number of rows scrolled, moves the view down by as many rows as
+    /// arrived, which a view merely kept off the tail does not show. Only the first rows of the frame
+    /// are compared, since the hint line under the view counts the rows below it.
+    #[test]
+    fn a_frame_of_a_held_view_counts_from_the_top_and_not_back_from_the_end() {
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+        // The last column holds the scrollbar, whose thumb moves as rows arrive.
+        let first_rows = |rows: Vec<String>| {
+            rows[..12]
+                .iter()
+                .map(|row| {
+                    row.chars()
+                        .take(89)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let tail = first_rows(rows_of_a_frame(&mut session));
+        session.scroll_up(60);
+        // The second frame draws the held view against the layout the first one reported.
+        rows_of_a_frame(&mut session);
+        let held = first_rows(rows_of_a_frame(&mut session));
+        assert_ne!(
+            held, tail,
+            "the view never left the tail, so there is nothing here to hold"
+        );
+
+        session.streaming("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10");
+
+        // The first frame after the chunk is drawn against the screen laid out before it arrived.
+        let arriving = first_rows(rows_of_a_frame(&mut session));
+        assert_eq!(
+            arriving, held,
+            "rows arriving below moved the rows a held view shows"
+        );
+        let settled = first_rows(rows_of_a_frame(&mut session));
+        assert_eq!(
+            settled, held,
+            "the frame drawn against the new layout moved the rows a held view shows"
         );
     }
 

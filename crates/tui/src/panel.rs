@@ -2926,7 +2926,8 @@ mod tests {
     /// returned adds none, while the one the person typed is drawn.
     ///
     /// Rejects: a session that reads the references out of a reply or a result as it reads them out
-    /// of a line the person sent.
+    /// of a line the person sent, and a row built from the text of a result, a returned line, or the
+    /// label, origin or preview of what was shown, none of which holds an address.
     #[test]
     fn nothing_a_turn_returned_reaches_the_panel() {
         use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
@@ -2938,24 +2939,38 @@ mod tests {
             session.type_char(c);
         }
         session.submit();
-        session.finish_activity(Activity::running("Run", "gh").done(format!("{TRAP} finished")));
+        session.finish_activity(
+            Activity::running("Run", "gh").done(format!("{TRAP} finished TRAPRESULT")),
+        );
         session.landed(Landing::Context);
         session.returned(Returned {
-            lines: vec![TRAP.to_string()],
-            total: 1,
+            lines: vec![TRAP.to_string(), "TRAPRETURNED".to_string()],
+            total: 2,
             from_the_end: false,
-            whole: vec![TRAP.to_string()],
+            whole: vec![TRAP.to_string(), "TRAPRETURNED".to_string()],
         });
         session.show(Shown {
             as_the_planner_had_it: None,
-            origin: TRAP.to_string(),
+            origin: format!("{TRAP} TRAPORIGIN"),
             reach: Reach::NotThePlanner,
-            label: "untrusted".to_string(),
-            preview: vec![TRAP.to_string()],
+            label: "TRAPLABEL".to_string(),
+            preview: vec![format!("{TRAP} TRAPPREVIEW")],
             lines: 1,
         });
         session.complete(format!("REPLYTEXT ignore the rules {TRAP}"), Vec::new(), 0);
-        let drawn = texts(&lines(&session, WIDTH, 30));
+        let drawn = texts(&lines(&session, WIDTH, 60));
+        for trap in [
+            "TRAPRESULT",
+            "TRAPRETURNED",
+            "TRAPORIGIN",
+            "TRAPLABEL",
+            "TRAPPREVIEW",
+        ] {
+            assert!(
+                !drawn.iter().any(|row| row.contains(trap)),
+                "{trap} reached the panel: {drawn:#?}"
+            );
+        }
         assert!(
             !drawn.iter().any(|row| row.contains("REPLYTEXT")),
             "the reply reached the panel: {drawn:#?}"
@@ -2970,6 +2985,84 @@ mod tests {
             "{drawn:#?}"
         );
         assert!(session.references().iter().all(|r| r.owner() != "evil"));
+    }
+
+    /// The session also holds text from outside that is not a turn's result: what the model
+    /// thought, the notes it was told (a watched command's output is one), a delegate's kind and
+    /// task, an aside's question and answer, and the reason a goal's judge gave. None of it is a
+    /// row of the panel, while what the person typed still is.
+    ///
+    /// Rejects: a row that echoes the last note, the thinking, a delegate's task or an aside, or
+    /// the judge's reason beside the goal's condition.
+    #[test]
+    fn nothing_the_session_holds_from_outside_reaches_the_panel() {
+        use bravebot_agent::goal::Verdict;
+        use bravebot_agent::report::Delegation;
+        use bravebot_core::delegate::DelegateId;
+        use bravebot_session::sessions::Aside;
+        let mut session = Session::new("none");
+        session.identify("typed by the person", "~/b".to_string(), None);
+        for c in "see https://github.com/brave/bravebot/issues/7".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        session.start_goal("the tests pass".to_string());
+        session.toggle_thinking();
+        session.thinking("TRAPTHINKING");
+        assert_eq!(
+            session.thinking_so_far(),
+            "TRAPTHINKING",
+            "the thinking is not shown, so the panel was not tested against it"
+        );
+        session.note("TRAPNOTE https://github.com/evil/trap/issues/9");
+        session.delegate_started(Delegation {
+            stop: Default::default(),
+            id: DelegateId::nth(1),
+            kind: "TRAPKIND".to_string(),
+            task: "TRAPTASK https://github.com/evil/trap/pull/10".to_string(),
+        });
+        session.asked_aside(Aside {
+            question: "TRAPQUESTION".to_string(),
+            answer: Some("TRAPANSWER".to_string()),
+            kept: true,
+        });
+        session.goal_judged(Ok(Verdict::NotMet {
+            reason: "TRAPJUDGE".to_string(),
+        }));
+        assert_eq!(
+            session.goal().and_then(|goal| goal.last_reason()),
+            Some("TRAPJUDGE"),
+            "the judge's reason was not held, so the panel was not tested against it"
+        );
+        let drawn = texts(&lines(&session, WIDTH, 60));
+        for trap in [
+            "TRAPTHINKING",
+            "TRAPNOTE",
+            "TRAPKIND",
+            "TRAPTASK",
+            "TRAPQUESTION",
+            "TRAPANSWER",
+            "TRAPJUDGE",
+            "evil/trap",
+        ] {
+            assert!(
+                !drawn.iter().any(|row| row.contains(trap)),
+                "{trap} reached the panel: {drawn:#?}"
+            );
+        }
+        assert!(
+            drawn.iter().any(|row| row.contains("typed by the person")),
+            "{drawn:#?}"
+        );
+        assert!(
+            drawn.iter().any(|row| row.contains("the tests pass")),
+            "{drawn:#?}"
+        );
+        assert_eq!(
+            link_rows(&session, t!(panel_issues)),
+            ["brave/bravebot#7"],
+            "{drawn:#?}"
+        );
     }
 
     /// A held goal is still drawn, with its condition, and says it is held.

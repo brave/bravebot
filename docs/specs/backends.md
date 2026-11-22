@@ -1386,6 +1386,10 @@ nothing or somebody told their configuration is broken when their session merely
 `verified-by: bravebot_bedrock::credentials::a_listing_that_could_not_be_read_does_not_withhold_a_sign_in`
 `verified-by: bravebot_bedrock::credentials::naming_no_profile_is_not_naming_a_missing_one`
 `verified-by: bravebot_bedrock::credentials::a_machine_with_no_profiles_at_all_says_so`
+`verified-by: bravebot_bedrock::credentials::a_report_on_a_profile_the_cli_does_not_list_names_the_profiles_it_has`
+`verified-by: bravebot_bedrock::credentials::a_sign_in_for_a_profile_the_cli_does_not_list_never_runs_the_login`
+`verified-by: bravebot_bedrock::credentials::a_good_session_costs_the_export_and_no_listing`
+`verified-by: bravebot_bedrock::credentials::a_listing_the_cli_fails_to_give_does_not_withhold_the_sign_in`
 
 
 <a id="BACKEND-24"></a>
@@ -3792,6 +3796,8 @@ request back in its error body is quoted without the header.
 `verified-by: bravebot_aichat::lib::another_gateway_still_sends_its_token_as_a_bearer`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refusal`
+`verified-by: bravebot_aichat::client::a_vertex_key_the_service_echoes_in_its_refusal_is_in_no_error_event_or_log_line`
+`verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_config::provider::a_google_vertex_key_is_sent_in_its_own_header`
 

@@ -14478,6 +14478,31 @@ five
         );
     }
 
+    /// The output label of a line run outside the root. A line whose reads are all vouched for is
+    /// trusted when it runs at the root, and the same line run in a subdirectory is the opaque
+    /// default, untrusted and private, whatever the map says about the name `lib.js` there. An
+    /// implementation that checked the directory only where a person is asked would give the
+    /// output of a line it asked about a trusted label.
+    #[test]
+    fn a_line_running_outside_the_project_root_has_the_opaque_output_label() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        let at_the_root = reading_in("/work", "lib.js");
+        assert_eq!(
+            label_of(&mut policy, &at_the_root),
+            Label::trusted_private(),
+            "the proof road is shut for the control that runs at the root"
+        );
+
+        let outside = reading_in("/work/vendor", "lib.js");
+        assert_eq!(
+            label_of(&mut policy, &outside),
+            Label::untrusted_private(),
+            "the output of a line run outside the root was labelled from its reads"
+        );
+    }
+
     /// A plan with no steps establishes nothing, and the proof road must not report that as an
     /// empty read set: the answer to what it read is that there was no proof.
     #[test]

@@ -1012,6 +1012,7 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::protocol::a_description_is_blanked_and_cut`
 `verified-by: bravebot_mcp::protocol::a_character_nobody_sees_is_blanked`
 `verified-by: bravebot_mcp::protocol::an_argument_is_its_name_type_and_whether_it_is_required`
+`verified-by: bravebot_mcp::protocol::an_argument_naming_more_than_sixteen_values_keeps_none_of_them`
 `verified-by: bravebot_mcp::protocol::a_tool_its_server_marks_read_only_is_drawn_as_one_and_no_other`
 `verified-by: bravebot_approval::lib::a_tool_the_server_marks_read_only_says_so_and_no_other_does`
 `verified-by: bravebot_approval::lib::the_values_an_argument_takes_are_drawn_behind_the_margin_one_row_each`
@@ -1285,6 +1286,7 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
 `verified-by: bravebot_cli::mcp::a_file_a_value_or_an_argument_names_is_declared_as_a_read_and_nothing_broader_is`
 `verified-by: bravebot_agent::servers::a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it`
+`verified-by: bravebot_agent::servers::a_named_variable_the_process_does_not_hold_is_left_out_and_not_set_empty`
 `verified-by: bravebot_agent::servers::a_declared_read_grants_the_one_file_and_nothing_beside_it`
 `verified-by: bravebot_agent::servers::a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them`
 `verified-by: bravebot_cli::mcp::a_program_named_by_a_bare_name_is_declared_with_path`
@@ -1775,6 +1777,9 @@ content.
 `verified-by: bravebot_cli::mcp::the_timeout_flags_set_the_declarations_bounds_and_refuse_what_is_not_seconds`
 `verified-by: bravebot_agent::servers::a_server_not_answering_its_handshake_within_its_startup_bound_is_left_out_at_that_bound`
 `verified-by: bravebot_agent::servers::a_server_answering_its_handshake_within_a_longer_startup_bound_is_kept`
+`verified-by: bravebot_agent::servers::a_server_not_answering_tools_list_within_its_startup_bound_is_left_out_at_that_bound`
+`verified-by: bravebot_agent::servers::a_server_not_answering_prompts_list_within_its_startup_bound_is_left_out_at_that_bound`
+`verified-by: bravebot_agent::servers::a_handshake_is_given_up_on_after_three_times_its_startup_bound_and_five_seconds`
 `verified-by: bravebot_agent::servers::a_started_server_is_held_to_the_call_bound_its_declaration_gives`
 `verified-by: bravebot_agent::servers::a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not`
 `verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`
@@ -1831,6 +1836,8 @@ text is shown and decides nothing from it.
 `verified-by: bravebot_config::settings::only_a_positive_size_sets_the_mcp_deferral_threshold`
 `verified-by: bravebot_config::settings::a_checkout_may_lower_the_mcp_deferral_threshold_and_not_raise_it`
 `verified-by: bravebot_agent::mcp::a_checkouts_higher_threshold_does_not_stop_the_deferral_the_person_asked_for`
+`verified-by: bravebot_agent::mcp::an_offers_weight_is_the_length_of_its_definitions_at_four_characters_a_token_rounded_up`
+`verified-by: bravebot_agent::mcp::an_offer_is_deferred_only_where_its_weight_is_greater_than_the_threshold`
 
 <a id="SERVERS-17"></a>
 ### SERVERS-17: a declaration may name tool allow and deny lists that filter what is offered

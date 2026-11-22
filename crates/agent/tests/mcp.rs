@@ -4629,7 +4629,25 @@ fn delegate_the_forecast_recorded(
     kind: &str,
     asking_every_call: bool,
 ) -> (Delegated, RecordingSink) {
+    delegate_the_forecast_under(name, kind, asking_every_call, None, false)
+}
+
+/// [`delegate_the_forecast_recorded`] under the rules `permissions` where there are any, and with
+/// answer 2 already recorded for the forecast tool in the project where `standing` says so.
+fn delegate_the_forecast_under(
+    name: &str,
+    kind: &str,
+    asking_every_call: bool,
+    permissions: Option<bravebot_core::permissions::Permissions>,
+    standing: bool,
+) -> (Delegated, RecordingSink) {
     let scratch = Scratch::new(name);
+    if standing {
+        let mut recorded = Standing::to_change(&scratch.state()).expect("the record reads");
+        assert!(recorded.add("weather", "get_forecast", &scratch.project()));
+        std::fs::write(tools_file(&scratch.state()), recorded.to_text())
+            .expect("record answer 2 for the tool");
+    }
     let (url, server) = serve_weather();
     let session = match asking_every_call {
         true => session_asking_every_call(&url, &scratch, true),
@@ -4656,13 +4674,11 @@ fn delegate_the_forecast_recorded(
     ]);
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
     let mut trail = RecordingSink::new();
-    run_turn_recording(
-        &endpoint,
-        &scratch.project(),
-        Task::new(PARENT).with_mcp(Some(session)),
-        &mut asked,
-        &mut trail,
-    );
+    let mut task = Task::new(PARENT).with_mcp(Some(session));
+    if let Some(permissions) = permissions {
+        task = task.with_permissions(permissions);
+    }
+    run_turn_recording(&endpoint, &scratch.project(), task, &mut asked, &mut trail);
     let delegate = rounds(&chat)
         .into_iter()
         .filter(|body| body.contains(DELEGATED) && !body.contains(PARENT))
@@ -4942,6 +4958,207 @@ fn a_workers_call_to_a_server_asked_every_call_is_refused_unasked() {
         refused_under(&trail, "approval").is_empty(),
         "the control left a refusal: {:?}",
         refused_under(&trail, "approval")
+    );
+}
+
+/// DELEGATE-10. A rule decides a delegate's call to a server's tool as it decides the turn's. An
+/// allow rule makes the call with nobody asked, and a deny rule refuses it with nobody asked and
+/// nothing sent to the server, recorded under the rule's gate and not as an approval the person
+/// withheld. The control is the same delegation under no rule, where the call is put to the person.
+/// It rejects a delegate whose policy holds none of the turn's rules, which asks about the allowed
+/// call and sends the denied one.
+#[test]
+fn a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own() {
+    let (
+        Delegated {
+            asked: control_asked,
+            called: control_called,
+            ..
+        },
+        _,
+    ) = delegate_the_forecast_under("delegate-no-rule", "worker", false, None, false);
+    assert_eq!(
+        control_asked.calls.len(),
+        1,
+        "the call under no rule was not put to the person"
+    );
+    assert_eq!(control_called, ["tools/call"], "the control was not made");
+
+    let (
+        Delegated {
+            asked,
+            called,
+            delegate,
+        },
+        trail,
+    ) = delegate_the_forecast_under(
+        "delegate-allow-rule",
+        "worker",
+        false,
+        Some(allowing_the_weather()),
+        false,
+    );
+    assert!(
+        asked.calls.is_empty(),
+        "a call an allow rule decides was put to the person: {:?}",
+        asked.calls
+    );
+    assert_eq!(
+        called,
+        ["tools/call"],
+        "the allowed call did not reach the server"
+    );
+    assert!(
+        delegate.len() >= 2,
+        "the delegate made {} requests",
+        delegate.len()
+    );
+    assert!(
+        refused_under(&trail, "mcp_call").is_empty(),
+        "the allowed call was refused: {:?}",
+        refused_under(&trail, "mcp_call")
+    );
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Mcp(weather:get_forecast)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule in this test did not parse");
+    let (
+        Delegated {
+            asked,
+            called,
+            delegate,
+        },
+        trail,
+    ) = delegate_the_forecast_under(
+        "delegate-deny-rule",
+        "worker",
+        false,
+        Some(permissions),
+        false,
+    );
+    let [_, second, ..] = delegate.as_slice() else {
+        panic!("the delegate made {} requests", delegate.len());
+    };
+    assert!(
+        asked.calls.is_empty(),
+        "a call a deny rule refuses was put to the person: {:?}",
+        asked.calls
+    );
+    assert!(
+        called.is_empty(),
+        "the server heard a call a deny rule refuses: {called:?}"
+    );
+    assert!(
+        second.contains("refused"),
+        "the delegate was not told the call was refused: {second}"
+    );
+    assert_eq!(
+        refused_under(&trail, "mcp_call").len(),
+        1,
+        "the rule's refusal was not recorded once"
+    );
+    assert!(
+        refused_under(&trail, "approval").is_empty(),
+        "a call a rule refused was recorded as one the person did not approve: {:?}",
+        refused_under(&trail, "approval")
+    );
+}
+
+/// DELEGATE-10. An answer that stops asking for the weather server's tool in the project decides a
+/// delegate's call to it as it decides the turn's: nobody is asked and the server hears the call.
+/// The control is the same delegation with no answer recorded, where the call is put to the person.
+/// It rejects a delegate whose calls always ask whatever answer 2 recorded.
+#[test]
+fn a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked() {
+    let (
+        Delegated {
+            asked: control_asked,
+            ..
+        },
+        _,
+    ) = delegate_the_forecast_under("delegate-no-answer", "worker", false, None, false);
+    assert_eq!(
+        control_asked.calls.len(),
+        1,
+        "the call with no answer recorded was not put to the person"
+    );
+
+    let (Delegated { asked, called, .. }, trail) =
+        delegate_the_forecast_under("delegate-answer-two", "worker", false, None, true);
+    assert!(
+        asked.calls.is_empty(),
+        "a call answer 2 stands for was put to the person: {:?}",
+        asked.calls
+    );
+    assert_eq!(
+        called,
+        ["tools/call"],
+        "the call answer 2 stands for did not reach the server"
+    );
+    assert!(
+        refused_under(&trail, "approval").is_empty()
+            && refused_under(&trail, "mcp_call").is_empty(),
+        "the call was refused"
+    );
+}
+
+/// DELEGATE-10. An approval is for the one call it was given to: the turn's call to the forecast
+/// tool, a delegate's call to it and the turn's next call to it are each put to the person, in that
+/// order, though the person said yes every time. It rejects a delegate answered from the turn's
+/// earlier approval and a turn whose later call is answered from the delegate's approval, which
+/// each leave two questions asked.
+#[test]
+fn an_approval_given_to_a_turn_or_a_worker_decides_no_other_call() {
+    let scratch = Scratch::new("delegate-approval-not-shared");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
+    let (endpoint, _chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+                reply_with("done"),
+            ],
+        ),
+        (
+            DELEGATED,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                reply_with("looked it up"),
+            ],
+        ),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    let mut trail = RecordingSink::new();
+    let task = Task::new(PARENT).with_mcp(Some(session));
+    run_turn_recording(&endpoint, &scratch.project(), task, &mut asked, &mut trail);
+    let cities: Vec<_> = asked
+        .calls
+        .iter()
+        .map(|call| call.arguments.clone())
+        .collect();
+    assert_eq!(
+        cities,
+        [
+            vec![("city".to_string(), "\"Paris\"".to_string())],
+            vec![("city".to_string(), "\"Paris\"".to_string())],
+            vec![("city".to_string(), "\"Lyon\"".to_string())],
+        ],
+        "the turn, the delegate and the turn again were not each asked about their own call"
+    );
+    assert_eq!(
+        methods(&server),
+        ["tools/call", "tools/call", "tools/call"],
+        "the server did not hear the three approved calls"
     );
 }
 

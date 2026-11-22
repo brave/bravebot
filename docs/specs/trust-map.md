@@ -1606,10 +1606,14 @@ untouched. A directory reachable without a rule is also why `/status` has a line
 says out loud is reach somebody discovers by accident.
 
 `verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path`
+`verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_listed_by_its_absolute_path`
+`verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_searched_by_its_absolute_path`
 `verified-by: bravebot_agent::workspace::the_temporary_directory_around_it_stays_unreachable`
+`verified-by: bravebot_agent::workspace::the_directories_around_the_sessions_own_can_be_added_by_name`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_the_sessions_own_directory_is_refused`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_is_not_one_the_user_added`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_cannot_be_added_by_name`
+`verified-by: bravebot_agent::workspace::a_directory_inside_the_sessions_own_directory_cannot_be_added_by_name`
 `verified-by: bravebot_agent::workspace::the_working_directory_cannot_be_moved_into_the_sessions_own_directory`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_rule`
 `verified-by: bravebot_core::policy::a_write_in_the_sessions_own_directory_asks_what_a_write_in_the_project_asks`

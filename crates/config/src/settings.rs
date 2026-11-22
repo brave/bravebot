@@ -12213,6 +12213,40 @@ mod tests {
         assert_eq!(named.not_obeyed("agent").count(), 0);
     }
 
+    /// ADDRESS-13: a blank value is how a line is commented out, and a number, a boolean, `null`,
+    /// an array or an object is not a definition name. Reading one as a name would send a run to
+    /// look up a definition called `""`, `"1"` or `"true"` and report it as missing, or would stop
+    /// a run whose settings only held a commented-out line. Surrounding space is the shape a
+    /// hand-edited file has, so a padded name is still a name.
+    #[test]
+    fn an_agent_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"agent": ""}"#,
+            r#"{"agent": "   "}"#,
+            "{\"agent\": \"\\t\\n\"}",
+            r#"{"agent": 1}"#,
+            r#"{"agent": true}"#,
+            r#"{"agent": null}"#,
+            r#"{"agent": ["my-reviewer"]}"#,
+            r#"{"agent": {"name": "my-reviewer"}}"#,
+        ] {
+            let settings = Settings::parse(text);
+            assert_eq!(settings.agent(), None, "{text} named a definition");
+            assert!(settings.is_empty(), "{text} counted as a setting made");
+            assert_eq!(settings.names().count(), 0, "{text} was listed as set");
+        }
+
+        let blank_layers = Layers::new("agent-blank-layers")
+            .global(r#"{"agent": "   "}"#)
+            .named(r#"{"agent": 7}"#)
+            .read();
+        assert_eq!(blank_layers.agent(), None);
+
+        let padded = Settings::parse("{\"agent\": \" my-reviewer\\n\"}");
+        assert_eq!(padded.agent(), Some("my-reviewer"));
+        assert_eq!(padded.names().collect::<Vec<_>>(), ["agent"]);
+    }
+
     /// ASK-9: the time is a whole positive count of seconds. Zero would close every question before
     /// it could be read, so it and anything that is not a whole count leave a question waiting for
     /// as long as it takes.

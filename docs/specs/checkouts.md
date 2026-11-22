@@ -421,6 +421,7 @@ Built, and a spawn is refused where a checkout is.
 `verified-by: bravebot_agent::git::a_distrusted_attributes_file_a_deny_rule_also_covers_is_the_fixed_refusal`
 `verified-by: bravebot_agent::git::the_fixed_refusal_names_no_check_and_differs_from_the_ones_that_do`
 `verified-by: bravebot_agent::git::a_setting_in_config_worktree_does_not_refuse_the_checkout`
+`verified-by: bravebot_agent::git::a_config_naming_an_attributes_file_elsewhere_refuses_the_checkout`
 
 <a id="CHECKOUT-5"></a>
 ### CHECKOUT-5: a checkout is HEAD's tree written by the driver, and nothing is started to write it
@@ -696,6 +697,8 @@ one is given no definition memory. The answer to the spawn says so.
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_reads_the_working_directorys_instructions`
 `verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_writes_there_and_not_in_the_working_directory`
 `verified-by: bravebot_agent::turn::a_deny_rule_with_an_absolute_specifier_holds_in_a_delegates_checkout`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_not_told_of_its_definitions_memory`
+`verified-by: bravebot_agent::turn::a_line_in_a_checkout_does_not_write_a_memory_nothing_could_record`
 `verified-by: bravebot_core::permissions::a_rule_under_the_working_directory_is_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_rule_outside_the_working_directory_is_not_copied_to_the_checkout`
 `verified-by: bravebot_core::permissions::a_refusal_is_copied_by_the_full_fold_and_a_grant_by_the_simple_fold`

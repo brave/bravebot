@@ -339,6 +339,106 @@ mod tests {
         assert!((0..4).all(|second| standing_glyph_for(second, true) == STANDING_ON));
     }
 
+    /// The variable that makes a run of this test binary the child of
+    /// `the_live_path_reads_no_motion_from_the_environment_by_presence`. Its value says whether
+    /// the child was started with `NO_MOTION` set.
+    #[cfg(unix)]
+    const LIVE_CHILD: &str = "BRAVEBOT_TEST_NO_MOTION_LIVE_CHILD";
+
+    /// The functions the running program calls, in a process whose environment has `NO_MOTION`
+    /// set or does not: `sense_no_motion` stores the answer, and the glyph beside a turn, the
+    /// glyph beside a command and the standing light read it.
+    ///
+    /// The static those read is one per process and every test in this binary shares it, and the
+    /// crate forbids the unsafe code that setting a variable in process takes. The test therefore
+    /// starts this binary again with the variable set on that command alone, and the child makes
+    /// the assertions. A child with the variable unset or empty is the control: the same
+    /// assertions have to say the glyph cycles and the light blinks. A wrong variable name,
+    /// `NO_MOTION=0` read as a switch that is off, an answer that never reaches the glyph or the
+    /// light, or a still indicator that also stops its counters passes every test that hands the
+    /// flag in as an argument and fails here.
+    #[cfg(unix)]
+    #[test]
+    fn the_live_path_reads_no_motion_from_the_environment_by_presence() {
+        const THIS: &str =
+            "indicator::tests::the_live_path_reads_no_motion_from_the_environment_by_presence";
+        const CHECKED: &str = "live path checked:";
+
+        if let Ok(expectation) = std::env::var(LIVE_CHILD) {
+            let asked = expectation == "asked";
+            sense_no_motion();
+            assert_eq!(stilled(), asked, "stilled() after sense_no_motion()");
+
+            let over_a_full_cycle: Vec<&str> = (0..FRAMES.len() as u64 + 1)
+                .map(|frame| glyph_at(Duration::from_millis(frame * FRAME_MILLIS as u64 + 1)))
+                .collect();
+            match asked {
+                true => assert!(
+                    over_a_full_cycle.iter().all(|glyph| *glyph == STILL),
+                    "the glyph moved: {over_a_full_cycle:?}"
+                ),
+                false => {
+                    for frame in FRAMES {
+                        assert!(
+                            over_a_full_cycle.contains(frame),
+                            "{frame} was never shown: {over_a_full_cycle:?}"
+                        );
+                    }
+                }
+            }
+            let still_one_frame_later = glyph_at(Duration::from_millis(0))
+                == glyph_at(Duration::from_millis(FRAME_MILLIS as u64));
+            assert_eq!(still_one_frame_later, asked, "the glyph one frame later");
+
+            assert_eq!(
+                standing_glyph_at(0),
+                STANDING_ON,
+                "the light at an even second"
+            );
+            assert_eq!(
+                standing_glyph_at(1),
+                if asked { STANDING_ON } else { STANDING_OFF },
+                "the light at an odd second"
+            );
+
+            let early = Indicator::new(0, Duration::from_secs(1), 1_500);
+            let late = Indicator::new(0, Duration::from_secs(61), 38_300);
+            assert_ne!(early.elapsed, late.elapsed, "the elapsed time stopped");
+            assert_ne!(early.tokens, late.tokens, "the token count stopped");
+
+            println!("{CHECKED} {expectation}");
+            return;
+        }
+
+        for (value, expectation) in [
+            (Some("1"), "asked"),
+            (Some("0"), "asked"),
+            (Some(""), "declined"),
+            (None, "declined"),
+        ] {
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", THIS, "--test-threads=1", "--nocapture"])
+                .env(LIVE_CHILD, expectation)
+                .env_remove("NO_MOTION")
+                .env_remove("NO_COLOR");
+            if let Some(value) = value {
+                command.env("NO_MOTION", value);
+            }
+            let what = format!("the child run with NO_MOTION {value:?}");
+            let output =
+                crate::testutil::output_within(&mut command, Duration::from_secs(60), &what);
+            let said = String::from_utf8_lossy(&output.stdout);
+            let failed = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{what} failed:\n{said}\n{failed}");
+            assert!(
+                said.contains(&format!("{CHECKED} {expectation}")),
+                "{what} did not reach its assertions:\n{said}\n{failed}"
+            );
+        }
+    }
+
     /// The shape asked for, end to end.
     #[test]
     fn the_line_has_the_expected_shape() {

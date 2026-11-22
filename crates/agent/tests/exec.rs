@@ -503,6 +503,94 @@ fn this_agents_own_credentials_do_not_reach_a_program_it_runs() {
     );
 }
 
+/// RUN-12: a line a person typed keeps the whole environment, and the same variables are removed
+/// from the program the planner chose. An implementation that scrubbed the typed line as well, or
+/// one that scrubbed neither, passes every test of the planner's path alone.
+///
+/// The planner's run goes first, in the same environment, so the typed line's output holding the
+/// values means they were handed over and not that the withheld set was empty.
+#[cfg(unix)]
+#[test]
+fn a_line_a_person_typed_keeps_the_credentials_a_program_the_planner_chose_loses() {
+    let scratch = Scratch::new("scrub-typed");
+    let _guard = with_env(&[
+        ("SERVICES_KEY_AICHAT", Some("a-live-signing-key")),
+        ("BRAVE_SERVICES_KEY_ID", Some("a-live-key-id")),
+        (
+            "BACKTRACE_SUBMIT_URL",
+            Some("https://a-live-token.example/post"),
+        ),
+        ("BRAVEBOT_SUBPROCESS_ENV_SCRUB", None),
+    ]);
+
+    let planned = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+    assert!(planned.succeeded());
+    for value in [
+        "a-live-signing-key",
+        "a-live-key-id",
+        "a-live-token.example",
+    ] {
+        assert!(
+            !planned.stdout.contains(value),
+            "{value} reached a program the planner chose, so the typed line below proves nothing"
+        );
+    }
+
+    let typed = bravebot_agent::shell::run("env", &scratch.path, &Cancel::new())
+        .expect("the typed line runs");
+    assert!(typed.succeeded());
+    for (name, value) in [
+        ("SERVICES_KEY_AICHAT", "a-live-signing-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-live-key-id"),
+        ("BACKTRACE_SUBMIT_URL", "https://a-live-token.example/post"),
+    ] {
+        assert!(
+            typed.stdout.contains(&format!("{name}={value}")),
+            "{name} was removed from a line the person typed"
+        );
+    }
+}
+
+/// The variables a provider block names are withheld from the planner's program and kept for a
+/// line a person typed. An implementation that applied the settings-derived names to the typed
+/// line, while keeping the fixed ones, passes the test above.
+#[cfg(unix)]
+#[test]
+fn a_line_a_person_typed_keeps_a_gateways_environment_token_the_planner_loses() {
+    let scratch = Scratch::new("scrub-typed-gateway");
+    let _guard = with_a_gateway_token(&scratch);
+
+    let planned = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+    assert!(planned.succeeded());
+    for value in ["a-live-gateway-token", "a-live-fallback-token"] {
+        assert!(
+            !planned.stdout.contains(value),
+            "{value} reached a program the planner chose, so the typed line below proves nothing"
+        );
+    }
+
+    let typed = bravebot_agent::shell::run("env", &scratch.path, &Cancel::new())
+        .expect("the typed line runs");
+    assert!(typed.succeeded());
+    for line in [
+        "ACME_GATEWAY_TOKEN=a-live-gateway-token",
+        "ACME_GATEWAY_FALLBACK=a-live-fallback-token",
+    ] {
+        assert!(
+            typed.stdout.lines().any(|printed| printed == line),
+            "{line} was removed from a line the person typed"
+        );
+    }
+}
+
 /// A home directory whose settings declare a gateway that reads its token from a variable no
 /// built-in list names, with the variable set to a live-looking value.
 ///

@@ -1974,6 +1974,31 @@ mod tests {
         }
     }
 
+    /// MANIFEST-5: the schema names exactly these tools at these tiers. There is no `run`, shell,
+    /// `edit_file` or `todo_write`, so a command string never becomes a step. Rejects a table that
+    /// gains any tool, which the registry test passes while the registry gains the same one.
+    #[test]
+    fn the_schema_names_exactly_the_tools_the_clause_allows() {
+        let mut named = tools();
+        named.sort_unstable_by_key(|(tool, _)| *tool);
+        assert_eq!(
+            named,
+            vec![
+                (ANSWER, Tier::Act),
+                (APPLY, Tier::Act),
+                (CONNECTOR_ACT, Tier::Act),
+                (CONNECTOR_FETCH, Tier::Fetch),
+                ("list_files", Tier::Fetch),
+                (MCP_CALL, Tier::Act),
+                (MCP_READ, Tier::Fetch),
+                ("process", Tier::Process),
+                ("read_file", Tier::Fetch),
+                ("search", Tier::Fetch),
+                ("write_file", Tier::Act),
+            ]
+        );
+    }
+
     /// Validation is a function of the draft and nothing else, so the same plan is refused for
     /// the same reason every time and a person can be told what to change.
     #[test]
