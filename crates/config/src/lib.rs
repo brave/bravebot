@@ -3788,9 +3788,6 @@ mod tests {
         assert_eq!(config.default_model, DEFAULT_MODEL);
     }
 
-    /// A gateway is additive on the same terms a Bedrock block is. Naming one adds to what a person
-    /// may choose and must not decide what answers when they have chosen nothing, nor set the budget
-    /// from a window belonging to a model the session may never use.
     /// BACKEND-66: the variants a model offers are its provider block's, in the file's order and
     /// without a disabled one. A model with none, and a model no block lists, offer nothing.
     #[test]
@@ -3816,6 +3813,9 @@ mod tests {
         assert!(config.variants_offered("unknown").is_empty());
     }
 
+    /// A gateway is additive on the same terms a Bedrock block is. Naming one adds to what a person
+    /// may choose and must not decide what answers when they have chosen nothing, nor set the budget
+    /// from a window belonging to a model the session may never use.
     #[test]
     fn a_provider_block_changes_neither_the_default_model_nor_the_budget() {
         let settings = Settings::parse(
