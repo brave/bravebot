@@ -89,7 +89,7 @@ pub(super) fn message_session<S: Sink, C: Confirmer, R: Reporter>(
 
     let label = message.label();
     let length = message.text().chars().count();
-    let answered = if messaging.ledger.is_covered(&to.id) {
+    let answered = if messaging.ledger.is_covered(&to.id, label) {
         Answered::Covered
     } else {
         let request = MessageRequest {
@@ -102,7 +102,7 @@ pub(super) fn message_session<S: Sink, C: Confirmer, R: Reporter>(
         match confirmer.confirm_message(&request) {
             MessageDecision::Once => Answered::Once,
             MessageDecision::ForTheTurn => {
-                messaging.ledger.cover(&to.id);
+                messaging.ledger.cover(&to.id, label);
                 Answered::ForTheTurn
             }
             MessageDecision::Decline => Answered::Declined,
