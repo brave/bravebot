@@ -70,7 +70,10 @@ mod tests {
     #[test]
     fn each_state_puts_its_marker_in_front() {
         assert_eq!(text("bravebot", "fix", State::Working), "✦ bravebot · fix");
-        assert_eq!(text("bravebot", "fix", State::Waiting), "[!] bravebot · fix");
+        assert_eq!(
+            text("bravebot", "fix", State::Waiting),
+            "[!] bravebot · fix"
+        );
     }
 
     #[test]

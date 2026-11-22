@@ -115,6 +115,9 @@ mod tests {
     fn control_characters_in_a_name_do_not_reach_the_window() {
         let cut = window_title("fix\x07\x1b]0;owned\u{9c}\nnext", State::Ready);
         assert!(!cut.chars().any(char::is_control), "{cut:?}");
-        assert!(cut.starts_with("Bravebot · fix␇␛]0;owned‹U+009C›␊next"), "{cut}");
+        assert!(
+            cut.starts_with("Bravebot · fix␇␛]0;owned‹U+009C›␊next"),
+            "{cut}"
+        );
     }
 }
