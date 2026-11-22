@@ -14,7 +14,7 @@ use bravebot_agent::plugin_servers;
 use bravebot_agent::plugins::Staged;
 use bravebot_config::hooks::{Hook, Unkept};
 use bravebot_config::mcp::Declaration;
-use bravebot_config::plugin::FileFault;
+use bravebot_config::plugin::{FileFault, HookList, ServerList};
 use bravebot_i18n::t;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -109,7 +109,12 @@ fn hook_row(hook: &Hook) -> HookRow {
 
 /// The hook rows of `staged`, or `None` where its manifest names no hooks file.
 pub(super) fn hooks_of(staged: &Staged) -> Option<Listed<HookRow>> {
-    staged.hooks.as_ref().map(|read| match read {
+    hooks_from(staged.hooks.as_ref())
+}
+
+/// The hook rows of a hooks file as the staging or the installed copy read it.
+pub(super) fn hooks_from(read: Option<&Result<HookList, FileFault>>) -> Option<Listed<HookRow>> {
+    read.map(|read| match read {
         Ok(list) => Listed {
             rows: list.hooks.declared().iter().map(hook_row).collect(),
             fault: None,
@@ -166,8 +171,16 @@ fn server_row(plugin: &str, alias: &str, declaration: &Declaration) -> ServerRow
 
 /// The server rows of `staged`, or `None` where its manifest names no servers file.
 pub(super) fn servers_of(staged: &Staged) -> Option<Listed<ServerRow>> {
-    let plugin = staged.manifest.name.as_str();
-    staged.servers.as_ref().map(|read| match read {
+    servers_from(&staged.manifest.name, staged.servers.as_ref())
+}
+
+/// The server rows of a servers file as the staging or the installed copy read it, for the plugin
+/// called `plugin`.
+pub(super) fn servers_from(
+    plugin: &str,
+    read: Option<&Result<ServerList, FileFault>>,
+) -> Option<Listed<ServerRow>> {
+    read.map(|read| match read {
         Ok(list) => Listed {
             rows: list
                 .entries
@@ -204,7 +217,7 @@ pub(super) struct Pen<'a> {
 
 impl Pen<'_> {
     /// A label, then the plugin's text behind the margin, uncut.
-    fn labelled(&self, lines: &mut Vec<Line<'static>>, label: String, value: &str) {
+    pub(super) fn labelled(&self, lines: &mut Vec<Line<'static>>, label: String, value: &str) {
         lines.extend(indented(label, self.muted, self.width));
         let (rows, _) = untrusted(value, self.bold, self.margin, self.width, None, false);
         lines.extend(rows);
@@ -221,7 +234,7 @@ impl Pen<'_> {
     }
 }
 
-fn fault_text(fault: FileFault) -> String {
+pub(super) fn fault_text(fault: FileFault) -> String {
     match fault {
         FileFault::Unreadable => t!(plugin_install_fault_unreadable),
         FileFault::NotARegularFile => t!(plugin_install_fault_not_file),
@@ -245,7 +258,7 @@ fn reach_row(pen: &Pen<'_>, lines: &mut Vec<Line<'static>>, reach: &Reach) {
 }
 
 /// What a part file said that could not be listed.
-fn left_out(
+pub(super) fn left_out(
     pen: &Pen<'_>,
     lines: &mut Vec<Line<'static>>,
     listed_fault: Option<FileFault>,
@@ -286,30 +299,36 @@ pub(super) fn draw_hooks(
     ));
     for hook in &listed.rows {
         lines.push(Line::raw(""));
-        lines.extend(indented(
-            t!(plugin_install_hook_at, moment = hook.moment.as_str()),
-            pen.bold,
-            pen.width,
-        ));
-        if let Some(tool) = &hook.tool {
-            pen.labelled(lines, t!(plugin_install_hook_tool).to_string(), tool);
-        }
-        if let Some(path) = &hook.watches {
-            pen.labelled(lines, t!(plugin_install_hook_path).to_string(), path);
-        }
-        if let Some(seconds) = hook.timeout_secs {
-            lines.extend(indented(
-                t!(plugin_install_hook_timeout, seconds = seconds),
-                pen.muted,
-                pen.width,
-            ));
-        }
-        pen.words(lines, t!(plugin_install_argv).to_string(), &hook.argv);
-        if let Some(program) = hook.argv.first() {
-            reach_row(pen, lines, &Reach::Command(program.clone()));
-        }
+        hook_body(pen, lines, hook);
     }
     left_out(pen, lines, listed.fault, listed.unkept);
+}
+
+/// One hook: its moment, what it is limited to, its argv and what it would start. Shared by the
+/// install listing and the update difference, so a hook reads the same in both.
+pub(super) fn hook_body(pen: &Pen<'_>, lines: &mut Vec<Line<'static>>, hook: &HookRow) {
+    lines.extend(indented(
+        t!(plugin_install_hook_at, moment = hook.moment.as_str()),
+        pen.bold,
+        pen.width,
+    ));
+    if let Some(tool) = &hook.tool {
+        pen.labelled(lines, t!(plugin_install_hook_tool).to_string(), tool);
+    }
+    if let Some(path) = &hook.watches {
+        pen.labelled(lines, t!(plugin_install_hook_path).to_string(), path);
+    }
+    if let Some(seconds) = hook.timeout_secs {
+        lines.extend(indented(
+            t!(plugin_install_hook_timeout, seconds = seconds),
+            pen.muted,
+            pen.width,
+        ));
+    }
+    pen.words(lines, t!(plugin_install_argv).to_string(), &hook.argv);
+    if let Some(program) = hook.argv.first() {
+        reach_row(pen, lines, &Reach::Command(program.clone()));
+    }
 }
 
 /// The servers section: a heading and, for each server, its transport, its command or url, the
@@ -335,46 +354,52 @@ pub(super) fn draw_servers(
     ));
     for server in &listed.rows {
         lines.push(Line::raw(""));
-        pen.labelled(lines, t!(plugin_install_server).to_string(), &server.alias);
-        if !server.usable {
-            lines.extend(indented(
-                t!(plugin_install_server_unusable),
-                pen.muted,
-                pen.width,
-            ));
-            continue;
-        }
-        if !server.reachable {
-            lines.extend(indented(
-                t!(plugin_install_server_unreachable),
-                pen.muted,
-                pen.width,
-            ));
-        }
-        pen.labelled(
-            lines,
-            t!(plugin_install_server_transport).to_string(),
-            &server.transport,
-        );
-        if !server.argv.is_empty() {
-            pen.words(lines, t!(plugin_install_argv).to_string(), &server.argv);
-        }
-        if let Some(url) = &server.url {
-            pen.labelled(lines, t!(plugin_install_server_url).to_string(), url);
-        }
-        for variable in &server.variables {
-            pen.labelled(
-                lines,
-                t!(plugin_install_server_variable).to_string(),
-                variable,
-            );
-        }
-        for stored in &server.stored {
-            pen.labelled(lines, t!(plugin_install_server_stored).to_string(), stored);
-        }
-        for reach in &server.reaches {
-            reach_row(pen, lines, reach);
-        }
+        server_body(pen, lines, server);
     }
     left_out(pen, lines, listed.fault, listed.unkept);
+}
+
+/// One server: its alias, transport, command or url, variables and everything it would reach.
+/// Shared by the install listing and the update difference.
+pub(super) fn server_body(pen: &Pen<'_>, lines: &mut Vec<Line<'static>>, server: &ServerRow) {
+    pen.labelled(lines, t!(plugin_install_server).to_string(), &server.alias);
+    if !server.usable {
+        lines.extend(indented(
+            t!(plugin_install_server_unusable),
+            pen.muted,
+            pen.width,
+        ));
+        return;
+    }
+    if !server.reachable {
+        lines.extend(indented(
+            t!(plugin_install_server_unreachable),
+            pen.muted,
+            pen.width,
+        ));
+    }
+    pen.labelled(
+        lines,
+        t!(plugin_install_server_transport).to_string(),
+        &server.transport,
+    );
+    if !server.argv.is_empty() {
+        pen.words(lines, t!(plugin_install_argv).to_string(), &server.argv);
+    }
+    if let Some(url) = &server.url {
+        pen.labelled(lines, t!(plugin_install_server_url).to_string(), url);
+    }
+    for variable in &server.variables {
+        pen.labelled(
+            lines,
+            t!(plugin_install_server_variable).to_string(),
+            variable,
+        );
+    }
+    for stored in &server.stored {
+        pen.labelled(lines, t!(plugin_install_server_stored).to_string(), stored);
+    }
+    for reach in &server.reaches {
+        reach_row(pen, lines, reach);
+    }
 }

@@ -57,8 +57,21 @@ pub enum Refusal {
     NobodyToAsk,
     /// The person answered no. Nothing was copied or recorded.
     Declined,
-    /// The name is installed from this same source. Updating is not built (decision 1).
-    UpdateNotBuilt { name: String, source: Source },
+    /// The name is installed from this same source, and `/plugin add` does not replace an installed
+    /// plugin. The word for that is `/plugin update <name>` ([`update_typed`], PLUGIN-5).
+    SameSource { name: String, source: Source },
+    /// `/plugin update` was given a name that cannot be an installed plugin's, or none is
+    /// installed under it (PLUGIN-9).
+    Manage(ManageRefusal),
+    /// The plugin has a directory and no record that can be read, so there is no recorded source
+    /// to fetch again and no digest to compare with. Remove it and add it again.
+    RecordUnreadable { name: String },
+    /// The recorded source names a full commit, which no fetch of it can move (PLUGIN-14). Nothing
+    /// was fetched and nothing was asked.
+    NothingToUpdateTo { name: String },
+    /// The source now holds a plugin of another name. Replacing `name` with it is not an update
+    /// of `name`, so nothing is changed.
+    UpdateRenamed { name: String, found: String },
     /// Another installed plugin, enabled or not, already offers a skill or definition of this
     /// name (PLUGIN-12). Both plugins are named and no prefix is added.
     NameOffered {
@@ -439,11 +452,23 @@ fn is_present(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
+/// Puts the staged tree at `partial` by a rename, or by a copy where the rename cannot be made (a
+/// staging directory on another file system, or one that cannot be moved). Where neither works
+/// nothing is left at `partial`.
+fn move_staged_tree(staged: &Path, partial: &Path) -> Result<(), Refusal> {
+    if std::fs::rename(staged, partial).is_ok() || copy_tree(staged, partial).is_ok() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(partial).ok();
+    Err(Refusal::Io(io::ErrorKind::Other))
+}
+
 /// Installs a staged plugin at `<state>/plugins/<name>/` with a record beside it.
 ///
 /// Refused, with nothing created or changed, when the name is already installed: a different
-/// source is named with the installed one, and the same source is refused as an update, which is
-/// not built (decision 1). The name is checked before the plugins directory is created.
+/// source is named with the installed one, and the same source is refused with a pointer to
+/// `/plugin update` ([`Refusal::SameSource`]). The name is checked before the plugins directory is
+/// created.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "consumes the staged copy, so its staging directory is gone once the install ends"
@@ -456,7 +481,7 @@ pub fn commit_install(staged: Staged, home: &Path) -> Result<(), Refusal> {
         let installed = read_record(home, &name).map(|read| read.source);
         return Err(match installed {
             Some(source) if source.same_origin(&staged.source) => {
-                Refusal::UpdateNotBuilt { name, source }
+                Refusal::SameSource { name, source }
             }
             installed => Refusal::AlreadyInstalled {
                 name,
@@ -476,12 +501,7 @@ pub fn commit_install(staged: Staged, home: &Path) -> Result<(), Refusal> {
     // A name holds no dot, so this is never another plugin's directory.
     let partial = plugins_dir(home).join(format!(".{name}.installing"));
     std::fs::remove_dir_all(&partial).ok();
-    let moved = std::fs::rename(&staged.tree, &partial).is_ok()
-        || copy_tree(&staged.tree, &partial).is_ok();
-    if !moved {
-        std::fs::remove_dir_all(&partial).ok();
-        return Err(Refusal::Io(io::ErrorKind::Other));
-    }
+    move_staged_tree(&staged.tree, &partial)?;
     std::fs::write(
         &record,
         record_text(
@@ -525,6 +545,15 @@ pub trait Asker {
 
     /// Put the listing of `staged` to the person. Only a true answer installs.
     fn confirm_install(&mut self, staged: &Staged) -> bool;
+
+    /// Put the difference between the installed plugin and `staged`, a fetch of the recorded source
+    /// whose digest differs, to the person (PLUGIN-9). `installed` is the record and `before` what
+    /// the installed copy offers and declares, read as data for the listing. Only a true answer
+    /// replaces the installed plugin.
+    ///
+    /// Like the other two this has no default and takes no mode, rule or setting: an implementation
+    /// puts it to a person or answers no.
+    fn confirm_update(&mut self, staged: &Staged, installed: &Installed, before: &Before) -> bool;
 }
 
 /// The asker of a run with nobody behind it, such as a one-shot run.
@@ -540,6 +569,15 @@ impl Asker for Nobody {
     }
 
     fn confirm_install(&mut self, _staged: &Staged) -> bool {
+        false
+    }
+
+    fn confirm_update(
+        &mut self,
+        _staged: &Staged,
+        _installed: &Installed,
+        _before: &Before,
+    ) -> bool {
         false
     }
 }
@@ -622,6 +660,21 @@ pub(crate) fn install_git<A: Asker + ?Sized>(
     allow: &[&str],
     parent: &Path,
 ) -> Result<String, Refusal> {
+    let staged = fetch_staged(git, home, asker, program, allow, parent)?;
+    confirm_and_commit(staged, home, asker)
+}
+
+/// The fetch an install and an update share (PLUGIN-3): finds out whether anybody can be asked and
+/// whether `git` is installed, puts the host to the person, and only after a yes fetches the source
+/// into a staging directory. Nothing leaves before the yes, and a no starts no program.
+fn fetch_staged<A: Asker + ?Sized>(
+    git: &GitSource,
+    home: &Path,
+    asker: &mut A,
+    program: Option<bravebot_sandbox::programs::Resolved>,
+    allow: &[&str],
+    parent: &Path,
+) -> Result<Staged, Refusal> {
     if !asker.anybody_there() {
         return Err(Refusal::NobodyToAsk);
     }
@@ -635,8 +688,346 @@ pub(crate) fn install_git<A: Asker + ?Sized>(
     if !asker.confirm_fetch_host(&request) {
         return Err(Refusal::Declined);
     }
-    let staged = crate::plugin_git::stage_from(&program, git, allow, parent, home)?;
-    confirm_and_commit(staged, home, asker)
+    crate::plugin_git::stage_from(&program, git, allow, parent, home)
+}
+
+/// What an update did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Updated {
+    /// The source holds the tree that is installed. Nothing was changed and nothing was asked.
+    /// `newer_commit` is whether the recorded ref now resolves to another commit with the same
+    /// tree, which is not recorded.
+    Unchanged { newer_commit: bool },
+    /// The person said yes to the difference and the installed plugin was replaced.
+    Replaced,
+}
+
+/// `/plugin update <name>` (PLUGIN-9): fetches the recorded source again at the recorded ref and
+/// compares the commit and the tree digest with the record.
+///
+/// A git source goes through the host question and the staging an install uses. A local path is
+/// staged again from the recorded path with no host question, since nothing leaves the machine. A
+/// source recorded as a full commit has nothing to update to and is answered before anything is
+/// fetched or asked. Where nobody can be asked nothing is read. An unchanged digest
+/// changes nothing and asks nothing. A different one is put to the person with
+/// [`Asker::confirm_update`], and only a yes replaces anything.
+pub fn update_typed<A: Asker + ?Sized>(
+    name: &str,
+    home: &Path,
+    asker: &mut A,
+) -> Result<Updated, Refusal> {
+    update_with(
+        name,
+        home,
+        asker,
+        crate::plugin_git::locate(),
+        &crate::plugin_git::PROTOCOLS,
+        // The directory the fetch is made under is a fresh one this account alone can enter
+        // (`plugin_git::Scratch`), so the shared parent is not trusted.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        &std::env::temp_dir(), // shared-temp-name: only the parent is shared, the directory under it is random
+    )
+}
+
+/// [`update_typed`] with the `git` program, the protocols it may use and the directory the fetch
+/// is made under given.
+pub(crate) fn update_with<A: Asker + ?Sized>(
+    name: &str,
+    home: &Path,
+    asker: &mut A,
+    program: Option<bravebot_sandbox::programs::Resolved>,
+    allow: &[&str],
+    parent: &Path,
+) -> Result<Updated, Refusal> {
+    checked_name(name).map_err(Refusal::Manage)?;
+    if !is_present(&installed_dir(home, name)) && !is_present(&record_path(home, name)) {
+        return Err(Refusal::Manage(ManageRefusal::NotInstalled(
+            name.to_string(),
+        )));
+    }
+    // The installed directory is not hashed here: the record is what the new tree is compared
+    // with, so a directory that was edited is replaced by an update (PLUGIN-9, Known costs).
+    let installed = read_record(home, name).ok_or_else(|| Refusal::RecordUnreadable {
+        name: name.to_string(),
+    })?;
+    let fetch = match &installed.source {
+        Source::Local(_) => None,
+        Source::Git {
+            url, requested_ref, ..
+        } => {
+            // A ref that is a full commit cannot move, so there is nothing to fetch it for.
+            if requested_ref
+                .as_deref()
+                .is_some_and(|text| Commit::parse(text).is_some())
+            {
+                return Err(Refusal::NothingToUpdateTo {
+                    name: name.to_string(),
+                });
+            }
+            // A recorded URL that no longer reads as a git source is a record this build cannot
+            // update from, whatever the classifier now says about it.
+            let Ok(Requested::Git(mut git)) = classify(url) else {
+                return Err(Refusal::RecordUnreadable {
+                    name: name.to_string(),
+                });
+            };
+            git.requested_ref.clone_from(requested_ref);
+            Some(git)
+        }
+    };
+    update_fetching(
+        &installed,
+        fetch.as_ref(),
+        home,
+        asker,
+        program,
+        allow,
+        parent,
+    )
+}
+
+/// The rest of an update once the record is read: `fetch` is the git source to fetch again, or
+/// `None` for a local path, which is staged again from the recorded path.
+pub(crate) fn update_fetching<A: Asker + ?Sized>(
+    installed: &Installed,
+    fetch: Option<&GitSource>,
+    home: &Path,
+    asker: &mut A,
+    program: Option<bravebot_sandbox::programs::Resolved>,
+    allow: &[&str],
+    parent: &Path,
+) -> Result<Updated, Refusal> {
+    if !asker.anybody_there() {
+        return Err(Refusal::NobodyToAsk);
+    }
+    let staged = match (fetch, &installed.source) {
+        (Some(git), _) => fetch_staged(git, home, asker, program, allow, parent)?,
+        (None, Source::Local(path)) => stage(path, home)?,
+        // A git record is always handed its source by `update_with`.
+        (None, Source::Git { .. }) => {
+            return Err(Refusal::RecordUnreadable {
+                name: installed.name.clone(),
+            });
+        }
+    };
+    if staged.manifest.name != installed.name {
+        return Err(Refusal::UpdateRenamed {
+            name: installed.name.clone(),
+            found: staged.manifest.name.clone(),
+        });
+    }
+    if staged.digest == installed.digest {
+        return Ok(Updated::Unchanged {
+            newer_commit: staged.source.commit() != installed.source.commit(),
+        });
+    }
+    // The name check comes before the question, so nobody is asked about an update that cannot be
+    // made (PLUGIN-12). The plugin's own offers are not counted against it.
+    refuse_taken_names(&staged, home, &installed.name)?;
+    let before = before_of(home, &installed.name);
+    if !asker.confirm_update(&staged, installed, &before) {
+        return Err(Refusal::Declined);
+    }
+    commit_update(&staged, installed, home)?;
+    Ok(Updated::Replaced)
+}
+
+/// What the installed copy of a plugin offers and declares, read from its directory as data, so the
+/// question an update puts can list what is added, removed and changed. Nothing here decides
+/// anything: the driver hands it to the listing and reads none of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Before {
+    /// Whether the installed manifest could be read. Where it could not, nothing below is known
+    /// and the listing says so rather than showing the plugin as offering nothing.
+    pub readable: bool,
+    pub offers: Vec<Offer>,
+    pub hooks: Option<Result<HookList, FileFault>>,
+    pub servers: Option<Result<ServerList, FileFault>>,
+    /// Every file and directory of the installed tree by the bytes of its path relative to the
+    /// plugin, with the SHA-256 of a file's bytes (a directory has none). `None` where the tree
+    /// could not be read.
+    files: Option<FileMap>,
+}
+
+/// How a file of the plugin differs between the installed copy and the staged one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    Added,
+    Removed,
+    Changed,
+}
+
+/// One file or directory that is added, removed or has other bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChange {
+    /// The bytes of the path relative to the plugin, `/` between names, a directory with a
+    /// trailing `/`. The bytes are kept so two names that differ only where a text rendering would
+    /// merge them stay two paths (PATH-001); the interface converts them where it draws the name.
+    pub path: Vec<u8>,
+    pub change: Change,
+}
+
+/// The files of a tree by the bytes of their relative paths, each with the digest of its content
+/// or `None` for a directory.
+type FileMap = std::collections::BTreeMap<Vec<u8>, Option<String>>;
+
+/// The path of every file and directory under `root` with a file's digest.
+fn file_digests(root: &Path) -> Result<FileMap, Refusal> {
+    let mut found = Vec::new();
+    collect(root, &[], &mut found)?;
+    digest_found(found)
+}
+
+/// The digest of each file of `found`, `(relative path bytes, path on disk, is a directory)`, keyed
+/// on the relative path bytes, with a `/` added to a directory's.
+fn digest_found(found: Vec<(Vec<u8>, PathBuf, bool)>) -> Result<FileMap, Refusal> {
+    let mut map = FileMap::new();
+    for (mut name, path, is_dir) in found {
+        if is_dir {
+            name.push(b'/');
+            map.insert(name, None);
+            continue;
+        }
+        let mut hasher = Sha256::new();
+        feed(&mut hasher, &path)?;
+        let hex: String = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        map.insert(name, Some(hex));
+    }
+    Ok(map)
+}
+
+/// Every file and directory that differs between the installed copy and `staged`, in path order
+/// (PLUGIN-9). This is what the listing shows besides the parts, so a script changed under a hooks
+/// file that reads the same is still on the screen. `None` where either tree could not be read, and
+/// the listing says so. Only paths and digests are compared; no file is read for anything else.
+pub fn file_changes(staged: &Staged, before: &Before) -> Option<Vec<FileChange>> {
+    let old = before.files.as_ref()?;
+    let new = file_digests(&staged.tree).ok()?;
+    Some(changes_between(old, &new))
+}
+
+/// The paths that are in one of two file maps and not the other, or in both with other bytes, in
+/// the order of the path bytes.
+fn changes_between(old: &FileMap, new: &FileMap) -> Vec<FileChange> {
+    let mut paths: std::collections::BTreeSet<&Vec<u8>> = old.keys().collect();
+    paths.extend(new.keys());
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let change = match (old.get(path), new.get(path)) {
+                (None, Some(_)) => Change::Added,
+                (Some(_), None) => Change::Removed,
+                (Some(had), Some(has)) if had != has => Change::Changed,
+                _ => return None,
+            };
+            Some(FileChange {
+                path: path.clone(),
+                change,
+            })
+        })
+        .collect()
+}
+
+/// [`Before`] for the installed plugin `name`. The manifest is read again from the installed
+/// directory, as [`installed_hooks`] reads it.
+fn before_of(home: &Path, name: &str) -> Before {
+    let directory = installed_dir(home, name);
+    match plugin::read(&directory) {
+        Ok(manifest) => Before {
+            readable: true,
+            offers: offers_in(&directory, &manifest),
+            hooks: manifest.hooks_list(&directory, &directory),
+            servers: manifest.servers_list(&directory, &directory),
+            files: file_digests(&directory).ok(),
+        },
+        Err(_) => Before {
+            readable: false,
+            offers: Vec::new(),
+            hooks: None,
+            servers: None,
+            files: file_digests(&directory).ok(),
+        },
+    }
+}
+
+/// Refuses the update when a skill or definition the staged plugin offers is already offered by an
+/// installed plugin other than `name` itself (PLUGIN-12), naming both. Only names are compared.
+fn refuse_taken_names(staged: &Staged, home: &Path, name: &str) -> Result<(), Refusal> {
+    match conflicts_except(&staged_offers(staged), home, Some(name)) {
+        Some((offered, existing_plugin)) => Err(Refusal::NameOffered {
+            offered,
+            new_plugin: name.to_string(),
+            existing_plugin,
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Replaces the installed plugin with the staged one after a yes (PLUGIN-9).
+///
+/// The order, so that a failure leaves the old plugin as it was wherever it can:
+///
+/// 1. the names are checked again and the staged tree is moved beside the installed one, which
+///    changes nothing that is installed;
+/// 2. the answers recorded for the plugin's hooks and servers are withdrawn, as `remove` does it
+///    and before anything is replaced, so a withdrawal that cannot be written stops the update
+///    with the old plugin in place. Every line for the plugin goes, not only a changed part's: the
+///    hook and server approvals are keyed on the tree digest, so none of them would match the new
+///    tree and each asks again;
+/// 3. the installed directory is moved aside, the new one moved in, and the record written through
+///    a temporary file and a rename. A step that fails puts the old directory back and leaves the
+///    old record, so the old plugin works. A failure after step 2 leaves the old plugin working and
+///    asking again for its hooks and servers.
+///
+/// The enabled state is kept, and the version, source, commit and digest are the staged ones.
+fn commit_update(staged: &Staged, installed: &Installed, home: &Path) -> Result<(), Refusal> {
+    let name = installed.name.as_str();
+    refuse_taken_names(staged, home, name)?;
+    let plugins = plugins_dir(home);
+    let target = installed_dir(home, name);
+    // A name holds no dot, so neither is another plugin's directory.
+    let partial = plugins.join(format!(".{name}.updating"));
+    let previous = plugins.join(format!(".{name}.previous"));
+    // A crash between the two moves of an earlier update left the old copy here and no directory.
+    if !is_present(&target) && is_present(&previous) {
+        std::fs::rename(&previous, &target).map_err(io_refusal)?;
+    }
+    std::fs::remove_dir_all(&partial).ok();
+    std::fs::remove_dir_all(&previous).ok();
+    move_staged_tree(&staged.tree, &partial)?;
+    let withdrawn = bravebot_config::hooks_approved::withdraw(home, name)
+        .and_then(|()| bravebot_config::mcp::withdraw_plugin(home, name));
+    if let Err(error) = withdrawn {
+        std::fs::remove_dir_all(&partial).ok();
+        return Err(io_refusal(error));
+    }
+    if let Err(error) = std::fs::rename(&target, &previous) {
+        std::fs::remove_dir_all(&partial).ok();
+        return Err(io_refusal(error));
+    }
+    if let Err(error) = std::fs::rename(&partial, &target) {
+        std::fs::rename(&previous, &target).ok();
+        std::fs::remove_dir_all(&partial).ok();
+        return Err(io_refusal(error));
+    }
+    let replacement = Installed {
+        name: installed.name.clone(),
+        source: staged.source.clone(),
+        version: staged.manifest.version.clone(),
+        enabled: installed.enabled,
+        digest: staged.digest.clone(),
+    };
+    if let Err(ManageRefusal::Io(kind)) = write_record(home, &replacement) {
+        std::fs::remove_dir_all(&target).ok();
+        std::fs::rename(&previous, &target).ok();
+        return Err(Refusal::Io(kind));
+    }
+    std::fs::remove_dir_all(&previous).ok();
+    Ok(())
 }
 
 /// Puts the listing of `staged` to `asker` and installs it on a yes.
@@ -927,7 +1318,20 @@ pub fn shadow_marks(
 /// not, already offers, with that plugin's name (PLUGIN-12). A skill and a definition of one name
 /// do not conflict. No prefix is added to either name.
 pub fn conflicts(staged_offers: &[Offer], home: &Path) -> Option<(String, String)> {
+    conflicts_except(staged_offers, home, None)
+}
+
+/// [`conflicts`] leaving out the installed plugin called `except`, so an update is not refused for
+/// a name its own installed copy offers.
+fn conflicts_except(
+    staged_offers: &[Offer],
+    home: &Path,
+    except: Option<&str>,
+) -> Option<(String, String)> {
     for installed in list(home) {
+        if except == Some(installed.name.as_str()) {
+            continue;
+        }
         let directory = installed_dir(home, &installed.name);
         let Ok(manifest) = plugin::read(&directory) else {
             continue;
@@ -1222,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn adding_the_same_source_again_is_refused_because_update_is_not_built() {
+    fn adding_the_same_source_again_is_refused_and_points_at_update() {
         let scratch = tempfile::tempdir().unwrap();
         let home = scratch.path().join("home");
         let source = plugin_dir(scratch.path(), "src", MANIFEST);
@@ -1236,7 +1640,7 @@ mod tests {
         let refused = commit_install(stage(&source, &home).unwrap(), &home).unwrap_err();
         assert_eq!(
             refused,
-            Refusal::UpdateNotBuilt {
+            Refusal::SameSource {
                 name: "demo".to_string(),
                 source: Source::Local(std::fs::canonicalize(&source).unwrap()),
             }
@@ -1494,6 +1898,10 @@ mod tests {
             self.asked += 1;
             self.yes
         }
+
+        fn confirm_update(&mut self, _s: &Staged, _i: &Installed, _b: &Before) -> bool {
+            false
+        }
     }
 
     /// PLUGIN-4: where nobody can be asked nothing is installed, nobody is asked, and not even the
@@ -1526,7 +1934,8 @@ mod tests {
     /// PLUGIN-5, PLUGIN-14: a git source's record holds the URL, the requested ref, the commit it
     /// resolved to and the digest, and reads back the same through list, enable and disable. A
     /// source with no ref records none, and the same URL and ref added again is the update that is
-    /// not built even where the commit differs, while another ref of the URL is another source.
+    /// refused as [`Refusal::SameSource`], which points at `/plugin update`, even where the commit
+    /// differs, while another ref of the URL is another source.
     ///
     /// Rejects: a record that drops the ref or the commit, a ref written for a source that named
     /// none, enable or disable rewriting the record without them, and an update test that compares
@@ -1566,7 +1975,7 @@ mod tests {
         let again = stage_directory(&tree, git(Some("release-2"), &moved), &home).unwrap();
         assert!(matches!(
             commit_install(again, &home),
-            Err(Refusal::UpdateNotBuilt { .. })
+            Err(Refusal::SameSource { .. })
         ));
         let other_ref = stage_directory(&tree, git(Some("dev"), commit), &home).unwrap();
         assert!(matches!(
@@ -1652,6 +2061,10 @@ mod tests {
         fn confirm_install(&mut self, _staged: &Staged) -> bool {
             self.asked += 1;
             true
+        }
+
+        fn confirm_update(&mut self, _s: &Staged, _i: &Installed, _b: &Before) -> bool {
+            false
         }
     }
 
@@ -1741,6 +2154,10 @@ mod tests {
         fn confirm_install(&mut self, _staged: &Staged) -> bool {
             self.installs += 1;
             self.install_yes
+        }
+
+        fn confirm_update(&mut self, _s: &Staged, _i: &Installed, _b: &Before) -> bool {
+            false
         }
     }
 
@@ -2238,6 +2655,867 @@ mod tests {
         assert_eq!(
             stage(&source, &home).unwrap_err(),
             Refusal::PartMissing(Part::Servers)
+        );
+    }
+
+    /// An asker for an update: answers the host question and the update question as told, and
+    /// keeps what it was shown.
+    struct Updating {
+        there: bool,
+        host_yes: bool,
+        update_yes: bool,
+        hosts: Vec<FetchRequest>,
+        updates: Vec<(Option<String>, String, Option<String>)>,
+        befores: Vec<Before>,
+        installs: usize,
+    }
+
+    impl Updating {
+        fn new(host_yes: bool, update_yes: bool) -> Self {
+            Self {
+                there: true,
+                host_yes,
+                update_yes,
+                hosts: Vec::new(),
+                updates: Vec::new(),
+                befores: Vec::new(),
+                installs: 0,
+            }
+        }
+    }
+
+    impl Asker for Updating {
+        fn anybody_there(&self) -> bool {
+            self.there
+        }
+
+        fn confirm_fetch_host(&mut self, request: &FetchRequest) -> bool {
+            self.hosts.push(request.clone());
+            self.host_yes
+        }
+
+        fn confirm_install(&mut self, _staged: &Staged) -> bool {
+            self.installs += 1;
+            true
+        }
+
+        fn confirm_update(
+            &mut self,
+            staged: &Staged,
+            installed: &Installed,
+            before: &Before,
+        ) -> bool {
+            self.befores.push(before.clone());
+            self.updates.push((
+                staged
+                    .source
+                    .commit()
+                    .map(|commit| commit.as_str().to_string()),
+                staged.digest.clone(),
+                installed
+                    .source
+                    .commit()
+                    .map(|commit| commit.as_str().to_string()),
+            ));
+            self.update_yes
+        }
+    }
+
+    /// Writes a line a hook answer would hold, so a test can show the approval files stay as they
+    /// were.
+    fn plant_answers(home: &Path) {
+        std::fs::write(home.join("hooks-approved"), "demo 0123456789abcdef\n").unwrap();
+        std::fs::write(
+            home.join("mcp-approved"),
+            "plugin demo s 0123456789abcdef\n",
+        )
+        .unwrap();
+    }
+
+    /// PLUGIN-9: where the source still holds the installed tree an update changes
+    /// nothing and asks nothing. The record, the directory and the answers recorded for the
+    /// plugin's hooks and servers are byte for byte what they were, and the staging directory is
+    /// gone.
+    ///
+    /// Rejects: an update that rewrites the record or the directory when the digest is the same,
+    /// one that asks the person about a difference that is not there, and one that reports a
+    /// change.
+    #[test]
+    fn an_update_of_an_unchanged_local_source_changes_nothing_and_asks_nothing() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = plugin_with_parts(scratch.path());
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+        plant_answers(&home);
+        let before = snapshot(&home);
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update_typed("demo", &home, &mut asker),
+            Ok(Updated::Unchanged {
+                newer_commit: false
+            })
+        );
+        assert!(asker.hosts.is_empty(), "a local path asks no host question");
+        assert!(asker.updates.is_empty() && asker.installs == 0);
+        assert_eq!(snapshot(&home), before);
+    }
+
+    /// PLUGIN-9, PLUGIN-14: a local source is staged again from the recorded path, so an edit there
+    /// is a different digest that is put to the person once, with the host question not put, and a
+    /// no leaves the directory, the record and the answers as they were.
+    ///
+    /// Rejects: an update that does not read the source again, one that puts a host question for a
+    /// path, one that asks before comparing digests, and one that changes anything on a no.
+    #[test]
+    fn an_update_of_a_changed_local_source_asks_once_and_a_no_changes_nothing() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = plugin_with_parts(scratch.path());
+        let installed = stage(&source, &home).unwrap();
+        let old_digest = installed.digest.clone();
+        commit_install(installed, &home).unwrap();
+        plant_answers(&home);
+        std::fs::write(
+            source.join("hooks.json"),
+            HOOKS.replace("hook.sh", "other.sh"),
+        )
+        .unwrap();
+        let before = snapshot(&home);
+        let mut asker = Updating::new(true, false);
+        assert_eq!(
+            update_typed("demo", &home, &mut asker),
+            Err(Refusal::Declined)
+        );
+        assert!(asker.hosts.is_empty());
+        assert_eq!(asker.updates.len(), 1);
+        assert_ne!(asker.updates[0].1, old_digest);
+        assert_eq!(snapshot(&home), before);
+    }
+
+    /// PLUGIN-9: where nobody can be asked nothing is read or asked, a name that is not a plugin's
+    /// or not installed is said, a record that cannot be read is said, and a source that now
+    /// holds another plugin is not an update of this one.
+    ///
+    /// Rejects: an update that stages with nobody to answer, one that joins a bad name to a path,
+    /// one that reads a missing record as an unchanged plugin, and one that replaces `demo` with a
+    /// plugin of another name.
+    #[test]
+    fn an_update_with_nobody_to_ask_or_a_bad_name_or_another_plugin_changes_nothing() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = plugin_with_parts(scratch.path());
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+        let before = snapshot(&home);
+        assert_eq!(
+            update_typed("demo", &home, &mut Nobody),
+            Err(Refusal::NobodyToAsk)
+        );
+        for name in ["../x", "", "a b"] {
+            assert_eq!(
+                update_typed(name, &home, &mut Updating::new(true, true)),
+                Err(Refusal::Manage(ManageRefusal::BadName)),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            update_typed("absent", &home, &mut Updating::new(true, true)),
+            Err(Refusal::Manage(ManageRefusal::NotInstalled(
+                "absent".to_string()
+            )))
+        );
+        assert_eq!(snapshot(&home), before);
+
+        std::fs::write(
+            source.join(plugin::FILE),
+            WITH_PARTS.replace("\"demo\"", "\"other\""),
+        )
+        .unwrap();
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update_typed("demo", &home, &mut asker),
+            Err(Refusal::UpdateRenamed {
+                name: "demo".to_string(),
+                found: "other".to_string()
+            })
+        );
+        assert!(asker.updates.is_empty());
+        assert_eq!(snapshot(&home), before);
+
+        std::fs::remove_file(record_path(&home, "demo")).unwrap();
+        assert_eq!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Err(Refusal::RecordUnreadable {
+                name: "demo".to_string()
+            })
+        );
+    }
+
+    fn git_record(parent: &Path, home: &Path, requested: Option<&str>, url: &str) -> String {
+        let tree = plugin_dir(parent, "recorded", MANIFEST);
+        let git = Source::Git {
+            url: url.to_string(),
+            requested_ref: requested.map(str::to_string),
+            commit: Commit::parse("0123456789abcdef0123456789abcdef01234567").unwrap(),
+        };
+        commit_install(stage_directory(&tree, git, home).unwrap(), home).unwrap();
+        "demo".to_string()
+    }
+
+    /// PLUGIN-9, PLUGIN-14: a source recorded as a full commit has nothing to update to. It is said
+    /// before any host question, any program and any connection.
+    ///
+    /// Rejects: an update that fetches a commit again, one that puts the host question for a ref
+    /// that cannot move, and one that treats a 39-digit or uppercase ref (a branch name that looks
+    /// like a commit) as a commit.
+    #[test]
+    fn a_source_recorded_as_a_full_commit_has_nothing_to_update_to_and_asks_nothing() {
+        let git = crate::plugin_git::locate().expect("git must be on PATH for this test");
+        let parent = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let listener = Listener::start();
+        let url = format!("https://127.0.0.1:{}/demo.git", listener.port);
+        let commit = "fedcba9876543210fedcba9876543210fedcba98";
+        git_record(scratch.path(), &home, Some(commit), &url);
+        let before = snapshot(&home);
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update_with(
+                "demo",
+                &home,
+                &mut asker,
+                Some(git.clone()),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::NothingToUpdateTo {
+                name: "demo".to_string()
+            })
+        );
+        assert!(asker.hosts.is_empty() && asker.updates.is_empty());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(listener.connections(), 0);
+        assert_eq!(snapshot(&home), before);
+
+        // A ref that only looks like a commit is a branch name and is fetched again. The yes lets
+        // the request leave, which is the control for the zero above: the listener does count a
+        // connection when one is made, so the zero is not a listener nobody could reach.
+        std::fs::remove_dir_all(&home).unwrap();
+        git_record(scratch.path(), &home, Some(&commit[..39]), &url);
+        let before = snapshot(&home);
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update_with(
+                "demo",
+                &home,
+                &mut asker,
+                Some(git),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::CloneFailed)
+        );
+        assert_eq!(asker.hosts.len(), 1);
+        assert!(listener.connections() > 0, "a yes did not reach the host");
+        assert_eq!(snapshot(&home), before);
+    }
+
+    /// PLUGIN-3, PLUGIN-9: the fetch of an update puts the same host question an install does,
+    /// with the host the recorded URL names, before any connection, and a no makes none, starts no
+    /// program and leaves the state as it was. Nobody to ask and no `git` are refused before a
+    /// question is put.
+    ///
+    /// Rejects: an update that connects before the question, one that ignores the no, one that
+    /// puts a question for a different host than the record's, and one that stages with no `git`.
+    #[test]
+    fn an_update_puts_the_host_question_before_any_connection_and_a_no_makes_none() {
+        let git = crate::plugin_git::locate().expect("git must be on PATH for this test");
+        let parent = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let listener = Listener::start();
+        let url = format!("https://127.0.0.1:{}/demo.git", listener.port);
+        git_record(scratch.path(), &home, Some("main"), &url);
+        let before = snapshot(&home);
+        let mut no = Updating::new(false, true);
+        assert_eq!(
+            update_with(
+                "demo",
+                &home,
+                &mut no,
+                Some(git.clone()),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::Declined)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(listener.connections(), 0, "a no made a connection");
+        assert_eq!(
+            no.hosts,
+            vec![FetchRequest {
+                url: url.clone(),
+                host: "127.0.0.1".to_string(),
+                redirected_from: None,
+                classified: Classified::NotAsked,
+            }]
+        );
+        assert!(no.updates.is_empty());
+        assert_eq!(snapshot(&home), before);
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+
+        let mut none = Updating::new(true, true);
+        assert_eq!(
+            update_with(
+                "demo",
+                &home,
+                &mut none,
+                None,
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::GitNotInstalled)
+        );
+        assert!(none.hosts.is_empty());
+        let mut nobody = Updating::new(true, true);
+        nobody.there = false;
+        assert_eq!(
+            update_with(
+                "demo",
+                &home,
+                &mut nobody,
+                Some(git.clone()),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::NobodyToAsk)
+        );
+        assert!(nobody.hosts.is_empty());
+
+        // A yes lets the request leave (the control for the zero above).
+        let mut yes = Updating::new(true, true);
+        assert_eq!(
+            update_with(
+                "demo",
+                &home,
+                &mut yes,
+                Some(git),
+                &crate::plugin_git::PROTOCOLS,
+                parent.path()
+            ),
+            Err(Refusal::CloneFailed)
+        );
+        assert!(listener.connections() > 0, "a yes did not reach the host");
+        assert_eq!(snapshot(&home), before);
+    }
+
+    /// PLUGIN-9, PLUGIN-14: an update fetches the recorded ref again. A branch that moved to a
+    /// commit with other files is put to the person with the new commit and a new digest, the old
+    /// commit being the record's, and a no changes nothing. A branch that moved to a commit with
+    /// the same files changes nothing and asks nothing. A tag that did not move is unchanged.
+    ///
+    /// Rejects: an update that fetches the default branch instead of the recorded ref, one that
+    /// compares only the commit (it would ask about the same-files commit), one that compares
+    /// only the digest and shows the old commit, and one that rewrites the record on either.
+    #[test]
+    fn an_update_fetches_the_recorded_ref_and_compares_the_commit_and_the_digest() {
+        let git = crate::plugin_git::locate().expect("git must be on PATH for this test");
+        let remote = crate::plugin_git::fixtures::remote();
+        let parent = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source_at = |requested: &str| GitSource {
+            url: remote.path.to_string_lossy().into_owned(),
+            host: "local.test".to_string(),
+            requested_ref: Some(requested.to_string()),
+        };
+        let update = |requested: &str, asker: &mut Updating| {
+            let installed = read_record(&home, "demo").unwrap();
+            update_fetching(
+                &installed,
+                Some(&source_at(requested)),
+                &home,
+                asker,
+                Some(git.clone()),
+                &["file"],
+                parent.path(),
+            )
+        };
+        let mut yes = Host::new(true, true, Box::new(|| 0));
+        install_git(
+            &source_at("main"),
+            &home,
+            &mut yes,
+            Some(git.clone()),
+            &["file"],
+            parent.path(),
+        )
+        .unwrap();
+        let installed = read_record(&home, "demo").unwrap();
+        plant_answers(&home);
+        let before = snapshot(&home);
+
+        // Nothing moved.
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update("main", &mut asker),
+            Ok(Updated::Unchanged {
+                newer_commit: false
+            })
+        );
+        assert_eq!(asker.hosts.len(), 1);
+        assert!(asker.updates.is_empty());
+        assert_eq!(snapshot(&home), before);
+
+        // The branch moved to a commit holding the same files.
+        crate::plugin_git::fixtures::git(
+            &remote.path,
+            &["commit", "-q", "--allow-empty", "-m", "same files"],
+        );
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update("main", &mut asker),
+            Ok(Updated::Unchanged { newer_commit: true })
+        );
+        assert!(asker.updates.is_empty());
+        assert_eq!(snapshot(&home), before);
+
+        // The branch moved to a commit holding other files.
+        std::fs::write(remote.path.join("second.txt"), "changed\n").unwrap();
+        crate::plugin_git::fixtures::git(&remote.path, &["add", "-A"]);
+        crate::plugin_git::fixtures::git(&remote.path, &["commit", "-q", "-m", "changed"]);
+        let newest = crate::plugin_git::fixtures::git(&remote.path, &["rev-parse", "HEAD"]);
+        let mut asker = Updating::new(true, false);
+        assert_eq!(update("main", &mut asker), Err(Refusal::Declined));
+        assert_eq!(asker.updates.len(), 1);
+        let (new_commit, new_digest, old_commit) = &asker.updates[0];
+        assert_eq!(new_commit.as_deref(), Some(newest.as_str()));
+        assert_ne!(*new_digest, installed.digest);
+        assert_eq!(old_commit.as_deref(), Some(remote.second.as_str()));
+        assert_eq!(snapshot(&home), before);
+
+        // The ref of the record is the one fetched: `main` moved and `v1` did not, and the
+        // tree of `v1` is another plugin tree than the one installed.
+        let mut asker = Updating::new(true, false);
+        assert_eq!(update("v1", &mut asker), Err(Refusal::Declined));
+        assert_eq!(
+            asker.updates[0].0.as_deref(),
+            Some(remote.first.as_str()),
+            "the asked ref is fetched, not the default branch"
+        );
+    }
+
+    /// A plugin called `demo` at `version` offering the skill `skills` with front matter, one hook
+    /// that runs `hook_word`, one server and an extra file `notes.txt` holding `notes`.
+    fn updatable(parent: &Path, version: &str, hook_word: &str, notes: &str) -> PathBuf {
+        let root = parent.join("updatable");
+        std::fs::create_dir_all(root.join("skills").join("hello")).unwrap();
+        std::fs::write(
+            root.join(plugin::FILE),
+            WITH_PARTS.replace("1.0.0", version),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("skills").join("hello").join("SKILL.md"),
+            "---\nname: hello\ndescription: Says hello.\n---\n\nBody.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("hooks.json"),
+            format!(
+                r#"{{"hooks":[{{"on":"turn-started","run":["${{PLUGIN_ROOT}}/{hook_word}"]}}]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("servers.json"), SERVERS).unwrap();
+        std::fs::write(root.join("notes.txt"), notes).unwrap();
+        root
+    }
+
+    /// A line in each approval file for `plugin`, so a test can show which lines a withdrawal took.
+    fn answer_lines(plugin: &str, tag: &str) -> (String, String) {
+        let digest = bravebot_config::hooks_approved::Digest::of(plugin, tag, &[], "t");
+        (
+            format!("{digest} {plugin}\n"),
+            format!("plugin {digest} {plugin} s\n"),
+        )
+    }
+
+    /// Writes the lines of `demo` and of `other` the way a person's yes would have left them.
+    fn plant_lines(home: &Path) -> (String, String) {
+        let (demo_hook, demo_server) = answer_lines("demo", "turn-started");
+        let (other_hook, other_server) = answer_lines("other", "turn-started");
+        std::fs::create_dir_all(home).unwrap();
+        let hooks = format!("{demo_hook}{other_hook}");
+        let servers = format!("{demo_server}{other_server}");
+        std::fs::write(home.join("hooks-approved"), &hooks).unwrap();
+        std::fs::write(home.join("mcp-approved"), &servers).unwrap();
+        (other_hook, other_server)
+    }
+
+    /// PLUGIN-9, PLUGIN-5, PLUGIN-7: a yes replaces the directory and the record with the new tree,
+    /// keeps whether the plugin is enabled, takes the new version and digest, leaves the tree
+    /// matching its record, withdraws every answer recorded for this plugin's hooks and servers and
+    /// no other plugin's, and leaves no half-made directory. The question is given what the
+    /// installed copy held, so what was removed can be listed.
+    ///
+    /// Rejects: an update that enables a disabled plugin, one that leaves the old version or digest
+    /// in the record, one that leaves a tree the record no longer describes (every hook would be
+    /// stopped as changed), one that withdraws nothing or another plugin's lines, one that leaves
+    /// its working directories behind, and a question that is not given the installed copy.
+    #[test]
+    fn a_yes_replaces_the_plugin_keeps_it_disabled_and_withdraws_only_its_own_answers() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = updatable(scratch.path(), "1.0.0", "hook.sh", "one");
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+        set_enabled(&home, "demo", false).unwrap();
+        let old_digest = read_record(&home, "demo").unwrap().digest;
+        let (other_hook, other_server) = plant_lines(&home);
+
+        let source = updatable(scratch.path(), "1.1.0", "other.sh", "two");
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update_typed("demo", &home, &mut asker),
+            Ok(Updated::Replaced)
+        );
+        assert_eq!(asker.updates.len(), 1);
+        let before = &asker.befores[0];
+        assert!(before.readable);
+        assert_eq!(before.offers.len(), 1);
+        assert!(matches!(before.hooks, Some(Ok(_))));
+
+        let record = read_record(&home, "demo").unwrap();
+        assert_eq!(record.version, "1.1.0");
+        assert!(!record.enabled, "an update turned a disabled plugin on");
+        assert_ne!(record.digest, old_digest);
+        assert_eq!(
+            record.source,
+            Source::Local(std::fs::canonicalize(&source).unwrap())
+        );
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+        assert_eq!(
+            std::fs::read_to_string(installed_dir(&home, "demo").join("notes.txt")).unwrap(),
+            "two"
+        );
+        let hooks = installed_hooks(&home, "demo").unwrap().unwrap();
+        assert!(hooks.hooks.declared()[0].run()[0].ends_with("/other.sh"));
+
+        assert_eq!(
+            std::fs::read_to_string(home.join("hooks-approved")).unwrap(),
+            other_hook
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("mcp-approved")).unwrap(),
+            other_server
+        );
+        let held: Vec<String> = std::fs::read_dir(plugins_dir(&home))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(held.len(), 2, "{held:?}");
+        assert!(held.contains(&"demo".to_string()) && held.contains(&"demo.record".to_string()));
+
+        // An enabled plugin stays enabled.
+        set_enabled(&home, "demo", true).unwrap();
+        updatable(scratch.path(), "1.2.0", "third.sh", "three");
+        assert_eq!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Ok(Updated::Replaced)
+        );
+        assert!(read_record(&home, "demo").unwrap().enabled);
+    }
+
+    /// PLUGIN-9, PLUGIN-12: a changed plugin that would offer a skill another installed plugin
+    /// already offers is refused naming both plugins, before the question and with nothing changed.
+    /// The plugin's own installed offers are not counted against it, so the update that keeps
+    /// `hello` goes through (the control).
+    ///
+    /// Rejects: an update that replaces anyway, one that asks first, one that names only one plugin,
+    /// and one that counts the plugin against its own old copy.
+    #[test]
+    fn an_update_offering_a_name_another_plugin_offers_is_refused_naming_both() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = updatable(scratch.path(), "1.0.0", "hook.sh", "one");
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+        install(&offering(scratch.path(), "other", "review", None), &home).unwrap();
+        plant_lines(&home);
+        let before = snapshot(&home);
+
+        std::fs::create_dir_all(source.join("skills").join("review")).unwrap();
+        std::fs::write(
+            source.join("skills").join("review").join("SKILL.md"),
+            "---\nname: review\ndescription: Reviews.\n---\n\nBody.\n",
+        )
+        .unwrap();
+        let mut asker = Updating::new(true, true);
+        assert_eq!(
+            update_typed("demo", &home, &mut asker),
+            Err(Refusal::NameOffered {
+                offered: "review".to_string(),
+                new_plugin: "demo".to_string(),
+                existing_plugin: "other".to_string(),
+            })
+        );
+        assert!(
+            asker.updates.is_empty(),
+            "the person was asked about a refused update"
+        );
+        assert_eq!(snapshot(&home), before);
+
+        // The control: without the colliding skill the same source updates.
+        std::fs::remove_dir_all(source.join("skills").join("review")).unwrap();
+        std::fs::write(source.join("notes.txt"), "changed").unwrap();
+        assert_eq!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Ok(Updated::Replaced)
+        );
+    }
+
+    /// PLUGIN-9: nothing is replaced where the replacement cannot be completed. A withdrawal that
+    /// cannot be written stops the update before anything is replaced, and a record that cannot be
+    /// written puts the old directory back. Either way the old directory, the old record and the
+    /// old version are in place and the old tree still matches its record, and no working
+    /// directory is left.
+    ///
+    /// Rejects: an update that moves the new tree in before the withdrawal, one that leaves the new
+    /// directory with the old record (every hook would be stopped as changed), one that loses the
+    /// old directory when the record write fails, and one that leaves its working directories.
+    #[test]
+    fn an_update_that_cannot_be_completed_leaves_the_old_plugin_working() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = updatable(scratch.path(), "1.0.0", "hook.sh", "one");
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+        let record_before = std::fs::read(record_path(&home, "demo")).unwrap();
+        let tree_before = snapshot(&installed_dir(&home, "demo"));
+        updatable(scratch.path(), "1.1.0", "other.sh", "two");
+        let intact = |home: &Path| {
+            assert_eq!(
+                std::fs::read(record_path(home, "demo")).unwrap(),
+                record_before
+            );
+            assert_eq!(snapshot(&installed_dir(home, "demo")), tree_before);
+            assert_eq!(tree_matches_record(home, "demo"), Ok(()));
+            let leftovers: Vec<String> = std::fs::read_dir(plugins_dir(home))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.starts_with('.') && !name.ends_with(".tmp"))
+                .collect();
+            assert!(leftovers.is_empty(), "{leftovers:?}");
+        };
+
+        // A hooks-approved that is a directory cannot be read or rewritten, so the withdrawal fails.
+        std::fs::create_dir(home.join("hooks-approved")).unwrap();
+        assert!(matches!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Err(Refusal::Io(_))
+        ));
+        intact(&home);
+        std::fs::remove_dir(home.join("hooks-approved")).unwrap();
+
+        // A record that cannot be written: the temporary name it is written through is a directory.
+        std::fs::create_dir(plugins_dir(&home).join(".demo.record.tmp")).unwrap();
+        assert!(matches!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Err(Refusal::Io(_))
+        ));
+        intact(&home);
+        assert_eq!(read_record(&home, "demo").unwrap().version, "1.0.0");
+
+        // A no changes nothing either, and the same source updates once the obstacle is gone.
+        std::fs::remove_dir(plugins_dir(&home).join(".demo.record.tmp")).unwrap();
+        assert_eq!(
+            update_typed("demo", &home, &mut Updating::new(true, false)),
+            Err(Refusal::Declined)
+        );
+        intact(&home);
+        assert_eq!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Ok(Updated::Replaced)
+        );
+        assert_eq!(read_record(&home, "demo").unwrap().version, "1.1.0");
+    }
+
+    /// PLUGIN-9, PLUGIN-14: a git record whose URL no longer reads as a git source (here a plain web
+    /// address and a bare word, which reads as a local path) is refused as an unreadable record,
+    /// before any question and with nothing changed.
+    ///
+    /// Rejects: an update that says the URL is not a source in words about archives or web
+    /// addresses, one that stages the bare word as a local directory, and one that asks first.
+    #[test]
+    fn a_git_record_whose_url_no_longer_reads_as_a_git_source_is_unreadable() {
+        for url in ["https://example.com/demo", "demo"] {
+            let scratch = tempfile::tempdir().unwrap();
+            let home = scratch.path().join("home");
+            git_record(scratch.path(), &home, Some("main"), url);
+            let before = snapshot(&home);
+            let mut asker = Updating::new(true, true);
+            assert_eq!(
+                update_typed("demo", &home, &mut asker),
+                Err(Refusal::RecordUnreadable {
+                    name: "demo".to_string()
+                }),
+                "{url}"
+            );
+            assert!(asker.hosts.is_empty() && asker.updates.is_empty(), "{url}");
+            assert_eq!(snapshot(&home), before, "{url}");
+        }
+    }
+
+    /// PLUGIN-9, Known costs: a crash between the two renames of an earlier update left the old copy
+    /// under `.<name>.previous` and no directory. The next update puts it back before it begins, so
+    /// an update that then fails leaves the old plugin in place and one that goes through replaces
+    /// it.
+    ///
+    /// Rejects: an update that deletes `.previous` without putting it back, which leaves no plugin
+    /// directory after a failure, and one that fails because the directory is missing.
+    #[test]
+    fn an_update_after_a_crash_between_its_renames_puts_the_old_copy_back_first() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = updatable(scratch.path(), "1.0.0", "hook.sh", "one");
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+        let tree_before = snapshot(&installed_dir(&home, "demo"));
+        let previous = plugins_dir(&home).join(".demo.previous");
+        let crash = || std::fs::rename(installed_dir(&home, "demo"), &previous).unwrap();
+        updatable(scratch.path(), "1.1.0", "other.sh", "two");
+
+        // The withdrawal cannot be written, so the update stops after the old copy was put back.
+        crash();
+        std::fs::create_dir(home.join("hooks-approved")).unwrap();
+        assert!(matches!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Err(Refusal::Io(_))
+        ));
+        assert!(!is_present(&previous), "the old copy was left aside");
+        assert_eq!(snapshot(&installed_dir(&home, "demo")), tree_before);
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+        std::fs::remove_dir(home.join("hooks-approved")).unwrap();
+
+        crash();
+        assert_eq!(
+            update_typed("demo", &home, &mut Updating::new(true, true)),
+            Ok(Updated::Replaced)
+        );
+        assert!(!is_present(&previous));
+        assert_eq!(read_record(&home, "demo").unwrap().version, "1.1.0");
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+    }
+
+    /// PLUGIN-9: where the staged tree cannot be renamed to the working directory, it is copied
+    /// there and the update goes through. A directory is renamed to another parent only by someone
+    /// who can write to it, so a read-only staged tree stands for any rename that fails while the
+    /// tree can still be read. A process that ignores file modes (root) renames it anyway and this
+    /// then shows only that the update goes through.
+    ///
+    /// Rejects: an update that is refused because the rename failed, and one that leaves its
+    /// working directory behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_staged_tree_that_cannot_be_renamed_is_copied_into_place() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = updatable(scratch.path(), "1.0.0", "hook.sh", "one");
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+        let installed = read_record(&home, "demo").unwrap();
+        updatable(scratch.path(), "1.1.0", "other.sh", "two");
+        let staged = stage(&source, &home).unwrap();
+        std::fs::set_permissions(&staged.tree, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = commit_update(&staged, &installed, &home);
+        std::fs::set_permissions(&staged.tree, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(result, Ok(()));
+        let record = read_record(&home, "demo").unwrap();
+        assert_eq!(record.version, "1.1.0");
+        assert_eq!(record.digest, staged.digest);
+        assert_eq!(tree_matches_record(&home, "demo"), Ok(()));
+        assert_eq!(
+            std::fs::read_to_string(installed_dir(&home, "demo").join("notes.txt")).unwrap(),
+            "two"
+        );
+        assert!(!is_present(&plugins_dir(&home).join(".demo.updating")));
+    }
+
+    /// PLUGIN-9: the files that differ list a file only in the installed copy as removed, a file
+    /// only in the staged tree as added, one with other bytes as changed, and a directory by its name
+    /// with a trailing `/`, in the order of the path bytes. Files that are the same are not listed.
+    ///
+    /// Rejects: a listing that leaves out what the update deletes, one that lists a directory
+    /// without the `/` or not at all, and one that lists a file whose bytes are the same.
+    #[test]
+    fn the_files_that_differ_list_removed_files_and_directories_as_well_as_added_ones() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = updatable(scratch.path(), "1.0.0", "hook.sh", "one");
+        std::fs::create_dir(source.join("docs")).unwrap();
+        std::fs::write(source.join("docs").join("a.txt"), "a").unwrap();
+        std::fs::write(source.join("old.txt"), "old").unwrap();
+        commit_install(stage(&source, &home).unwrap(), &home).unwrap();
+
+        std::fs::remove_dir_all(source.join("docs")).unwrap();
+        std::fs::remove_file(source.join("old.txt")).unwrap();
+        std::fs::create_dir(source.join("more")).unwrap();
+        std::fs::write(source.join("more").join("b.txt"), "b").unwrap();
+        std::fs::write(source.join("new.txt"), "new").unwrap();
+        std::fs::write(source.join("notes.txt"), "two").unwrap();
+        let staged = stage(&source, &home).unwrap();
+        let changes = file_changes(&staged, &before_of(&home, "demo")).unwrap();
+        let shown: Vec<(String, Change)> = changes
+            .iter()
+            .map(|file| (String::from_utf8(file.path.clone()).unwrap(), file.change))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("docs/".to_string(), Change::Removed),
+                ("docs/a.txt".to_string(), Change::Removed),
+                ("more/".to_string(), Change::Added),
+                ("more/b.txt".to_string(), Change::Added),
+                ("new.txt".to_string(), Change::Added),
+                ("notes.txt".to_string(), Change::Changed),
+                ("old.txt".to_string(), Change::Removed),
+            ]
+        );
+    }
+
+    /// PLUGIN-9, PATH-001, PATH-003: two files whose names differ only where a text rendering would
+    /// make them equal (`f-\xff` and `f-\u{FFFD}`) are two entries of the listing's file map, so a
+    /// change to one of them is listed with its own bytes. The names are built in memory because
+    /// some file systems cannot hold the first.
+    ///
+    /// Rejects: a file map keyed on a lossy rendering of the name, which holds one entry for both
+    /// and can drop a changed file from the listing.
+    #[test]
+    fn names_that_differ_only_in_invalid_bytes_stay_two_paths_in_the_file_map() {
+        let scratch = tempfile::tempdir().unwrap();
+        let file = |name: &str, text: &str| {
+            let path = scratch.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let invalid = b"f-\xff".to_vec();
+        let lookalike = "f-\u{FFFD}".as_bytes().to_vec();
+        let (one, two) = (file("one", "1"), file("two", "2"));
+        let old = digest_found(vec![
+            (invalid.clone(), one, false),
+            (lookalike.clone(), two.clone(), false),
+        ])
+        .unwrap();
+        assert_eq!(old.len(), 2);
+        let changed = file("changed", "11");
+        let new = digest_found(vec![
+            (invalid.clone(), changed, false),
+            (lookalike, two, false),
+        ])
+        .unwrap();
+        assert_eq!(
+            changes_between(&old, &new),
+            vec![FileChange {
+                path: invalid,
+                change: Change::Changed
+            }]
         );
     }
 }

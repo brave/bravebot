@@ -26,12 +26,11 @@ declarations from one source, what the person is shown before it does, where eac
 plugin can never carry, and how an installed plugin is updated, turned off and removed.
 
 What is built is the install of a plugin from a local path or from a git URL and ref with
-`/plugin add`, and `/plugin list`, `/plugin remove`, `/plugin enable` and `/plugin disable`, for the
-skills, definitions, hooks and servers a plugin carries, with the hook question and the server
-question of [PLUGIN-7](#PLUGIN-7) and `${PLUGIN_ROOT}` ([PLUGIN-13](#PLUGIN-13)). Not built is
-`/plugin update` ([PLUGIN-9](#PLUGIN-9), [PLUGIN-14](#PLUGIN-14)). A
-clause reads `verified-by: none` where none of it is built, and a clause only partly built has a
-**Not built** paragraph naming what is missing. The specs this one changes are named in
+`/plugin add`, and `/plugin update`, `/plugin list`, `/plugin remove`, `/plugin enable` and
+`/plugin disable`, for the skills, definitions, hooks and servers a plugin carries, with the hook
+question and the server question of [PLUGIN-7](#PLUGIN-7) and `${PLUGIN_ROOT}`
+([PLUGIN-13](#PLUGIN-13)). A clause only partly built has a **Not built** paragraph naming what is
+missing. The specs this one changes are named in
 [What this changes elsewhere](#what-this-changes-elsewhere). The skills, definitions, instructions,
 trust-map, hooks and MCP servers specs were edited when the work they describe landed, and the
 programs and import specs are not edited until theirs does.
@@ -69,13 +68,12 @@ the typed command even where it reads as one.
 provenance. Whether that happens is a decision about where bytes land and what runs afterwards, and
 only a person's own keystrokes are a source for it that no content can author.
 
-**Not built:** `/plugin update`. The typed `/plugin update` is refused with a notice that says it is
-not built.
-
 `verified-by: bravebot_agent::tools::no_tool_offered_installs_or_changes_a_plugin`
 `verified-by: bravebot_tui::app::the_plugin_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::a_pasted_plugin_line_is_text_in_the_box_and_not_the_command`
 `verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_add_installs_nothing`
+`verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_update_changes_nothing`
+`verified-by: bravebot_tui::plugin_command::the_words_after_the_command_read_as_the_six_forms_and_nothing_else`
 
 <a id="PLUGIN-2"></a>
 ### PLUGIN-2: `plugin.toml` names its parts, and a part it does not name is not installed
@@ -260,7 +258,10 @@ one named `.bravebot/plugins`, offers nothing, and is a file read through the tr
 and therefore not trusted until the map says so.
 
 An install whose name is already installed from another source is refused rather than replaced, naming
-both sources. An install of the same source is an update ([PLUGIN-9](#PLUGIN-9)).
+both sources. An install of the same source is refused too, and the refusal names
+`/plugin update <name>` ([PLUGIN-9](#PLUGIN-9)), which is how an installed plugin is replaced. A git
+source is the same source when its URL and requested ref are the same, whatever commit the ref resolves
+to now.
 
 There is no project scope and no setting that makes a plugin required for a team.
 
@@ -268,13 +269,10 @@ There is no project scope and no setting that makes a plugin required for a team
 single-file spec of the declarations depends on. A project scope would put plugin parts where a checkout
 authors them.
 
-**Not built:** the update that an install of the same source would be. A git source is the same source
-when its URL and requested ref are the same, whatever commit the ref resolves to now. Adding the same
-source again is refused and says update is not built.
-
 `verified-by: bravebot_agent::plugins::an_install_puts_the_tree_and_a_record_under_the_plugins_directory`
 `verified-by: bravebot_agent::plugins::a_name_installed_from_another_source_is_refused_naming_both_and_changes_nothing`
-`verified-by: bravebot_agent::plugins::adding_the_same_source_again_is_refused_because_update_is_not_built`
+`verified-by: bravebot_agent::plugins::adding_the_same_source_again_is_refused_and_points_at_update`
+`verified-by: bravebot_tui::plugin_command::adding_an_installed_source_points_at_update_and_does_not_say_it_is_not_built`
 `verified-by: bravebot_agent::plugins::a_git_record_holds_the_url_ref_and_commit_and_the_same_url_and_ref_is_an_update`
 `verified-by: bravebot_agent::plugins::an_old_record_still_reads_and_a_damaged_git_record_does_not`
 `verified-by: bravebot_agent::plugin_source::the_same_url_and_ref_is_one_source_whatever_commit_it_resolved_to`
@@ -336,16 +334,16 @@ none does.
 Before a hook fires or a server starts, the plugin's directory is hashed again, and for a server also
 before its question. A tree whose digest is not the one recorded at install stops the hook or the
 server without a question, and a notice names the plugin once in the session as a plain sentence.
-Changing a hook's moment or argv, or any file in the plugin, is a question again after an update the
-person accepted.
+Every hook of a plugin, and every server, is a question again after an update the person accepted,
+whether or not its own declaration changed, because the digest of a hook's approval and of a server's
+approval each include the digest of the plugin's tree ([PLUGIN-9](#PLUGIN-9)). The recorded digest is
+replaced by the update, so the directory matches its record afterwards and the hook and the server are
+not stopped as changed.
 
 **Why.** The install is one yes to a list. Running a program the first time is a decision about that
 program, and it is asked about where it runs, in a session the person is watching. A hook is usually an
 argv that starts a script in the plugin, so an approval bound to the argv alone would still hold after
 the script changed.
-
-**Not built:** the update half. "After an update the person accepted" depends on `/plugin update`, which
-is not built, so a changed plugin is stopped and the way back is to remove it and install it again.
 
 `verified-by: bravebot_agent::plugin_hooks::a_plugin_hook_runs_nothing_until_the_question_is_answered_yes`
 `verified-by: bravebot_agent::plugin_hooks::a_no_leaves_the_hook_silent_and_is_asked_again_in_a_later_session`
@@ -361,6 +359,9 @@ is not built, so a changed plugin is stopped and the way back is to remove it an
 `verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
 `verified-by: bravebot_agent::servers::plugin_tests::a_plugin_whose_files_changed_starts_no_server_before_or_after_its_question`
 `verified-by: bravebot_agent::mcp::a_plugins_server_is_stopped_by_a_changed_tree_and_the_plugin_is_named_once`
+`verified-by: bravebot_agent::plugin_hooks::after_an_update_every_hook_of_the_plugin_is_asked_about_again`
+`verified-by: bravebot_agent::servers::plugin_tests::a_server_of_an_updated_plugin_is_asked_about_again_though_its_declaration_is_the_same`
+`verified-by: bravebot_agent::plugins::a_yes_replaces_the_plugin_keeps_it_disabled_and_withdraws_only_its_own_answers`
 
 <a id="PLUGIN-8"></a>
 ### PLUGIN-8: withdrawn, there is no marketplace
@@ -373,12 +374,37 @@ would carry is the resolved commit and the tree digest those two clauses record.
 ### PLUGIN-9: update, remove and list work from the recorded source
 
 `/plugin update <name>` fetches the recorded source again at the recorded ref
-([PLUGIN-3](#PLUGIN-3), [PLUGIN-14](#PLUGIN-14)) and, when the tree's digest differs, puts the
-difference to the person the way [PLUGIN-4](#PLUGIN-4) puts a first install: each part added, removed or
-changed, in full. A part whose name another installed plugin already offers ([PLUGIN-12](#PLUGIN-12))
-refuses the update, naming both plugins. Nothing is replaced before the yes, and an answer given to a
-hook or a server before is withdrawn for any part whose digest changed. No plugin updates on its own and
-no session start checks for one.
+([PLUGIN-3](#PLUGIN-3), [PLUGIN-14](#PLUGIN-14)) and compares the tree's digest with the recorded one.
+A git source goes through the host question and the staging an install uses, so no request leaves
+before a yes to the host and no mode or rule answers it. A local path is staged again from the
+recorded path, with no host question since nothing leaves the machine. A source recorded at a full
+commit has nothing to update to, and that is said before anything is fetched or asked. A source that
+now holds a plugin of another name is refused with nothing changed. A plugin whose record cannot be
+read, or whose recorded git source no longer reads as one, is refused with nothing changed, and is
+removed and added again.
+
+When the digest is the same, nothing changes and nothing is asked: the record, the directory and the
+answers are untouched, including when the ref now resolves to a newer commit, which is not recorded and
+is said in words. When the digest differs, the difference is put to the person the way
+[PLUGIN-4](#PLUGIN-4) puts a first install: the name, the old and new version, the source, the old and
+new resolved commit, and each skill, definition, hook and server added, removed or changed, in full
+behind the same margin, with a list of the files that differ so a changed script is visible where the
+parts read the same. The installed copy is read as data for that listing, and an installed copy that
+cannot be read is said and is not shown as empty. The answer is yes or no. No mode and no allow rule
+answers it, and where nobody can be asked, such as a one-shot run, nothing is read or updated.
+
+A part whose name another installed plugin already offers ([PLUGIN-12](#PLUGIN-12)) refuses the update,
+naming both plugins, before the question and again before anything is replaced. The plugin's own
+installed offers are not counted. Nothing is replaced before the yes. On a yes the answers recorded for
+the plugin's hooks in `hooks-approved` and `plugin` lines in `mcp-approved` are all withdrawn before the
+directory is replaced, as `remove` does, so a withdrawal that cannot be written stops the update with the
+old plugin in place. All of them are withdrawn and not only those of changed parts, because the digest of
+each approval includes the plugin's tree ([PLUGIN-7](#PLUGIN-7)), so every hook and every server asks
+again. The directory is replaced through `.<name>.updating` and `.<name>.previous` and the record
+through a temporary file and a rename, and a failure after the swap puts the old directory back. The
+record keeps whether the plugin is enabled and takes the new version, source, commit and digest. A
+plugin whose directory no longer matches its record is still updated, since the record is the baseline.
+No plugin updates on its own and no session start checks for one or makes a request for one.
 
 `/plugin remove <name>` deletes the directory and its record, and withdraws what was recorded for its
 hooks and servers: the lines of `hooks-approved` that name the plugin and the `plugin` lines of
@@ -390,9 +416,6 @@ reads nothing but that record and starts no program.
 **Why.** An update that applied itself would be a fetch nobody asked for followed by changed programs
 nobody saw.
 
-**Not built:** `/plugin update`, so the fetch again, the difference put to the person and the withdrawal of
-an answer for a changed part are not built. `/plugin remove` and `/plugin list` are built.
-
 `verified-by: bravebot_agent::plugins::list_shows_what_was_installed_from_the_records_alone`
 `verified-by: bravebot_agent::plugins::remove_deletes_the_directory_and_the_record_and_nothing_else`
 `verified-by: bravebot_tui::plugin_command::list_prints_name_version_source_digest_and_enabled`
@@ -401,7 +424,32 @@ an answer for a changed part are not built. `/plugin remove` and `/plugin list` 
 `verified-by: bravebot_config::hooks_approved::withdrawing_a_plugin_removes_its_lines_and_leaves_the_others_as_they_are`
 `verified-by: bravebot_agent::plugin_hooks::a_removed_plugin_is_asked_about_again_when_it_is_installed_again`
 `verified-by: bravebot_agent::servers::plugin_tests::removing_a_plugin_withdraws_its_servers_answers_and_leaves_the_rest`
-`verified-by: none`
+`verified-by: bravebot_tui::plugin_command::update_is_dispatched_and_says_what_it_did_in_words`
+`verified-by: bravebot_agent::plugins::an_update_of_an_unchanged_local_source_changes_nothing_and_asks_nothing`
+`verified-by: bravebot_agent::plugins::an_update_of_a_changed_local_source_asks_once_and_a_no_changes_nothing`
+`verified-by: bravebot_agent::plugins::an_update_with_nobody_to_ask_or_a_bad_name_or_another_plugin_changes_nothing`
+`verified-by: bravebot_agent::plugins::a_source_recorded_as_a_full_commit_has_nothing_to_update_to_and_asks_nothing`
+`verified-by: bravebot_agent::plugins::an_update_puts_the_host_question_before_any_connection_and_a_no_makes_none`
+`verified-by: bravebot_agent::plugins::an_update_fetches_the_recorded_ref_and_compares_the_commit_and_the_digest`
+`verified-by: bravebot_agent::plugins::a_yes_replaces_the_plugin_keeps_it_disabled_and_withdraws_only_its_own_answers`
+`verified-by: bravebot_agent::plugins::an_update_offering_a_name_another_plugin_offers_is_refused_naming_both`
+`verified-by: bravebot_agent::plugins::an_update_that_cannot_be_completed_leaves_the_old_plugin_working`
+`verified-by: bravebot_agent::plugins::an_update_after_a_crash_between_its_renames_puts_the_old_copy_back_first`
+`verified-by: bravebot_agent::plugins::a_staged_tree_that_cannot_be_renamed_is_copied_into_place`
+`verified-by: bravebot_agent::plugins::a_git_record_whose_url_no_longer_reads_as_a_git_source_is_unreadable`
+`verified-by: bravebot_agent::plugins::the_files_that_differ_list_removed_files_and_directories_as_well_as_added_ones`
+`verified-by: bravebot_agent::plugins::names_that_differ_only_in_invalid_bytes_stay_two_paths_in_the_file_map`
+`verified-by: bravebot_tui::plugin_command::a_changed_source_puts_the_difference_and_only_a_typed_yes_updates`
+`verified-by: bravebot_tui::plugin_command::every_permission_mode_still_puts_the_update_prompt_to_the_person`
+`verified-by: bravebot_tui::plugin_command::an_update_into_a_name_another_plugin_offers_is_said_naming_both_and_asks_nothing`
+`verified-by: bravebot_tui::confirm::plugin::update::the_prompt_shows_each_part_added_removed_and_changed_with_both_commits`
+`verified-by: bravebot_tui::confirm::plugin::update::the_difference_leaves_out_what_is_equal_and_pairs_a_change`
+`verified-by: bravebot_tui::confirm::plugin::update::a_side_that_could_not_be_read_is_said_and_not_shown_as_empty`
+`verified-by: bravebot_tui::confirm::plugin::update::text_of_the_difference_is_drawn_behind_the_margin_and_written_out`
+`verified-by: bravebot_tui::confirm::plugin::update::a_long_description_is_cut_and_a_yes_waits_for_it_and_argv_rows_are_never_cut`
+`verified-by: bravebot_tui::confirm::plugin::update::only_a_y_updates_and_not_before_every_row_has_been_drawn`
+`verified-by: bravebot_cli::running::starting_a_session_makes_no_request_for_an_installed_git_source_plugin`
+`verified-by: bravebot_cli::running::a_one_shot_task_opening_with_slash_plugin_update_changes_nothing`
 
 <a id="PLUGIN-10"></a>
 ### PLUGIN-10: a plugin's text reaches a turn only as the part it is
@@ -492,9 +540,6 @@ recorded with its digest.
 **Why.** Without an index to pin a source, the commit the person was shown is the pin, and an update is
 a different commit the person is shown again.
 
-**Not built:** the update. `/plugin update` is refused ([PLUGIN-1](#PLUGIN-1)), and a git source added
-again with the same URL and ref is refused and says update is not built.
-
 `verified-by: bravebot_agent::plugin_source::a_git_url_is_split_from_its_ref_at_the_first_hash`
 `verified-by: bravebot_agent::plugin_source::a_ref_that_git_could_read_as_an_option_or_that_holds_a_control_character_is_refused`
 `verified-by: bravebot_agent::plugin_source::a_url_with_a_control_character_is_refused_and_a_commit_is_forty_lowercase_hex_digits`
@@ -503,6 +548,9 @@ again with the same URL and ref is refused and says update is not built.
 `verified-by: bravebot_agent::plugins::a_git_record_holds_the_url_ref_and_commit_and_the_same_url_and_ref_is_an_update`
 `verified-by: bravebot_tui::confirm::plugin::a_git_source_shows_the_requested_ref_and_the_full_commit`
 `verified-by: bravebot_tui::plugin_command::list_prints_the_resolved_commit_of_a_git_source_and_none_for_a_path`
+`verified-by: bravebot_agent::plugins::an_update_fetches_the_recorded_ref_and_compares_the_commit_and_the_digest`
+`verified-by: bravebot_agent::plugins::a_source_recorded_as_a_full_commit_has_nothing_to_update_to_and_asks_nothing`
+`verified-by: bravebot_agent::plugins::an_update_of_a_changed_local_source_asks_once_and_a_no_changes_nothing`
 
 ## What this changes elsewhere
 
@@ -551,6 +599,18 @@ work lands, in the same commit as the code.
 - A plugin's hooks and servers file is read as `hooks.json` and `mcp.json` are, so an entry the hook
   reader cannot use is left out and counted in the install prompt without its text, and a servers file
   the server reader refuses lists no server and says so.
+- A plugin update fetches the source again only when a person types `/plugin update <name>`. Nothing
+  checks for a newer version, so a plugin whose source has moved stays as installed until then, and a
+  person who wants to know whether one has moved runs the command, which asks nothing when the files
+  are the same. A source recorded at a full commit cannot be updated: it is removed and added again at
+  another commit. An update withdraws every recorded answer for the plugin's hooks and servers and not
+  only those of changed parts, so an unchanged hook asks again.
+- A local path is updated by reading the recorded path again, with no host question, and an update does
+  not hash the installed directory first, so a directory edited after the install is replaced by an
+  update. A new commit whose files are the same changes nothing and is not recorded.
+- An update replaces the directory with two renames, so a crash between them leaves the old copy under
+  `.<name>.previous`, which the next update puts back before it begins. A failure after the withdrawal
+  leaves the old plugin working and asking again for its hooks and servers.
 - A plugin hook that fires only on `session-ended` or `prompt-shown` fires only after an earlier yes,
   a `file-changed` question waits while the person has a draft, and the desktop interface, an editor
   over ACP and the local host cannot approve a plugin hook, so none runs there
@@ -581,7 +641,14 @@ work lands, in the same commit as the code.
 - The install decides from a plugin's bytes in three places, and each only refuses or marks: the manifest
   reader refuses a decision key, a part path that leaves the root and a bad name; the shadow marking
   compares a skill or definition name with the session's own list and marks the row; the two-plugin
-  comparison refuses an install whose name another plugin offers. Each result is a sentence of the
+  comparison refuses an install whose name another plugin offers. An update decides from the new bytes in
+  four more places, and each only refuses, marks or lists: it compares the manifest name of the new tree
+  with the installed plugin's name and refuses a source that now holds another plugin, it compares the
+  new tree's digest with the recorded one to decide whether to ask at all, it compares the new and the
+  installed copies' parts and files to draw the difference, and it reads whether the installed manifest
+  could be read (`Before.readable`) so that the listing says an unreadable copy is unreadable and does
+  not show it as empty. The comparison produces rows of the program's own wording and the
+  plugin's text, drawn behind the margin, and the answer is the person's. Each result is a sentence of the
   program's own wording drawn to the person, and the plugin's text is not in it unmarked. None runs in a
   turn or reaches the planner's context, so none is one of the places [labels.md](labels.md) lists
   under Known costs, which decide from untrusted bytes inside a turn.

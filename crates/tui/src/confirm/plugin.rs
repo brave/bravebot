@@ -13,6 +13,7 @@
 //! it has been drawn.
 
 mod parts;
+mod update;
 
 use bravebot_agent::plugin_source::Source;
 use bravebot_agent::plugins::{self, Offered, Staged};
@@ -34,6 +35,9 @@ use super::pinned::{self, Approving, Drawn, Question, Seen};
 use super::{Next, next_press};
 
 pub use parts::{HookRow, Listed, ServerRow};
+#[cfg(test)]
+pub(crate) use update::ask_update_reading;
+pub use update::{Delta, UpdateRequest, ask_update};
 
 /// How many rows of one description are drawn before `e` is pressed.
 const DESCRIPTION_ROWS: usize = 3;
@@ -89,43 +93,58 @@ impl InstallRequest {
     /// The listing of `staged`, with each name a higher-ranked source offers marked as shadowed.
     /// `catalogue` and `definitions` are what discovery found for this session.
     pub fn from_staged(staged: &Staged, catalogue: &Catalogue, definitions: &Definitions) -> Self {
-        let offers = plugins::staged_offers(staged);
-        let mut skills = Vec::new();
-        let mut kinds = Vec::new();
-        for mark in plugins::shadow_marks(&offers, catalogue, definitions) {
-            match mark.offer.what {
-                Offered::Skill { description } => skills.push(SkillRow {
-                    name: mark.offer.name,
-                    description,
-                    shadowed_by: mark.by,
-                }),
-                Offered::Definition { kind } => kinds.push(DefinitionRow {
-                    name: mark.offer.name,
-                    kind: kind.to_string(),
-                    shadowed_by: mark.by,
-                }),
-            }
-        }
+        let (skills, kinds) = offer_rows(&plugins::staged_offers(staged), catalogue, definitions);
         Self {
             name: staged.manifest.name.clone(),
             version: staged.manifest.version.clone(),
             source: staged.source.to_string(),
-            git: match &staged.source {
-                Source::Local(_) => None,
-                Source::Git {
-                    requested_ref,
-                    commit,
-                    ..
-                } => Some(GitRows {
-                    requested_ref: requested_ref.clone(),
-                    commit: commit.to_string(),
-                }),
-            },
+            git: git_rows(&staged.source),
             skills,
             definitions: kinds,
             hooks: parts::hooks_of(staged),
             servers: parts::servers_of(staged),
         }
+    }
+}
+
+/// The skill and definition rows of `offers`, each name a higher-ranked source offers marked as
+/// shadowed. Shared by the install listing and the update difference.
+pub(super) fn offer_rows(
+    offers: &[plugins::Offer],
+    catalogue: &Catalogue,
+    definitions: &Definitions,
+) -> (Vec<SkillRow>, Vec<DefinitionRow>) {
+    let mut skills = Vec::new();
+    let mut kinds = Vec::new();
+    for mark in plugins::shadow_marks(offers, catalogue, definitions) {
+        match mark.offer.what {
+            Offered::Skill { description } => skills.push(SkillRow {
+                name: mark.offer.name,
+                description,
+                shadowed_by: mark.by,
+            }),
+            Offered::Definition { kind } => kinds.push(DefinitionRow {
+                name: mark.offer.name,
+                kind: kind.to_string(),
+                shadowed_by: mark.by,
+            }),
+        }
+    }
+    (skills, kinds)
+}
+
+/// The rows only a git source has, or `None` for a local path, which has no commit.
+pub(super) fn git_rows(source: &Source) -> Option<GitRows> {
+    match source {
+        Source::Local(_) => None,
+        Source::Git {
+            requested_ref,
+            commit,
+            ..
+        } => Some(GitRows {
+            requested_ref: requested_ref.clone(),
+            commit: commit.to_string(),
+        }),
     }
 }
 
@@ -187,6 +206,24 @@ pub fn ask_install<B: Backend>(terminal: &mut Terminal<B>, request: &InstallRequ
 pub(crate) fn ask_install_reading<B: Backend>(
     terminal: &mut Terminal<B>,
     request: &InstallRequest,
+    next: impl FnMut() -> Next,
+) -> bool {
+    ask_drawing(
+        terminal,
+        |frame, expanded, scroll, seen, cut| {
+            draw_install(frame, request, expanded, scroll, seen, cut)
+        },
+        next,
+    )
+}
+
+/// The loop of a plugin question: draw, read a key, scroll, expand or answer. `draw` draws the
+/// prompt and returns what the draw decided for the keys. Shared by the install and the update
+/// question, so both take a yes by the same rules: only a typed y, never while any text of the
+/// plugin is cut, and never before every deciding row has been drawn.
+pub(super) fn ask_drawing<B: Backend>(
+    terminal: &mut Terminal<B>,
+    mut draw: impl FnMut(&mut ratatui::Frame, bool, u16, &mut Seen, &Cell<bool>) -> Drawn,
     mut next: impl FnMut() -> Next,
 ) -> bool {
     let mut scroll = 0u16;
@@ -198,9 +235,7 @@ pub(crate) fn ask_install_reading<B: Backend>(
     loop {
         if !ignored
             && terminal
-                .draw(|frame| {
-                    drawn = draw_install(frame, request, expanded, scroll, &mut seen, &cut)
-                })
+                .draw(|frame| drawn = draw(frame, expanded, scroll, &mut seen, &cut))
                 .is_err()
         {
             return false;
@@ -277,6 +312,19 @@ fn fact_rows(
         ));
         facts.push((t!(plugin_install_commit), git.commit.clone()));
     }
+    fact_list(lines, facts, margin, bold, muted, width, expanded);
+}
+
+/// A label above each value, the value behind the margin.
+pub(super) fn fact_list(
+    lines: &mut Vec<Line<'static>>,
+    facts: Vec<(impl Into<String>, String)>,
+    margin: &Span<'static>,
+    bold: Style,
+    muted: Style,
+    width: usize,
+    expanded: bool,
+) {
     for (label, value) in facts {
         lines.extend(indented(label, muted, width));
         let (rows, _) = untrusted(&value, bold, margin, width, None, expanded);
@@ -317,19 +365,7 @@ pub(super) fn draw_install(
     });
     for skill in &request.skills {
         lines.push(Line::raw(""));
-        let (rows, _) = untrusted(&skill.name, bold, &margin, width, None, expanded);
-        lines.extend(rows);
-        let (rows, was_cut) = untrusted(
-            &skill.description,
-            Style::default(),
-            &margin,
-            width,
-            Some(DESCRIPTION_ROWS),
-            expanded,
-        );
-        lines.extend(rows);
-        any_cut |= was_cut;
-        shadow_rows(&mut lines, skill.shadowed_by.as_deref(), width);
+        any_cut |= skill_body(&mut lines, skill, &margin, bold, width, expanded);
     }
 
     lines.push(Line::raw(""));
@@ -400,19 +436,57 @@ fn definition_rows(
 ) {
     for definition in &request.definitions {
         lines.push(Line::raw(""));
-        let (rows, _) = untrusted(&definition.name, bold, margin, width, None, expanded);
-        lines.extend(rows);
-        let (rows, _) = untrusted(
-            &t!(plugin_install_kind, kind = definition.kind.as_str()),
-            Style::default(),
-            margin,
-            width,
-            None,
-            expanded,
-        );
-        lines.extend(rows);
-        shadow_rows(lines, definition.shadowed_by.as_deref(), width);
+        definition_body(lines, definition, margin, bold, width, expanded);
     }
+}
+
+/// One skill: its name, its description cut to a few rows until `e`, and the mark of a source that
+/// shadows it. Returns whether the description is cut. Shared by the install listing and the update
+/// difference.
+pub(super) fn skill_body(
+    lines: &mut Vec<Line<'static>>,
+    skill: &SkillRow,
+    margin: &Span<'static>,
+    bold: Style,
+    width: usize,
+    expanded: bool,
+) -> bool {
+    let (rows, _) = untrusted(&skill.name, bold, margin, width, None, expanded);
+    lines.extend(rows);
+    let (rows, was_cut) = untrusted(
+        &skill.description,
+        Style::default(),
+        margin,
+        width,
+        Some(DESCRIPTION_ROWS),
+        expanded,
+    );
+    lines.extend(rows);
+    shadow_rows(lines, skill.shadowed_by.as_deref(), width);
+    was_cut
+}
+
+/// One definition: its name, its kind and the mark of a source that shadows it.
+pub(super) fn definition_body(
+    lines: &mut Vec<Line<'static>>,
+    definition: &DefinitionRow,
+    margin: &Span<'static>,
+    bold: Style,
+    width: usize,
+    expanded: bool,
+) {
+    let (rows, _) = untrusted(&definition.name, bold, margin, width, None, expanded);
+    lines.extend(rows);
+    let (rows, _) = untrusted(
+        &t!(plugin_install_kind, kind = definition.kind.as_str()),
+        Style::default(),
+        margin,
+        width,
+        None,
+        expanded,
+    );
+    lines.extend(rows);
+    shadow_rows(lines, definition.shadowed_by.as_deref(), width);
 }
 
 /// The mark under a name that a higher-ranked source takes. Its origin is a path, so it is drawn

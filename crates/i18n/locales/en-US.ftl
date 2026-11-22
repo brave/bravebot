@@ -1891,13 +1891,15 @@ servers-plugin-nobody =
 servers-plugin-disabled = { $alias } was not started: the plugin { $plugin } is turned off
 servers-plugin-changed =
     { $alias } was not started: the files of the plugin { $plugin } no longer match what was
-    installed. Remove the plugin and install it again to use its servers
+    installed. Run /plugin update { $plugin } to use its servers again if its source holds the files
+    you want, or remove the plugin and add it again
 servers-plugin-shadowed =
     { $alias } is declared in mcp.json, so the server the plugin { $plugin } carries under that
     name is not used
 servers-plugin-stopped-changed =
     A server of the plugin { $plugin } was stopped: the plugin's files no longer match what was
-    installed. Remove the plugin and install it again to use its servers.
+    installed. Run /plugin update { $plugin } to use its servers again if its source holds the files
+    you want, or remove the plugin and add it again.
 servers-program-relative = { $program } is a relative path, which names a different program in each directory
 servers-program-without-path =
     { $program } is found through PATH, which the declaration does not name: declare it with
@@ -2076,8 +2078,8 @@ mcp-command-nothing-to-reconnect = Every requested MCP server is running or turn
 mcp-command-reconnected = { $alias } is running. Its tools are put to you before the next turn plans.
 mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
 mcp-command-already-off = { $alias } is already turned off
-command-plugin = Install, list, remove, enable or disable a plugin
-plugin-command-usage = /plugin takes add <path or git url[#ref]>, list, remove <name>, enable <name> or disable <name>
+command-plugin = Install, list, update, remove, enable or disable a plugin
+plugin-command-usage = /plugin takes add <path or git url[#ref]>, list, update <name>, remove <name>, enable <name> or disable <name>
 plugin-command-needs-an-argument = /plugin { $command } needs a path, a git url or a name
 plugin-command-no-home = There is no state directory, so no plugin can be read or written
 plugin-added = Installed { $name } from { $path }
@@ -2088,7 +2090,16 @@ plugin-refused-manifest-key = plugin.toml was refused at the key { $key }
 plugin-refused-part-missing = the path given for { $key } does not exist in the plugin
 plugin-refused-unreadable = the directory could not be read or copied
 plugin-refused-already-installed = a plugin named { $name } is already installed
-plugin-refused-update-not-built = { $name } is already installed from this source, and updating is not built
+plugin-refused-same-source = { $name } is already installed from this source. /plugin update { $name } fetches it again
+plugin-update-done = Updated { $name }
+plugin-update-unchanged = { $name } is up to date: the source holds the files that are installed, and nothing was changed
+plugin-update-unchanged-newer-commit = { $name } is unchanged: the source resolves to a newer commit that holds the same files, so nothing was changed
+plugin-update-refused = Nothing was updated for { $name }: { $why }
+plugin-update-declined = Nothing was updated for { $name }: the update was declined
+plugin-update-nobody-to-ask = Nothing was updated for { $name }: nobody can be asked here, so nothing is updated
+plugin-refused-record-unreadable = its record cannot be read, so there is no recorded source to fetch again. Remove it and add it again
+plugin-refused-nothing-to-update-to = it was installed at one commit, which cannot move, so there is nothing to update to
+plugin-refused-update-renamed = the source now holds a plugin named { $found }, which is not this one
 plugin-refused-archive = an archive is not a source. Name a git url or a directory
 plugin-refused-npm-package = an npm package is not a source. Name a git url or a directory
 plugin-refused-plain-url = a web address that is not a git url is not a source. A git url is https ending in .git, or ssh
@@ -2160,6 +2171,31 @@ plugin-install-not-done = A yes copies this plugin and records it. It does not m
 plugin-install-question = Install this plugin?
 plugin-install-yes = Yes, install it
 plugin-install-no = No, install nothing
+plugin-update-title = Update plugin
+plugin-update-version-change = { $old } to { $new }
+plugin-update-commit-installed = Commit installed now
+plugin-update-commit-new = Commit it resolves to now
+plugin-update-installed-unreadable = The installed copy of this plugin could not be read, so what it offers now is not known and every part below shows as added.
+plugin-update-installed-fault = The installed copy's file for this part could not be read, so what it held is not known and every row below shows as added:
+plugin-update-what-skills = Skills
+plugin-update-what-definitions = Definitions
+plugin-update-what-hooks = Hooks
+plugin-update-what-servers = Servers
+plugin-update-section = { $what }: { $added } added, { $removed } removed, { $changed } changed
+plugin-update-added = Added
+plugin-update-removed = Removed
+plugin-update-changed = Changed
+plugin-update-was = Was
+plugin-update-now = Now
+plugin-update-files = Files that differ ({ $count })
+plugin-update-files-unread = The two trees could not be compared file by file, so no file is listed
+plugin-update-file-added = added { $path }
+plugin-update-file-removed = removed { $path }
+plugin-update-file-changed = changed { $path }
+plugin-update-effect = A yes replaces the installed copy with this one. Every answer you gave to this plugin's hooks and servers is withdrawn, so each asks its own question again the first time it is used. A no changes nothing.
+plugin-update-question = Update this plugin?
+plugin-update-yes = Yes, update it
+plugin-update-no = No, keep the installed copy
 plugin-hook-title = run this plugin's hook?
 plugin-hook-plugin = Plugin
 plugin-hook-moment = Moment
@@ -2169,7 +2205,7 @@ plugin-hook-recorded = A yes is written to { $file }, so it is not asked again f
 plugin-hook-session-only = A yes is not written anywhere and lasts until this session ends.
 plugin-hook-yes = Yes, run it
 plugin-hook-no = No, do not run it
-plugin-hook-stopped-changed = A hook of the plugin { $plugin } did not run: the plugin's files no longer match what was installed. Remove the plugin and install it again to use its hooks.
+plugin-hook-stopped-changed = A hook of the plugin { $plugin } did not run: the plugin's files no longer match what was installed. Run /plugin update { $plugin } to use its hooks again if its source holds the files you want, or remove the plugin and add it again.
 mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-command-not-an-alias = { $alias } is not the name of an MCP server
 mcp-command-no-match = No MCP server is named by { $pattern }. Nothing was changed

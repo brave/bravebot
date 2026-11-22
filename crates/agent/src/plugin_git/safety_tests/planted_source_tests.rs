@@ -232,6 +232,15 @@ impl Asker for Inspecting<'_> {
         ));
         true
     }
+
+    fn confirm_update(
+        &mut self,
+        _staged: &crate::plugins::Staged,
+        _installed: &crate::plugins::Installed,
+        _before: &crate::plugins::Before,
+    ) -> bool {
+        false
+    }
 }
 
 /// S15, PLUGIN-3: the tree a clone made is read as data only. When the listing is put to the

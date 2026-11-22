@@ -93,6 +93,10 @@ pub(crate) const PLUGIN_ENABLE: &str = "enable";
 /// The word after `/plugin` that turns the installed plugin named after it off and keeps it.
 pub(crate) const PLUGIN_DISABLE: &str = "disable";
 
+/// The word after `/plugin` that fetches the installed plugin named after it again from its
+/// recorded source.
+pub(crate) const PLUGIN_UPDATE: &str = "update";
+
 /// The line that says which language servers the session has started (CMD-29).
 pub(crate) const LSP_COMMAND: &str = "/lsp";
 
@@ -385,7 +389,7 @@ impl Command {
             }
             MCP_COMMAND => format!("[{MCP_LIST} | {MCP_RECONNECT} | {MCP_DISABLE} | {MCP_REMOVE}]"),
             PLUGIN_COMMAND => format!(
-                "[{PLUGIN_ADD} <path> | {PLUGIN_LIST} | {PLUGIN_REMOVE} <name> | {PLUGIN_ENABLE} <name> | {PLUGIN_DISABLE} <name>]"
+                "[{PLUGIN_ADD} <path> | {PLUGIN_LIST} | {PLUGIN_UPDATE} <name> | {PLUGIN_REMOVE} <name> | {PLUGIN_ENABLE} <name> | {PLUGIN_DISABLE} <name>]"
             ),
             COMMIT_MESSAGE_COMMAND => {
                 use crate::commit_message_command::{RANGE, STAGED};
