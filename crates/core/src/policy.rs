@@ -1589,6 +1589,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn deny(&mut self, gate: &'static str, principle: Principle, message: String) -> Denial {
         self.refusals.push(format!("{gate}: {message}"));
         self.sink.emit(Event::GateBlocked {
@@ -1601,6 +1605,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        ensures
+            spec_context(*final(self)) == spec_context(*old(self)),
+    ))]
     fn allow(&mut self, gate: &'static str, detail: String) {
         self.sink.emit(Event::GatePassed { gate, detail });
     }
@@ -3793,6 +3801,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of(
                 series,
             ),
+            spec_context(*final(self)) == spec_context(*old(self)),
     ))]
     pub fn record_answers(
         &mut self,
