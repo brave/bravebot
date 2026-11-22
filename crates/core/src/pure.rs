@@ -928,6 +928,27 @@ mod tests {
         assert!(!is_pure_filter("/usr/bin/sed", &args(&["s/a/b/"])));
     }
 
+    /// A Windows path has no `/`, so its whole spelling is its name and the table, which is matched on
+    /// the file name as written, names no program of that spelling. The answer is `None` on every
+    /// host, so a step resolved to `C:\Windows\System32\wc.exe` keeps the opaque default and is
+    /// asked about, and a Windows port has to add its own reading of the separator and the extension
+    /// with a test of its own (CMDLINE-4). The extensionless and the `\\?\` spellings are there
+    /// because a reader that only splits on `\` would match the first, and one that also drops
+    /// `.exe` the rest. The controls show the same arguments are an answer for a Unix spelling.
+    #[test]
+    fn a_windows_path_is_not_in_the_table() {
+        for program in [
+            r"C:\Windows\System32\wc.exe",
+            r"C:\Windows\System32\wc",
+            r"\\?\C:\Windows\System32\wc.exe",
+        ] {
+            assert_eq!(read_set(program, &args(&["-l"])), None, "{program}");
+            assert!(!is_pure_filter(program, &args(&["-l"])), "{program}");
+        }
+        assert!(is_pure_filter("/usr/bin/wc", &args(&["-l"])));
+        assert!(is_pure_filter("wc", &args(&["-l"])));
+    }
+
     /// The table grants an answer, so its program name is compared as written. A letter a volume may
     /// open as another (`\u{17f}` for `s`) is a different name here and keeps the opaque default,
     /// where a deny or ask rule folds it (PERM-5).

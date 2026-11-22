@@ -580,7 +580,8 @@ write, and a file that is a link into such a directory is not taken
 directory the session was opened on, added or moved to, the nearest of it and its ancestors with a
 `.git`, so a session opened below a checkout's root does not search the checkout's `bin`. A server
 started by a command that opens no session has the directory the command ran in and its checkout
-left out as well ([SANDBOX-30](sandboxing.md#SANDBOX-30)). The digest holds the
+left out as well. A lookup for any server also leaves out the directories an earlier process
+recorded as ones a stage may write ([SANDBOX-30](sandboxing.md#SANDBOX-30)). The digest holds the
 name, so an approval of the name must not start a file a confined stage wrote into an activated
 virtualenv's `bin`, a `node_modules/.bin` or the `bin` of the checkout ahead of the installation the
 person was shown. A name found only in such a directory is not found, as for any absent program.

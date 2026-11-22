@@ -5256,6 +5256,55 @@ mod tests {
         );
     }
 
+    /// CMDLINE-8: a directory a stage was let write with `request_path` is one a program can be put
+    /// in, on `$PATH` or not, so it is in the set a program may not resolve into. A directory a stage
+    /// was let only read is not, since nothing could have been written there, and a read grant that
+    /// a later grant makes a write one is. Rejects a set that leaves out the write grants, which
+    /// proves a program in a virtualenv's `bin` outside the project as the system's, and one that
+    /// holds read grants too, which refuses every program in a directory the person only let a stage
+    /// read.
+    #[test]
+    fn a_directory_a_stage_was_let_write_is_one_a_program_may_not_resolve_into_and_one_it_was_let_read_is_not()
+     {
+        let parent = crate::testutil::scratch_dir("unproven-path-reach");
+        let _ = std::fs::remove_dir_all(&parent);
+        let directories: Vec<PathBuf> = ["root", "written", "read", "upgraded"]
+            .into_iter()
+            .map(|name| {
+                std::fs::create_dir_all(parent.join(name)).expect("scratch");
+                parent.join(name).canonicalize().expect("canonical")
+            })
+            .collect();
+        let [root, written, read, upgraded] = &directories[..] else {
+            panic!("four directories");
+        };
+        let workspace = Workspace::new(root).expect("workspace");
+        assert!(
+            !workspace.unproven_directories().contains(written),
+            "the control: the directory is in the set before any grant"
+        );
+
+        workspace.grant_path_reach(written.clone(), true, "writes".to_string());
+        workspace.grant_path_reach(read.clone(), false, "reads".to_string());
+        workspace.grant_path_reach(upgraded.clone(), false, "reads".to_string());
+        workspace.grant_path_reach(upgraded.clone(), true, "writes".to_string());
+
+        let held = workspace.unproven_directories();
+        assert!(
+            held.contains(written),
+            "a directory a stage was let write was not held: {held:?}"
+        );
+        assert!(
+            held.contains(upgraded),
+            "a read grant a later grant made a write grant was not held: {held:?}"
+        );
+        assert!(
+            !held.contains(read),
+            "a directory a stage was let only read was held: {held:?}"
+        );
+        assert!(held.contains(root), "the working directory was dropped");
+    }
+
     /// CHECKOUT-23. A name the driver recorded for a write is relative to the root it was written
     /// under, so moving the working directory forgets it, as it forgets the directories touched.
     /// Carried under the new root, it would name a file that was never written there.

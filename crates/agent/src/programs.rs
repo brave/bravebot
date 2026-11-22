@@ -292,4 +292,35 @@ mod tests {
         assert_eq!(found.started_as.file_name(), Some("link".as_ref()));
         let _ = std::fs::remove_dir_all(&scratch);
     }
+
+    /// CMDLINE-8: off Unix a program is started by the file it resolved to, so `started_as` equals
+    /// `resolved` and no step found there is read as started by another name. The table is then
+    /// the only check that refuses a Windows path. `canonicalize` gives a `\\?\` path in the case
+    /// the file has on disk, which no path a name is found by equals. Rejects a `started_as` that
+    /// is the path the name was found by, which differs from `resolved` in its prefix, its case or
+    /// a `..` in it.
+    #[cfg(not(unix))]
+    #[test]
+    fn a_program_found_off_unix_is_started_as_the_file_it_resolved_to() {
+        let scratch = crate::testutil::scratch_dir("bravebot-programs-started-as-off-unix");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let program = scratch.join("tool.exe");
+        std::fs::write(&program, "MZ").unwrap();
+        let roundabout = scratch
+            .join("..")
+            .join(scratch.file_name().expect("the directory has a name"))
+            .join("tool.exe");
+
+        let found = find(&roundabout.to_string_lossy(), Path::new("."))
+            .expect("the file is a program by its path");
+
+        assert_eq!(found.resolved, program.canonicalize().unwrap());
+        assert_eq!(found.started_as, found.resolved);
+        assert_ne!(
+            found.started_as, roundabout,
+            "the path the name was found by is not what starts it"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 }

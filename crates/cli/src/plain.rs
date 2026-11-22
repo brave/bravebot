@@ -247,7 +247,7 @@ fn starting_configuration(hosted: bool) -> Result<Config, ExitCode> {
 
 /// The workspace the session works in, or what ends a start that has none.
 fn opening_workspace(settings: &bravebot_config::Settings) -> Result<Workspace, ExitCode> {
-    match crate::workspace::current_workspace(settings, &bravebot_config::Managed::load()) {
+    match crate::workspace::session_workspace(settings, &bravebot_config::Managed::load()) {
         Ok(workspace) => Ok(workspace),
         Err(err) => Err(crate::workspace::workspace_problem(&err)),
     }

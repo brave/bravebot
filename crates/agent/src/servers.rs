@@ -3991,8 +3991,10 @@ fn nameable(
 /// starts itself (SANDBOX-30).
 ///
 /// A server is code bravebot did not write, so a file it writes in its home or its declared
-/// directory is not one bravebot may start. The record lasts for the process, as a stage's does,
-/// because a server that has stopped has not taken its files with it. It is made from the policy
+/// directory is not one bravebot may start. The record is never removed from, as a stage's is not,
+/// because a server that has stopped has not taken its files with it, and each directory in it is
+/// handed on to the record in the state directory, so a later process leaves it out too
+/// ([`crate::stage_record`]). It is made from the policy
 /// the server is launched under, once the rows the backend cannot name are dropped, and before
 /// the launch, so it holds what the server can write and is complete before it runs.
 fn keep_out_what_it_may_write(policy: &SandboxPolicy) {

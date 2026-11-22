@@ -5690,15 +5690,17 @@ cancel kills it rather than asking it to stop.
   started unconfined, so [SANDBOX-30](sandboxing.md#SANDBOX-30) searches only the `PATH` entries a
   confined stage cannot write. Somebody whose only `aws` is in an activated virtualenv, or in the
   session's own directory or the temporary directory, gets `NotInstalled` until they install it
-  elsewhere or open the session from a directory that does not hold it. A session opened on a
+  elsewhere or open the session from a directory that does not hold it. A directory an earlier
+  process recorded stays left out, so opening the session elsewhere does not end it for that
+  directory until the file `stage-writes` in the state directory is deleted. A session opened on a
   directory that holds the install, `~/.local/bin` under a session opened on the home directory
   among them, is the same case. The same holds for a
   directory a toolchain was granted writes in once a stage has run with it, so a CLI installed under
   such a cache is found before the first such stage and not after. Where the permission mode
   answers every question and the sandbox mode is workspace-write, a stage is given every path the account
   can write, so an `aws` in a directory the account owns, such as a Homebrew prefix, is found before
-  the first stage runs and not after, and every Bedrock request from then until bravebot exits gets
-  `NotInstalled`. The CLI is also started with a `PATH` of those same entries, so a program it starts
+  the first stage runs and not after, and every Bedrock request from then on gets `NotInstalled`, in
+  later bravebot processes as well unless the session that ran the stage was incognito. The CLI is also started with a `PATH` of those same entries, so a program it starts
   by name, the interpreter of an `aws` that is a script or a bare `credential_process` command, is
   not found by it in a directory left out.
   An editor found outside those directories still starts, with a `PATH` of the searched entries

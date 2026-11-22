@@ -105,6 +105,7 @@ pub mod skills;
 #[cfg(test)]
 mod spec_headings;
 pub mod spend_limit;
+pub mod stage_record;
 pub mod styles;
 pub mod subscription;
 #[cfg(test)]

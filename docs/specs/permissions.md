@@ -1110,8 +1110,9 @@ the write tools and for a `run` redirection ([PERM-9](#PERM-9)), and on macOS th
 refuses a stage every write to it ([SANDBOX-14](sandboxing.md#SANDBOX-14)), so there the file keeps
 granting wherever it sits. On Linux and Windows the sandbox grants a directory with everything in it
 and cannot hold one file back ([#2599](https://github.com/brave/bravebot/issues/2599)), so a named
-file that lies inside a directory a stage may write, the working directory or one `--add-dir`,
-`/add-dir` or `--sandbox-allow-write` opened, is read as a checkout's file is. It grants no `allow`
+file that lies inside a directory a stage may write, the working directory, one `--add-dir`,
+`/add-dir` or `--sandbox-allow-write` opened, or one an earlier process recorded
+([sandboxing.md](sandboxing.md#SANDBOX-30)), is read as a checkout's file is. It grants no `allow`
 rule, no `sandbox.mode` and no `run.network`, which are the keys that matter most, and every other
 key a checkout's file may not set is ignored too (environment values, host lists, filesystem lists,
 git identities and the keys only the home file may set). Its `deny` and `ask` rules, which only
@@ -1167,6 +1168,9 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::named_reach::a_file_in_a_root_is_withheld_only_where_one_file_cannot_be_held_back`
 `verified-by: bravebot_config::named_reach::dot_dot_spellings_are_read_by_where_they_land`
 `verified-by: bravebot_config::named_reach::a_link_to_a_file_inside_a_root_lies_inside_it`
+`verified-by: bravebot_config::named_reach::the_roots_hold_the_directories_an_earlier_process_granted`
+`verified-by: bravebot_config::named_reach::the_roots_are_the_working_directory_then_each_other_directory_once`
+`verified-by: bravebot_config::settings::layered_withholds_a_named_file_inside_a_directory_an_earlier_process_recorded`
 `verified-by: bravebot_cli::doctor::doctor_says_why_a_named_file_in_a_writable_directory_grants_nothing`
 `verified-by: bravebot_cli::plain::the_opening_says_why_a_named_file_in_a_writable_directory_grants_nothing`
 `verified-by: bravebot_tui::app::the_opening_note_says_why_a_named_file_in_a_writable_directory_grants_nothing`

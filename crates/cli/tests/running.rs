@@ -3762,6 +3762,105 @@ fn doctor_starts_no_aws_from_the_checkout_it_runs_in() {
     );
 }
 
+/// SANDBOX-30 over two processes: a directory a session opened is one a stage of that session
+/// could write, so `doctor` in a later process, run from another directory with that directory
+/// first on `PATH`, asks the `aws` behind it and not the one a stage left there. The first process
+/// is a run that opens the directory with `--add-dir`, which records it in the state directory.
+/// The planted `aws` is written between the runs, as the stage of the first would have written
+/// it. The control is a later process with a state directory that holds no record, which starts
+/// the planted program, so what keeps it from starting is the record. Rejects a record that is
+/// never written, one that is never read, and one that is read into a set the lookup does not
+/// use.
+#[cfg(unix)]
+#[test]
+fn doctor_starts_no_aws_from_a_directory_an_earlier_process_granted() {
+    let (_gateway, scratch, cwd, beside) = a_directory_beside_whose_notes_the_model_reads(
+        "cli-running-doctor-aws-granted-earlier",
+        "notes.md",
+    );
+    let installed = aws_stand_in(&scratch);
+    let marker = scratch.path.join("planted-aws");
+
+    let earlier = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &[
+            "--add-dir",
+            beside.to_str().expect("a path that is text"),
+            "-p",
+            "hello",
+        ],
+    );
+    let (_, stderr) = said(&earlier);
+    assert!(earlier.status.success(), "{stderr}");
+    let record = std::fs::read_to_string(scratch.path.join(".bravebot").join("stage-writes"))
+        .unwrap_or_default();
+    assert!(
+        record.contains(&format!("directory\t{}\n", beside.display())),
+        "the run that opened the directory did not record it: {record:?}"
+    );
+
+    let body = format!("printf x >> '{}' 2>/dev/null; exit 255", marker.display());
+    stand_in(&beside.join("bin"), "aws", &body);
+    let path = std::env::join_paths([beside.join("bin").as_path(), Path::new(&installed)])
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let settings = r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2", "profile": "work"}}},
+            "model": "opus"}"#;
+    std::fs::write(
+        scratch.path.join(".bravebot").join("settings.json"),
+        settings,
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("aws-work"), "").unwrap();
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.extend([
+        ("PATH", path.as_str()),
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+    ]);
+
+    // The control: the same directory and `PATH` under a state directory with no record.
+    let without = Scratch::new("cli-running-doctor-aws-granted-earlier-control")
+        .with_settings(settings)
+        .with_file("aws-work", "");
+    let control = bravebot_started_in(
+        &without.path,
+        &checkout_in(&without),
+        &environment,
+        &["doctor"],
+    );
+    let (stdout, stderr) = said(&control);
+    assert!(
+        marker.exists(),
+        "the control did not start the planted aws, so it shows nothing: {stdout}{stderr}"
+    );
+    std::fs::remove_file(&marker).unwrap();
+
+    let later = bravebot_started_in(
+        &scratch.path,
+        &checkout_in(&scratch),
+        &environment,
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&later);
+    assert!(
+        !marker.exists(),
+        "the aws in a directory an earlier process opened was started: {stdout}{stderr}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "session   signed in"),
+        "the installed aws was not the one asked: {stdout}{stderr}"
+    );
+}
+
 /// CRED-14 over the process: this agent's signing key and key id are not in the environment of
 /// `ssh-keygen`, `ssh` or `git`, which run unconfined with the person's access to `~/.ssh`. Each
 /// stand-in reports what it was handed in the part of its answer the report shows.
@@ -19362,6 +19461,46 @@ fn listing_a_plugins_servers_writes_nothing_into_the_state_directory() {
         assert!(
             !state.join("mcp-approved").exists(),
             "{command} recorded an approval"
+        );
+    }
+}
+
+/// SANDBOX-30: a command that opens no session reads the record of the directories earlier
+/// processes let a stage write and appends nothing to it, and makes none where there was none. A
+/// state directory that holds a record is the same after `doctor` and `mcp list`, byte for byte,
+/// and one that holds none holds none. The two-process test beside the lookups is the control: a
+/// run that opens a session with `--add-dir` does write the record, so this test does not pass for
+/// a record that is never written. Rejects a command that switches the record's writer on before
+/// it knows a session opens, as `main` did for every command, which made `doctor` append the
+/// directory it ran in.
+#[test]
+fn a_command_that_opens_no_session_leaves_the_record_of_stage_writes_as_it_found_it() {
+    let seeded = "directory\t/bravebot-seeded-directory\n";
+    let with =
+        Scratch::new("cli-running-no-session-record-kept").with_state("stage-writes", seeded);
+    let without = Scratch::new("cli-running-no-session-record-none");
+
+    for (command, arguments) in [
+        ("bravebot doctor", vec!["doctor"]),
+        ("bravebot mcp list", vec!["mcp", "list"]),
+    ] {
+        for scratch in [&with, &without] {
+            let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+            let (stdout, stderr) = said(&output);
+            assert!(
+                output.status.code().is_some() && !format!("{stdout}{stderr}").is_empty(),
+                "{command} did not run to its end: {stdout}{stderr}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(with.path.join(".bravebot").join("stage-writes"))
+                .expect("the record is still there"),
+            seeded,
+            "{command} changed a record it found"
+        );
+        assert!(
+            !without.path.join(".bravebot").join("stage-writes").exists(),
+            "{command} made a record where there was none"
         );
     }
 }

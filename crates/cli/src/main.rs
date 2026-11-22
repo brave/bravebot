@@ -76,9 +76,8 @@ use crate::model::{
 use crate::one_shot::OneShot;
 use crate::usage::print_help;
 use crate::workspace::{
-    confinement_name, current_workspace, definition_for_a_run, open_directories,
-    rules_for_a_one_shot_run, scratch_for_this_run, trusting_the_added_directories,
-    unattended_trust,
+    confinement_name, definition_for_a_run, open_directories, rules_for_a_one_shot_run,
+    scratch_for_this_run, session_workspace, trusting_the_added_directories, unattended_trust,
 };
 use bravebot_agent::Mode;
 use bravebot_agent::turn::{self, SystemPrompts, Task};
@@ -528,14 +527,27 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     })
 }
 
-/// Leave out of the lookup for programs the directory this process ran in and the checkout
+/// Leave out of the lookup for programs the directories an earlier process let a stage write
+/// ([`bravebot_agent::stage_record::load`]), the directory this process ran in and the checkout
 /// holding it ([`bravebot_sandbox::programs::keep_out_with_checkout`]).
 ///
 /// This is a new process, so [`bravebot_sandbox::programs`] knows of no session until one records
-/// its directory. `main` calls this once for every command. Where the working directory cannot be
-/// read nothing is recorded: there is no directory to name, and a relative `PATH` entry is no more
-/// readable than the directory it is relative to.
+/// its directory, and of no directory an earlier process recorded until the record is read. `main`
+/// calls this once for every command. Where the working directory cannot be read nothing is
+/// recorded: there is no directory to name, and a relative `PATH` entry is no more readable than
+/// the directory it is relative to.
+///
+/// Nothing is appended to the record here, and no command appends to it until a session opens. A
+/// command that opens no session (`doctor`, `mcp list`, `mcp get`, `auth`, `schedule`) reads the
+/// record and records its directory in memory, so it leaves the state directory as it found it,
+/// with no record made where there was none. A session starts appending where it builds its
+/// workspace ([`crate::workspace::session_workspace`]): the terminal client, the session in lines,
+/// the host of a background session and a one-shot run. `bravebot acp` starts appending before it
+/// serves. The directory this call recorded in memory is appended then, with the directories the
+/// session opens. A second call, after a deep link moved the process, records the directory it
+/// moved to in memory, and the session that link opens appends it.
 fn keep_out_where_this_ran() {
+    bravebot_agent::stage_record::load();
     if let Ok(cwd) = std::env::current_dir() {
         bravebot_sandbox::programs::keep_out_with_checkout(&cwd);
     }
@@ -1235,7 +1247,7 @@ fn prepare_the_run(
         return Err(stopped_before_the_turn(as_json, Ending::Configuration, how));
     }
 
-    let mut workspace = match current_workspace(&settings, &Managed::load()) {
+    let mut workspace = match session_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
         Err(err) => {
             return Err(stopped_before_the_turn(
@@ -2633,7 +2645,7 @@ fn interactive(
     }
 
     let settings = bravebot_config::Settings::load();
-    let workspace = match current_workspace(&settings, &Managed::load()) {
+    let workspace = match session_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
         Err(err) => return workspace::workspace_problem(&err),
     };

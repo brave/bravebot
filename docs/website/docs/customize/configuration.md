@@ -97,6 +97,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
 | `~/.bravebot/bedrock-refusals.json` | the AWS Bedrock models that refused the request for their thinking to be shown as it happens, each kept for 30 days so the first request of a later session leaves it out; delete the file to ask again |
+| `~/.bravebot/stage-writes` | the directories a confined program may write, one per line, which later sessions leave out of the search for the programs Brave Bot starts itself; delete the file to clear it |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
 | `~/.bravebot/effort` | the effort level chosen with `/effort`; `/effort session` does not write it |

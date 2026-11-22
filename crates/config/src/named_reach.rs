@@ -57,6 +57,35 @@ pub fn added_writable_directories() -> Vec<PathBuf> {
         .collect()
 }
 
+/// The directories the `--settings` check reads as ones a stage may write, given the working
+/// directory: the working directory, the directories this process opened with [`add_writable_directory`]
+/// and the directories an earlier process let a stage write, which the sandbox crate read from the
+/// record in the state directory when the process began
+/// ([`bravebot_sandbox::programs::recorded_earlier`]).
+///
+/// A file in a directory only an earlier process opened is one a stage of that process could have
+/// rewritten, so a later process that names it without `--add-dir` does not read it as the
+/// person's own.
+#[must_use]
+pub fn writable_roots(cwd: Option<&Path>) -> Vec<PathBuf> {
+    roots_from(
+        cwd,
+        &added_writable_directories(),
+        &bravebot_sandbox::programs::recorded_earlier(),
+    )
+}
+
+/// [`writable_roots`] from the directories rather than from the records, each once.
+fn roots_from(cwd: Option<&Path>, added: &[PathBuf], earlier: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = cwd.map(Path::to_path_buf).into_iter().collect();
+    for directory in added.iter().chain(earlier) {
+        if !roots.contains(directory) {
+            roots.push(directory.clone());
+        }
+    }
+    roots
+}
+
 /// `path` as the filesystem resolves it, a file that does not exist yet by the directory it will be
 /// made in, and made absolute where neither resolves.
 fn settled(path: &Path) -> PathBuf {
@@ -177,6 +206,47 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).expect("link");
         assert!(lies_inside(&link, &[root.join("in")]));
         assert!(!lies_inside(&link, &[root.join("out").join("elsewhere")]));
+    }
+
+    /// The roots hold the directories an earlier process let a stage write, and a file in one is
+    /// withheld where the platform cannot hold one file back. A directory the record does not hold
+    /// is not a root. Rejects roots built from this process's own `--add-dir` directories alone,
+    /// which read a file an earlier process's stage could have rewritten as the person's own.
+    #[test]
+    fn the_roots_hold_the_directories_an_earlier_process_granted() {
+        let granted = scratch("earlier-granted");
+        let unrelated = scratch("earlier-unrelated");
+        bravebot_sandbox::programs::load_record(
+            format!("directory\t{}\n", granted.display()).as_bytes(),
+        );
+
+        let roots = writable_roots(None);
+
+        assert!(roots.contains(&granted), "{roots:?}");
+        assert!(!roots.contains(&unrelated), "{roots:?}");
+        assert!(withholds(&granted.join("named.json"), &roots, false));
+        assert!(!withholds(&unrelated.join("named.json"), &roots, false));
+        assert!(!withholds(&granted.join("named.json"), &roots, true));
+    }
+
+    /// The working directory comes first and each directory is held once, whichever record named
+    /// it. Rejects a list that leaves out the working directory or repeats a directory.
+    #[test]
+    fn the_roots_are_the_working_directory_then_each_other_directory_once() {
+        let here = PathBuf::from("/work/here");
+        let added = [PathBuf::from("/work/added"), PathBuf::from("/work/both")];
+        let earlier = [PathBuf::from("/work/both"), PathBuf::from("/work/earlier")];
+
+        assert_eq!(
+            roots_from(Some(&here), &added, &earlier),
+            [
+                PathBuf::from("/work/here"),
+                PathBuf::from("/work/added"),
+                PathBuf::from("/work/both"),
+                PathBuf::from("/work/earlier"),
+            ]
+        );
+        assert_eq!(roots_from(None, &[], &[]), Vec::<PathBuf>::new());
     }
 
     /// A directory recorded twice is listed once and stays after the first close, and the second

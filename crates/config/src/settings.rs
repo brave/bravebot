@@ -1930,15 +1930,20 @@ impl Settings {
     /// flag is typed by the person running this invocation, and whatever gets them to type it could
     /// get them to type any other command (PERM-14).
     pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
-        let mut roots: Vec<PathBuf> = cwd.map(Path::to_path_buf).into_iter().collect();
-        roots.extend(crate::named_reach::added_writable_directories());
-        Self::layered_reaching(
-            home,
-            cwd,
-            named,
-            &roots,
-            bravebot_sandbox::holds_one_file_back(),
-        )
+        Self::layered_on(home, cwd, named, bravebot_sandbox::holds_one_file_back())
+    }
+
+    /// [`Settings::layered`] for a platform that can or cannot hold one file back from a stage, with
+    /// the roots a stage may write taken from [`crate::named_reach::writable_roots`], so a test
+    /// states the platform and still reads the roots of the process.
+    fn layered_on(
+        home: Option<PathBuf>,
+        cwd: Option<&Path>,
+        named: Option<&Path>,
+        can_hold_one_file_back: bool,
+    ) -> Self {
+        let roots = crate::named_reach::writable_roots(cwd);
+        Self::layered_reaching(home, cwd, named, &roots, can_hold_one_file_back)
     }
 
     /// As [`Settings::layered`], for the directories a stage may write and whether this platform's
@@ -6770,6 +6775,57 @@ mod tests {
         } else {
             assert!(settings.permissions().allow.is_empty());
             assert!(settings.named_withheld().is_some());
+        }
+    }
+
+    /// A file named by `--settings` inside a directory an earlier process let a stage write is
+    /// withheld where the platform cannot hold one file back, through the roots `Settings::layered`
+    /// takes from the process: the working directory, this process's `--add-dir` directories and
+    /// the directories of the record. Rejects a `layered` that takes its roots from the working
+    /// directory and `--add-dir` alone, which reads a file an earlier process's stage could have
+    /// rewritten as the person's own. The platform answer is stated, since macOS answers that it can
+    /// hold the file back and withholds nothing; where the host cannot, `layered` itself is asked
+    /// as well.
+    #[test]
+    fn layered_withholds_a_named_file_inside_a_directory_an_earlier_process_recorded() {
+        let layers = Layers::new("layered-recorded").named(NAMED_GRANTS_ALL);
+        let recorded = layers
+            .named
+            .as_deref()
+            .and_then(Path::parent)
+            .expect("a parent")
+            .to_path_buf();
+        let read = |can_hold_one_file_back| {
+            Settings::layered_on(
+                Some(layers.home.clone()),
+                Some(&layers.cwd),
+                layers.named.as_deref(),
+                can_hold_one_file_back,
+            )
+        };
+        assert_eq!(
+            read(false).named_withheld(),
+            None,
+            "the control: nothing is recorded yet, so the file grants"
+        );
+
+        bravebot_sandbox::programs::load_record(
+            format!("directory\t{}\n", recorded.display()).as_bytes(),
+        );
+
+        let withheld = read(false);
+        assert_eq!(withheld.named_withheld(), layers.named.as_deref());
+        assert!(withheld.permissions().allow.is_empty());
+        assert_eq!(
+            read(true).named_withheld(),
+            None,
+            "a platform that holds it back"
+        );
+        if !bravebot_sandbox::holds_one_file_back() {
+            assert_eq!(
+                layers.read_on_this_platform().named_withheld(),
+                layers.named.as_deref()
+            );
         }
     }
 
