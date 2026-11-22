@@ -2,6 +2,7 @@
 //! the pickers, `/effort`, `/advisor`, `/limit`, `/style`, `/theme`, `/rename`, `/branch`, `/link`.
 
 use super::*;
+use bravebot_config::VariantChoice;
 
 /// Open the theme picker and persist what the person chose.
 pub(super) fn choose_theme(
@@ -260,45 +261,36 @@ pub(super) fn set_language(session: &mut Session, word: &str) {
 /// A name the model has no variant for changes nothing and says which it has, so a typo does not
 /// leave somebody believing a request carries what they meant.
 pub(super) fn set_variant(session: &mut Session, config: &Config, word: &str) {
-    let word = word.trim();
     let model = session
         .model()
         .map_or_else(|| config.default_model.clone(), str::to_string);
-    let offered: Vec<String> = config
-        .provider_for(&model)
-        .and_then(|(provider, wire)| provider.model(wire))
-        .map(|entry| {
-            entry
-                .variant_names()
-                .into_iter()
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    if word == VARIANT_OFF {
-        session.choose_variant(None);
-        session.note(t!(session_variant_dropped).to_string());
-        return;
-    }
-    if offered.is_empty() {
-        session.note(t!(session_variant_none_offered, model = model));
-        return;
-    }
-    let names = offered.join(", ");
-    if word.is_empty() {
-        let note = match session.variant() {
-            Some(name) => t!(session_variant_in_force, variant = name, names = names),
-            None => t!(session_variant_listed, names = names),
-        };
-        session.note(note);
-        return;
-    }
-    if offered.iter().any(|name| name == word) {
-        session.choose_variant(Some(word.to_string()));
-        session.note(t!(session_variant_set, variant = word));
-    } else {
-        session.note(t!(session_no_such_variant, variant = word, names = names));
-    }
+    let note = match config.choose_variant(&model, word) {
+        VariantChoice::Drop => {
+            session.choose_variant(None);
+            t!(session_variant_dropped).to_string()
+        }
+        VariantChoice::Read(offered) if offered.is_empty() => {
+            t!(session_variant_none_offered, model = model)
+        }
+        VariantChoice::NoneOffered => t!(session_variant_none_offered, model = model),
+        VariantChoice::Read(offered) => {
+            let names = offered.join(", ");
+            match session.variant() {
+                Some(name) => t!(session_variant_in_force, variant = name, names = names),
+                None => t!(session_variant_listed, names = names),
+            }
+        }
+        VariantChoice::Pick(name) => {
+            session.choose_variant(Some(name.clone()));
+            t!(session_variant_set, variant = name)
+        }
+        VariantChoice::NotOffered(offered) => t!(
+            session_no_such_variant,
+            variant = word.trim(),
+            names = offered.join(", ")
+        ),
+    };
+    session.note(note);
 }
 
 pub(super) fn set_advisor(session: &mut Session, config: &Config, word: &str) {

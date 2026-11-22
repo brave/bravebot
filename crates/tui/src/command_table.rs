@@ -24,7 +24,6 @@ pub(crate) const EFFORT_COMMAND: &str = "/effort";
 pub(crate) const EFFORT_SESSION_WORD: &str = MODEL_SESSION_WORD;
 /// Picks one of the named option sets the model in force carries (BACKEND-45).
 pub(crate) const VARIANT_COMMAND: &str = "/variant";
-pub(crate) const VARIANT_OFF: &str = "off";
 
 /// The line that names the model the planner may consult, says which it may, or drops the choice.
 pub(crate) const ADVISOR_COMMAND: &str = "/advisor";

@@ -626,6 +626,13 @@ none is in force until somebody typed a name. It is held for the session and is 
 looked up in whichever model is in force when a request is built, so a pick made under one model adds
 nothing under another that has no variant of that name.
 
+The desktop window's composer offers the same list, pick and drop through the bridge's
+`session.variant`. It lists the names the model chosen in the composer offers, picks an offered name,
+and with `null` or `off` drops the pick, under the same rules as `/variant`. The pick is held for the
+open chat in the bridge, is never written to the session store, and a chat that is opened, resumed,
+forked or made new starts with none. Each turn the bridge starts carries the pick held when the turn
+begins.
+
 Variants are read from the layers that may name `provider` ([BACKEND-24](#BACKEND-24)), because they
 are part of the block. They are merged into a request to a gateway in each protocol that merges
 `options`, and a Bedrock request, which merges none, carries none.
@@ -648,6 +655,9 @@ a file from deciding what was asked, and keeping the choice a person's is what k
 `verified-by: bravebot_agent::turn::a_chosen_variant_is_merged_into_the_planners_request`
 `verified-by: bravebot_tui::app::a_variant_the_model_offers_is_picked_and_reaches_the_next_turn`
 `verified-by: bravebot_tui::app::a_model_offering_no_variants_takes_no_pick`
+`verified-by: bravebot_ui_bridge::variant::session_variant_lists_picks_refuses_and_drops`
+`verified-by: bravebot_ui_bridge::variant::a_picked_variant_reaches_the_next_turns_request_and_none_adds_nothing`
+`verified-by: bravebot_ui_bridge::variant::a_new_or_forked_session_starts_with_no_variant`
 
 <a id="BACKEND-16"></a>
 ### BACKEND-16: a gateway credential is named rather than resolved ahead of time

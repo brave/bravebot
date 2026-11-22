@@ -148,6 +148,10 @@ struct Open {
     /// The state's token total when its current turn began, which `session.limit` reports while
     /// that turn holds the state.
     tokens_at_turn: u64,
+    /// The variant of the model's options the window picked, or `None` for the model's own
+    /// options (BACKEND-66). A person's act that is never recorded, so a session opens, resumes,
+    /// forks and starts new with none.
+    variant: Option<String>,
 }
 
 impl Open {
@@ -188,6 +192,7 @@ impl Open {
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
             refused_folders: Vec::new(),
+            variant: None,
         }
     }
 
@@ -426,6 +431,7 @@ impl Bridge {
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.limit" => self.session_limit(request),
+            "session.variant" => self.session_variant(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
             "session.folders.list" | "session.folders.add" | "session.folders.close" => {
@@ -1988,6 +1994,32 @@ impl Bridge {
         })
     }
 
+    /// List, pick or drop the session's variant of the model's options: the desktop window's
+    /// `/variant` (BACKEND-66).
+    ///
+    /// `model` is the window's pick, which reaches the session only with the next `turn.send`, and
+    /// is resolved as `turn.send` resolves it. Answered while a turn runs, since the pick is not
+    /// in the state the turn holds.
+    fn session_variant(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+        let word = crate::variant::word(request)?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let model = model.unwrap_or_else(|| config.default_model.clone());
+        let choice = config.choose_variant(&model, word);
+        let offered = config.variants_offered(&model);
+        crate::variant::apply(choice, word, &mut open.variant, &model, &offered)
+    }
+
     /// Choose the sandbox mode the session's next turn runs its programs under.
     ///
     /// `strict` or `workspace-write`: a window has no way to show that nothing confines a program, so
@@ -2163,6 +2195,9 @@ impl Bridge {
         // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
         // between turns applies to the next one.
         let effort = recorded_effort(&settings);
+        // The variant the window picked for this session, read when the turn starts so a pick
+        // made while a turn runs applies to the next one (BACKEND-66).
+        let variant = open.variant.clone();
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
@@ -2263,6 +2298,7 @@ impl Bridge {
                 config,
                 attribution,
                 effort,
+                variant,
                 output_cap,
                 download_cap,
                 deadlines,
@@ -4514,6 +4550,9 @@ struct Work {
     /// How hard the model is asked to think: the recorded level and the settings layers, ranked as
     /// BACKEND-43 ranks them. `None` asks for the service's own default.
     effort: Option<bravebot_session::store::Effort>,
+    /// The named option set of the model that the window picked through `session.variant`
+    /// (BACKEND-66). `None` asks with the model's options alone.
+    variant: Option<String>,
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
@@ -4647,6 +4686,7 @@ fn work(work: Work) {
         mut config,
         attribution,
         effort,
+        variant,
         output_cap,
         download_cap,
         deadlines,
@@ -4768,6 +4808,7 @@ fn work(work: Work) {
         .in_front_end(front_end)
         .with_model(model)
         .with_effort(effort)
+        .with_variant(variant)
         .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)

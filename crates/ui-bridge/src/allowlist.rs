@@ -249,6 +249,7 @@ pub const DENIED: &[&str] = &[
     "session.mode",
     "session.sandbox",
     "session.limit",
+    "session.variant",
     "settings.inspect",
     "settings.select",
     "permissions.list",

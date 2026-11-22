@@ -81,7 +81,7 @@ const NO_GATE = {
   'session.stats': 'reads records and opens no session; a directory it names is held to mayOpenSessionIn by a check of its own, since it may name none',
 }
 const TAKES_NO_DIRECTORY = [
-  'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.limit', 'session.rewind',
+  'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.limit', 'session.variant', 'session.rewind',
   'session.note', 'session.folders.list',
   'session.report.cost', 'session.report.context', 'session.report.request', 'session.report.status',
   'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'session.compact', 'session.compact.cancel', 'session.handoff', 'session.handoff.cancel', 'session.background', 'session.btw', 'session.recap', 'session.aside.cancel', 'mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',
