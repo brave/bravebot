@@ -21,16 +21,30 @@ mkdirSync(output, { recursive: true })
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-background-profile-'))
 const directory = mkdtempSync(join(tmpdir(), 'bravebot-background-project-'))
 const now = Math.floor(Date.now() / 1000)
-const session = (n, state, name, ago, extra = {}) => ({
-  id: `${String(n).repeat(8)}-0000-4000-8000-00000000000${n}`,
-  short: String(n).repeat(8),
-  name,
-  state,
-  held: null,
-  updated: now - ago,
-  directory: `${directory}/checkout-${n}`,
-  prompt: `the prompt of session ${n}`,
-  ...extra,
+// The headings and state words the bridge sends, which are the terminal list's (BG-16, SCREEN-16).
+const HEADINGS = { 'needs-input': 'Needs input', interrupted: 'Interrupted', working: 'Working', idle: 'Ready', stopped: 'Stopped' }
+const ORDER = Object.keys(HEADINGS)
+const words = ({ state, held }) => (state === 'needs-input' && held ? `${HEADINGS[state]} (${held})` : HEADINGS[state])
+const session = (n, state, name, ago, extra = {}) => {
+  const row = {
+    id: `${String(n).repeat(8)}-0000-4000-8000-00000000000${n}`,
+    short: String(n).repeat(8),
+    name,
+    state,
+    held: null,
+    updated: now - ago,
+    directory: `${directory}/checkout-${n}`,
+    prompt: `the prompt of session ${n}`,
+    ...extra,
+  }
+  return { ...row, words: words(row) }
+}
+// The answer of `background.list` for rows in the bridge's order: a group for each state a row is in.
+const listed = (rows) => ({
+  groups: ORDER.flatMap((state) => {
+    const sessions = rows.filter((row) => row.state === state)
+    return sessions.length ? [{ state, heading: HEADINGS[state], count: sessions.length, sessions }] : []
+  }),
 })
 // As the bridge sends them: BG-16 order, most recent first within a state.
 const roster = [
@@ -71,11 +85,11 @@ try {
         return { ok: { session: `s-${p.id}`, model: 'sample/fast', record, said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
       }
       if (method === 'models.list') return { ok: models }
-      if (method === 'background.list') { globalThis.backgroundReads++; return { ok: { sessions: globalThis.backgroundRoster } } }
+      if (method === 'background.list') { globalThis.backgroundReads++; return { ok: globalThis.backgroundRoster } }
       return { ok: {} }
     })
-  }, { roster, chats, models: oneModelList })
-  const setRoster = (rows) => app.evaluate((_, rows) => { globalThis.backgroundRoster = rows }, rows)
+  }, { roster: listed(roster), chats, models: oneModelList })
+  const setRoster = (rows) => app.evaluate((_, answer) => { globalThis.backgroundRoster = answer }, listed(rows))
   const reads = () => app.evaluate(() => globalThis.backgroundReads)
   // Tall enough that the six rows and the detail fit in the column without scrolling.
   await page.setViewportSize({ width: 1440, height: 1100 })
@@ -105,7 +119,7 @@ try {
   assert.equal(await row(1).locator('.background-short').textContent(), '11111111')
   assert.equal(await row(1).locator('.background-name').textContent(), 'Fix the feed parser')
   assert.equal(await row(1).locator('.background-time').textContent(), 'just now')
-  assert.equal(await row(1).locator('.background-state').textContent(), 'Needs input · run')
+  assert.equal(await row(1).locator('.background-state').textContent(), 'Needs input (run)')
   assert.equal(await row(2).locator('.background-time').textContent(), '15 minutes ago')
   assert.equal(await row(6).locator('.background-time').textContent(), '2 days ago')
   assert.equal(await row(5).locator('.background-state').textContent(), 'Ready')
@@ -127,18 +141,17 @@ try {
 
   // 4. The selected session's state changes between polls: it moves under Needs input, stays
   // selected, and the counts follow. Working keeps its other session.
+  const moved = { ...roster[3], state: 'needs-input', held: 'write', updated: now }
   await setRoster([
-    roster[0],
-    { ...roster[3], state: 'needs-input', held: 'write', updated: now },
-    roster[1], roster[2], roster[4], roster[5],
-  ].sort((a, b) => ['needs-input', 'interrupted', 'working', 'idle', 'stopped'].indexOf(a.state)
-    - ['needs-input', 'interrupted', 'working', 'idle', 'stopped'].indexOf(b.state) || b.updated - a.updated))
+    { ...moved, words: words(moved) },
+    roster[0], roster[1], roster[2], roster[4], roster[5],
+  ])
   await under('needs-input').locator(`.background-row[data-session="${roster[3].id}"]`).waitFor()
   assert.deepEqual(await heads.locator('.count').allTextContents(), ['2', '1', '1', '1', '1'])
   assert.deepEqual(await under('needs-input').locator('.background-short').allTextContents(), ['44444444', '11111111'],
     'the session written last is first under its heading')
   assert.equal(await row(4).getAttribute('aria-pressed'), 'true', 'the moved row is still selected')
-  assert.equal(await row(4).locator('.background-state').textContent(), 'Needs input · write')
+  assert.equal(await row(4).locator('.background-state').textContent(), 'Needs input (write)')
   assert.equal(await section.locator('.background-row[aria-pressed="true"]').count(), 1)
   assert.equal(await detail.locator('.background-prompt').textContent(), 'the prompt of session 4')
 

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { attachCommand, grouped, stateWords, type BackgroundRow } from '../background-list'
+import { attachCommand, sessionsOf, type BackgroundGroup, type BackgroundList, type BackgroundRow } from '../background-list'
 import { middleTruncate } from '../truncate'
 import { CopyButton } from './CopyButton'
 import { ago } from './Sessions'
@@ -23,7 +23,7 @@ const DIRECTORY_WIDTH = 36
  * is shown and keep polling for the first session to appear.
  */
 export function BackgroundSessions(): React.JSX.Element {
-  const [rows, setRows] = useState<BackgroundRow[]>([])
+  const [groups, setGroups] = useState<BackgroundGroup[]>([])
   const [failed, setFailed] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const section = useRef<HTMLElement>(null)
@@ -39,12 +39,12 @@ export function BackgroundSessions(): React.JSX.Element {
       if (reading || !shown()) return
       reading = true
       try {
-        const answer = await window.bravebot.request<{ sessions: BackgroundRow[] }>('background.list')
+        const answer = await window.bravebot.request<BackgroundList>('background.list')
         if (!live) return
         if (answer.error) setFailed(true)
         else {
           setFailed(false)
-          setRows(answer.ok?.sessions ?? [])
+          setGroups(answer.ok?.groups ?? [])
         }
       } catch {
         if (live) setFailed(true)
@@ -65,7 +65,7 @@ export function BackgroundSessions(): React.JSX.Element {
     }
   }, [])
 
-  const groups = useMemo(() => grouped(rows), [rows])
+  const rows = useMemo(() => sessionsOf(groups), [groups])
   // Selection is by id, so a session whose state changed is still the one selected under its new
   // heading, and one that left the roster is no longer selected.
   const chosen = rows.find((row) => row.id === selected)
@@ -80,7 +80,7 @@ export function BackgroundSessions(): React.JSX.Element {
             <span className="background-group-name">{group.heading}</span>
             <span className="count num">{group.count}</span>
           </div>
-          {group.rows.map((row) => (
+          {group.sessions.map((row) => (
             <BackgroundSession key={row.id} row={row} selected={row.id === selected} onSelect={setSelected} />
           ))}
         </div>
@@ -110,7 +110,6 @@ const BackgroundSession = memo(function BackgroundSession({ row, selected, onSel
   selected: boolean
   onSelect: (id: string) => void
 }): React.JSX.Element {
-  const words = stateWords(row)
   return (
     <button type="button" className={`background-row${selected ? ' current' : ''}`} aria-pressed={selected}
       data-session={row.id} onClick={() => onSelect(row.id)}>
@@ -119,7 +118,7 @@ const BackgroundSession = memo(function BackgroundSession({ row, selected, onSel
         <time className="background-time num" dateTime={new Date(row.updated * 1000).toISOString()}>{ago(row.updated)}</time>
       </span>
       <span className="background-name" data-tooltip={row.name}>{row.name}</span>
-      <span className="background-state">{words}</span>
+      <span className="background-state">{row.words}</span>
     </button>
   )
 })

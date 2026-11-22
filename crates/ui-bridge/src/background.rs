@@ -19,7 +19,7 @@
 //! to, replies to, stops or starts no session.
 
 use bravebot_session::jobs::{Handing, Mode, Refusal, Roster};
-use bravebot_session::listing::{self, Reader, RosterRow};
+use bravebot_session::listing::{self, Reader, RosterRow, Status};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -88,22 +88,34 @@ pub fn program_beside(executable: &Path) -> Option<PathBuf> {
     program.is_file().then_some(program)
 }
 
-/// The roster's sessions as `{"sessions": [...]}`. An absent roster lists none.
+/// The roster's sessions as `{"groups": [...]}`: a group for each state of
+/// [`listing::ROSTER_ORDER`] some session is in, in that order, each with the heading the terminal
+/// list draws for it, its count and its sessions. An absent roster lists none.
 pub fn list(reader: &mut Reader, root: &Path, roster: Option<&Roster>) -> Value {
     let Some(roster) = roster else {
-        return json!({ "sessions": [] });
+        return json!({ "groups": [] });
     };
-    let mut rows = listing::roster_rows(&reader.roster(root, roster));
-    // Stable, so the reader's most-recent-first order holds within a state.
-    rows.sort_by_key(rank);
-    json!({ "sessions": rows.iter().map(row_json).collect::<Vec<_>>() })
-}
-
-fn rank(row: &RosterRow) -> usize {
-    listing::ROSTER_ORDER
+    let rows = listing::roster_rows(&reader.roster(root, roster));
+    let groups: Vec<Value> = listing::ROSTER_ORDER
         .iter()
-        .position(|state| *state == row.state)
-        .unwrap_or(listing::ROSTER_ORDER.len())
+        .filter_map(|state| {
+            // In the reader's order, so most recent first within a state.
+            let under: Vec<Value> = rows
+                .iter()
+                .filter(|row| row.state == *state)
+                .map(row_json)
+                .collect();
+            (!under.is_empty()).then(|| {
+                json!({
+                    "state": state.word(),
+                    "heading": Status::of_state(*state).word(),
+                    "count": under.len(),
+                    "sessions": under,
+                })
+            })
+        })
+        .collect();
+    json!({ "groups": groups })
 }
 
 fn row_json(row: &RosterRow) -> Value {
@@ -113,6 +125,7 @@ fn row_json(row: &RosterRow) -> Value {
         "name": row.name,
         "state": row.state.word(),
         "held": row.held.map(|held| held.label()),
+        "words": Status::of_state(row.state).in_words(row.held),
         "updated": row.updated,
         "directory": row.directory,
         "prompt": row.prompt,
@@ -211,9 +224,17 @@ mod tests {
             }
         }
 
-        fn list(&self) -> Vec<Value> {
+        fn groups(&self) -> Vec<Value> {
             let listed = list(&mut Reader::new(), &self.root, Some(&self.roster));
-            listed["sessions"].as_array().expect("sessions").clone()
+            listed["groups"].as_array().expect("groups").clone()
+        }
+
+        /// The sessions of every group, in the order they are listed.
+        fn list(&self) -> Vec<Value> {
+            self.groups()
+                .iter()
+                .flat_map(|group| group["sessions"].as_array().expect("sessions").clone())
+                .collect()
         }
     }
 
@@ -247,6 +268,44 @@ mod tests {
                 "stopped"
             ]
         );
+    }
+
+    /// BG-16, BG-17. A group is listed for each state a session is in, and none for a state no
+    /// session is in, headed by the terminal list's word for it with a count of its sessions.
+    #[test]
+    fn background_groups_carry_the_terminal_heading_and_a_count() {
+        let mut scratch = scratch();
+        scratch.publish(ONE, State::Idle, None, 300, true);
+        scratch.publish(TWO, State::Idle, None, 200, true);
+        scratch.publish(THREE, State::Stopped, None, 100, false);
+        let groups = scratch.groups();
+        assert_eq!(field(&groups, "state"), ["idle", "stopped"]);
+        assert_eq!(
+            field(&groups, "heading"),
+            [Status::Ready.word(), Status::Stopped.word()]
+        );
+        assert_eq!(groups[0]["count"], 2);
+        assert_eq!(groups[1]["count"], 1);
+        let every: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|group| field(group["sessions"].as_array().expect("sessions"), "id"))
+            .collect();
+        assert_eq!(every, [vec![ONE, TWO], vec![THREE]]);
+    }
+
+    /// BG-5, SCREEN-16. A row's state words are the ones the terminal's row says, with the kind
+    /// of prompt held where one is.
+    #[test]
+    fn background_state_words_are_the_terminal_row_words() {
+        let mut scratch = scratch();
+        scratch.publish(ONE, State::NeedsInput, Some(Held::Run), 200, true);
+        scratch.publish(TWO, State::Idle, None, 100, true);
+        let rows = scratch.list();
+        assert_eq!(
+            rows[0]["words"],
+            Status::NeedsInput.in_words(Some(Held::Run))
+        );
+        assert_eq!(rows[1]["words"], Status::Ready.word());
     }
 
     /// BG-6. `state` is the word `jobs::as_json` writes for the same entry.
@@ -301,8 +360,8 @@ mod tests {
         assert!(rows.iter().all(|row| row["held"].is_null()), "{rows:?}");
     }
 
-    /// BG-5. A row carries the id, its short form, the name, the state, the held kind, the time,
-    /// the directory and the prompt, and nothing else.
+    /// BG-5. A row carries the id, its short form, the name, the state, the held kind, the state
+    /// words, the time, the directory and the prompt, and nothing else.
     #[test]
     fn a_background_row_carries_only_the_listed_fields() {
         let mut scratch = scratch();
@@ -325,7 +384,8 @@ mod tests {
                 "prompt",
                 "short",
                 "state",
-                "updated"
+                "updated",
+                "words"
             ]
         );
         assert_eq!(rows[0]["short"], "0a1b2c3d");
@@ -339,8 +399,8 @@ mod tests {
     fn an_empty_or_absent_background_roster_lists_no_sessions() {
         let scratch = scratch();
         let empty = list(&mut Reader::new(), &scratch.root, Some(&scratch.roster));
-        assert_eq!(empty, json!({ "sessions": [] }));
+        assert_eq!(empty, json!({ "groups": [] }));
         let absent = list(&mut Reader::new(), &scratch.root, None);
-        assert_eq!(absent, json!({ "sessions": [] }));
+        assert_eq!(absent, json!({ "groups": [] }));
     }
 }

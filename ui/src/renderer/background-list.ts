@@ -1,6 +1,7 @@
 /**
- * The desktop list of background sessions (BG-17), as data: the rows `background.list` sends,
- * grouped under the BG-16 headings in the BG-16 order. Nothing here draws.
+ * The desktop list of background sessions (BG-17), as data: the groups `background.list` sends,
+ * which the bridge builds under the BG-16 headings in the BG-16 order with the terminal list's
+ * words. Nothing here groups, orders or names a state, and nothing here draws.
  */
 
 /** A BG-6 state word, as `bravebot sessions --json` writes it. */
@@ -15,52 +16,30 @@ export interface BackgroundRow {
   state: BackgroundState
   /** The word for the kind of prompt held, or `null` unless `state` is `needs-input`. */
   held: string | null
+  /** What the terminal's row says about the state, with the kind of prompt held where one is. */
+  words: string
   /** Seconds since the epoch. */
   updated: number
   directory: string
   prompt: string
 }
 
-/** One heading of the list and the rows under it. */
+/** One heading of the list and the sessions under it, most recent first. */
 export interface BackgroundGroup {
   state: BackgroundState
   heading: string
   count: number
-  rows: BackgroundRow[]
+  sessions: BackgroundRow[]
 }
 
-/** The BG-16 order of the headings, which is `listing::ROSTER_ORDER`. */
-export const ORDER: readonly BackgroundState[] = ['needs-input', 'interrupted', 'working', 'idle', 'stopped']
-
-/** The Sessions screen's word for a state. `idle` is drawn as Ready. */
-const HEADINGS: Record<BackgroundState, string> = {
-  'needs-input': 'Needs input',
-  interrupted: 'Interrupted',
-  working: 'Working',
-  idle: 'Ready',
-  stopped: 'Stopped',
+/** The answer of `background.list`. */
+export interface BackgroundList {
+  groups: BackgroundGroup[]
 }
 
-/** The heading a state is listed under. */
-export function heading(state: BackgroundState): string {
-  return HEADINGS[state]
-}
-
-/** What a row says about its state, with the kind of prompt it holds where one is held. */
-export function stateWords(row: Pick<BackgroundRow, 'state' | 'held'>): string {
-  const words = heading(row.state)
-  return row.state === 'needs-input' && row.held ? `${words} · ${row.held}` : words
-}
-
-/**
- * The rows under a heading for each state in BG-16 order, leaving out a state no row is in.
- * Rows keep the order they came in within a state, which is most recent first from the bridge.
- */
-export function grouped(rows: readonly BackgroundRow[]): BackgroundGroup[] {
-  return ORDER.flatMap((state) => {
-    const under = rows.filter((row) => row.state === state)
-    return under.length ? [{ state, heading: heading(state), count: under.length, rows: under }] : []
-  })
+/** Every session of the groups, in the order they are listed. */
+export function sessionsOf(groups: readonly BackgroundGroup[]): BackgroundRow[] {
+  return groups.flatMap((group) => group.sessions)
 }
 
 /** The line a row copies, so the person can attach from a terminal (BG-9). */

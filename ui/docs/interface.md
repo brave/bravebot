@@ -322,8 +322,8 @@ the model's output is never taken for the command.
 
 Above the chats, a section headed **Background sessions** lists the sessions started with
 `bravebot --bg`, from every project ([BG-17](../../docs/specs/background-sessions.md#BG-17)). It
-takes the rows from `background.list` and draws them under the headings of the terminal's Sessions
-screen, in its order, each with a count: Needs input, Interrupted, Working, Ready, Stopped. A row
+draws the groups `background.list` sends, which the bridge makes under the headings of the
+terminal's Sessions screen, in its order and its words, each with a count: Needs input, Interrupted, Working, Ready, Stopped. A row
 shows the start of the session's id, its name, how long since it was written and its state.
 Selecting a row shows its working directory, the last prompt typed and the line
 `bravebot attach <id>` with a button that copies it. A row does nothing else: attaching, replying

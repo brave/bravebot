@@ -134,9 +134,16 @@ test('auto-answer ends the scenario when no button can be pressed', async () => 
 
 test('background.list answers with a session in each state, as the bridge words them', async () => {
   const listed = await request('background.list')
-  assert.deepEqual(listed.ok.sessions.map((row) => row.state), ['needs-input', 'interrupted', 'working', 'idle', 'stopped'])
-  for (const row of listed.ok.sessions) {
-    assert.deepEqual(Object.keys(row).sort(), ['directory', 'held', 'id', 'name', 'prompt', 'short', 'state', 'updated'])
+  const groups = listed.ok.groups
+  assert.deepEqual(groups.map((group) => group.state), ['needs-input', 'interrupted', 'working', 'idle', 'stopped'])
+  assert.deepEqual(groups.map((group) => group.heading), ['Needs input', 'Interrupted', 'Working', 'Ready', 'Stopped'])
+  const sessions = groups.flatMap((group) => group.sessions)
+  for (const group of groups) {
+    assert.equal(group.count, group.sessions.length)
+    assert.ok(group.sessions.every((row) => row.state === group.state))
+  }
+  for (const row of sessions) {
+    assert.deepEqual(Object.keys(row).sort(), ['directory', 'held', 'id', 'name', 'prompt', 'short', 'state', 'updated', 'words'])
     assert.equal(row.short, row.id.slice(0, 8))
     assert.equal(row.held !== null, row.state === 'needs-input')
   }

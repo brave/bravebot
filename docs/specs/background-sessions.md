@@ -645,11 +645,13 @@ session and gives the person the command that opens it. With the rows and the wo
 session is named and placed the same way in both front ends.
 
 `verified-by: bravebot_ui_bridge::background::background_sessions_are_listed_in_state_order_and_most_recent_first_within_a_state`
+`verified-by: bravebot_ui_bridge::background::background_groups_carry_the_terminal_heading_and_a_count`
+`verified-by: bravebot_ui_bridge::background::background_state_words_are_the_terminal_row_words`
 `verified-by: bravebot_ui_bridge::background::background_state_is_the_word_the_roster_json_uses`
 `verified-by: bravebot_ui_bridge::background::a_background_row_carries_only_the_listed_fields`
 `verified-by: bravebot_ui_bridge::background::an_empty_or_absent_background_roster_lists_no_sessions`
 `verified-by: bravebot_session::listing::a_control_character_in_a_roster_row_is_pictured`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/background-list.test.mjs holds the headings, their order and counts, Ready for idle and the state words; ui/scripts/drive-background-sessions.mjs drives the section in a real window against a mocked background.list: the headings and counts, a row's id, name, time and state, the 28-column cut, the selected row's directory and prompt, the selected row moving under its new heading, the copy button as its only action writing bravebot attach and the short id, every row and the copy button sending the bridge nothing but background.list so no row control starts, replies to or stops a session, no reads while the list is hidden, and no section while the roster is empty)`
+`verified-by: by-construction (the bridge sends the groups with their headings, order, counts and state words, which the tests above hold, and the desktop renderer is not a crate this workspace compiles, so ui/scripts/background-list.test.mjs holds that it reads the sessions in the order sent and the copied line; ui/scripts/drive-background-sessions.mjs drives the section in a real window against a mocked background.list: the headings and counts, a row's id, name, time and state, the 28-column cut, the selected row's directory and prompt, the selected row moving under its new heading, the copy button as its only action writing bravebot attach and the short id, every row and the copy button sending the bridge nothing but background.list so no row control starts, replies to or stops a session, no reads while the list is hidden, and no section while the roster is empty)`
 
 ## What this changes in other specs
 

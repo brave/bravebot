@@ -12,7 +12,7 @@ import type {
   ModelCatalogue, OutputRequest, RewindPoint, RunRequest, Said, ServerRequest, SessionSummary,
   SettingsRules, Shown, TodoRow, VetRequest, VouchRequest,
 } from '../src/shared/protocol'
-import type { BackgroundRow } from '../src/renderer/background-list'
+import type { BackgroundGroup, BackgroundRow } from '../src/renderer/background-list'
 
 export const DIRECTORY = '/Users/example/harbour-lights'
 export const OTHER_DIRECTORY = '/Users/example/tide-tables'
@@ -38,13 +38,19 @@ export const SESSIONS = (): SessionSummary[] => [
   { id: IDS.bot, directory: BOT_HOME, project: 'review-bot', branch: null, title: 'Review Bot conversation', updated: now() - 2 * 86400, bytes: 6_000 },
 ]
 
-/** The roster `background.list` answers with: a session in each of the five states, in BG-16 order. */
-export const BACKGROUND = (): BackgroundRow[] => [
-  { id: 'a1b2c3d4-0000-4000-8000-000000000001', short: 'a1b2c3d4', name: 'Fix the feed parser', state: 'needs-input', held: 'run', updated: now() - 30, directory: DIRECTORY, prompt: 'fix the feed parser and run the tests' },
-  { id: 'b2c3d4e5-0000-4000-8000-000000000002', short: 'b2c3d4e5', name: 'Migrate the tide tables', state: 'interrupted', held: null, updated: now() - 900, directory: OTHER_DIRECTORY, prompt: 'migrate the tide tables to the new schema' },
-  { id: 'c3d4e5f6-0000-4000-8000-000000000003', short: 'c3d4e5f6', name: 'Write the release notes', state: 'working', held: null, updated: now() - 5, directory: DIRECTORY, prompt: 'write the release notes for 0.19' },
-  { id: 'd4e5f6a7-0000-4000-8000-000000000004', short: 'd4e5f6a7', name: 'Review the lock-free read path', state: 'idle', held: null, updated: now() - 600, directory: DIRECTORY, prompt: 'review the lock-free read path' },
-  { id: 'e5f6a7b8-0000-4000-8000-000000000005', short: 'e5f6a7b8', name: 'A deliberately long background session name that is cut', state: 'stopped', held: null, updated: now() - 2 * 86400, directory: OTHER_DIRECTORY, prompt: 'look at the importer' },
+/** A group of `background.list` holding one session, headed as the bridge heads it. */
+const alone = (heading: string, row: BackgroundRow): BackgroundGroup => ({ state: row.state, heading, count: 1, sessions: [row] })
+
+/**
+ * The groups `background.list` answers with: a session in each of the five states, in BG-16
+ * order, with the headings and state words the bridge sends.
+ */
+export const BACKGROUND = (): BackgroundGroup[] => [
+  alone('Needs input', { id: 'a1b2c3d4-0000-4000-8000-000000000001', short: 'a1b2c3d4', name: 'Fix the feed parser', state: 'needs-input', held: 'run', words: 'Needs input (run)', updated: now() - 30, directory: DIRECTORY, prompt: 'fix the feed parser and run the tests' }),
+  alone('Interrupted', { id: 'b2c3d4e5-0000-4000-8000-000000000002', short: 'b2c3d4e5', name: 'Migrate the tide tables', state: 'interrupted', held: null, words: 'Interrupted', updated: now() - 900, directory: OTHER_DIRECTORY, prompt: 'migrate the tide tables to the new schema' }),
+  alone('Working', { id: 'c3d4e5f6-0000-4000-8000-000000000003', short: 'c3d4e5f6', name: 'Write the release notes', state: 'working', held: null, words: 'Working', updated: now() - 5, directory: DIRECTORY, prompt: 'write the release notes for 0.19' }),
+  alone('Ready', { id: 'd4e5f6a7-0000-4000-8000-000000000004', short: 'd4e5f6a7', name: 'Review the lock-free read path', state: 'idle', held: null, words: 'Ready', updated: now() - 600, directory: DIRECTORY, prompt: 'review the lock-free read path' }),
+  alone('Stopped', { id: 'e5f6a7b8-0000-4000-8000-000000000005', short: 'e5f6a7b8', name: 'A deliberately long background session name that is cut', state: 'stopped', held: null, words: 'Stopped', updated: now() - 2 * 86400, directory: OTHER_DIRECTORY, prompt: 'look at the importer' }),
 ]
 
 export const BOTS = (): Bot[] => [
