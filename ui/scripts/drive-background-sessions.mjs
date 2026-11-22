@@ -59,8 +59,10 @@ try {
   await app.evaluate(({ ipcMain }, { roster, chats, models }) => {
     globalThis.backgroundRoster = roster
     globalThis.backgroundReads = 0
+    globalThis.requested = []
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, p = {}) => {
+      globalThis.requested.push(method)
       if (method === 'agent.info') return { ok: { configured: true, build: 'background fixture', version: '1' } }
       if (method === 'session.list') return { ok: { sessions: chats } }
       // Choosing the Chats tab opens the chat at the top of the list.
@@ -141,12 +143,23 @@ try {
   assert.equal(await detail.locator('.background-prompt').textContent(), 'the prompt of session 4')
 
   // 5. The one action copies the attach command and nothing else.
+  const sentBefore = await app.evaluate(() => globalThis.requested.length)
   await app.evaluate(({ clipboard }) => clipboard.writeText('before'))
   await detail.locator('[data-test="copy-attach"]').click()
   for (let tries = 0; tries < 50 && (await app.evaluate(({ clipboard }) => clipboard.readText())) === 'before'; tries++) await page.waitForTimeout(100)
   assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'bravebot attach 44444444')
   assert.equal(await section.getByRole('button').count(), roster.length + 1,
     'the section has a button for each row and the copy button, and no other action')
+  // Clicking every row and the copy button sends the bridge nothing but reads of the roster:
+  // no row control starts, replies to or stops a session.
+  for (const n of [1, 2, 3, 4, 5, 6]) await row(n).click()
+  await detail.locator('[data-test="copy-attach"]').click()
+  await page.waitForTimeout(1500)
+  const sent = await app.evaluate((_, from) => globalThis.requested.slice(from), sentBefore)
+  assert.deepEqual([...new Set(sent)].filter((method) => method !== 'background.list'), [],
+    'a row control sent only background.list')
+  await row(4).click()
+  await detail.waitFor()
 
   // 6. Dark, with the moved row selected, for the record.
   await page.emulateMedia({ colorScheme: 'dark' })
