@@ -538,6 +538,8 @@ A click on a row says which language servers the session has started, as `/lsp` 
 `verified-by: bravebot_tui::panel::each_started_language_server_has_a_row_and_none_leaves_no_heading`
 `verified-by: bravebot_tui::panel::the_plan_gets_the_rows_the_server_sections_leave`
 `verified-by: bravebot_agent::lsp::the_roster_names_the_program_a_turn_started_until_the_set_is_dropped`
+`verified-by: bravebot_lsp::server::the_roster_names_the_servers_in_name_order_whatever_order_they_started_in`
+`verified-by: bravebot_lsp::server::the_roster_keeps_naming_the_running_servers_while_a_question_waits_on_an_approval`
 
 <a id="PANEL-14"></a>
 ### PANEL-14: the MCP servers the session started

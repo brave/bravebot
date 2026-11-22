@@ -41642,6 +41642,399 @@ mod tests {
         );
     }
 
+    /// CMD-14: `/resume <id>` ends the session being run and leaves the record chosen for the next
+    /// one to begin from. The session left is named for the caller to print, its record stays on
+    /// disk and resumable, and the directory it opened is closed before the workspace is handed
+    /// on. Rejects: a resume that leaves no record to begin from, one that names another session as
+    /// the one left, one that leaves an opened directory reachable by the next session, and one
+    /// that removes or renames the record of the session left.
+    #[test]
+    fn resuming_ends_the_session_and_leaves_its_record_resumable() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let base = crate::test_profile::project("bravebot-app-resume-ends");
+        let root = base.join("project");
+        std::fs::create_dir_all(&root).expect("create");
+        std::fs::create_dir_all(base.join("shared")).expect("create");
+        let (_, _, earlier, _, _) = a_session_to_branch(&root);
+        let earlier_id = earlier.id().to_string();
+        drop(earlier);
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
+        let current_id = stored.id().to_string();
+        assert_ne!(current_id, earlier_id);
+        let asked = named_to_open(&mut session, &workspace, &["../shared".to_string()]);
+        open_named(&mut session, &mut workspace, &mut answers.trust, &asked);
+        assert!(
+            !workspace.added_directories().is_empty(),
+            "the directory was not open to begin with"
+        );
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut servers = crate::state::Servers::default();
+        let mut switch = None;
+
+        let ended = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .resume(&mut servers, &mut switch, &earlier_id);
+
+        let Some(Ended::Left(Some(left))) = ended else {
+            panic!("the session was not left with a record to pick up: {ended:?}");
+        };
+        assert_eq!(
+            left.id, current_id,
+            "another session was named as the one left"
+        );
+        let switch = switch.expect("no record was left for the next session to begin from");
+        assert_eq!(switch.record.id, earlier_id);
+        assert!(
+            switch.workspace.added_directories().is_empty(),
+            "the next session was handed a directory the one left had opened"
+        );
+        assert!(
+            workspace.added_directories().is_empty(),
+            "the session left kept a directory open"
+        );
+        drop(stored);
+        let kept = bravebot_session::sessions::load(&root, &current_id)
+            .expect("the session left lost its record");
+        assert_eq!(kept.title, "write a line saying hello into notes.txt");
+        let again = crate::resume::named(&root, &earlier_id, &current_id)
+            .expect("the session left cannot be resumed");
+        assert_eq!(again.id, current_id);
+    }
+
+    /// CMD-14: `/resume <id>` in a directory that holds no other session is refused without
+    /// leaving the session and without repeating the id typed, which may hold an escape. Rejects:
+    /// a refusal that formats the typed id into its line, one that ends the session or hands on a
+    /// record anyway, and one that says nothing.
+    #[test]
+    fn resume_where_the_directory_holds_no_other_session_stays_and_does_not_echo_the_id() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-resume-alone");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
+        let current_id = stored.id().to_string();
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut servers = crate::state::Servers::default();
+
+        for typed in ["ghost-7f3c91e2", "ghost-\u{1b}[31m7f3c91e2"] {
+            let mut switch = None;
+            let said_before = session.transcript.len();
+
+            let ended = Held {
+                session: &mut session,
+                conversation: &mut conversation,
+                stored: &mut stored,
+                answers: &mut answers,
+                workspace: &mut workspace,
+                scratch: &mut scratch,
+                settings: &settings,
+                run_settings: &run_settings,
+            }
+            .resume(&mut servers, &mut switch, typed);
+
+            assert!(ended.is_none(), "{typed:?} ended the session: {ended:?}");
+            assert!(switch.is_none(), "{typed:?} handed on a record");
+            assert_eq!(
+                session.transcript.len(),
+                said_before + 1,
+                "{typed:?} was not refused with one line"
+            );
+            let said = &session.transcript.last().expect("a note").text;
+            assert_eq!(
+                said,
+                &crate::resume::Refusal::NoSuchSession.note(),
+                "the refusal for a directory with no other session said something else"
+            );
+            assert!(
+                !said.contains("7f3c91e2") && !said.contains('\u{1b}'),
+                "the refusal repeated the id typed: {said:?}"
+            );
+        }
+        assert_eq!(stored.id(), current_id);
+        assert!(session.looping().is_some(), "the refusal ended the loop");
+        assert!(bravebot_session::sessions::load(&root, &current_id).is_some());
+    }
+
+    /// Whether `path` has been removed within a second, since ending the session that held it waits
+    /// a quarter of a second at most for the removal.
+    fn removed_within_a_second(path: &std::path::Path) -> bool {
+        (0..20).any(|_| {
+            if !path.exists() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            false
+        })
+    }
+
+    /// TRUST-15: `/branch` carries on in a copy and gives it a directory of its own, removing the one
+    /// of the session it followed with what was written in it, and a branch that was refused
+    /// carries on in the same session and keeps its directory. Rejects: a branch that keeps the
+    /// directory of the session it followed, one that replaces it where no copy was made, and one
+    /// that opens a new directory the workspace does not reach.
+    #[test]
+    fn branching_replaces_the_sessions_directory_only_where_a_copy_was_made() {
+        use bravebot_agent::SessionScratch;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-scratch");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, written, mut conversation, mut answers) =
+            a_session_to_branch(&root);
+        let mut scratch = Some(SessionScratch::create().expect("a directory"));
+        workspace.open_scratch(scratch.as_ref().and_then(SessionScratch::directory));
+        let first = scratch.as_ref().expect("a directory").path().to_path_buf();
+        std::fs::write(first.join("intermediate.txt"), "written by the session").expect("a file");
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+
+        // A session nobody has written a record for has nothing to copy, so the branch is refused.
+        let mut nothing_written =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut nothing_written,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .branch("");
+        assert_eq!(
+            scratch.as_ref().map(SessionScratch::path),
+            Some(first.as_path()),
+            "a refused branch replaced the directory of the session it stayed in"
+        );
+        assert!(
+            first.join("intermediate.txt").exists(),
+            "a refused branch removed what the session wrote"
+        );
+        assert_eq!(workspace.scratch(), Some(first.as_path()));
+        drop(nothing_written);
+
+        let mut stored = written;
+        Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .branch("");
+
+        let second = scratch
+            .as_ref()
+            .expect("the copy was given no directory")
+            .path()
+            .to_path_buf();
+        assert_ne!(second, first, "the copy carried on in the old directory");
+        assert!(second.is_dir(), "the copy's directory does not exist");
+        assert!(
+            removed_within_a_second(&first),
+            "the directory of the session the copy followed was not removed"
+        );
+        assert_eq!(
+            workspace.scratch(),
+            Some(second.as_path()),
+            "the workspace does not reach the copy's directory"
+        );
+    }
+
+    /// TRUST-15: `/clear` and a handoff each begin a session with a directory of its own and remove
+    /// the one of the session they end, with what was written in it. Rejects: a clear that keeps the
+    /// directory of the cleared session, and a handoff that does.
+    #[test]
+    fn clearing_and_a_handoff_each_replace_the_sessions_directory() {
+        use bravebot_agent::SessionScratch;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-clear-scratch");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, mut conversation, mut answers) =
+            a_session_to_branch(&root);
+        let mut scratch = Some(SessionScratch::create().expect("a directory"));
+        workspace.open_scratch(scratch.as_ref().and_then(SessionScratch::directory));
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        // Never drawn on: a session bypassing every permission is not asked about the directory it
+        // opens in, so the new session is settled without a question.
+        let mut terminal = ratatui::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 20, 5)),
+            },
+        )
+        .expect("a terminal");
+
+        for brief in [None, Some("carry on with the notes".to_string())] {
+            for _ in 0..8 {
+                if session.permission_mode() == bravebot_agent::PermissionMode::Bypass {
+                    break;
+                }
+                session.cycle_permission_mode();
+            }
+            assert_eq!(
+                session.permission_mode(),
+                bravebot_agent::PermissionMode::Bypass,
+                "the fixture would put a question to the terminal"
+            );
+            let before = scratch.as_ref().expect("a directory").path().to_path_buf();
+            std::fs::write(before.join("intermediate.txt"), "written by the session")
+                .expect("a file");
+
+            let ended = Held {
+                session: &mut session,
+                conversation: &mut conversation,
+                stored: &mut stored,
+                answers: &mut answers,
+                workspace: &mut workspace,
+                scratch: &mut scratch,
+                settings: &settings,
+                run_settings: &run_settings,
+            }
+            .clear(&mut terminal, brief.clone());
+
+            assert!(ended.is_none(), "{brief:?} ended the session: {ended:?}");
+            let after = scratch
+                .as_ref()
+                .expect("the new session was given no directory")
+                .path()
+                .to_path_buf();
+            assert_ne!(after, before, "{brief:?} carried on in the old directory");
+            assert!(after.is_dir(), "{brief:?} left no directory");
+            assert!(
+                removed_within_a_second(&before),
+                "{brief:?} did not remove the directory of the session it ended"
+            );
+            assert_eq!(
+                workspace.scratch(),
+                Some(after.as_path()),
+                "{brief:?} left the workspace reaching the old directory"
+            );
+        }
+    }
+
+    /// TRUST-15: a session begun from a record, resumed or forked, is given a directory of its own
+    /// that its workspace reaches, and the directory goes when that session ends, as it does when
+    /// `event_loop` returns and drops what it began with. Each session is begun with the workspace
+    /// the one before it left, which still reaches the directory that session had. Rejects: a
+    /// session begun from a record that is given no directory, one whose workspace is left
+    /// reaching a directory that is not its own, and one that carries on in the directory of the
+    /// session it followed.
+    #[test]
+    fn a_session_begun_from_a_record_is_given_a_directory_of_its_own() {
+        use bravebot_agent::SessionScratch;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-begin-scratch");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, _session, stored, _conversation, _answers) = a_session_to_branch(&root);
+        let resumed = sessions::load(&root, stored.id()).expect("the record");
+        let forked = sessions::fork(&root, stored.id()).expect("the session forks");
+        drop(stored);
+
+        // The directory of a session that has ended, still reached by the workspace it left.
+        let ended = SessionScratch::create().expect("a directory");
+        let mut followed = ended.path().to_path_buf();
+        workspace.open_scratch(ended.directory());
+        drop(ended);
+        assert!(
+            removed_within_a_second(&followed),
+            "the fixture's earlier directory is still there"
+        );
+
+        // Never drawn on: a session opened bypassing every permission is not asked about the
+        // directory it opens in.
+        let mut terminal = ratatui::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 20, 5)),
+            },
+        )
+        .expect("a terminal");
+        let mut config = a_config_needing_no_sign_in();
+        let mut servers = crate::state::Servers::default();
+
+        for (how, record) in [("resumed", resumed), ("forked", forked)] {
+            let begun = begin_session(
+                &mut terminal,
+                &mut config,
+                &workspace,
+                &mut servers,
+                Startup {
+                    confinement: String::new(),
+                    sockets_with_a_path_reachable: false,
+                    sandbox: crate::sandbox_command::Sandboxed::at_start(),
+                    start: Start::Resuming(Box::new(record)),
+                    named: None,
+                    links: Links::default(),
+                    skip_permissions: true,
+                    asked_for_auto: false,
+                    prompts: bravebot_agent::turn::SystemPrompts::default(),
+                },
+            )
+            .unwrap_or_else(|ended| panic!("the {how} session did not begin: {ended:?}"));
+
+            let own = begun
+                .scratch
+                .as_ref()
+                .unwrap_or_else(|| panic!("the {how} session was given no directory"))
+                .path()
+                .to_path_buf();
+            assert!(own.is_dir(), "the {how} session's directory does not exist");
+            assert_ne!(
+                own, followed,
+                "the {how} session carried on in the directory of the session it followed"
+            );
+            assert_eq!(
+                begun.workspace.scratch(),
+                Some(own.as_path()),
+                "the workspace does not reach the {how} session's directory"
+            );
+            std::fs::write(own.join("intermediate.txt"), "written by the session").expect("a file");
+
+            // The session ends as `event_loop` returns, and the next begins with the workspace
+            // this one left.
+            workspace = begun.workspace.clone();
+            drop(begun);
+            assert!(
+                removed_within_a_second(&own),
+                "the {how} session left its directory behind when it ended"
+            );
+            followed = own;
+        }
+    }
+
     /// `/clear` begins a session nobody has asked anything. A program vouched for, a server
     /// approved, a run prompt drawn and a file agreed to be shown were answers about the session it
     /// ends, and kept they would answer the next one's questions for it.

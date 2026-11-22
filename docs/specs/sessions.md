@@ -1382,6 +1382,7 @@ place it genuinely is.
 `verified-by: bravebot_ui_bridge::rewind::undoing_a_desktop_turn_puts_back_its_file_and_its_conversation`
 `verified-by: bravebot_ui_bridge::rewind::undoing_two_desktop_turns_puts_a_file_back_to_before_the_first`
 `verified-by: bravebot_ui_bridge::rewind::a_session_with_no_turns_has_nothing_to_undo`
+`verified-by: bravebot_ui_bridge::manifest::a_plan_run_marks_every_rewind_point_the_session_holds_as_uncovered_by_the_desktop`
 `verified-by: bravebot_ui_bridge::bridge::undoing_a_turn_does_not_hand_back_a_revoked_command`
 `verified-by: bravebot_ui_bridge::interop::a_record_written_here_is_read_back_by_the_agents_own_reader`
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`

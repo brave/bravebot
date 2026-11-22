@@ -1721,6 +1721,83 @@ mod tests {
             assert!(!opened.contains("q closes"), "{opened}");
         }
 
+        /// Where there is more than one row the footer says where the reader is among them and
+        /// names the keys for moving. A footer that drew the position and left the keys out would
+        /// leave a reader of two delegates with no way to find the other one from the screen.
+        #[test]
+        fn the_footer_gives_the_position_and_the_keys_for_moving_where_there_is_more_than_one_row()
+        {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.watch();
+            session.open_watched();
+            let footer = |session: &Session| {
+                rows_at(session, 90, 24)
+                    .last()
+                    .expect("a footer")
+                    .trim_start()
+                    .to_string()
+            };
+
+            session.watch_previous();
+            session.watch_previous();
+            let first = footer(&session);
+            assert!(first.contains("1 of 2"), "{first}");
+            assert!(first.contains("n / p another delegate"), "{first}");
+
+            session.watch_next();
+            session.watch_next();
+            let last = footer(&session);
+            assert!(last.contains("2 of 2"), "{last}");
+            assert!(last.contains("n / p another delegate"), "{last}");
+        }
+
+        /// A delegate that reported is neither working nor one that did not finish, and the footer
+        /// says which. A footer that kept the word for work in progress, or drew the failed word
+        /// for every delegate that stopped, would tell a reader the wrong thing about a run that
+        /// ended well.
+        #[test]
+        fn the_footer_says_a_delegate_that_reported_has_answered() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "run the build");
+            session.watch();
+
+            session.delegate_finished(id, "the build passed".to_string(), false, None);
+            let rows = rows_at(&session, 90, 24);
+            let footer = rows.last().expect("a footer").trim_start().to_string();
+            assert!(
+                footer.starts_with(&format!("checker delegate {id}  ·  answered")),
+                "{footer}"
+            );
+            assert!(!footer.contains("working"), "{footer}");
+            assert!(!footer.contains("did not finish"), "{footer}");
+        }
+
+        /// What a delegate was asked and what it said are text a model wrote, so the footer, which
+        /// is the interface's own voice, holds neither. A footer that named the task to say which
+        /// delegate this is would quote the planner into the one row nothing else marks.
+        #[test]
+        fn the_footer_quotes_neither_what_a_delegate_was_asked_nor_what_it_said() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "checker", "PECULIAR-TASK");
+            session.watch();
+            session.delegate_finished(id, "PECULIAR-REPORT".to_string(), false, None);
+
+            let rows = rows_at(&session, 90, 24);
+            assert!(
+                rows.iter().any(|row| row.contains("PECULIAR-TASK")),
+                "the task was not drawn above the lines: {rows:?}"
+            );
+            let footer = rows.last().expect("a footer").trim_start().to_string();
+            assert!(
+                footer.starts_with(&format!("checker delegate {id}")),
+                "{footer}"
+            );
+            assert!(!footer.contains("PECULIAR-TASK"), "{footer}");
+            assert!(!footer.contains("PECULIAR-REPORT"), "{footer}");
+        }
+
         /// Marked the way every other block the planner was kept from is marked, and marked
         /// structurally: the bar is in the margin on every row, so content saying the block ends
         /// cannot end it.
@@ -2153,6 +2230,29 @@ mod tests {
             );
         }
 
+        /// The list row says whether the record keeps the answer, and it says it per row. An
+        /// implementation that drew one word for every row, or the opposite word, would still draw
+        /// "aside" and the question on each row, so each row is read by what it names.
+        #[test]
+        fn the_list_row_of_an_aside_says_whether_the_record_keeps_its_answer() {
+            let mut session = Session::new("kernel-enforced");
+            asked(&mut session, "KEPT-QUESTION", "because of nesting", true);
+            asked(&mut session, "SCREEN-QUESTION", "it is a leaf", false);
+            session.watch();
+            assert!(
+                session.listing_delegates(),
+                "two rows did not open the list"
+            );
+
+            let panel = listed(&session, 90, 24);
+            let kept = row_naming(&panel, "KEPT-QUESTION");
+            let screen_only = row_naming(&panel, "SCREEN-QUESTION");
+            assert!(kept.contains("kept"), "{kept}");
+            assert!(!kept.contains("screen"), "{kept}");
+            assert!(screen_only.contains("screen"), "{screen_only}");
+            assert!(!screen_only.contains("kept"), "{screen_only}");
+        }
+
         /// Both halves, because a question with no answer under it is half of what a person came
         /// here to read, and an answer alone stops making sense as soon as there are two asides.
         #[test]
@@ -2168,6 +2268,27 @@ mod tests {
             let screen = rendered(&session);
             assert!(screen.contains("why is the parser recursive?"), "{screen}");
             assert!(screen.contains("because the grammar nests"), "{screen}");
+        }
+
+        /// The question is the first thing drawn and the answer comes under it. A view that drew
+        /// the answer first would still hold both words, which is all the presence check reads.
+        #[test]
+        fn an_asides_view_draws_the_question_above_the_answer() {
+            let mut session = Session::new("kernel-enforced");
+            asked(&mut session, "PECULIAR-QUESTION", "PECULIAR-ANSWER", true);
+
+            let rows = rows_at(&session, 90, 24);
+            let row_of = |word: &str| {
+                rows.iter()
+                    .position(|row| row.contains(word))
+                    .unwrap_or_else(|| panic!("{word} was not drawn: {rows:?}"))
+            };
+            let question = row_of("PECULIAR-QUESTION");
+            let answer = row_of("PECULIAR-ANSWER");
+            assert!(
+                question < answer,
+                "the question was drawn on row {question} and the answer on row {answer}: {rows:?}"
+            );
         }
 
         /// An answer is usually one paragraph with no line break in it, and a row of the screen
@@ -2430,6 +2551,24 @@ mod tests {
             assert!(
                 screen.contains(&t!(watching_list_title).to_string()),
                 "the panel was not drawn: {screen}"
+            );
+        }
+
+        /// The list names its own keys inside the panel. A panel that drew its rows and no key
+        /// row would leave a person who opened it with no word on the screen for how to pick one
+        /// or leave.
+        #[test]
+        fn the_list_carries_its_own_key_row() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.watch();
+            assert!(session.listing_delegates());
+
+            let panel = listed(&session, 90, 24);
+            assert!(
+                panel.contains("up / down moves  ·  enter opens  ·  q closes"),
+                "{panel}"
             );
         }
 

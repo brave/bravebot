@@ -8068,14 +8068,17 @@ done
     /// bound, with the request named.
     ///
     /// A wrong implementation switches to the call bound, 120 seconds here, after `initialize`.
-    /// The handshake is then given up on at three times the startup bound and five seconds, and
-    /// the note says only that the handshake was too slow.
+    /// The handshake is then given up on at three times the startup bound and five seconds, 14
+    /// seconds for the 3 seconds given here, and the note says only that the handshake was too
+    /// slow. The startup bound leaves `initialize` a wide margin under load, and the elapsed
+    /// ceiling of 10 seconds is between the 3 seconds `tools/list` is held to and the 14 seconds
+    /// of that give-up.
     #[cfg(unix)]
     #[test]
     fn a_server_not_answering_tools_list_within_its_startup_bound_is_left_out_at_that_bound() {
         let root = scratch("cli-servers-startup-bound-tools-list");
         let mut notes = Vec::new();
-        let timeouts = Timeouts::new(Some(1), None).expect("timeouts");
+        let timeouts = Timeouts::new(Some(3), None).expect("timeouts");
 
         let started = std::time::Instant::now();
         let Some(reached) =
@@ -8086,7 +8089,7 @@ done
 
         assert!(reached.is_empty(), "a server that never listed was kept");
         assert!(
-            started.elapsed() < Duration::from_secs(6),
+            started.elapsed() < Duration::from_secs(10),
             "tools/list was waited on past the startup bound: {:?}",
             started.elapsed()
         );
@@ -8098,7 +8101,7 @@ done
             panic!("notes were {notes:?}");
         };
         assert!(
-            note.contains("weather") && note.contains("tools/list timed out after 1 seconds"),
+            note.contains("weather") && note.contains("tools/list timed out after 3 seconds"),
             "{note}"
         );
     }
@@ -8107,13 +8110,15 @@ done
     /// answers `initialize` and `tools/list` and never answers `prompts/list` is left out at the
     /// startup bound, with the request named.
     ///
-    /// A wrong implementation switches to the call bound once the tools are listed.
+    /// A wrong implementation switches to the call bound once the tools are listed. The startup
+    /// bound is 3 seconds, which leaves `initialize` a wide margin under load, and the elapsed
+    /// ceiling of 10 seconds is below the 14 seconds at which the handshake is given up on.
     #[cfg(unix)]
     #[test]
     fn a_server_not_answering_prompts_list_within_its_startup_bound_is_left_out_at_that_bound() {
         let root = scratch("cli-servers-startup-bound-prompts-list");
         let mut notes = Vec::new();
-        let timeouts = Timeouts::new(Some(1), None).expect("timeouts");
+        let timeouts = Timeouts::new(Some(3), None).expect("timeouts");
 
         let started = std::time::Instant::now();
         let Some(reached) =
@@ -8124,7 +8129,7 @@ done
 
         assert!(reached.is_empty(), "a server that never listed was kept");
         assert!(
-            started.elapsed() < Duration::from_secs(6),
+            started.elapsed() < Duration::from_secs(10),
             "prompts/list was waited on past the startup bound: {:?}",
             started.elapsed()
         );
@@ -8136,7 +8141,7 @@ done
             panic!("notes were {notes:?}");
         };
         assert!(
-            note.contains("weather") && note.contains("prompts/list timed out after 1 seconds"),
+            note.contains("weather") && note.contains("prompts/list timed out after 3 seconds"),
             "{note}"
         );
     }

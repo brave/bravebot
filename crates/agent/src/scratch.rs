@@ -101,13 +101,28 @@ impl SessionScratch {
     /// `root` holds, and other programs fill a temporary directory with entries nothing removes.
     fn made_in(root: &Path, kind: &str) -> std::io::Result<Self> {
         #[cfg(unix)]
-        let places = places_in(root, rustix::process::geteuid().as_raw());
+        {
+            Self::made_in_sweeping(root, kind, sweep)
+        }
         #[cfg(not(unix))]
-        let places = Places {
-            home: root.to_path_buf(),
-        };
+        {
+            let places = Places {
+                home: root.to_path_buf(),
+            };
+            Self::created_at(reserved_name(&places.home, kind))
+        }
+    }
+
+    /// [`SessionScratch::made_in`] with the removal of a place's leftovers given, so a test can
+    /// hold it up and see whether the session waits for it.
+    #[cfg(unix)]
+    fn made_in_sweeping(
+        root: &Path,
+        kind: &str,
+        sweeper: impl Fn(&Path, u32) + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let places = places_in(root, rustix::process::geteuid().as_raw());
         let scratch = Self::created_at(reserved_name(&places.home, kind))?;
-        #[cfg(unix)]
         if let Ok(own) = scratch.claim.metadata() {
             use std::os::unix::fs::MetadataExt;
             let owner = own.uid();
@@ -115,7 +130,7 @@ impl SessionScratch {
                 .name("scratch sweep".into())
                 .spawn(move || {
                     for place in &places.sweeps {
-                        sweep(place, owner);
+                        sweeper(place, owner);
                     }
                 });
         }
@@ -1281,6 +1296,49 @@ mod tests {
         letting_go.join().expect("let go");
 
         assert_eq!(mode_of(&path), 0o700, "mode was {:o}", mode_of(&path));
+    }
+
+    /// The removal of leftovers runs beside the opening session rather than ahead of it (TRUST-25).
+    ///
+    /// The removal given here does not return until the test lets it, so an opening that ran it
+    /// inline, or waited for its thread to end, would not answer until the bound on the wait ran
+    /// out. The removal is also required to have begun, so an opening that never removes anything
+    /// does not pass.
+    #[test]
+    #[cfg(unix)]
+    fn the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let (reached, began) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (finished, was_released) = std::sync::mpsc::channel();
+        let held_up = move |_place: &Path, _owner: u32| {
+            let _ = reached.send(());
+            let _ = released.recv_timeout(PATIENCE);
+            let _ = finished.send(());
+        };
+        let (sent, answer) = std::sync::mpsc::channel();
+        let opening = root.path().to_path_buf();
+        std::thread::spawn(move || {
+            let _ = sent.send(SessionScratch::made_in_sweeping(&opening, SESSION, held_up));
+        });
+
+        let opened = answer
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("the session waited for the removal of leftovers")
+            .expect("a scratch directory");
+
+        began
+            .recv_timeout(PATIENCE)
+            .expect("the removal never began");
+        assert!(
+            opened.path().is_dir(),
+            "{} was not there while the removal was held up",
+            opened.path().display()
+        );
+        release.send(()).expect("let the removal go on");
+        was_released
+            .recv_timeout(PATIENCE)
+            .expect("the removal never finished once it was let go");
     }
 
     /// A lock something else keeps does not keep a session from opening. It goes on with its

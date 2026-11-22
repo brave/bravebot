@@ -388,7 +388,13 @@ saying so, which is the case the hint exists for.
 foot, reads as two things to press. The line that is always drawn is the one to put it on.
 
 `verified-by: bravebot_tui::render::the_footer_says_which_delegate_this_is_and_whether_it_is_working`
+`verified-by: bravebot_tui::render::the_footer_says_q_closes_a_row_the_list_did_not_open`
+`verified-by: bravebot_tui::render::stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer`
 `verified-by: bravebot_tui::render::one_delegate_is_given_no_position_and_no_key_for_moving`
+`verified-by: bravebot_tui::render::the_footer_gives_the_position_and_the_keys_for_moving_where_there_is_more_than_one_row`
+`verified-by: bravebot_tui::render::the_footer_says_a_delegate_that_reported_has_answered`
+`verified-by: bravebot_tui::render::the_footer_quotes_neither_what_a_delegate_was_asked_nor_what_it_said`
+`verified-by: bravebot_tui::render::the_list_carries_its_own_key_row`
 `verified-by: bravebot_tui::render::the_list_names_every_delegate_and_what_each_was_asked`
 `verified-by: bravebot_tui::render::the_row_that_would_open_is_filled_edge_to_edge`
 `verified-by: bravebot_tui::render::a_narrow_row_keeps_the_count_and_loses_the_end_of_the_task`
@@ -586,7 +592,10 @@ sends, so neither half reaches the planner from it.
 `verified-by: bravebot_tui::app::answering_a_question_beside_the_work_leaves_the_transcript_alone`
 `verified-by: bravebot_tui::app::an_answer_being_written_beside_the_work_is_not_drawn_over_the_turn`
 `verified-by: bravebot_tui::render::the_list_names_an_aside_row_as_an_aside`
+`verified-by: bravebot_tui::render::the_list_row_of_an_aside_says_whether_the_record_keeps_its_answer`
+`verified-by: bravebot_tui::render::stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer`
 `verified-by: bravebot_tui::render::an_asides_view_draws_the_question_and_the_answer`
+`verified-by: bravebot_tui::render::an_asides_view_draws_the_question_above_the_answer`
 `verified-by: bravebot_tui::render::an_asides_view_wraps_an_answer_that_is_one_long_line`
 `verified-by: bravebot_agent::turn::asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone`
 `verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_not_added_to_the_exchange`

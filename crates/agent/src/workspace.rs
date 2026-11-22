@@ -6349,6 +6349,69 @@ mod tests {
         );
     }
 
+    /// Each door that opens a directory by name asks for the refusal itself, so a share, a device
+    /// path or a drive-relative name is refused by `/add-dir` and by `/cd` alike (TRUST-18). The
+    /// guard is tested alone above; a door that stopped calling it would still pass that test, and
+    /// `/cd` would then replace the working directory with a name the map reads inside the project.
+    /// Each door is given the host's answer, so the Windows answer is asked of it where the tests
+    /// run. A refused move leaves the working directory where it was.
+    #[test]
+    fn each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key() {
+        let base = crate::testutil::scratch_dir("bravebot-unkeyable-doors");
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("project");
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&project).expect("create the project");
+        std::fs::create_dir_all(&elsewhere).expect("create a directory beside it");
+        let elsewhere = elsewhere.canonicalize().expect("canonical name");
+        let named = elsewhere.to_str().expect("utf-8 path");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let root = workspace.root().to_path_buf();
+
+        for (unkeyable, backslash_separates) in [
+            (r"\\server\share\x", true),
+            (r"\\?\UNC\server\share", true),
+            ("C:other", true),
+            (r"C:\other", false),
+        ] {
+            let opened = workspace
+                .admit_resolved_directory(unkeyable, PathBuf::from(unkeyable), backslash_separates)
+                .expect_err("the door that adds a directory opened a name with no key");
+            assert!(
+                matches!(&opened, WorkspaceError::Invalid { path, .. } if path == unkeyable),
+                "{unkeyable}: {opened:?}"
+            );
+            let moved = workspace
+                .move_root_to(unkeyable, PathBuf::from(unkeyable), backslash_separates)
+                .expect_err("the door that moves the root moved it to a name with no key");
+            assert!(
+                matches!(&moved, WorkspaceError::Invalid { path, .. } if path == unkeyable),
+                "{unkeyable}: {moved:?}"
+            );
+            assert_eq!(
+                workspace.root(),
+                root,
+                "{unkeyable}: a refused move changed the working directory"
+            );
+        }
+        assert!(workspace.added_directories().is_empty());
+
+        // The same doors admit a name the map can key, so the refusals above are the key's.
+        assert_eq!(
+            workspace
+                .admit_resolved_directory(named, elsewhere.clone(), BACKSLASH_SEPARATES)
+                .expect("a directory with a key was refused"),
+            elsewhere
+        );
+        let moved = workspace
+            .move_root_to(named, elsewhere.clone(), BACKSLASH_SEPARATES)
+            .expect("a move to a directory with a key was refused");
+        assert_eq!(moved.root, elsewhere);
+        assert_eq!(workspace.root(), elsewhere);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     /// Windows hands back a directory it canonicalised as `\\?\C:\...`, and a planner names one as
     /// `C:\...`, so both have to reach the one key a rule about the directory is held under, and
     /// that key has to read as a root rather than as a name under the project. The same name is a

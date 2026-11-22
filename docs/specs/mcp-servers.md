@@ -1725,6 +1725,7 @@ network that confinement grants each server are listed at the end of the report
 `verified-by: bravebot_cli::running::list_and_doctor_in_a_checkout_say_what_requested_each_server_and_what_a_session_there_holds`
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::status::each_servers_note_says_how_its_tools_stand`
+`verified-by: bravebot_tui::status::the_servers_line_of_a_report_says_how_the_held_servers_tools_stand`
 
 <a id="SERVERS-15"></a>
 ### SERVERS-15: a server has a bound on its handshake and on each call, and a call past it fails

@@ -1235,6 +1235,8 @@ decide, so the command only says which one the person meant.
 `verified-by: bravebot_tui::sessions::resume_by_id_reads_the_record_named_and_refuses_what_it_cannot_continue`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_a_running_background_session_holds`
 `verified-by: bravebot_tui::sessions::resume_by_id_does_not_follow_an_id_out_of_the_sessions_directory`
+`verified-by: bravebot_tui::app::resuming_ends_the_session_and_leaves_its_record_resumable`
+`verified-by: bravebot_tui::app::resume_where_the_directory_holds_no_other_session_stays_and_does_not_echo_the_id`
 
 <a id="CMD-15"></a>
 ### CMD-15: `/request` opens the last request built, and takes no argument

@@ -10518,6 +10518,118 @@ fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
     );
 }
 
+/// TRUST-19. The gap a write in the session's own directory leaves is the scratch gap and no other,
+/// and a write in the project leaves none. Marking another gap for it (a command, an unavailable
+/// backup) would tell the person the wrong reason an undo is incomplete.
+#[test]
+fn a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other() {
+    use bravebot_agent::rewind::CoverageGap;
+
+    let project = Scratch::new("scratch-gap-named");
+    std::fs::write(project.path.join("source.txt"), "before").expect("a file in the project");
+    let given = SessionScratch::create().expect("a directory of its own");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let coverage = workspace.rewind_coverage();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text("source.txt"),
+            &trusted_text("after"),
+        )
+        .expect("a write in the project");
+    assert!(
+        coverage.is_complete(),
+        "a write in the project left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    let named = given.path().join("workings.txt").display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&named),
+            &trusted_text("intermediate"),
+        )
+        .expect("a write in the session's own directory");
+    assert_eq!(coverage.gaps(), [CoverageGap::Scratch].into());
+}
+
+/// TRUST-19. A directory the person opened is inside the backup domain: a write there keeps a
+/// backup that restores the file, leaves no scratch gap, and the session's own directory beside it
+/// still keeps none. Treating every directory outside the project as scratch would keep nothing
+/// for the directory the person opened.
+#[test]
+fn a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap() {
+    use bravebot_agent::rewind::CoverageGap;
+
+    let project = Scratch::new("scratch-gap-project");
+    let opened = Scratch::new("scratch-gap-opened");
+    let kept = opened.path.join("notes.txt");
+    std::fs::write(&kept, "the person's notes").expect("a file in the opened directory");
+    let given = SessionScratch::create().expect("a directory of its own");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace
+        .add_directory(opened.path.to_str().expect("utf-8 path"))
+        .expect("the person opens a directory");
+    workspace.open_scratch(given.directory());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let coverage = workspace.rewind_coverage();
+    let named = kept.display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&named),
+            &trusted_text("what the turn made of them"),
+        )
+        .expect("a write in the directory the person opened");
+    assert!(
+        coverage.is_complete(),
+        "a write in an opened directory left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    let workings = given.path().join("workings.txt").display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&workings),
+            &trusted_text("intermediate"),
+        )
+        .expect("a write in the session's own directory");
+    assert_eq!(coverage.gaps(), [CoverageGap::Scratch].into());
+
+    let backups = workspace.take_backups();
+    let backed_up: Vec<_> = backups.iter().map(|backup| backup.path.clone()).collect();
+    assert_eq!(backed_up, vec![kept.canonicalize().expect("canonical")]);
+    assert!(restore_for_test(&workspace, backups).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&kept).expect("the opened directory's file"),
+        "the person's notes"
+    );
+}
+
 /// Given, not opened by name. It is not among the directories the user asked for, because `/status`
 /// says what it is instead of listing it as somewhere they chose to reach.
 #[test]
@@ -12176,8 +12288,12 @@ fn the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout() {
 }
 
 /// CHECKOUT-7, PERM-16. Where the settings keep the file tools inside the workspace, a delegate's
-/// checkout keeps them inside its root: a directory the parent already had open is reached by none
-/// of a read, a write, a listing and a search, though the checkout's own files are.
+/// checkout keeps them inside its root: a directory the parent already had open and the parent's
+/// working directory are each reached by none of a read, a write, a listing and a search, though
+/// the checkout's own files are.
+///
+/// The failure this rejects is a checkout whose root is still the working directory, or one that
+/// does not carry the key, so either tree is reachable by its absolute path from the delegate.
 #[test]
 fn the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout() {
     let (_scratch, state, mut workspace) =
@@ -12215,41 +12331,50 @@ fn the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout() {
         1,
     )
     .expect("the checkout searches its own tree");
-    let directory = trusted_text(&opened.display().to_string());
-    let errors = [
-        made.read(
-            &mut policy,
-            &trusted_text(&opened.join("notes.md").display().to_string()),
-        )
-        .err(),
-        made.write(
-            &mut policy,
-            &trusted_text(&opened.join("fresh.md").display().to_string()),
-            &trusted_text("written"),
-        )
-        .err(),
-        made.list(&mut policy, &directory, None, None).err(),
-        made.grep(
-            &mut policy,
-            std::slice::from_ref(&trusted_text("note")),
-            &directory,
-            None,
-            true,
-            1,
-        )
-        .err(),
-    ];
-    let reached: Vec<&str> = ["read", "write", "list", "grep"]
-        .into_iter()
-        .zip(errors)
-        .filter(|(_, error)| !matches!(error, Some(WorkspaceError::Escapes { .. })))
-        .map(|(tool, _)| tool)
-        .collect();
+    let working_directory = workspace.root().to_path_buf();
+    let mut reached: Vec<String> = Vec::new();
+    for (holder, outside_the_checkout, existing, needle) in [
+        ("opened", opened.clone(), "notes.md", "note"),
+        ("working", working_directory.clone(), "README", "hello"),
+    ] {
+        let directory = trusted_text(&outside_the_checkout.display().to_string());
+        let errors = [
+            made.read(
+                &mut policy,
+                &trusted_text(&outside_the_checkout.join(existing).display().to_string()),
+            )
+            .err(),
+            made.write(
+                &mut policy,
+                &trusted_text(&outside_the_checkout.join("fresh.md").display().to_string()),
+                &trusted_text("written"),
+            )
+            .err(),
+            made.list(&mut policy, &directory, None, None).err(),
+            made.grep(
+                &mut policy,
+                std::slice::from_ref(&trusted_text(needle)),
+                &directory,
+                None,
+                true,
+                1,
+            )
+            .err(),
+        ];
+        reached.extend(
+            ["read", "write", "list", "grep"]
+                .into_iter()
+                .zip(errors)
+                .filter(|(_, error)| !matches!(error, Some(WorkspaceError::Escapes { .. })))
+                .map(|(tool, _)| format!("{tool} in the {holder} directory")),
+        );
+    }
     assert!(
         reached.is_empty(),
         "these tools reached a directory outside the checkout: {reached:?}"
     );
     assert!(!opened.join("fresh.md").exists());
+    assert!(!working_directory.join("fresh.md").exists());
 }
 
 /// TRACE-1. The refusal for an opened directory carries a fixed cause that names the directory a
@@ -14994,6 +15119,90 @@ fn a_repo_map_says_when_the_file_cap_stopped_it() {
     let (map, _) = map_of(&whole, trust, None, ".").expect("map");
     assert!(!map.truncated, "a complete map claimed to be cut short");
     assert_eq!(map.files, 5);
+}
+
+/// Rust source of exactly `size` bytes whose only declaration is `declaration`, so a size limit
+/// is tested at its boundary and what the file declares does not depend on the padding.
+fn source_of_exactly(size: usize, declaration: &str) -> String {
+    let padding = format!("//{}\n", " ".repeat(4093));
+    let mut text = format!("{declaration}\n");
+    while text.len() + padding.len() <= size {
+        text.push_str(&padding);
+    }
+    let rest = size - text.len();
+    if rest > 0 {
+        text.push_str(&" ".repeat(rest - 1));
+        text.push('\n');
+    }
+    assert_eq!(text.len(), size);
+    text
+}
+
+/// MAP-5: the walk reads at most 32 MiB of source and says when it stopped there. Sixty-four files
+/// of 512 KiB total exactly 32 MiB, and a sixty-fifth would pass it, so the map holds the first
+/// sixty-four and reports a cut. The regressions it rejects: no cap on bytes (the sixty-fifth file
+/// is read and nothing is reported), a cap that is not reported, and a comparison that refuses the
+/// sixty-fourth file because the total reaches the cap.
+#[test]
+fn a_repo_map_says_when_the_byte_cap_stopped_it() {
+    let scratch = Scratch::new("map-byte-capped");
+    for n in 0..65 {
+        std::fs::write(
+            scratch.path.join(format!("f{n:02}.rs")),
+            source_of_exactly(512 * 1024, &format!("pub fn f_{n:02}() {{}}")),
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(
+        map.truncated,
+        "a walk that reached the cap on bytes did not say so: {map:?}"
+    );
+    assert_eq!(
+        (map.files, map.found, map.skipped, map.unvouched),
+        (64, 64, 0, 0),
+        "the files read were not the 64 that fit under the cap: {map:?}"
+    );
+}
+
+/// MAP-5, MAP-3: a file past 512 KiB is generated or data, so it is left out and counted with the
+/// files that were not read, and a file of exactly 512 KiB is read. The regressions it rejects:
+/// reading the large file, leaving it out without counting it, and refusing a file at the limit.
+#[test]
+fn a_repo_map_leaves_out_a_file_past_the_per_file_size_limit() {
+    let scratch = Scratch::new("map-file-limit");
+    std::fs::write(
+        scratch.path.join("at_the_limit.rs"),
+        source_of_exactly(512 * 1024, "pub fn at_the_limit() {}"),
+    )
+    .unwrap();
+    std::fs::write(
+        scratch.path.join("past_the_limit.rs"),
+        source_of_exactly(512 * 1024 + 1, "pub fn past_the_limit() {}"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("small.rs"), "pub fn small() {}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert_eq!(
+        (map.files, map.unvouched, map.skipped),
+        (2, 0, 1),
+        "{map:?}"
+    );
+    assert!(map.body.contains("at_the_limit"), "{}", map.body);
+    assert!(map.body.contains("small"), "{}", map.body);
+    assert!(!map.body.contains("past_the_limit"), "{}", map.body);
+    assert!(
+        !map.truncated,
+        "a file left out for its size was reported as a cut: {map:?}"
+    );
 }
 
 /// A project with `count` files in `first/` and a vouched `src/lib.rs` that declares `wanted`.
