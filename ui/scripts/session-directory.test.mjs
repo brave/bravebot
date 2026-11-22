@@ -100,6 +100,8 @@ const TAKES_NO_DIRECTORY = [
   'accounts.list', 'accounts.signOut', 'effort.set',
   // Reads the roster of every project and opens nothing; the bridge takes no parameter for it.
   'background.list',
+  // Takes a record's whole id and stops the process holding it; the session record is not touched.
+  'session.background.stop',
 ]
 
 test('every method the window may send is classified by whether it carries a directory', () => {

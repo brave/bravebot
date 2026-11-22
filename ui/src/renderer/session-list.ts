@@ -12,7 +12,7 @@ export function hadConversation(bot: Bot, summary: { id: string; directory: stri
 }
 
 /** Whether a background process is running this chat: it is working, needs input or is idle (BG-6). */
-function heldInBackground(summary: SessionSummary): boolean {
+export function heldInBackground(summary: SessionSummary): boolean {
   return summary.background === 'working' || summary.background === 'needs-input' || summary.background === 'idle'
 }
 

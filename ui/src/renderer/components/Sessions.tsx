@@ -5,6 +5,7 @@ import { flushSync } from 'react-dom'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
+import { heldInBackground } from '../session-list'
 import { BackgroundSessions } from './BackgroundSessions'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
@@ -494,7 +495,7 @@ const Session = memo(function Session({
   const pr = pullRequestLink(session.pullRequest)
   return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`} data-session={key}>
     <button type="button" className={`session${current ? ' current' : ''}`} aria-current={current ? 'true' : undefined}
-      onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+      onClick={() => onOpen(session)} onContextMenu={contextMenu(heldInBackground(session) ? 'session-background' : 'session', session.id)}>
       <span className="session-meta">
         <span className="session-status" data-status={status} data-tooltip={status ? STATUS_WORDS[status] : info?.bot?.name}>
           {status === 'working' ? <ProgressRing className="session-spinner" />

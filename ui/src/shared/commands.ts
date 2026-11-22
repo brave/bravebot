@@ -348,7 +348,7 @@ export function menuLabel(item: Command, state: WindowState): string {
  * A closed union rather than a free string, because this is what the renderer is allowed to
  * say when it asks for a popup, and the main process builds the menu from it.
  */
-export type ContextTarget = 'session' | 'entry' | 'entry-user' | 'entry-user-rewindable' | 'directory'
+export type ContextTarget = 'session' | 'session-background' | 'entry' | 'entry-user' | 'entry-user-rewindable' | 'directory'
 
 export type ContextCommandId =
   /** Start a session in a project the main process named, from File > Open Recent. */
@@ -356,6 +356,7 @@ export type ContextCommandId =
   | 'context.session.open'
   | 'context.session.close'
   | 'context.session.copy-path'
+  | 'context.session.stop-background'
   | 'context.entry.copy'
   | 'context.entry.fork'
   | 'context.entry.rewind'
@@ -385,6 +386,11 @@ export type ContextCommandId =
  * A prompt whose turn the session can still be put back to before is a kind of its own, so the
  * menu holds a rewind only where one exists. Rewinding decides nothing either: it asks first, in
  * a dialog naming every file it puts back.
+ *
+ * A chat a background process holds is a kind of its own too (BG-11). It offers no Open, because
+ * the bridge refuses to open it while the process runs, and no Close Chat, because nothing of it
+ * is open here. It offers Stop Background Session, which ends the process as `bravebot sessions
+ * stop` does and keeps the record, so the chat opens again afterwards.
  */
 export const CONTEXT: Record<
   ContextTarget,
@@ -397,6 +403,10 @@ export const CONTEXT: Record<
     { id: 'context.session.open', label: 'Open' },
     { id: 'context.session.close', label: 'Close Chat' },
     { id: 'context.session.copy-path', label: 'Copy Project Path' },
+  ],
+  'session-background': [
+    { id: 'context.session.copy-path', label: 'Copy Project Path' },
+    { id: 'context.session.stop-background', label: 'Stop Background Session' },
   ],
   entry: [{ id: 'context.entry.copy', label: 'Copy' }],
   'entry-user': [
