@@ -652,6 +652,7 @@ write is shown.
 `verified-by: bravebot_core::policy::untrusted_data_into_a_trusted_path_prompts_and_distrusts_the_path`
 `verified-by: bravebot_core::policy::trusted_data_into_an_untrusted_path_is_silent_and_trusts_the_path`
 `verified-by: bravebot_core::policy::untrusted_data_into_an_untrusted_path_is_silent_and_records_the_path_as_it_was`
+`verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_restores_it_and_asks_only_where_the_rewrite_left_the_path_undecided`
 `verified-by: bravebot_core::policy::an_unvouched_path_prompts_either_way`
 `verified-by: bravebot_core::policy::a_file_written_with_untrusted_data_reads_back_untrusted`
 `verified-by: bravebot_core::policy::a_file_read_back_under_another_spelling_is_still_untrusted`

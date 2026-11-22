@@ -92,6 +92,15 @@ Even where the trust map would not ask. The person approving is shown the path, 
 change with each character that draws as nothing written out and counted
 ([PROMPT-13](../prompting.md#PROMPT-13)), since a body a processor wrote is bytes nobody has read.
 
+This row is about the destination: a `path_ref` is a reference nobody has read, so the approval is
+the only moment anybody sees the file it names. A write whose `path` names the destination directly
+and whose body is a `contents_ref` to quarantined text is not shown on that account: the planner
+already named the destination, so [TRUST-4](../trust-map.md#TRUST-4)'s ordinary table decides,
+the same as it decides for a write of `contents`. Where that destination is already untrusted, the
+table's "untrusted data, untrusted destination" row answers, and nobody is asked.
+[WRITE-9](#WRITE-9) keeps a picture or a PDF under this row regardless of `path`, because there is
+no diff to show its owner.
+
 **Why.** The approval is the only moment the filename is visible to anybody. They own the
 directory and are the only party who can say whether that file should be rewritten.
 
@@ -110,7 +119,16 @@ slot was read. They are compared with the destination as a name, with the path's
 with the count now, as numbers. No byte of either side is read. A different path, `./` in front of
 the same path, a slot that no file filled (a processor's answer about the file included), a slot
 that was not read yet, a slot whose file was written after the slot was read, and a slot read
-before any `run` line that has started since are all asked about.
+before any `run` line that has started since are all outside the exception. Each then goes to
+[TRUST-4](../trust-map.md#TRUST-4)'s ordinary table rather than being shown unconditionally: a
+different path and a slot not read yet are usually paths nobody has vouched for, which that table
+always asks about either way. Where a `run` line is why the slot is no longer a copy of the
+destination, what the table does with it depends on how the line rewrote the file: a redirection
+is the only form of a line that names its destination, so it marks the path untrusted, and writing
+the slot's own untrusted bytes back into it is the table's "untrusted data, untrusted destination"
+row, where nobody is asked. A program the line starts but does not name as a destination (`cp`,
+`sed -i`) leaves the authority told of no write, so the path is exactly as undecided as it was
+before, and the table's "nobody has vouched for this path" row asks, as it did before the rewrite.
 
 The count is of lines, not of files. A program opens files the line does not name (`cp a X`,
 `sed -i X`, a script), so the authority is told of no write to them, and a redirection is the only
@@ -144,7 +162,7 @@ exception above. No byte of the file is read for the comparison.
 
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing`
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_and_restores_it`
-`verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_is_asked_about_and_restores_it`
+`verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_restores_it_and_asks_only_where_the_rewrite_left_the_path_undecided`
 `verified-by: bravebot_core::policy::a_slot_is_not_a_copy_of_its_file_once_the_file_was_written`
 `verified-by: bravebot_core::policy::a_slot_is_not_a_copy_of_its_file_once_a_program_started_after_it_was_read`
 `verified-by: bravebot_agent::turn::a_slot_written_to_another_path_or_another_spelling_of_its_file_is_asked_about`
