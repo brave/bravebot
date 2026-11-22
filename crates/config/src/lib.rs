@@ -2066,6 +2066,18 @@ impl Config {
             .map(|provider| (provider, model))
     }
 
+    /// The variant names `model` offers, in the file's order
+    /// ([BACKEND-66](../../../docs/specs/backends.md#BACKEND-66)).
+    ///
+    /// They come from the provider block [`Config::provider_for`] resolves the name to. A disabled
+    /// variant is not offered, and a model no provider block lists offers none.
+    pub fn variants_offered(&self, model: &str) -> Vec<&str> {
+        self.provider_for(model)
+            .and_then(|(provider, wire)| provider.model(wire))
+            .map(provider::Model::variant_names)
+            .unwrap_or_default()
+    }
+
     /// The name the ChatGPT account knows `model` by, where `model` is one of its models
     /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
     ///
@@ -3779,6 +3791,31 @@ mod tests {
     /// A gateway is additive on the same terms a Bedrock block is. Naming one adds to what a person
     /// may choose and must not decide what answers when they have chosen nothing, nor set the budget
     /// from a window belonging to a model the session may never use.
+    /// BACKEND-66: the variants a model offers are its provider block's, in the file's order and
+    /// without a disabled one. A model with none, and a model no block lists, offer nothing.
+    #[test]
+    fn variants_offered_lists_the_models_names_and_none_for_an_unknown_model() {
+        let settings = Settings::parse(
+            r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "terse": {"textVerbosity": "low"},
+                    "off": {"disabled": true}
+                }}, "bare": {}}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+
+        assert_eq!(config.variants_offered("gw/m"), ["high", "terse"]);
+        assert_eq!(config.variants_offered("m"), ["high", "terse"]);
+        assert!(config.variants_offered("gw/bare").is_empty());
+        assert!(config.variants_offered("nowhere/m").is_empty());
+        assert!(config.variants_offered("unknown").is_empty());
+    }
+
     #[test]
     fn a_provider_block_changes_neither_the_default_model_nor_the_budget() {
         let settings = Settings::parse(

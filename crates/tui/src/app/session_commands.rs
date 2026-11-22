@@ -264,17 +264,7 @@ pub(super) fn set_variant(session: &mut Session, config: &Config, word: &str) {
     let model = session
         .model()
         .map_or_else(|| config.default_model.clone(), str::to_string);
-    let offered: Vec<String> = config
-        .provider_for(&model)
-        .and_then(|(provider, wire)| provider.model(wire))
-        .map(|entry| {
-            entry
-                .variant_names()
-                .into_iter()
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    let offered = config.variants_offered(&model);
     if word == VARIANT_OFF {
         session.choose_variant(None);
         session.note(t!(session_variant_dropped).to_string());
@@ -293,7 +283,7 @@ pub(super) fn set_variant(session: &mut Session, config: &Config, word: &str) {
         session.note(note);
         return;
     }
-    if offered.iter().any(|name| name == word) {
+    if offered.contains(&word) {
         session.choose_variant(Some(word.to_string()));
         session.note(t!(session_variant_set, variant = word));
     } else {
