@@ -247,11 +247,47 @@ fn read(path: &Path) -> Option<Counted> {
     serde_json::from_str(&text).ok()
 }
 
+/// Seconds in a day of 24 hours, which a count of days goes back from now in.
+const SECONDS_IN_A_DAY: u64 = 86_400;
+
+/// The most days a count may name. The terminal's sentence says the number back through a message
+/// that counts in `i64`, and a larger one would be printed as another number than the one the cut
+/// used.
+pub const MOST_DAYS: u64 = i64::MAX as u64;
+
+/// The [`Scope::since`] for the last `days` days, counted back from `now`, or `None` for a count
+/// of zero or one past [`MOST_DAYS`].
+pub fn since_days_ago_from(now: u64, days: u64) -> Option<u64> {
+    (1..=MOST_DAYS)
+        .contains(&days)
+        .then(|| now.saturating_sub(days.saturating_mul(SECONDS_IN_A_DAY)))
+}
+
+/// [`since_days_ago_from`] the present moment.
+pub fn since_days_ago(days: u64) -> Option<u64> {
+    since_days_ago_from(sessions::now(), days)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::scratch_dir;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_count_of_days_goes_back_that_many_days_of_seconds() {
+        assert_eq!(since_days_ago_from(10 * 86_400, 3), Some(7 * 86_400));
+        // Further back than the epoch stops at it.
+        assert_eq!(since_days_ago_from(86_400, 2), Some(0));
+        assert_eq!(since_days_ago_from(86_400, MOST_DAYS), Some(0));
+    }
+
+    #[test]
+    fn a_count_of_zero_or_past_the_most_is_refused() {
+        assert_eq!(since_days_ago_from(86_400, 0), None);
+        assert_eq!(since_days_ago_from(86_400, MOST_DAYS + 1), None);
+        assert_eq!(since_days_ago_from(86_400, u64::MAX), None);
+    }
 
     /// A sessions directory with one store per project, which a test fills with records.
     struct Store {

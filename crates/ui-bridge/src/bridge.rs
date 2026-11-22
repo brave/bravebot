@@ -4150,9 +4150,6 @@ fn addressed_sessions(request: &Request) -> Result<Value, Failure> {
     Ok(json!({ "exchanges": exchanges }))
 }
 
-/// Seconds in a day of 24 hours, which is what `days` counts back from now in (CLI-37).
-const SECONDS_IN_A_DAY: u64 = 86_400;
-
 /// What the recorded sessions spent, for every project or the one `directory` names, and for the
 /// last `days` days or all of them, as `bravebot stats` totals it
 /// ([CLI-37](../../../docs/specs/cli.md#CLI-37)).
@@ -4166,21 +4163,19 @@ fn session_stats(request: &Request) -> Result<Value, Failure> {
         Value::Null => None,
         _ => Some(existing_directory(request)?),
     };
-    // The bounds of `--days`: the terminal says the count back through a message that counts in
-    // `i64`.
-    let days = match request.param("days") {
-        Value::Null => None,
-        days => Some(
-            days.as_u64()
-                .filter(|days| (1..=i64::MAX as u64).contains(days))
+    // Bounded as `bravebot stats --days` bounds it.
+    let (days, since) = match request.param("days") {
+        Value::Null => (None, None),
+        days => {
+            let (days, since) = days
+                .as_u64()
+                .and_then(|days| Some((days, bravebot_session::stats::since_days_ago(days)?)))
                 .ok_or_else(|| {
                     Failure::bad_request("`days` must be a whole number of days from 1")
-                })?,
-        ),
+                })?;
+            (Some(days), Some(since))
+        }
     };
-    let since = days.map(|days| {
-        bravebot_session::sessions::now().saturating_sub(days.saturating_mul(SECONDS_IN_A_DAY))
-    });
     let totals = bravebot_session::stats::totals(Scope {
         project: directory.as_deref(),
         since,

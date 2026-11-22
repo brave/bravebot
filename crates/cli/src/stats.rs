@@ -12,17 +12,10 @@
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::search;
-use bravebot_session::sessions;
-use bravebot_session::stats::{Scope, Spent, Totals};
+use bravebot_session::stats::{MOST_DAYS, Scope, Spent, Totals, since_days_ago};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-const SECONDS_IN_A_DAY: u64 = 86_400;
-
-/// The most days a count may name. The sentence says the number back through a message that counts
-/// in `i64`, and a larger one would be printed as another number than the one the cut used.
-const MOST_DAYS: u64 = i64::MAX as u64;
 
 /// What was asked for, once the words are read.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -45,9 +38,7 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
         },
         None => None,
     };
-    let since = request
-        .days
-        .map(|days| sessions::now().saturating_sub(days.saturating_mul(SECONDS_IN_A_DAY)));
+    let since = request.days.and_then(since_days_ago);
 
     let totals = bravebot_session::stats::totals(Scope {
         project: project.as_deref(),
