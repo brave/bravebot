@@ -229,6 +229,8 @@ pub const DENIED: &[&str] = &[
     // Reach saved sessions, every project's list, and other directories.
     "session.list",
     "background.list",
+    // Totals what every project's records spent (CLI-37).
+    "session.stats",
     "session.open",
     "session.fork",
     "session.addressed",

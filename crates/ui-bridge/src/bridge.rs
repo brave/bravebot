@@ -412,6 +412,7 @@ impl Bridge {
                 &bravebot_session::sessions::sessions_root().unwrap_or_default(),
                 bravebot_session::jobs::Roster::readable().as_ref(),
             )),
+            "session.stats" => session_stats(request),
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
             "session.view.start" => self.start_view(request),
@@ -4147,6 +4148,73 @@ fn addressed_sessions(request: &Request) -> Result<Value, Failure> {
         })
         .collect();
     Ok(json!({ "exchanges": exchanges }))
+}
+
+/// Seconds in a day of 24 hours, which is what `days` counts back from now in (CLI-37).
+const SECONDS_IN_A_DAY: u64 = 86_400;
+
+/// What the recorded sessions spent, for every project or the one `directory` names, and for the
+/// last `days` days or all of them, as `bravebot stats` totals it
+/// ([CLI-37](../../../docs/specs/cli.md#CLI-37)).
+///
+/// Reads the records and writes nothing, so it needs no open session and answers the same under
+/// incognito. The model rows are the ones [`bravebot_session::stats::Totals::by_shown_model`]
+/// gives, already cleaned, with `null` for the row whose records name no model.
+fn session_stats(request: &Request) -> Result<Value, Failure> {
+    use bravebot_session::stats::{Scope, Spent};
+    let directory = match request.param("directory") {
+        Value::Null => None,
+        _ => Some(existing_directory(request)?),
+    };
+    // The bounds of `--days`: the terminal says the count back through a message that counts in
+    // `i64`.
+    let days = match request.param("days") {
+        Value::Null => None,
+        days => Some(
+            days.as_u64()
+                .filter(|days| (1..=i64::MAX as u64).contains(days))
+                .ok_or_else(|| {
+                    Failure::bad_request("`days` must be a whole number of days from 1")
+                })?,
+        ),
+    };
+    let since = days.map(|days| {
+        bravebot_session::sessions::now().saturating_sub(days.saturating_mul(SECONDS_IN_A_DAY))
+    });
+    let totals = bravebot_session::stats::totals(Scope {
+        project: directory.as_deref(),
+        since,
+    });
+
+    let figures = |spent: &Spent| {
+        json!({
+            "sessions": spent.sessions,
+            "turns": spent.turns,
+            "tokens": spent.tokens,
+            "read": spent.split.read,
+            "written": spent.split.written,
+            "unsplit": spent.unsplit(),
+        })
+    };
+    let models: Vec<Value> = totals
+        .by_shown_model()
+        .iter()
+        .map(|(model, spent)| {
+            let mut row = figures(spent);
+            row["model"] = json!(model);
+            row
+        })
+        .collect();
+    Ok(json!({
+        // Cleaned as the terminal's scope sentence cleans it, in case the name holds an escape.
+        "directory": directory.map(|directory| {
+            bravebot_session::search::clean(&directory.display().to_string(), usize::MAX)
+        }),
+        "days": days,
+        "total": figures(&totals.all),
+        "models": models,
+        "unreadable": totals.unreadable,
+    }))
 }
 
 /// List Claude Code's sessions for a project, or copy the ones named (SESSION-32).
