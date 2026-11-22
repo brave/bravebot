@@ -886,8 +886,8 @@ a compact form and a full page reads that as a request for the page.
 ## `web_search`
 
 Searches the web through the [Brave Search API](https://api-dashboard.search.brave.com/documentation).
-It is offered only where `webSearch.keyFile` names a key file ([setting it
-up](../customize/configuration.md#websearchkeyfile)). **You approve every search, unless a `WebSearch`
+It is offered only where `webSearch.env` names a variable that holds a key or `webSearch.keyFile` names a
+key file ([setting it up](../customize/configuration.md#websearchkeyfile-and-websearchenv)). **You approve every search, unless a `WebSearch`
 rule allows it.**
 
 | Parameter | |

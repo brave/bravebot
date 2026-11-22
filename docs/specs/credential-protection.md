@@ -285,11 +285,11 @@ whatever its tier, which is why the record reaches past the two tiers CRED-25 as
 
 **What stands where.** Every credential the record holds stands at Held: the signing key, the AWS
 credentials, a gateway's token, the premium key, the search key and the ChatGPT and xAI sign-ins. The
-search key is the file `webSearch.keyFile` names, which a person got from the Brave Search API
+search key is the variable `webSearch.env` names or the file `webSearch.keyFile` names, which a person got from the Brave Search API
 dashboard: its walk drops at all three gates as the premium key's does, each recorded as one nobody
 attempted, since the dashboard issues one key, this program presents it itself with nothing deciding a
 use, and nothing here has asked the dashboard for a narrower or shorter one. Revoking it in the
-dashboard is the only thing that ends it, and removing the setting or the file ends this machine's
+dashboard is the only thing that ends it, and removing the setting and the variable or the file ends this machine's
 custody and leaves the key working. The premium key's
 walk drops at all three gates, each recorded as one nobody attempted, as a gateway token's does: the
 premium host issues one key, this program presents it itself with nothing deciding a use, and nothing

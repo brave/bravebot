@@ -128,23 +128,26 @@ answer about the next.
 `verified-by: bravebot_core::policy::approving_a_search_never_trusts_what_comes_back_and_covers_one_request`
 
 <a id="WEBSEARCH-4"></a>
-### WEBSEARCH-4: the tool is offered only where a key file is configured
+### WEBSEARCH-4: the tool is offered only where a key is configured
 
-`web_search` is on the planner's list when `webSearch.keyFile` names a file that exists. With no
-setting, or a name that is not a file, it is not on the list and the name is answered as an unknown
-tool ([TOOL-3](tool-surface.md#TOOL-3)), so the planner is not sent after a tool that can only fail.
-Which of these holds is read from the configuration and the file's metadata, and the key is not read
-to decide it.
+`web_search` is on the planner's list when a variable `webSearch.env` names holds text, or
+`webSearch.keyFile` names a file that exists. With neither, it is not on the list and the name is
+answered as an unknown tool ([TOOL-3](tool-surface.md#TOOL-3)), so the planner is not sent after a tool
+that can only fail. Which of these holds is read from the configuration, the environment and the
+file's metadata, and the key is not read to decide it.
 
-A key file that exists and holds no usable key is reported when the tool is called, before anybody is
-asked, and the planner's sentence names the setting and not the path or what the file held.
+A key that is configured and unusable is reported when the tool is called, before anybody is asked,
+and the planner's sentence names the settings and not the path, the variable or what either held.
 
 **Why.** A tool that is offered and always fails costs a round and a question to a person.
 
 `verified-by: bravebot_agent::web_search::the_tool_is_offered_only_where_a_key_file_is_configured`
+`verified-by: bravebot_agent::web_search_variable::a_named_variable_is_the_key_and_wins_over_the_file_until_it_is_gone`
 `verified-by: bravebot_agent::web_search::an_unusable_key_file_is_reported_before_a_question_without_its_path_or_content`
 `verified-by: bravebot_config::lib::web_search_is_offered_only_for_a_key_file_that_exists`
+`verified-by: bravebot_config::lib::an_unset_named_variable_is_no_source_and_a_key_file_beside_it_still_is`
 `verified-by: bravebot_config::web_search_key::offered_looks_at_the_file_and_not_at_what_it_holds`
+`verified-by: bravebot_config::web_search_key::nothing_configured_is_no_key_and_no_source`
 
 <a id="WEBSEARCH-5"></a>
 ### WEBSEARCH-5: arguments are checked against what the vendor documents before anything is sent
@@ -185,36 +188,57 @@ place a planner's text reaches the wire as something other than a query.
 `verified-by: bravebot_agent::web_search::an_argument_off_the_documented_range_is_refused_before_a_question_or_a_request`
 
 <a id="WEBSEARCH-6"></a>
-### WEBSEARCH-6: the key is a file a person named in their own settings, and it reaches one header
+### WEBSEARCH-6: the key is a variable or a file a person named in their own settings, and it reaches one header
 
-`webSearch.keyFile` is read from `~/.bravebot/settings.json` and from the file `--settings` names, and
-from no other: a project or local file that names it is ignored and reported, since a checkout could
-otherwise choose which file on this machine is sent to a host. The value is an absolute path.
+`webSearch.env` lists variable names, tried in order as a provider block's `env` is, and
+`webSearch.keyFile` is an absolute path. Both are read from `~/.bravebot/settings.json` and from the
+file `--settings` names, and from no other: a project or local file that names either is ignored and
+reported, since a checkout could otherwise choose which variable or which file on this machine is sent
+to a host. The lists of the two files join, so the file `--settings` names does not release a variable
+the person's own file named.
 
-The file is read when a search is made. It is refused when it is not a regular file, is over 4,096
-bytes, is not UTF-8, is empty after trimming, or holds a space, a control character or a character
-outside ASCII. The text and the bytes it was read through are overwritten, and no error carries the
-path or the content. The value is held as a `Secret`, and is sent in one header,
-`X-Subscription-Token`, of the request to the search host. It is not in the URL, a result, a prompt,
-the trail, the log, an error or anything the planner is sent. A hop of the request that leaves the host
-is sent without it ([WEBSEARCH-7](#WEBSEARCH-7)). The header is held on the request as a socket header,
-and a `Request` formats as the names of its headers and never their values
+The key is read when a search is made. It comes from the first named variable that holds text, and
+from the file only when none does: a variable wins over the file, as a provider's variable wins over
+its stored key, and a variable that holds text and cannot be a header value is refused without the
+file being tried. The text is refused when it is over 4,096 bytes (a file), is not UTF-8 (a file), is
+empty after trimming, or holds a space, a control character or a character outside ASCII. The file
+must also be a regular file. The text and the bytes it was read through are overwritten, and no error
+carries the path, the name of a variable or the content. The value is held as a `Secret`, and is sent
+in one header, `X-Subscription-Token`, of the request to the search host. It is not in the URL, a
+result, a prompt, the trail, the log, an error or anything the planner is sent. A hop of the request
+that leaves the host is sent without it ([WEBSEARCH-7](#WEBSEARCH-7)). The header is held on the
+request as a socket header, and a `Request` formats as the names of its headers and never their values
 ([NET-1](../network-egress.md#NET-1)).
 
-There is no command-line argument and no environment variable that carries it
-([CRED-24](../credential-protection.md#CRED-24)).
+The variables `webSearch.env` names are withheld from every program `run` starts, from a hook, a
+language server and the `aws` CLI the Bedrock backend starts, as the variables a provider block names
+are ([RUN-12](run.md#RUN-12)). They are not named to the planner, who is told that variables the
+person's settings name are removed without their being listed.
 
-`bravebot doctor` prints a `web search` line that says whether the setting names a file and whether
-the file exists, with the path the person wrote, and never the key. Its credential record names the key
-at Held, and what would end it ([CRED-2](../credential-protection.md#CRED-2),
+There is no command-line argument that carries the key ([CRED-24](../credential-protection.md#CRED-24)).
+The environment is an allowed way to hand a program a credential, and this program reads the key from
+it itself.
+
+`bravebot doctor` prints a `web search` line that says which source the key would come from, a
+variable or a file, with the path the person wrote where the file is the source, and never the key or
+the name of a variable. Its credential record names the key at Held, and names the variable and the
+file as what would end this machine's custody ([CRED-2](../credential-protection.md#CRED-2),
 [CRED-25](../credential-protection.md#CRED-25)).
 
-**Why a file and no variable.** A person's environment is inherited by every program a turn starts, so
-a key held there is handed to each of them, while a file is read by this program at the moment of use.
-**Why home only.** The setting chooses what this program sends to a host.
+**Why a variable is allowed.** The environment of this process is read by this program at the moment
+of use, and the variables named here are withheld from every program this agent starts, so the key does
+not travel to them.
+
+**Why only the person's own files name it.** Either setting chooses what this program sends to a host.
+
+**Why no stored key and no key in a settings file.** A key stored by `bravebot auth login` needs a
+sign-in flow that is not written, and a key in a settings file is the practice the provider
+documentation advises against.
 
 `verified-by: bravebot_net::lib::a_request_prints_its_header_names_and_never_their_values`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_a_web_search_key_file`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_a_web_search_variable_and_the_two_trusted_lists_join`
+`verified-by: bravebot_config::settings::web_search_variable_names_are_strings_without_the_whitespace_at_their_ends`
 `verified-by: bravebot_config::settings::a_web_search_key_file_must_be_an_absolute_path`
 `verified-by: bravebot_config::lib::the_web_search_setting_reaches_the_configuration`
 `verified-by: bravebot_config::lib::a_search_key_is_held_exactly_when_web_search_is_offered`
@@ -224,6 +248,12 @@ a key held there is handed to each of them, while a file is read by this program
 `verified-by: bravebot_config::web_search_key::a_text_that_cannot_be_a_header_value_is_not_a_key`
 `verified-by: bravebot_config::web_search_key::a_file_that_is_not_text_is_unreadable`
 `verified-by: bravebot_config::web_search_key::a_missing_file_and_a_directory_are_unreadable_and_not_offered`
+`verified-by: bravebot_config::web_search_key::the_first_named_variable_holding_text_is_the_key`
+`verified-by: bravebot_config::web_search_key::a_variable_wins_over_the_file_and_the_file_answers_when_none_holds_text`
+`verified-by: bravebot_config::web_search_key::a_variable_that_cannot_be_a_header_value_is_refused_without_falling_back_to_the_file`
+`verified-by: bravebot_config::scrub::the_variables_web_search_names_are_withheld_and_no_others`
+`verified-by: bravebot_agent::exec::a_web_search_variable_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_agent::web_search_variable::a_named_variable_is_the_key_and_wins_over_the_file_until_it_is_gone`
 `verified-by: bravebot_cli::doctor::the_web_search_key_is_reported_by_its_setting_and_never_by_its_value`
 `verified-by: bravebot_agent::web_search::a_search_returns_a_reference_sends_the_key_in_one_header_and_asks_about_the_query`
 

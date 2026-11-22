@@ -262,6 +262,10 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // The file it names is read as the key the `web_search` tool sends to the search service, so a
     // checkout's file would be choosing which file of the person's is read and sent as a credential.
     (WEB_SEARCH_KEY_FILE, Entitled::OwnOrNamed),
+    // Each name is a variable of the person's environment that is read as the search key and sent to
+    // the search service, so a checkout's file would be choosing which of the person's variables
+    // leaves the machine as a credential.
+    (WEB_SEARCH_ENV, Entitled::OwnOrNamed),
 ];
 
 /// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
@@ -542,6 +546,15 @@ const WEB_SEARCH_KEY_NAME: &str = "keyFile";
 /// Named as a constant because the per-layer look that removes it from a checkout's file, the read
 /// of the merged root and the list of keys this build reads all spell it here.
 const WEB_SEARCH_KEY_FILE: &str = "webSearch.keyFile";
+
+/// The name of the variable list inside [`WEB_SEARCH_BLOCK`].
+const WEB_SEARCH_ENV_NAME: &str = "env";
+
+/// `webSearch.env`: the names of the variables the `web_search` tool reads its key from, in the
+/// order to try them.
+///
+/// Named as a constant for the reason [`WEB_SEARCH_KEY_FILE`] is.
+const WEB_SEARCH_ENV: &str = "webSearch.env";
 
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
@@ -899,6 +912,10 @@ pub struct Settings {
     ///
     /// Read from the layers [`HOME_ONLY`] entitles. The file is not opened here.
     web_search_key_file: Option<String>,
+    /// The variable names `webSearch.env` listed, in the order written.
+    ///
+    /// Read from the layers [`HOME_ONLY`] entitles. Names only: nothing here reads a variable.
+    web_search_env: Vec<String>,
     /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
     language: Option<String>,
     /// The entries of the `references` block that name a directory, in alias order (REFER-1).
@@ -2124,6 +2141,9 @@ impl Settings {
         settings.web_search_key_file = object(root, WEB_SEARCH_BLOCK)
             .and_then(|block| word(block, WEB_SEARCH_KEY_NAME))
             .filter(|path| std::path::Path::new(path).is_absolute());
+        settings.web_search_env = object(root, WEB_SEARCH_BLOCK)
+            .map(|block| variable_names(block, WEB_SEARCH_ENV_NAME))
+            .unwrap_or_default();
         settings.language = word(root, "language");
         settings
     }
@@ -2894,6 +2914,7 @@ impl Settings {
             && self.style.is_none()
             && self.shared_skills.is_empty()
             && self.web_search_key_file.is_none()
+            && self.web_search_env.is_empty()
             && self.language.is_none()
             && self.ask_idle_seconds.is_none()
             && self.start_in_auto.is_none()
@@ -2990,6 +3011,14 @@ impl Settings {
     /// is an absolute path. Only the path: nothing here opens the file.
     pub fn web_search_key_file(&self) -> Option<&str> {
         self.web_search_key_file.as_deref()
+    }
+
+    /// The variables `webSearch.env` named as holding the web search key, in the order to try them.
+    ///
+    /// Empty where no layer entitled to name them did, and where what was named is not a list.
+    /// Names only: nothing here reads a variable.
+    pub fn web_search_env(&self) -> &[String] {
+        &self.web_search_env
     }
 
     /// The language the person's own file asked the interface to be read in, as the file spelled it
@@ -3228,6 +3257,7 @@ impl Settings {
                     .is_some()
                     .then_some(WEB_SEARCH_KEY_FILE),
             )
+            .chain((!self.web_search_env.is_empty()).then_some(WEB_SEARCH_ENV))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -4223,12 +4253,20 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "sessionsKeys"
                     || key == "search"
                     || key == "tui"
-                    || key == "download"
-                    || key == WEB_SEARCH_BLOCK =>
+                    || key == "download" =>
             {
                 for (name, value) in above {
                     lay_over(displaced, under, name, value);
                 }
+            }
+            // `webSearch` holds one list that unions and a path that overrides. The list unions for
+            // the reason `run.scrubEnv` does: the file `--settings` names must not hand back a
+            // variable the person's own file named as the search key, which is withheld from the
+            // programs the agent starts.
+            (Some(serde_json::Value::Object(under)), serde_json::Value::Object(above))
+                if key == WEB_SEARCH_BLOCK =>
+            {
+                merge_web_search(displaced, under, above);
             }
             // `run` holds one list that unions and nothing else that does, so a sibling added later
             // gets whatever this arm does by default, which is to override.
@@ -4315,6 +4353,31 @@ fn merge_permissions(
     }
 }
 
+/// The `webSearch` block, where `env` unions and every other name overrides.
+///
+/// A checkout's `env` is not among what arrives: the layer loop took it out ([`HOME_ONLY`]).
+fn merge_web_search(
+    displaced: &mut Vec<serde_json::Value>,
+    under: &mut serde_json::Map<String, serde_json::Value>,
+    above: serde_json::Map<String, serde_json::Value>,
+) {
+    for (key, value) in above {
+        match (under.get_mut(&key), value) {
+            (Some(serde_json::Value::Array(kept)), serde_json::Value::Array(added))
+                if key == WEB_SEARCH_ENV_NAME =>
+            {
+                kept.extend(added);
+            }
+            (Some(serde_json::Value::Array(_)), value) if key == WEB_SEARCH_ENV_NAME => {
+                displaced.push(value);
+            }
+            (_, value) => {
+                lay_over(displaced, under, key, value);
+            }
+        }
+    }
+}
+
 /// The `run` block, where `scrubEnv` unions and every other name overrides.
 ///
 /// A checkout's `scrubEnv` is not among what arrives: the layer loop took it out ([`HOME_ONLY`]).
@@ -4338,6 +4401,27 @@ fn merge_run(
             }
         }
     }
+}
+
+/// One array of variable names out of a block: strings only, each read without the whitespace at
+/// its ends, in the order written.
+///
+/// Empty for every other shape, and an entry that is not a string or is blank is left out, on the
+/// footing [`scrub_list`] reads its names: no variable is named with whitespace at an end, so an
+/// entry kept as written would never find one.
+fn variable_names(block: &serde_json::Map<String, serde_json::Value>, name: &str) -> Vec<String> {
+    let Some(serde_json::Value::Array(entries)) = block.get(name) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            serde_json::Value::String(text) if !text.trim().is_empty() => {
+                Some(text.trim().to_string())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The `run.scrubEnv` array: names a file says to keep from a program the agent runs.
@@ -11170,6 +11254,7 @@ mod tests {
         ("permissions.startInAuto", false, false),
         ("run.scrubEnv", false, false),
         ("webSearch.keyFile", false, false),
+        ("webSearch.env", false, false),
     ];
 
     /// The text of a layer naming only `key`, inside its block where the key is written
@@ -12481,6 +12566,54 @@ mod tests {
 
         let nothing = Layers::new("web-search-unset").global("{}").read();
         assert_eq!(nothing.web_search_key_file(), None);
+    }
+
+    /// `webSearch.env` is read from the person's own file and the file `--settings` names, and
+    /// from no project or local file. A checkout that could list a variable here would be choosing
+    /// which of the person's variables is sent to the search host. The lists of the two files join,
+    /// so the named file cannot release a variable the person's own file listed.
+    #[test]
+    fn a_project_layer_cannot_name_a_web_search_variable_and_the_two_trusted_lists_join() {
+        let settings = Layers::new("web-search-env-layers")
+            .global(r#"{"webSearch": {"env": ["HOME_KEY"]}}"#)
+            .project(r#"{"webSearch": {"env": ["PROJECT_KEY"]}}"#)
+            .local(r#"{"webSearch": {"env": ["LOCAL_KEY"]}}"#)
+            .read();
+        assert_eq!(settings.web_search_env(), ["HOME_KEY"]);
+        assert_eq!(settings.not_obeyed(WEB_SEARCH_ENV).count(), 2);
+
+        let only_project = Layers::new("web-search-env-only-project")
+            .project(r#"{"webSearch": {"env": ["PROJECT_KEY"]}}"#)
+            .read();
+        assert!(only_project.web_search_env().is_empty());
+        assert_eq!(only_project.not_obeyed(WEB_SEARCH_ENV).count(), 1);
+        assert!(!only_project.is_empty());
+
+        let joined = Layers::new("web-search-env-named")
+            .global(r#"{"webSearch": {"env": ["HOME_KEY"], "keyFile": "/home/person/key.txt"}}"#)
+            .named(r#"{"webSearch": {"env": ["NAMED_KEY"]}}"#)
+            .read();
+        assert_eq!(joined.web_search_env(), ["HOME_KEY", "NAMED_KEY"]);
+        assert_eq!(joined.web_search_key_file(), Some("/home/person/key.txt"));
+        assert_eq!(joined.not_obeyed(WEB_SEARCH_ENV).count(), 0);
+    }
+
+    /// A name is read without the whitespace at its ends, and an entry that is not a string or is
+    /// blank is left out, as a provider's `env` is read. An implementation that kept `"KEY "` as
+    /// written would look up a variable no environment holds and offer no search.
+    #[test]
+    fn web_search_variable_names_are_strings_without_the_whitespace_at_their_ends() {
+        let settings = Settings::parse(
+            r#"{"webSearch": {"env": [" FIRST_KEY\n", 7, null, "", "  ", "SECOND_KEY"]}}"#,
+        );
+        assert_eq!(settings.web_search_env(), ["FIRST_KEY", "SECOND_KEY"]);
+        for text in [
+            r#"{"webSearch": {"env": "FIRST_KEY"}}"#,
+            r#"{"webSearch": ["FIRST_KEY"]}"#,
+            r#"{"env": ["FIRST_KEY"]}"#,
+        ] {
+            assert!(Settings::parse(text).web_search_env().is_empty(), "{text}");
+        }
     }
 
     /// Only a string that is an absolute path names the key file: a relative path, a blank, a

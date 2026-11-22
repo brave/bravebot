@@ -522,12 +522,14 @@ doctor-premium = premium
 doctor-premium-absent = not configured
 doctor-premium-keyed = { $url }, with a premium key
 doctor-premium-unkeyed = { $url }, without a premium key, so requests go to the endpoint above
-# The web search key file named by the setting webSearch.keyFile. The line says a file is named and
-# is there. It never shows the key, and the file is not read to say it.
+# The web search key, from a variable the setting webSearch.env names or from the file the setting
+# webSearch.keyFile names. The line says which source the key would come from and that it is there.
+# It never shows the key, and a file is not read to say it.
 doctor-web-search = web search
-doctor-web-search-absent = not configured: webSearch.keyFile is not set, so the web_search tool is not offered
-doctor-web-search-missing = webSearch.keyFile names { $path }, which is not a file, so the web_search tool is not offered
+doctor-web-search-absent = not configured: no variable named in webSearch.env holds text and webSearch.keyFile is not set, so the web_search tool is not offered
+doctor-web-search-missing = no variable named in webSearch.env holds text, and webSearch.keyFile names { $path }, which is not a file, so the web_search tool is not offered
 doctor-web-search-keyed = a key file is configured in webSearch.keyFile ({ $path }); the key is read from it when a search is made and is sent only to api.search.brave.com
+doctor-web-search-variable = a variable named in webSearch.env holds the key, which wins over webSearch.keyFile; the key is read from it when a search is made and is sent only to api.search.brave.com
 doctor-key-id = key id
 doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
@@ -557,7 +559,7 @@ doctor-ends-aws-session =
 doctor-ends-premium-key =
     the premium key: issued by Brave's premium service, which is also the only surface that revokes it; `bravebot auth logout brave` ends this machine's custody and leaves the key live there
 doctor-ends-search-key =
-    the Brave Search key: read from the file the setting `webSearch.keyFile` names and sent only to api.search.brave.com in one request header; issued by the Brave Search API dashboard, which is also the only surface that revokes it; removing the setting or the file ends this machine's custody, and the key keeps working at Brave until it is revoked in the Brave Search API dashboard
+    the Brave Search key: read from the first variable the setting `webSearch.env` names that holds text, or else from the file the setting `webSearch.keyFile` names, and sent only to api.search.brave.com in one request header; issued by the Brave Search API dashboard, which is also the only surface that revokes it; removing the setting and the variable or the file it names ends this machine's custody, and the key keeps working at Brave until it is revoked in the Brave Search API dashboard
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-chatgpt-account =
@@ -646,7 +648,7 @@ doctor-dropped-search-key-nothing-decides-each-use =
 doctor-dropped-search-key-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the Brave Search API dashboard issues one key and nothing here asks it for a narrower one
 doctor-dropped-search-key-not-minted-for-one-step =
-    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever the file named by `webSearch.keyFile` holds, and it is read again for every search
+    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever the variable `webSearch.env` names holds or else the file named by `webSearch.keyFile` holds, and it is read again for every search
 doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
@@ -832,6 +834,8 @@ doctor-settings-scrub-env-ignored =
     run.scrubEnv in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, and none of its names is withheld
 doctor-settings-web-search-key-file-ignored =
     webSearch.keyFile in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, so no file named there is read as a web search key
+doctor-settings-web-search-env-ignored =
+    webSearch.env in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, so no variable named there is read as a web search key
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =

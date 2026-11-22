@@ -857,7 +857,8 @@ the planner's and not the person's own.
 
 Those credentials are the signing key, its key id and the crash report submission URL
 (`BACKTRACE_SUBMIT_URL`, whose path holds the project's submission token), and every variable the `env` of a gateway in
-force names as a place its bearer token may live. The gateways in force are the managed layer's where
+force names as a place its bearer token may live, and every variable the `webSearch.env` setting names as a
+place the web search key may live ([WEBSEARCH-6](web-search.md#WEBSEARCH-6)). The gateways in force are the managed layer's where
 it states any, otherwise the person's own provider blocks and the Vertex AI service the environment
 names, so the set follows the configuration with no second list to keep in step. A variable no block
 names is the person's own and stays. The same set is taken off a background job, a hook
@@ -946,6 +947,8 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_lsp::server::a_server_is_not_handed_the_names_it_is_told_to_withhold`
 `verified-by: bravebot_agent::exec::a_background_job_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::exec::a_variable_no_provider_block_names_still_reaches_a_program`
+`verified-by: bravebot_agent::exec::a_web_search_variable_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_config::scrub::the_variables_web_search_names_are_withheld_and_no_others`
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::lsp::a_language_server_is_not_handed_a_gateways_environment_token`

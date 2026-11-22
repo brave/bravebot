@@ -139,8 +139,10 @@ pub fn names_against(settings: &Settings, environment: &[String]) -> Vec<String>
     if !enabled() {
         return Vec::new();
     }
+    let mut gateway_names = crate::gateway_variable_names(settings.providers());
+    crate::add_search_variables(&mut gateway_names, settings);
     with_listed(
-        credentials_of(crate::gateway_variable_names(settings.providers())),
+        credentials_of(gateway_names),
         settings.scrubbed(),
         environment,
     )
@@ -474,6 +476,46 @@ mod tests {
             names.len(),
             crate::env_var::SCRUBBED.len() + 1,
             "a block naming no variable added to the set: {names:?}"
+        );
+    }
+
+    /// RUN-12: the variables `webSearch.env` names are withheld from a program, as a provider's
+    /// are, with no variable of a well-known name guessed at. The fault this rejects is leaving the
+    /// search variables out of the set, which hands the search key to every program the planner
+    /// chooses to start.
+    #[test]
+    fn the_variables_web_search_names_are_withheld_and_no_others() {
+        let settings = Settings::parse(
+            r#"{"webSearch": {"env": ["SEARCH_FIRST_KEY", "SEARCH_SECOND_KEY", "SERVICES_KEY_AICHAT"]},
+                "provider": {"gateway": {
+                    "options": {"baseURL": "https://gateway.example/v1"},
+                    "env": ["GATEWAY_TOKEN", "SEARCH_FIRST_KEY"]
+                }}}"#,
+        );
+        let names = names(&settings);
+        for expected in ["SEARCH_FIRST_KEY", "SEARCH_SECOND_KEY", "GATEWAY_TOKEN"] {
+            assert_eq!(
+                names.iter().filter(|name| *name == expected).count(),
+                1,
+                "{expected} is not withheld exactly once: {names:?}"
+            );
+        }
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| *name == "SERVICES_KEY_AICHAT")
+                .count(),
+            1,
+            "a built-in name was listed twice: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name == "BRAVE_SEARCH_API_KEY"),
+            "a well-known name was withheld that no setting names"
+        );
+        assert_eq!(
+            names.len(),
+            crate::env_var::SCRUBBED.len() + 3,
+            "the set holds more than the settings name: {names:?}"
         );
     }
 

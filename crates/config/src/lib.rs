@@ -1360,6 +1360,12 @@ pub struct Config {
     /// A path and not a secret. Nothing in this crate opens the file when the configuration is
     /// built: [`web_search_key::read`] does, where the tool is used.
     pub web_search_key_file: Option<std::path::PathBuf>,
+    /// The variables the setting `webSearch.env` names as holding the key the `web_search` tool
+    /// sends, in the order to try them.
+    ///
+    /// Names and not values. A variable is read where the tool is used, so one set after this
+    /// configuration was built is found, and one unset is not remembered.
+    pub web_search_env: Vec<String>,
     /// Where the `web_search` tool sends its requests in place of [`WEB_SEARCH_BASE`].
     ///
     /// Set only by [`Config::with_web_search_base`], which a test calls to point the tool at a server
@@ -1550,7 +1556,21 @@ fn gateway_variables_under(
     baked: impl Fn(&str) -> Option<String>,
 ) -> Vec<String> {
     let lookup = lookup_in(settings, managed, exported, baked);
-    gateway_variable_names(&gateways(settings, managed, &lookup))
+    let mut names = gateway_variable_names(&gateways(settings, managed, &lookup));
+    add_search_variables(&mut names, settings);
+    names
+}
+
+/// The variables `webSearch.env` names, added to `names` where they are not already there.
+///
+/// The search key is as much this agent's own credential as a gateway's token, so the programs the
+/// agent starts are not handed it (RUN-12).
+pub(crate) fn add_search_variables(names: &mut Vec<String>, settings: &Settings) {
+    for name in settings.web_search_env() {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
 }
 
 /// Each variable name any of `providers` reads a token from, once.
@@ -1652,6 +1672,7 @@ impl Config {
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
         config.refused_regions = refused_regions;
         config.web_search_key_file = settings.web_search_key_file().map(std::path::PathBuf::from);
+        config.web_search_env = settings.web_search_env().to_vec();
         // Held only with a host to send it to, so a key stored on a machine whose build reaches no
         // Brave backend is carried by nothing.
         config.premium_key = premium_key.filter(|_| config.premium_endpoint.is_some());
@@ -1833,6 +1854,7 @@ impl Config {
             listed_inputs: None,
             refused_regions: Vec::new(),
             web_search_key_file: None,
+            web_search_env: Vec::new(),
             web_search_base: None,
             patience: provider::Patience::default(),
         })
@@ -1843,6 +1865,35 @@ impl Config {
     pub fn with_web_search_key_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.web_search_key_file = Some(path.into());
         self
+    }
+
+    /// The same configuration with the variables the setting `webSearch.env` would name as holding
+    /// the web search key.
+    pub fn with_web_search_env(mut self, names: &[&str]) -> Self {
+        self.web_search_env = names.iter().map(|name| (*name).to_string()).collect();
+        self
+    }
+
+    /// Where the web search key would come from: a named variable that holds text, else the key
+    /// file if it is there, else nowhere.
+    ///
+    /// Reads the process environment and the file's metadata. The key is not held past the check,
+    /// and nothing of it is returned.
+    pub fn web_search_source(&self) -> Option<web_search_key::Source> {
+        web_search_key::source(
+            &self.web_search_env,
+            |name| env::var(name).ok(),
+            self.web_search_key_file.as_deref(),
+        )
+    }
+
+    /// The web search key, read now: the first named variable that holds text, else the key file.
+    pub fn web_search_key(&self) -> Result<Secret, web_search_key::Problem> {
+        web_search_key::resolve(
+            &self.web_search_env,
+            |name| env::var(name).ok(),
+            self.web_search_key_file.as_deref(),
+        )
     }
 
     /// The same configuration with `web_search` pointed at `base`, which is how a test stands in
@@ -1863,9 +1914,7 @@ impl Config {
     /// Looks at the file's metadata and reads nothing from it, so the key is not held until a search
     /// is made.
     pub fn offers_web_search(&self) -> bool {
-        self.web_search_key_file
-            .as_deref()
-            .is_some_and(web_search_key::offered)
+        self.web_search_source().is_some()
     }
 
     /// The same configuration with the retry count and window its requests to Brave's endpoint are
@@ -3319,6 +3368,35 @@ mod tests {
             .expect("configured")
             .with_web_search_key_file(&file);
         assert!(present.offers_web_search());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A named variable that is unset is no source: the tool is not offered and no credential is
+    /// listed, and a key file beside it is still the source. An implementation that counted a name
+    /// in `webSearch.env` as a configured key, without asking whether the variable holds text,
+    /// would offer a tool that can only fail. The case of a variable that does hold text needs a
+    /// process variable, which this crate cannot set, so
+    /// `bravebot-agent`'s `web_search_variable` test covers it.
+    #[test]
+    fn an_unset_named_variable_is_no_source_and_a_key_file_beside_it_still_is() {
+        const NAME: &str = "BRAVEBOT_CONFIG_TEST_SEARCH_KEY_VARIABLE";
+        let unset = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_env(&[NAME]);
+        assert!(!unset.offers_web_search());
+        assert_eq!(unset.web_search_source(), None);
+        assert_eq!(unset.held(), [Held::SigningKey]);
+
+        let (directory, file) = a_search_key_file("variable-source");
+        let by_file = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_env(&[NAME])
+            .with_web_search_key_file(&file);
+        assert_eq!(
+            by_file.web_search_source(),
+            Some(web_search_key::Source::File)
+        );
+
         let _ = std::fs::remove_dir_all(&directory);
     }
 

@@ -618,6 +618,64 @@ fn with_a_gateway_token(scratch: &Scratch) -> EnvGuard {
     ])
 }
 
+/// RUN-12: a variable `webSearch.env` names is withheld from a program the planner chose, every
+/// one the setting lists, and the search still reads its key from the environment. The names are
+/// ones no built-in list holds, so a set that happened to list a well-known search variable would
+/// pass with a different one. The regression it rejects: the search variables left out of the
+/// withheld set, which hands the search key to every program the planner starts.
+#[cfg(unix)]
+#[test]
+fn a_web_search_variable_does_not_reach_a_program_it_runs() {
+    let scratch = Scratch::new("scrub-web-search");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".bravebot")).expect("create the home");
+    std::fs::write(
+        home.join(".bravebot").join("settings.json"),
+        r#"{"webSearch": {"env": ["ACME_SEARCH_KEY", "ACME_SEARCH_FALLBACK"]}}"#,
+    )
+    .expect("write the settings");
+    let _guard = with_env(&[
+        ("HOME", Some(home.to_str().expect("a path"))),
+        ("BRAVEBOT_HOME", None),
+        ("ACME_SEARCH_KEY", Some("a-live-search-key")),
+        ("ACME_SEARCH_FALLBACK", Some("a-live-search-fallback")),
+        ("BRAVEBOT_SUBPROCESS_ENV_SCRUB", None),
+    ]);
+
+    let ran = run(
+        Pipeline::new(vec![Stage::new("env", Vec::new())]),
+        &scratch.path,
+    )
+    .expect("env runs");
+
+    assert!(ran.succeeded());
+    assert!(
+        ran.stdout.contains("PATH="),
+        "the program printed no environment at all: {}",
+        ran.stdout
+    );
+    assert!(
+        !ran.stdout.contains("a-live-search-key"),
+        "the search key reached a program the planner chose"
+    );
+    assert!(
+        !ran.stdout.contains("a-live-search-fallback"),
+        "only the first variable the setting lists was withheld"
+    );
+    let configured = bravebot_config::Config::from_lookup(|name| match name {
+        "SERVICES_KEY_AICHAT" => Some("test-key".to_string()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".to_string()),
+        bravebot_config::env_var::ENDPOINT => Some("https://free.invalid".to_string()),
+        _ => None,
+    })
+    .expect("complete")
+    .with_web_search_env(&["ACME_SEARCH_KEY"]);
+    let key = configured
+        .web_search_key()
+        .expect("the agent still reads the variable it withheld from the program");
+    assert_eq!(key.expose(), "a-live-search-key");
+}
+
 /// The request the withheld variable is for still carries it: it is withheld from the programs this
 /// agent starts, and the agent reads it from its own environment.
 #[cfg(unix)]

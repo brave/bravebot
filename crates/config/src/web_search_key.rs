@@ -1,11 +1,13 @@
 //! The key the `web_search` tool sends to the Brave Search API.
 //!
-//! The key is a file the person names in `webSearch.keyFile`. The file holds the key as plain text
-//! and nothing else, and the whole file, trimmed, is the key. Where the key goes is not stored in
-//! the file or in a setting: the tool sends it to `api.search.brave.com` in one request header.
+//! The key comes from the first variable `webSearch.env` names that holds text, as a provider
+//! block's token comes from the first of its `env`, and otherwise from a file the person names in
+//! `webSearch.keyFile`. The file holds the key as plain text and nothing else, and the whole file,
+//! trimmed, is the key. Where the key goes is not stored in the file, a variable or a setting: the
+//! tool sends it to `api.search.brave.com` in one request header.
 //!
-//! No error here names the path or holds any of the file's content, so a report of one cannot carry
-//! the key.
+//! No error here names the path or a variable or holds any of the content, so a report of one
+//! cannot carry the key.
 
 use crate::Secret;
 use std::io::Read as _;
@@ -14,12 +16,22 @@ use std::path::Path;
 /// Larger than a file holding one key has any reason to be, so it is not read.
 const MAX_BYTES: u64 = 4096;
 
-/// Why a file was not used as the key.
+/// Where the key is read from, for a report that names the place and never the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A variable `webSearch.env` names, which wins over the file.
+    Variable,
+    /// The file `webSearch.keyFile` names.
+    File,
+}
+
+/// Why a file or a variable was not used as the key.
 ///
-/// No variant holds the path or any text from the file.
+/// No variant holds the path, the name of a variable or any text from either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Problem {
-    /// The file is missing, is not a regular file, cannot be read, or is not text.
+    /// Nothing is configured, or the file is missing, is not a regular file, cannot be read, or is
+    /// not text.
     Unreadable,
     /// The file is larger than 4096 bytes.
     TooLarge,
@@ -28,6 +40,58 @@ pub enum Problem {
     /// The text holds whitespace, a control character or a byte outside ASCII, so it cannot be
     /// sent as an HTTP header value.
     NotAKey,
+}
+
+/// The text of the first of `names` that holds text, or `None` where none does.
+///
+/// A variable that is unset or holds only whitespace is skipped, as a provider's is. The text
+/// returned is a copy of what the variable holds, so the caller overwrites it.
+fn variable_text(names: &[String], lookup: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    names.iter().find_map(|name| {
+        let mut value = lookup(name)?;
+        if value.trim().is_empty() {
+            crate::scrub(&mut value);
+            return None;
+        }
+        Some(value)
+    })
+}
+
+/// Where the key would come from: a variable of `names` that holds text, else the file, if either.
+///
+/// Reads the variable's text only to see that it is not blank, and the file's metadata and nothing
+/// from the file, so it is safe to ask where the key must not be read, as `doctor` does.
+pub fn source(
+    names: &[String],
+    lookup: impl Fn(&str) -> Option<String>,
+    file: Option<&Path>,
+) -> Option<Source> {
+    if let Some(mut text) = variable_text(names, &lookup) {
+        crate::scrub(&mut text);
+        return Some(Source::Variable);
+    }
+    file.is_some_and(offered).then_some(Source::File)
+}
+
+/// The key the first variable of `names` holding text carries, else the file's.
+///
+/// A variable that holds text is the key or is refused as one, and the file is not consulted then:
+/// a variable wins over the file, as it does for a provider. Where no variable holds text and no
+/// file is named, the problem is [`Problem::Unreadable`].
+pub fn resolve(
+    names: &[String],
+    lookup: impl Fn(&str) -> Option<String>,
+    file: Option<&Path>,
+) -> Result<Secret, Problem> {
+    if let Some(mut text) = variable_text(names, &lookup) {
+        let parsed = from_text(&text);
+        crate::scrub(&mut text);
+        return parsed;
+    }
+    match file {
+        Some(path) => read(path),
+        None => Err(Problem::Unreadable),
+    }
 }
 
 /// Whether `path` is an existing regular file.
@@ -227,5 +291,100 @@ mod tests {
         std::fs::write(&path, "two words\n").expect("a file");
         assert!(offered(&path));
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A lookup over a fixed list of variables, so a test sets nothing in the process.
+    fn holding<'a>(held: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| {
+            held.iter()
+                .find(|(held, _)| *held == name)
+                .map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    /// The first named variable that holds text is the key, in the order written, and one that is
+    /// unset or blank is skipped. An implementation that took the last, or stopped at the first name
+    /// whether or not it held text, would send the wrong key or none.
+    #[test]
+    fn the_first_named_variable_holding_text_is_the_key() {
+        let held = [
+            ("BLANK_ONE", "  \n"),
+            ("FIRST_KEY", "first-placeholder\n"),
+            ("SECOND_KEY", "second-placeholder"),
+        ];
+        let order = names(&["UNSET_ONE", "BLANK_ONE", "FIRST_KEY", "SECOND_KEY"]);
+        let key = resolve(&order, holding(&held), None).expect("a key");
+        assert_eq!(key.expose(), "first-placeholder");
+
+        let reversed = names(&["SECOND_KEY", "FIRST_KEY"]);
+        let key = resolve(&reversed, holding(&held), None).expect("a key");
+        assert_eq!(key.expose(), "second-placeholder");
+    }
+
+    /// A variable that holds text wins over the file, as a provider's variable wins over its stored
+    /// key, and the file is read only where no variable holds text. An implementation that tried the
+    /// file first would send the file's key whenever both exist.
+    #[test]
+    fn a_variable_wins_over_the_file_and_the_file_answers_when_none_holds_text() {
+        let directory = scratch("precedence");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, PLACEHOLDER).expect("a file");
+        let held = [("SEARCH_KEY", "variable-placeholder")];
+        let order = names(&["SEARCH_KEY"]);
+
+        let both = resolve(&order, holding(&held), Some(&file)).expect("a key");
+        assert_eq!(both.expose(), "variable-placeholder");
+        assert_eq!(
+            source(&order, holding(&held), Some(&file)),
+            Some(Source::Variable)
+        );
+
+        let blank = [("SEARCH_KEY", "   ")];
+        let file_only = resolve(&order, holding(&blank), Some(&file)).expect("a key");
+        assert_eq!(file_only.expose(), PLACEHOLDER);
+        assert_eq!(
+            source(&order, holding(&blank), Some(&file)),
+            Some(Source::File)
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A variable that holds text is the key or is refused as one, and the file behind it is not
+    /// consulted. An implementation that fell back to the file on a bad variable would send a key
+    /// the person had replaced by a variable they believe is in force.
+    #[test]
+    fn a_variable_that_cannot_be_a_header_value_is_refused_without_falling_back_to_the_file() {
+        let directory = scratch("no-fallback");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, PLACEHOLDER).expect("a file");
+        let order = names(&["SEARCH_KEY"]);
+        for text in ["two words", "line\nbreak", "caf\u{e9}-key"] {
+            let held = [("SEARCH_KEY", text)];
+            assert_eq!(
+                resolve(&order, holding(&held), Some(&file)).err(),
+                Some(Problem::NotAKey),
+                "{text:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// With no variable holding text and no file named, there is no key and no source. An
+    /// implementation that treated an empty list as a configured key would offer a tool that can
+    /// only fail.
+    #[test]
+    fn nothing_configured_is_no_key_and_no_source() {
+        let none: [(&str, &str); 0] = [];
+        let order = names(&["SEARCH_KEY"]);
+        assert_eq!(
+            resolve(&order, holding(&none), None).err(),
+            Some(Problem::Unreadable)
+        );
+        assert_eq!(source(&order, holding(&none), None), None);
+        assert_eq!(source(&[], holding(&none), None), None);
     }
 }

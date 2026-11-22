@@ -306,6 +306,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "permissions.startInAuto" => t!(doctor_settings_start_in_auto_ignored, path = path),
         "run.scrubEnv" => t!(doctor_settings_scrub_env_ignored, path = path),
         "webSearch.keyFile" => t!(doctor_settings_web_search_key_file_ignored, path = path),
+        "webSearch.env" => t!(doctor_settings_web_search_env_ignored, path = path),
         "limit" => t!(doctor_settings_limit_ignored, path = path),
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
@@ -1046,24 +1047,41 @@ fn report_held(held: bravebot_config::Held<'_>) {
     }
 }
 
-/// What `doctor` says of the web search key file: whether the setting names one and whether it is
-/// there.
+/// What `doctor` says of the web search key: which source it would come from, a variable the
+/// setting `webSearch.env` names or the file `webSearch.keyFile` names, and whether it is there.
 ///
-/// Looks at the file's metadata through [`Config::offers_web_search`] and reads nothing from it, so
-/// the report cannot hold the key. The path is the person's own setting and is not a secret.
+/// Looks at whether a named variable holds text and at the file's metadata, and prints nothing of
+/// either, so the report cannot hold the key. The path is the person's own setting and is not a
+/// secret.
 fn report_web_search(config: &Config) {
     fact(t!(doctor_web_search), web_search_line(config));
 }
 
 /// The words of [`report_web_search`], separate from the printing so a test can hold them.
 pub(crate) fn web_search_line(config: &Config) -> String {
-    match config.web_search_key_file.as_deref() {
-        None => t!(doctor_web_search_absent).to_string(),
-        Some(path) if config.offers_web_search() => t!(
+    web_search_words(
+        config.web_search_source(),
+        config.web_search_key_file.as_deref(),
+    )
+}
+
+/// The words for a key that would come from `source`, given the file the setting names.
+///
+/// Separate from [`web_search_line`] so a test states the source and needs no variable set in the
+/// process.
+fn web_search_words(
+    source: Option<bravebot_config::web_search_key::Source>,
+    file: Option<&Path>,
+) -> String {
+    use bravebot_config::web_search_key::Source;
+    match (source, file) {
+        (Some(Source::Variable), _) => t!(doctor_web_search_variable).to_string(),
+        (Some(Source::File), Some(path)) => t!(
             doctor_web_search_keyed,
             path = progress::printable_path(path)
         ),
-        Some(path) => t!(
+        (Some(Source::File), None) | (None, None) => t!(doctor_web_search_absent).to_string(),
+        (None, Some(path)) => t!(
             doctor_web_search_missing,
             path = progress::printable_path(path)
         ),
@@ -4479,6 +4497,7 @@ mod tests {
         let account = what_would_end(bravebot_config::Held::SearchKey);
         for named in [
             "webSearch.keyFile",
+            "webSearch.env",
             "api.search.brave.com",
             "Brave Search API dashboard",
         ] {
@@ -4509,6 +4528,20 @@ mod tests {
         assert!(!configured.contains(PLACEHOLDER), "{configured}");
         assert_ne!(configured, missing);
         assert_ne!(configured, absent);
+
+        // A variable that holds the key wins over the file the setting also names, and the line
+        // says so without naming the variable or printing what it holds.
+        use bravebot_config::web_search_key::Source;
+        let by_variable = web_search_words(Some(Source::Variable), Some(&file));
+        assert!(by_variable.contains("webSearch.env"), "{by_variable}");
+        assert!(!by_variable.contains(PLACEHOLDER), "{by_variable}");
+        assert!(
+            !by_variable.contains(file.to_str().expect("a path")),
+            "the file is not the source, so its path is not said: {by_variable}"
+        );
+        assert_ne!(by_variable, configured);
+        assert_ne!(by_variable, absent);
+        assert_ne!(by_variable, missing);
         let _ = std::fs::remove_dir_all(&directory);
     }
 
