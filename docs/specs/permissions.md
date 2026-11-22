@@ -409,17 +409,25 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_config::settings::an_object_entrys_rule_is_anchored_where_a_line_is`
 
 <a id="PERM-4"></a>
-### PERM-4: a one-segment relative pattern floats where it restricts, not where it grants
+### PERM-4: a relative pattern that starts at a plain directory name floats where it restricts, not where it grants
 
 `Edit(src/**)` in `deny` or `ask` covers a `src` directory at any depth, including a nested copy
-under `vendor`. The same pattern in `allow` covers only the `src` at the top. A pattern written
-from `./` does not float in any list, so `Edit(./src/**)` covers only the `src` at the top.
+under `vendor`. The same pattern in `allow` covers only the `src` at the top. Any pattern with a
+directory part floats this way, however many segments it has: `Edit(src/lib/**)` and `Edit(a/b.md)`
+float the same way, to the `src/lib` or the `a/b.md` under any directory. A pattern whose first
+segment holds a `*` or is `**` does not float, and neither does one written from `./`, so
+`Edit(./src/**)` covers only the `src` at the top in every list.
+
+A bare name is a different case. A pattern with no directory part, such as `Read(.env)`, matches at
+any depth in every list, `allow` included.
 
 **Why.** A rule that restricts should cover the copy somebody forgot about; a rule that grants
 should cover what it says and no more. Anchoring the pattern, as `Edit(./src/**)` or
 `Edit(/src/**)`, pins it to one place in every list.
 
 `verified-by: bravebot_core::permissions::a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_relative_pattern_of_several_plain_segments_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_allow_as_well_as_in_deny_and_ask`
 `verified-by: bravebot_core::permissions::a_dotted_pattern_of_several_segments_stays_at_the_top_in_every_list`
 
 <a id="PERM-5"></a>

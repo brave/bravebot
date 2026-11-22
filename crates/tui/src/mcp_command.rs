@@ -1856,4 +1856,143 @@ pub(crate) mod tests {
             ]
         );
     }
+
+    /// What the failing server below writes to its stderr before it exits: a window title and the
+    /// clipboard (OSC 52), each with its own marker so a failure says which one reached the
+    /// terminal.
+    #[cfg(unix)]
+    const WHAT_A_FAILING_SERVER_WRITES: &[&str] =
+        &["\x1b]0;SERVER-TITLE\x07", "\x1b]52;c;ZXZpbA==\x07"];
+
+    /// A machine whose state directory declares `weather` as an approved stdio server that writes
+    /// [`WHAT_A_FAILING_SERVER_WRITES`] to its stderr and exits before it answers `initialize`.
+    #[cfg(unix)]
+    fn declaring_a_failing_stdio_server(name: &str) -> Machine {
+        use bravebot_config::mcp::{Approvals, Declaration, Declarations};
+        let home = tempfile::Builder::new()
+            .prefix(name)
+            .tempdir()
+            .expect("directory")
+            .keep();
+        let script = r"printf '\033]0;SERVER-TITLE\007\033]52;c;ZXZpbA==\007' >&2; exit 1";
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
+        let declaration =
+            Declaration::stdio(argv, vec!["PATH".to_string()], None).expect("a declaration");
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &declaration);
+        std::fs::write(
+            bravebot_config::mcp::declarations_file(&home),
+            declarations.to_text(),
+        )
+        .expect("mcp.json");
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", declaration.digest());
+        std::fs::write(
+            bravebot_config::mcp::approvals_file(&home),
+            approvals.to_text(),
+        )
+        .expect("mcp-approved");
+        Machine {
+            managed: bravebot_config::Managed::at(&home.join("managed.json")),
+            home: servers::Home {
+                directory: Some(home),
+                writable: false,
+            },
+        }
+    }
+
+    /// MCP-8: `/mcp reconnect` draws nothing a server writes to its stderr, and a server that
+    /// fails its handshake is named in a note this process wrote.
+    ///
+    /// The bytes would reach the terminal through the process's own standard error, which a test
+    /// cannot read from inside itself, so this test starts the binary again for this test alone
+    /// and reads the child's standard error from a file. The child runs the command and asserts
+    /// the note; the parent asserts that neither the title, the clipboard sequence nor the escape
+    /// byte is in what the child wrote to either stream. The wrong implementation this rejects
+    /// passes the process's standard error to the server (`Stream::Inherited`) at the call
+    /// `reconnect` makes, which puts both sequences on the child's standard error.
+    #[cfg(unix)]
+    #[test]
+    fn reconnect_draws_nothing_a_servers_stderr_writes_and_shows_a_failed_handshake() {
+        const THIS: &str = "mcp_command::tests::reconnect_draws_nothing_a_servers_stderr_writes_and_shows_a_failed_handshake";
+        const CHILD: &str = "BRAVEBOT_TEST_MCP_FAILING_SERVER_CHILD";
+        const CHECKED: &str = "reconnect checked:";
+
+        if std::env::var_os(CHILD).is_some() {
+            let (settings, root) = requesting("mcp-stderr", &["weather"]);
+            let machine = declaring_a_failing_stdio_server("mcp-stderr-home");
+            let mut session = Session::new("none");
+            let mut asker = Answering {
+                answer: servers::Answer::Once,
+                asked: 0,
+            };
+
+            run_on(
+                &mut session,
+                &settings,
+                &root,
+                "reconnect weather",
+                Asking::Person,
+                &mut asker,
+                &machine,
+            );
+
+            let notes = said(&session);
+            assert!(
+                notes
+                    .iter()
+                    .any(|note| note.contains("weather") && note.contains("handshake")),
+                "the failed handshake was not shown: {notes:?}"
+            );
+            assert!(
+                session.servers.session.is_none(),
+                "a server that failed its handshake was kept"
+            );
+            for note in &notes {
+                assert!(!note.contains('\x1b'), "a note holds an escape: {note:?}");
+                assert!(
+                    !note.contains("SERVER-TITLE"),
+                    "a note holds what the server wrote: {note:?}"
+                );
+            }
+            println!("{CHECKED} ran");
+            return;
+        }
+
+        if !bravebot_sandbox::confinement_works_here() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "a CI machine must run this check, and cannot: confinement is unavailable"
+            );
+            eprintln!("skipped: confinement is unavailable, so the server cannot be started");
+            return;
+        }
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", THIS, "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1");
+        let what = "the child that reconnects a server that writes to its stderr";
+        let output =
+            crate::testutil::output_within(&mut command, std::time::Duration::from_secs(60), what);
+        let said = String::from_utf8_lossy(&output.stdout).into_owned();
+        let failed = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "{what} failed:\n{said}\n{failed}");
+        assert!(
+            said.contains(CHECKED),
+            "{what} did not reach its assertions:\n{said}\n{failed}"
+        );
+        for (stream, text) in [("standard output", &said), ("standard error", &failed)] {
+            for effect in WHAT_A_FAILING_SERVER_WRITES {
+                assert!(
+                    !text.contains(effect),
+                    "a server's stderr bytes {effect:?} reached the child's {stream}:\n{text:?}"
+                );
+            }
+            assert!(
+                !text.contains("SERVER-TITLE"),
+                "a server's stderr text reached the child's {stream}:\n{text:?}"
+            );
+        }
+    }
 }

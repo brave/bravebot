@@ -4844,6 +4844,24 @@ impl Workspace {
         self.keyed(named, BACKSLASH_SEPARATES, self.home.as_deref())
     }
 
+    /// The name a window of a read is recorded and looked up under (READ-8): the trust key of the
+    /// name with a leading `./` taken off, so `./a.txt` and `a.txt` are one file.
+    ///
+    /// [`Workspace::trust_key`] leaves a leading `./` on a relative name, because the trust map
+    /// takes it off itself when it is asked. A record of what the planner was shown has no such
+    /// step, so a repeat spelled the other way would be sent again for lines it holds. Made from the
+    /// name the planner typed alone, so no byte of the file decides it.
+    pub(crate) fn window_key(&self, named: &str) -> String {
+        let plain: PathBuf = Path::new(named)
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect();
+        match plain.to_str() {
+            Some(plain) if !plain.is_empty() => self.trust_key(plain),
+            _ => self.trust_key(named),
+        }
+    }
+
     /// The name the trust map is asked about for a file a walk of `root` reported as `reported`,
     /// when the call that began the walk typed `typed`.
     ///

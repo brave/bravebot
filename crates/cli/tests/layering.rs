@@ -446,6 +446,12 @@ fn a_rows_dependency_list_is_what_the_manifest_asks_for() {
 /// Each part is the manifest's lines under the tables of that kind, so [`dependencies`] reads it
 /// with every spelling it already understands. A platform's table counts as the kind it names.
 fn dependencies_by_kind(manifest: &str) -> [BTreeSet<String>; 3] {
+    manifest_parts(manifest).map(|part| workspace_dependencies(&part))
+}
+
+/// The lines of a manifest that belong to each kind of dependency table, in the order
+/// [`dependencies_by_kind`] returns them. Everything outside a dependency table is in the first.
+fn manifest_parts(manifest: &str) -> [String; 3] {
     let mut parts = [String::new(), String::new(), String::new()];
     let mut kind = 0;
     for line in manifest.lines() {
@@ -467,7 +473,7 @@ fn dependencies_by_kind(manifest: &str) -> [BTreeSet<String>; 3] {
         parts[kind].push_str(line);
         parts[kind].push('\n');
     }
-    parts.map(|part| workspace_dependencies(&part))
+    parts
 }
 
 /// Source text with its comments taken out: what follows `//` to the end of its line, and each
@@ -859,6 +865,365 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
                 file.display()
             );
         }
+    }
+}
+
+/// The crates LAYER-1's rows say do no I/O, each with the dependencies it may ask for, which are the
+/// ones that do none: the kernel and the file-type crate ask for nothing, and the crate that reads a
+/// processor's answer asks for the kernel and for the JSON parser, which reads the text it is handed
+/// and opens nothing. A dependency is added here by deciding that the crate it names does no I/O,
+/// which is the question the manifests test cannot ask: it holds a row's list to the manifest and
+/// grants whatever the row grants.
+const IO_FREE: [(&str, &[&str]); 3] = [
+    ("core", &[]),
+    ("filetype", &[]),
+    ("choice", &["bravebot-core", "serde_json"]),
+];
+
+/// The crates a manifest asks for in the tables its own targets link, `[dependencies]` and the
+/// platform ones, that `allowed` does not name. Every crate is read, not only this workspace's,
+/// since a crate that does I/O may come from outside it. The tables of tests and of the build
+/// script are not read: a test reads fixtures, and the promise is about what the crate does once
+/// it is built.
+fn dependencies_outside(manifest: &str, allowed: &[&str]) -> Vec<String> {
+    let [normal, _, _] = manifest_parts(manifest);
+    dependencies(&normal)
+        .into_iter()
+        .filter(|name| !allowed.contains(&name.as_str()))
+        .collect()
+}
+
+/// A crate that does no I/O may not depend on one that does. The scan above holds the source of
+/// these crates to no `std::fs`, and a dependency is how the same reach comes in without the source
+/// naming it: `bravebot-sandbox` or `rustix` called from the kernel is a file read that no line of
+/// the kernel spells.
+#[test]
+fn the_crates_that_do_no_io_depend_only_on_crates_that_do_none() {
+    let (rows, manifests) = table_and_manifests();
+    let promised: BTreeSet<String> = rows
+        .iter()
+        .filter(|row| row.constraint.to_lowercase().contains("no i/o"))
+        .map(|row| row.name.clone())
+        .collect();
+    let listed: BTreeSet<String> = IO_FREE
+        .iter()
+        .map(|(directory, _)| format!("{PREFIX}{directory}"))
+        .collect();
+    assert_eq!(
+        promised, listed,
+        "the rows of LAYER-1 that say `no I/O` are not the crates this test holds to it. A row \
+         that promises it needs an entry in IO_FREE naming what it may depend on, and an entry \
+         for a crate whose row no longer promises it is a constraint nothing states"
+    );
+    for (directory, allowed) in IO_FREE {
+        let (_, manifest) = manifests
+            .iter()
+            .find(|(member, _)| member.rsplit('/').next() == Some(directory))
+            .unwrap_or_else(|| panic!("{directory} is not a workspace member"));
+        let outside = dependencies_outside(manifest, allowed);
+        assert!(
+            outside.is_empty(),
+            "LAYER-1 says {PREFIX}{directory} does no I/O, and its manifest asks for {outside:?}, \
+             which IO_FREE does not name as a crate that does none ({allowed:?} are). A crate that \
+             does I/O is reached through a dependency without any line of this one saying so"
+        );
+    }
+}
+
+/// The dependency check names the crate behind each spelling a manifest may ask for it in, and
+/// reads neither the tables of tests nor a crate the row grants.
+#[test]
+fn a_dependency_on_a_crate_that_does_io_is_refused() {
+    let granted = ["bravebot-core", "serde_json"];
+    let base = "[package]\nname = \"bravebot-choice\"\n\n";
+    let plain = format!(
+        "{base}[dependencies]\nbravebot-core = {{ path = \"../core\" }}\n\
+         serde_json = {{ workspace = true }}\n\n[dev-dependencies]\nrustix = {{ workspace = true }}\n"
+    );
+    assert!(
+        dependencies_outside(&plain, &granted).is_empty(),
+        "the granted crates, and a test-only one, were refused"
+    );
+    for (asked, refused) in [
+        ("[dependencies]\nrustix = { workspace = true }\n", "rustix"),
+        (
+            "[dependencies]\nbravebot-sandbox = { path = \"../sandbox\" }\n",
+            "bravebot-sandbox",
+        ),
+        ("[dependencies.libc]\nversion = \"0.2\"\n", "libc"),
+        (
+            "[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n",
+            "libc",
+        ),
+        (
+            "[dependencies]\nhost = { package = \"rustix\", workspace = true }\n",
+            "rustix",
+        ),
+        (
+            "[dependencies]\nbravebot-sandbox.workspace = true\n",
+            "bravebot-sandbox",
+        ),
+    ] {
+        let manifest = format!("{base}{asked}");
+        assert_eq!(
+            dependencies_outside(&manifest, &granted),
+            [refused.to_string()],
+            "a dependency that does I/O was not refused: {asked}"
+        );
+    }
+}
+
+/// What a path in a crate that does no I/O may start from, beside the crate's own declarations and
+/// the crates its manifest grants: the standard library, and `vstd`, which only the Verus build
+/// compiles (`#[cfg(verus_keep_ghost)]` or inside `verus!`) and which holds no I/O.
+const ROOTS: [&str; 6] = ["std", "core", "alloc", "crate", "self", "super"];
+const VERIFIER_ROOTS: [&str; 1] = ["vstd"];
+
+/// `pub(crate) use a::b;` without the visibility, and the line unchanged where there is none.
+fn without_visibility(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("pub") else {
+        return line;
+    };
+    if let Some(inner) = rest.strip_prefix('(') {
+        return inner
+            .split_once(')')
+            .map_or(line, |(_, after)| after.trim_start());
+    }
+    if rest.starts_with(char::is_whitespace) {
+        rest.trim_start()
+    } else {
+        line
+    }
+}
+
+/// The parts of a use tree's braces that a comma separates, leaving the commas of nested braces.
+fn split_top_level(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (at, c) in text.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&text[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// Whether what follows a root in a use tree binds the root itself under a name of the importer's
+/// choosing or brings everything under it into scope, rather than naming a path below it:
+/// `std as host`, `std::*` and `std::{self as host}` are those, `std::fmt` and `std::{fmt, io}`
+/// are not.
+fn binds_the_root(after_root: &str) -> bool {
+    let Some(path) = after_root.trim_start().strip_prefix("::") else {
+        return true;
+    };
+    let path = path.trim_start();
+    match path.strip_prefix('{') {
+        Some(group) => {
+            let inner = group.rsplit_once('}').map_or(group, |(inner, _)| inner);
+            split_top_level(inner).iter().any(|item| {
+                let item = item.trim();
+                item.starts_with('*')
+                    || item
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .next()
+                        == Some("self")
+            })
+        }
+        None => path.starts_with('*'),
+    }
+}
+
+/// The root of each path one use tree imports, with whether the tree binds that root itself.
+fn roots_of(tree: &str, found: &mut Vec<(String, bool)>) {
+    let tree = tree.trim().trim_start_matches("::").trim_start();
+    if let Some(group) = tree.strip_prefix('{') {
+        let inner = group.rsplit_once('}').map_or(group, |(inner, _)| inner);
+        for part in split_top_level(inner) {
+            roots_of(part, found);
+        }
+        return;
+    }
+    let root: String = tree
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if root.is_empty() {
+        return;
+    }
+    let binds = binds_the_root(&tree[root.len()..]);
+    found.push((root, binds));
+}
+
+/// The root of every path a source file's non-test code imports with `use` or `extern crate`, one
+/// per path, with whether the import binds that root itself. Test modules and comments are
+/// skipped, as in [`reaching_out`]. An import is read where a line starts with it, which is where
+/// `rustfmt` puts it.
+fn use_roots(source: &str) -> Vec<(String, bool)> {
+    let code = without_comments(&shipped::code_of(source).without_test_modules);
+    let lines: Vec<&str> = code.lines().collect();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        let line = without_visibility(lines[at].trim());
+        at += 1;
+        if let Some(rest) = line.strip_prefix("extern crate ") {
+            let name = rest
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .next()
+                .unwrap_or_default();
+            found.push((name.to_string(), true));
+            continue;
+        }
+        let Some(first) = line.strip_prefix("use ") else {
+            continue;
+        };
+        let mut tree = first.to_string();
+        while !tree.contains(';') && at < lines.len() {
+            tree.push(' ');
+            tree.push_str(lines[at].trim());
+            at += 1;
+        }
+        roots_of(tree.split(';').next().unwrap_or_default(), &mut found);
+    }
+    found
+}
+
+/// The names a source file's non-test code declares as a module, type or trait. A path may start
+/// from one of these: `use Integrity::*;` names an enum of the crate, and `pub use ask::Answer;`
+/// a module of it.
+fn declared_in(source: &str) -> BTreeSet<String> {
+    let code = without_comments(&shipped::code_of(source).without_test_modules);
+    let words: Vec<&str> = code
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+        .collect();
+    words
+        .windows(2)
+        .filter(|pair| ["mod", "enum", "struct", "trait", "type", "union"].contains(&pair[0]))
+        .map(|pair| pair[1].to_string())
+        .collect()
+}
+
+/// The imports of `source` that start from a name a crate that does no I/O may not use, one
+/// description per import: a root that is not the standard library, the crate itself, a name the
+/// crate declares or a crate in `granted`, and the standard library bound under a name of the
+/// importer's choosing.
+fn imports_outside(source: &str, declared: &BTreeSet<String>, granted: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (root, binds) in use_roots(source) {
+        let standard = ["std", "core", "alloc"].contains(&root.as_str());
+        if standard && binds {
+            found.push(format!("{root} bound as a name of its own"));
+        } else if !(ROOTS.contains(&root.as_str())
+            || VERIFIER_ROOTS.contains(&root.as_str())
+            || declared.contains(&root)
+            || granted.iter().any(|name| name.replace('-', "_") == root))
+        {
+            found.push(root);
+        }
+    }
+    found
+}
+
+/// A call through a handle that never names `std::fs` is not seen by the scan above, which reads
+/// `std::` paths: `use std as host;` then `host::fs::read(..)` names no `std::fs`. What can give a
+/// crate such a handle is the name an import starts from, so the roots of the imports of these
+/// crates are held to the standard library, the crate and what its manifest grants.
+#[test]
+fn the_crates_that_do_no_io_import_from_nothing_that_does() {
+    for (directory, granted) in IO_FREE {
+        let files = rust_files(&workspace().join("crates").join(directory).join("src"));
+        assert!(
+            files.len() > 1,
+            "{directory} has {} source files, so this test would pass by scanning almost nothing",
+            files.len()
+        );
+        let sources: Vec<(std::path::PathBuf, String)> = files
+            .into_iter()
+            .map(|file| {
+                let source = std::fs::read_to_string(&file).expect("a source file");
+                (file, source)
+            })
+            .collect();
+        let declared: BTreeSet<String> = sources
+            .iter()
+            .flat_map(|(_, source)| declared_in(source))
+            .collect();
+        let imports: usize = sources
+            .iter()
+            .map(|(_, source)| use_roots(source).len())
+            .sum();
+        assert!(
+            imports > 0,
+            "no import was read out of {directory}, so this test would pass by checking nothing"
+        );
+        for (file, source) in &sources {
+            let found = imports_outside(source, &declared, granted);
+            assert!(
+                found.is_empty(),
+                "LAYER-1 says {directory} does no I/O, and {} imports from {found:?}. A handle that \
+                 never names std::fs reaches the file system without the scan of its paths seeing it",
+                file.display()
+            );
+        }
+    }
+}
+
+/// The import scan sees the handles the path scan cannot, and leaves alone the imports of a crate
+/// that reaches nothing.
+#[test]
+fn the_import_scan_sees_a_handle_the_path_scan_cannot() {
+    let declared = BTreeSet::from(["tables".to_string(), "Integrity".to_string()]);
+    let granted = ["bravebot-core", "serde_json"];
+    for hidden in [
+        "use std as host;\nfn f() { let _ = host::fs::read(p); }",
+        "use std::{self as host};\nfn f() { let _ = host::fs::read(p); }",
+        "use std::*;\nfn f() { let _ = fs::read(p); }",
+        "extern crate std as host;\nfn f() { let _ = host::fs::read(p); }",
+        "use rustix::fs::open;\nfn f() { open(p); }",
+        "use {rustix::fs::open, std::fmt};\nfn f() { open(p); }",
+        "pub(crate) use libc::read as read_file;\n",
+        "use std::fmt;\nuse bravebot_sandbox::{\n    fs as host,\n};\n",
+    ] {
+        assert!(
+            reaching_out(hidden).is_empty(),
+            "the path scan sees this, so it does not show a handle it cannot: {hidden}"
+        );
+        assert!(
+            !imports_outside(hidden, &declared, &granted).is_empty(),
+            "an import of a handle that reaches outside was not seen: {hidden}"
+        );
+    }
+    // A handle another module of the crate re-exports is read where the re-export names the
+    // standard library.
+    let reexported = "mod host {\n    pub use std::fs::read as read_file;\n}\n\
+                      use crate::host::read_file;\nfn f() { read_file(p); }";
+    assert!(
+        !reaching_out(reexported).is_empty(),
+        "a re-export of std::fs was not seen at the line that names it"
+    );
+    assert!(imports_outside(reexported, &declared, &granted).is_empty());
+    for quiet in [
+        "use std::collections::BTreeMap;\nuse std::{fmt, net::IpAddr};\nuse crate::label::Label;\n\
+         use super::tables::{A, B};\nuse self::inner::x;\nuse core::fmt::Debug;\n\
+         use bravebot_core::apply::{Entries, Shape};\nuse serde_json::Value;\n\
+         use std::{\n    collections::BTreeMap,\n    fmt,\n};",
+        "use tables::X;\npub use Integrity::*;",
+        "// use rustix::fs;\nfn f() {}\n/* use libc::read; */\n",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    use rustix::fs::open;\n}\nfn h() {}",
+    ] {
+        assert!(
+            imports_outside(quiet, &declared, &granted).is_empty(),
+            "an import that reaches nowhere was reported: {quiet}"
+        );
     }
 }
 

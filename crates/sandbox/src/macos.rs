@@ -2896,9 +2896,11 @@ int main(int argc, char **argv) {
     /// refusing policy, so a profile that refuses every rename or removal does not pass.
     #[test]
     fn a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory() {
+        use std::os::macos::fs::MetadataExt as _;
         use std::os::unix::fs::PermissionsExt;
 
-        /// One line per entry under `directory`: its path from `root`, mode and contents.
+        /// One line per entry under `directory`: its path from `root`, mode, file flags and
+        /// contents.
         fn snapshot(directory: &Path, root: &Path, into: &mut Vec<String>) {
             let mut paths: Vec<_> = std::fs::read_dir(directory)
                 .expect("readable")
@@ -2913,9 +2915,10 @@ int main(int argc, char **argv) {
                     String::new()
                 };
                 into.push(format!(
-                    "{} {:o} {contents:?}",
+                    "{} {:o} {:x} {contents:?}",
                     path.strip_prefix(root).expect("beneath the root").display(),
-                    metadata.permissions().mode() & 0o7777
+                    metadata.permissions().mode() & 0o7777,
+                    metadata.st_flags()
                 ));
                 if metadata.is_dir() {
                     snapshot(&path, root, into);
@@ -2935,10 +2938,28 @@ int main(int argc, char **argv) {
                 .expect("settable");
             std::fs::write(dir.join("outside"), "outside").expect("writable");
             std::fs::write(dir.join("other"), "other").expect("writable");
+            let modules = dir.join(".git").join("modules").join("m");
+            std::fs::create_dir_all(&modules).expect("creatable");
+            std::fs::write(modules.join("config"), "[core]\n").expect("writable");
+            let worktree = dir.join(".git").join("worktrees").join("w");
+            std::fs::create_dir_all(&worktree).expect("creatable");
+            std::fs::write(worktree.join("gitdir"), "/elsewhere/.git\n").expect("writable");
+            std::fs::create_dir_all(dir.join("linked")).expect("creatable");
+            std::fs::write(
+                dir.join("linked").join(".git"),
+                "gitdir: ../.git/worktrees/w\n",
+            )
+            .expect("writable");
         };
         let tree = || {
             let mut lines = Vec::new();
             snapshot(&dir, &dir, &mut lines);
+            let attributes = std::process::Command::new("/usr/bin/xattr")
+                .arg("-lr")
+                .arg(&dir)
+                .output()
+                .expect("xattr runs");
+            lines.push(String::from_utf8_lossy(&attributes.stdout).into_owned());
             lines
         };
         let attempt = |policy: &SandboxPolicy, line: &str| {
@@ -2981,6 +3002,32 @@ int main(int argc, char **argv) {
             ("remove an empty directory in .git", "rmdir .git/hooks"),
             ("remove a nested .git", "rm -rf sub/.git"),
             ("remove .git", "rm -rf .git"),
+            (
+                "set a file flag on a file in .git",
+                "chflags hidden .git/config",
+            ),
+            (
+                "set an extended attribute on a file in .git",
+                "xattr -w user.note x .git/config",
+            ),
+            (
+                "append to a file in .git/modules",
+                "echo x >> .git/modules/m/config",
+            ),
+            (
+                "rename a file over one in .git/worktrees",
+                "mv outside .git/worktrees/w/gitdir",
+            ),
+            (
+                "remove a file in .git/worktrees",
+                "rm .git/worktrees/w/gitdir",
+            ),
+            ("append to a .git that is a file", "echo x >> linked/.git"),
+            ("remove a .git that is a file", "rm linked/.git"),
+            (
+                "rename a .git that is a file away",
+                "mv linked/.git linked/moved-git",
+            ),
         ];
 
         let got_through: Vec<_> = attempts
@@ -3009,7 +3056,8 @@ int main(int argc, char **argv) {
         let (code, _) = attempt(
             &refusing,
             "echo y > beside && mv other beside2 && rm beside2 && echo z > .gitignore \
-             && mv .gitignore .gitignore2 && rm .gitignore2",
+             && mv .gitignore .gitignore2 && rm .gitignore2 \
+             && chflags hidden beside && xattr -w user.note x beside",
         );
         assert_eq!(code, Some(0), "a write beside the .git was refused");
 

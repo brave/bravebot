@@ -67,6 +67,17 @@ The dependency column holds only edges the code uses: each workspace crate a man
 is named as `bravebot_<name>` by code outside comments that the table it is declared in reaches,
 which `every_workspace_dependency_a_crate_declares_is_named_by_its_code` checks.
 
+A row that says `no I/O` (`core`, `filetype` and `choice`) is held to it past the source the path scan
+reads. The manifests of these crates may ask only for crates that do no I/O: nothing for `core` and
+`filetype`, and `core` and `serde_json` for `choice`. The table grants what a row lists, so a row
+that listed a crate that does I/O would pass the manifests test, and the allow-list in
+`the_crates_that_do_no_io_depend_only_on_crates_that_do_none` refuses it. The path scan in
+`the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing` reads `std::` paths and cannot see a
+handle that never names `std::fs`, so `the_crates_that_do_no_io_import_from_nothing_that_does` reads
+the root of each `use` and `extern crate` in these crates. A root must be the standard library (not
+bound under another name), the crate itself, a module or type the crate declares, or a crate the
+allow-list names.
+
 `verified-by: bravebot_cli::layering::every_workspace_member_is_a_row_in_the_layering_table`
 `verified-by: bravebot_cli::layering::a_rows_dependency_list_is_what_the_manifest_asks_for`
 `verified-by: bravebot_cli::layering::every_workspace_dependency_a_crate_declares_is_named_by_its_code`
@@ -74,6 +85,10 @@ which `every_workspace_dependency_a_crate_declares_is_named_by_its_code` checks.
 `verified-by: bravebot_cli::layering::a_crate_that_draws_nothing_reaches_no_terminal_library`
 `verified-by: bravebot_cli::layering::the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing`
 `verified-by: bravebot_cli::layering::the_io_scan_sees_a_grouped_import_a_macro_and_skips_tests_and_comments`
+`verified-by: bravebot_cli::layering::the_crates_that_do_no_io_depend_only_on_crates_that_do_none`
+`verified-by: bravebot_cli::layering::a_dependency_on_a_crate_that_does_io_is_refused`
+`verified-by: bravebot_cli::layering::the_crates_that_do_no_io_import_from_nothing_that_does`
+`verified-by: bravebot_cli::layering::the_import_scan_sees_a_handle_the_path_scan_cannot`
 `verified-by: bravebot_cli::layering::the_ui_files_helper_starts_no_process`
 `verified-by: bravebot_cli::layering::the_process_scan_sees_a_grouped_import_and_a_command_and_skips_tests_and_comments`
 

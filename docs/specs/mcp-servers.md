@@ -862,8 +862,12 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_agent::mcp::answer_two_stops_asking_for_the_one_tool_in_the_one_project`
 `verified-by: bravebot_agent::mcp::answer_two_follows_the_session_to_another_project`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
+`verified-by: bravebot_agent::mcp::a_rule_wins_over_a_standing_answer_for_the_tool`
 `verified-by: bravebot_agent::mcp::a_session_that_writes_nothing_records_neither_answer`
+`verified-by: bravebot_agent::mcp::a_session_with_no_state_directory_does_not_offer_or_record_answer_two`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
+`verified-by: bravebot_agent::mcp::the_private_arm_survives_a_resume_and_an_allow_ruled_call_still_asks`
+`verified-by: bravebot_agent::mcp::a_call_written_in_a_context_that_met_untrusted_content_reaches_no_server`
 `verified-by: bravebot_agent::mcp::one_yes_covers_the_later_calls_to_the_same_tool_listed_in_its_question`
 `verified-by: bravebot_agent::mcp::one_no_refuses_the_later_calls_listed_in_its_question`
 `verified-by: bravebot_agent::mcp::a_call_covered_by_an_earlier_answer_is_not_recorded_as_asking`
@@ -876,13 +880,24 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_approval::lib::a_call_lists_the_later_calls_its_answer_also_covers`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 `verified-by: bravebot_agent::mcp::a_record_that_cannot_be_read_is_not_written_over`
+`verified-by: bravebot_agent::mcp::a_call_whose_answer_two_could_not_be_recorded_says_the_next_call_asks_again`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_server_asked_every_call_asks_though_a_rule_and_answer_two_allow_it`
 `verified-by: bravebot_agent::mcp::a_run_with_nobody_to_ask_refuses_a_call_to_a_server_asked_every_call`
+`verified-by: bravebot_agent::mcp::a_run_with_nobody_to_ask_refuses_a_call_that_would_ask_to_an_ordinary_server`
+`verified-by: bravebot_agent::mcp::a_run_with_nobody_to_ask_refuses_a_call_asked_for_private_arguments`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
 `verified-by: bravebot_core::policy::a_deny_rule_refuses_an_mcp_call_before_anybody_is_asked`
 `verified-by: bravebot_core::policy::an_mcp_call_asks_unless_a_rule_or_a_standing_answer_says_otherwise`
 `verified-by: bravebot_core::policy::private_arguments_ask_even_for_a_tool_a_rule_allows`
+`verified-by: bravebot_agent::mcp::a_call_answer_two_lets_through_is_drawn_with_what_it_sends`
+`verified-by: bravebot_agent::mcp::an_allow_ruled_or_bypassed_call_is_drawn_with_the_alias_and_what_it_sends`
+`verified-by: bravebot_agent::mcp::answer_two_is_filed_under_the_workspace_root_with_its_links_followed`
+`verified-by: bravebot_agent::mcp::a_call_is_put_with_the_description_on_the_list_the_person_vouched_for`
+`verified-by: bravebot_agent::mcp::the_calls_a_question_covers_are_matched_by_position_not_by_argument`
+`verified-by: bravebot_agent::mcp::a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked`
+`verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`
+`verified-by: bravebot_agent::mcp::an_approval_given_to_a_turn_or_a_worker_decides_no_other_call`
 `verified-by: bravebot_core::policy::an_mcp_call_needs_the_endorsement_for_its_own_tool`
 `verified-by: bravebot_core::policy::arguments_from_a_fallen_context_do_not_reach_a_server`
 `verified-by: bravebot_core::permissions::an_mcp_rule_covers_the_server_or_the_tool_it_names`
@@ -1019,8 +1034,10 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::protocol::a_tool_its_server_marks_read_only_is_drawn_as_one_and_no_other`
 `verified-by: bravebot_approval::lib::a_tool_the_server_marks_read_only_says_so_and_no_other_does`
 `verified-by: bravebot_approval::lib::the_values_an_argument_takes_are_drawn_behind_the_margin_one_row_each`
+`verified-by: bravebot_approval::lib::a_tool_lists_verdict_is_drawn_above_the_first_tool`
 `verified-by: bravebot_agent::mcp::the_values_an_argument_takes_are_listed_apart_from_its_text`
 `verified-by: bravebot_tui::confirm::mcp::a_tool_list_draws_every_description_row_behind_the_margin`
+`verified-by: bravebot_tui::confirm::mcp::a_tool_lists_verdict_is_drawn_above_the_first_tool`
 `verified-by: bravebot_cli::plain::the_values_an_argument_takes_are_asked_about_behind_the_margin_in_lines`
 `verified-by: bravebot_ui_bridge::acp::the_values_an_argument_takes_are_drawn_behind_the_margin_for_an_editor`
 `verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
@@ -1039,6 +1056,7 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement`
 `verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
+`verified-by: bravebot_agent::mcp::a_servers_list_is_checked_whole_before_it_is_asked_about`
 `verified-by: bravebot_agent::mcp::a_servers_tool_named_like_a_built_in_one_shadows_nothing`
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
@@ -1326,6 +1344,7 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_agent::servers::a_directory_a_started_server_may_write_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::servers::describing_a_server_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::servers::a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike`
+`verified-by: bravebot_agent::servers::a_server_whose_own_directory_cannot_be_made_is_not_started_and_the_note_says_where_and_why`
 
 <a id="SERVERS-11"></a>
 ### SERVERS-11: a remote server is an egress destination, and its host is approved as one
@@ -1451,9 +1470,12 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement`
 `verified-by: bravebot_agent::mcp::a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it`
 `verified-by: bravebot_agent::mcp::a_hop_the_person_refuses_sends_nothing_and_the_refusal_names_the_declaration`
+`verified-by: bravebot_agent::mcp::a_second_hop_off_where_a_server_was_just_moved_is_refused_and_not_asked_about`
+`verified-by: bravebot_agent::mcp::a_destination_that_does_not_complete_its_handshake_is_not_recorded`
 `verified-by: bravebot_agent::mcp::a_move_the_managed_layer_denies_is_refused_whatever_is_answered`
 `verified-by: bravebot_agent::mcp::a_move_in_a_session_that_writes_nothing_lasts_for_the_session`
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
+`verified-by: bravebot_agent::mcp::a_declaration_edited_while_a_move_is_asked_about_is_left_alone_and_the_server_is_not_moved`
 `verified-by: bravebot_agent::mcp::a_move_keeps_everything_but_the_address_of_the_declaration_it_replaces`
 `verified-by: bravebot_agent::mcp::a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote`
 `verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
@@ -1469,6 +1491,11 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_config::mcp::a_move_changes_the_address_of_a_remote_declaration_and_nothing_else`
 `verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
 `verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no`
+`verified-by: bravebot_agent::servers::only_a_y_moves_a_server_on_the_handshake_road`
+`verified-by: bravebot_agent::mcp::the_next_session_after_a_recorded_move_starts_the_server_there_and_asks_for_its_list_again`
+`verified-by: bravebot_agent::servers::a_handshake_redirected_again_off_where_it_was_moved_is_refused_and_not_asked_about`
+`verified-by: bravebot_agent::servers::a_handshake_redirected_to_a_host_the_managed_layer_denies_is_not_moved_on_a_yes`
+`verified-by: bravebot_agent::servers::a_handshake_redirected_to_an_address_carrying_credentials_is_not_moved_on_a_yes`
 `verified-by: bravebot_agent::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
 `verified-by: bravebot_agent::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
 `verified-by: bravebot_cli::plain::a_move_is_asked_in_lines_and_only_a_yes_moves_the_server`
@@ -1661,11 +1688,21 @@ not say beside each one whether it started unasked because of the mode.
 
 `verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
+`verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
+`verified-by: bravebot_agent::mcp::a_call_asked_for_private_arguments_is_made_under_bypass_and_asked_under_ask`
 `verified-by: bravebot_agent::mcp::bypassing_does_not_answer_a_call_to_a_server_asked_every_call`
 `verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
 `verified-by: bravebot_agent::mcp::bypassing_refuses_a_hop_and_asks_nobody`
+`verified-by: bravebot_agent::mcp::bypassing_does_not_call_a_server_the_run_holds_no_grant_for`
+`verified-by: bravebot_agent::mcp::a_deny_rule_refuses_a_call_to_a_server_under_bypass_before_anybody_is_asked`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
 `verified-by: bravebot_agent::servers::a_redirected_handshake_nobody_is_asked_about_starts_nothing`
+`verified-by: bravebot_agent::servers::a_request_nobody_declared_starts_nothing_in_any_mode_bypassing_included`
+`verified-by: bravebot_agent::servers::bypassing_does_not_start_a_server_nothing_can_confine`
+`verified-by: bravebot_agent::mcp::a_servers_tool_called_without_read_in_bypass_still_comes_back_as_a_reference`
+`verified-by: bravebot_agent::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
+`verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
+`verified-by: bravebot_agent::servers::a_server_started_in_bypass_gets_the_named_variables_and_the_stored_values_and_no_more`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything
@@ -1831,6 +1868,7 @@ content.
 `verified-by: bravebot_agent::mcp::a_moved_server_is_held_to_the_call_bound_it_had`
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
+`verified-by: bravebot_cli::running::a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_out`
 
 <a id="SERVERS-16"></a>
 ### SERVERS-16: past a size the setting names, a vouched tool is offered by name until the planner loads it

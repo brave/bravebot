@@ -1902,6 +1902,7 @@ for one that does not.
 `verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
 `verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
 `verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
+`verified-by: bravebot_bedrock::lib::requests_begun_together_are_one_refusal_when_made_through_the_client`
 `verified-by: bravebot_bedrock::lib::a_record_of_refused_breakpoints_lapses`
 `verified-by: bravebot_tui::status::the_panel_says_when_the_breakpoints_were_given_up`
 `verified-by: bravebot_tui::panel::the_panel_says_when_the_breakpoints_were_given_up`
@@ -1911,7 +1912,11 @@ for one that does not.
 `verified-by: bravebot_config::settings::a_checkout_may_ask_for_the_short_cache_lifetime_and_not_the_long_one`
 `verified-by: bravebot_bedrock::protocol::the_last_block_of_the_conversation_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_a_tool_result_is_marked_too`
+`verified-by: bravebot_bedrock::protocol::a_conversation_ending_in_an_image_a_document_or_a_call_is_marked_nowhere_but_the_prompt`
 `verified-by: bravebot_bedrock::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
+`verified-by: bravebot_bedrock::lib::a_request_giving_up_its_conversation_sends_no_breakpoint_on_the_end_of_it`
+`verified-by: bravebot_bedrock::lib::a_whole_reply_request_gives_up_a_refused_lifetime_before_the_breakpoints`
+`verified-by: bravebot_bedrock::lib::each_refusal_gives_up_only_its_own_part_of_the_request`
 `verified-by: bravebot_bedrock::protocol::a_reply_without_a_breakpoint_still_parses`
 `verified-by: bravebot_bedrock::protocol::cached_tokens_are_counted_as_the_prompt_they_were`
 `verified-by: bravebot_bedrock::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
@@ -1925,6 +1930,7 @@ for one that does not.
 `verified-by: bravebot_aichat::anthropic::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint_and_none_is_added`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobody_asked_for`
+`verified-by: bravebot_aichat::client::an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_service`
 `verified-by: bravebot_aichat::client::an_anthropic_refused_lifetime_is_given_up_before_the_breakpoints`
 `verified-by: bravebot_aichat::client::a_probe_that_failed_as_well_leaves_what_was_known_alone`
 
@@ -3866,6 +3872,7 @@ request back in its error body is quoted without the header.
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refusal`
 `verified-by: bravebot_aichat::client::a_vertex_key_the_service_echoes_in_its_refusal_is_in_no_error_event_or_log_line`
+`verified-by: bravebot_net::egress::a_key_the_service_repeats_in_a_refusals_body_is_in_no_failure_text_event_or_log_line`
 `verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_config::provider::a_google_vertex_key_is_sent_in_its_own_header`

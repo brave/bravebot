@@ -1819,6 +1819,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::spelling::a_name_is_below_a_verbatim_root_whichever_way_the_drive_path_is_spelled`
 `verified-by: bravebot_core::spelling::a_drive_spelling_is_not_below_a_root_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_agent::workspace::a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path`
+`verified-by: by-construction (each door that opens or moves to a directory by name passes the host's answer about what separates to its inner function in one expression, BACKSLASH_SEPARATES, which is cfg!(windows): Workspace::resolve_directory to admit_resolved_directory and Workspace::move_root to move_root_to in crates/agent/src/workspace/reach.rs, and restored_rules in crates/session/src/sessions.rs for a saved rule. The tests above give that answer to the inner functions directly, so a wrapper that passed a literal false is not detected on a host where a backslash is not a separator, since a canonical name there is always rooted at a slash. The code that picks a trust key gets no test seam for it, as docs/development/verification.md requires, and the contents of the Windows CI job were not read, so the wrappers are held by their being one expression each and are not demonstrated by a test that fails)`
 
 ## What a rewind puts back
 
@@ -1838,6 +1839,9 @@ without blocking restoration of other files.
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other`
 `verified-by: bravebot_agent::workspace::a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap`
+`verified-by: bravebot_agent::workspace::an_untrusted_file_in_the_sessions_own_directory_stays_untrusted_after_an_undo`
+`verified-by: bravebot_agent::workspace::an_explicit_distrust_on_either_side_survives_an_undo_and_the_snapshot_grants_nothing`
+`verified-by: bravebot_agent::workspace::keeping_the_lower_decision_for_a_scratch_file_does_not_stop_the_other_files_being_restored`
 
 ## The session's directory in an incognito session
 
@@ -2184,7 +2188,7 @@ directory as well, once. A directory reaches that mode only once
 its lock is held, so one still being made is left, and a program a session starts does not inherit
 the lock. A link under such a name is judged as a link rather than as what it points at. A local MCP
 server's home is removed on the same terms. On Windows nothing is removed.
-[CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds, sweeps delegates' checkouts under
+On Unix, [CHECKOUT-16](checkouts.md#CHECKOUT-16) sweeps delegates' checkouts under
 the state directory with a lock of the same kind, taken as each is created, removing one that no
 session record for its workspace lists and no running session holds.
 
@@ -2238,6 +2242,10 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_claim_held_for_a_moment_is_waited_out`
 `verified-by: bravebot_agent::scratch::a_claim_held_by_something_else_does_not_stall_the_session`
 `verified-by: bravebot_agent::scratch::the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it`
+`verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
+`verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`
+`verified-by: bravebot_tui::sessions::the_opening_sweep_leaves_a_checkout_a_record_lists_and_removes_the_other`
+`verified-by: bravebot_ui_bridge::checkouts::a_checkout_stays_locked_between_turns`
 
 ## Known costs
 

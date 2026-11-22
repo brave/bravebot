@@ -1634,6 +1634,140 @@ mod tests {
         assert!(!confining.confirm_run(&a_run()).approved());
     }
 
+    /// Approves every write, run, command output, vetted read and vouch it is asked and counts each
+    /// one; refuses everything else. Every other question is the one the double `ShownWrites` makes
+    /// of it.
+    #[derive(Default)]
+    struct ApprovesAndCounts {
+        writes: usize,
+        runs: usize,
+        outputs: usize,
+        vetted_reads: usize,
+        vouches: usize,
+    }
+
+    impl Confirmer for ApprovesAndCounts {
+        fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+            self.writes += 1;
+            WriteDecision::approve()
+        }
+        fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+            self.runs += 1;
+            RunDecision::approve()
+        }
+        fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+            self.outputs += 1;
+            Decision::Approve
+        }
+        fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+            self.vetted_reads += 1;
+            Decision::Approve
+        }
+        fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+            self.vouches += 1;
+            Decision::Approve
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// MODE-1: asking puts a write, a run, a command's output, a file nobody vouched for and the
+    /// offer to vouch to the person. The inner confirmer approves everything it is asked, so each
+    /// question is answered only if the mode passed it on: the inner confirmer was asked once for
+    /// each and its yes is what comes back. A mode that answered one of them itself, with a refusal
+    /// or with a yes, would leave the count at 0 or return its own answer.
+    ///
+    /// The test above wraps `Unattended`, which refuses, so a mode that refused a write itself
+    /// returns the same answer and passes it. This one approves behind the mode.
+    ///
+    /// Rejects `Unasked::write` refusing under asking (as plan mode does) and the same for each
+    /// other question.
+    #[test]
+    fn asking_puts_a_write_a_run_an_output_a_file_and_a_vouch_to_the_person() {
+        let mut approving = ApprovesAndCounts::default();
+        let mut confining = Confining::new(&mut approving, PermissionMode::Ask, false);
+
+        assert_eq!(
+            confining.confirm_write(&a_write()),
+            WriteDecision::approve(),
+            "a write was not put to the person: the mode answered it"
+        );
+        assert!(
+            confining.confirm_run(&a_run()).approved(),
+            "a run was not put to the person: the mode answered it"
+        );
+        assert_eq!(
+            confining.confirm_read_output(&an_output(Verdict::Safe)),
+            Decision::Approve,
+            "a command's output was not put to the person: the mode answered it"
+        );
+        assert_eq!(
+            confining.confirm_vetted_read(&a_vetted_read(Verdict::Safe)),
+            Decision::Approve,
+            "a file nobody vouched for was not put to the person: the mode answered it"
+        );
+        assert_eq!(
+            confining.confirm_vouch(&a_vouch(Verdict::Safe)),
+            Decision::Approve,
+            "the offer to vouch was not put to the person: the mode answered it"
+        );
+
+        assert_eq!(
+            (
+                approving.writes,
+                approving.runs,
+                approving.outputs,
+                approving.vetted_reads,
+                approving.vouches
+            ),
+            (1, 1, 1, 1, 1),
+            "each question was not put to the confirmer behind the mode exactly once"
+        );
+    }
+
     /// The whole of what accepting edits buys, and the whole of what it does not: a write goes
     /// through and a command still asks. A write lands where `git diff` will show it; a command runs
     /// with everything the user's shell has.
