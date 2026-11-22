@@ -14,10 +14,14 @@
 //! split was kept has none, and a session that went on after one has it for the later turns only,
 //! so the two figures can total less than the tokens, and [`Spent::unsplit`] is the difference.
 
+use crate::search;
 use crate::sessions;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// The longest model name a row shows, in characters.
+pub const LONGEST_MODEL: usize = 60;
 
 /// What a total covers.
 #[derive(Debug, Clone, Copy, Default)]
@@ -133,6 +137,40 @@ impl Counted {
 }
 
 impl Totals {
+    /// A row for each model as a person is shown it, the one that spent most first.
+    ///
+    /// The name the server reported is cleaned of anything a terminal would act on and cut to
+    /// [`LONGEST_MODEL`] characters (VIEW-4). Rows are grouped on the cleaned name, so two names
+    /// that differ only in what cleaning removes are one row rather than two that read alike. A
+    /// record that names no model, and a name with nothing left after cleaning, are the `None` row.
+    ///
+    /// Ordered by tokens, then sessions, most first, then by name, with the `None` row after every
+    /// named row of the same figures.
+    pub fn by_shown_model(&self) -> Vec<(Option<String>, Spent)> {
+        let mut shown: BTreeMap<Option<String>, Spent> = BTreeMap::new();
+        for (model, spent) in &self.by_model {
+            let name = model
+                .as_deref()
+                .map(|name| search::clean(name, LONGEST_MODEL))
+                .filter(|name| !name.is_empty());
+            shown.entry(name).or_default().merge(*spent);
+        }
+        let mut rows: Vec<(Option<String>, Spent)> = shown.into_iter().collect();
+        rows.sort_by(|(left_name, left), (right_name, right)| {
+            right
+                .tokens
+                .cmp(&left.tokens)
+                .then(right.sessions.cmp(&left.sessions))
+                .then_with(|| match (left_name, right_name) {
+                    (Some(left), Some(right)) => left.cmp(right),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                })
+        });
+        rows
+    }
+
     fn take(&mut self, counted: Counted) {
         let spent = Spent::of(&counted);
         self.all.merge(spent);
@@ -723,5 +761,99 @@ mod tests {
             spent_split(1, 3, 1_000, 234)
         );
         assert_eq!(totals.unreadable, 0);
+    }
+
+    fn by(models: &[(Option<&str>, Spent)]) -> Totals {
+        let mut totals = Totals::default();
+        for (model, spent) in models {
+            totals.all.merge(*spent);
+            totals.by_model.insert(model.map(str::to_string), *spent);
+        }
+        totals
+    }
+
+    /// A model name is the server's, so a row that kept an escape in it would hand a terminal a
+    /// command, and one that kept a name of any length would push the figures off the screen.
+    #[test]
+    fn a_shown_model_name_is_cleaned_and_cut() {
+        let long = "m".repeat(LONGEST_MODEL + 20);
+        let totals = by(&[
+            (Some("evil\u{1b}[2Jmodel\u{7}"), spent(1, 1, 10)),
+            (Some(long.as_str()), spent(1, 1, 5)),
+        ]);
+
+        let rows = totals.by_shown_model();
+
+        assert_eq!(rows.len(), 2);
+        let first = rows[0].0.as_deref().expect("a named row");
+        assert!(
+            !first.contains('\u{1b}') && !first.contains('\u{7}'),
+            "{first:?}"
+        );
+        assert!(first.contains("model"), "{first:?}");
+        let second = rows[1].0.as_deref().expect("a named row");
+        assert!(second.chars().count() <= LONGEST_MODEL, "{second:?}");
+    }
+
+    /// Two names that differ only in what cleaning removes read alike, and two rows that read
+    /// alike would split one model's spend in two.
+    #[test]
+    fn names_that_read_alike_once_cleaned_are_one_row() {
+        let totals = by(&[
+            (Some("model"), spent(1, 2, 10)),
+            (Some("mo\u{200B}del"), spent(2, 3, 20)),
+        ]);
+
+        let rows = totals.by_shown_model();
+
+        assert_eq!(rows, vec![(Some("model".to_string()), spent(3, 5, 30))]);
+    }
+
+    /// A name with nothing left after cleaning would head a row with a blank label beside the row
+    /// for no name, so it is that row.
+    #[test]
+    fn an_empty_name_and_one_with_nothing_left_after_cleaning_are_the_row_for_no_name() {
+        let totals = by(&[
+            (None, spent(1, 1, 1)),
+            (Some(""), spent(1, 2, 2)),
+            (Some("\u{1b}\u{7}"), spent(1, 4, 4)),
+            (Some("m"), spent(1, 1, 100)),
+        ]);
+
+        let rows = totals.by_shown_model();
+
+        assert_eq!(
+            rows,
+            vec![
+                (Some("m".to_string()), spent(1, 1, 100)),
+                (None, spent(3, 7, 7)),
+            ]
+        );
+    }
+
+    /// The model that spent most comes first; sessions settle a tie in tokens, and the name a tie in
+    /// both, with the row for no name after the named ones.
+    #[test]
+    fn rows_are_ordered_by_tokens_then_sessions_then_name() {
+        let totals = by(&[
+            (Some("b"), spent(1, 1, 50)),
+            (Some("a"), spent(1, 1, 50)),
+            (None, spent(1, 1, 50)),
+            (Some("c"), spent(2, 1, 50)),
+            (Some("d"), spent(1, 1, 500)),
+            (Some("e"), spent(9, 9, 5)),
+        ]);
+
+        let names: Vec<Option<String>> = totals
+            .by_shown_model()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+
+        let some = |name: &str| Some(name.to_string());
+        assert_eq!(
+            names,
+            vec![some("d"), some("c"), some("a"), some("b"), None, some("e")]
+        );
     }
 }
