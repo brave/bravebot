@@ -314,6 +314,11 @@ shows `[!]` while one of its approvals is open. At the box there is no marker. A
 left with an empty one rather than this session's name. An incognito session leaves the title alone,
 and so does setting [`terminalTitle`](../customize/configuration.md#terminaltitle) to `false`.
 
+The desktop app titles its window the same way, as `Bravebot · dependency audit`, after the session
+on screen, with `✦` in front while a turn runs and `[!]` while a question or an approval waits. The
+title changes when you switch to another session in the sidebar. `terminalTitle` does not turn it
+off.
+
 ## Noting something on a session
 
 ```
