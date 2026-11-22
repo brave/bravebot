@@ -81,6 +81,10 @@ mutation: sextet_of names a value of sixty-four or more for a base64 character
 file: crates/core/src/credentials.rs
 replace: Some(63) => Some(64)
 
+mutation: code_end reads past the end of the bytes for an offset at their end
+file: crates/core/src/colour_codes.rs
+replace: let too_short = start > bytes.len() || bytes.len() - start < 2; => let too_short = false;
+
 mutation: taint takes the first input's confidentiality, so a private second input comes out public
 file: crates/core/src/spec.rs
 replace: confidentiality: join(a.confidentiality, b.confidentiality), => confidentiality: a.confidentiality,
