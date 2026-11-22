@@ -1257,13 +1257,13 @@ fn carried(
     let approved = t!(mcp_approved).to_string();
     let unapproved = t!(mcp_unapproved).to_string();
     let state = approved.chars().count().max(unapproved.chars().count());
-    // The column is as wide as the longest alias a session can reach. A plugin's servers file may
-    // hold an entry with an alias of thousands of characters, and an alias longer than a session
-    // takes is drawn as it is, so it does not widen the column or the indent of every other line.
-    let reachable = |alias: &str| alias.len() <= mcp::MAX_ALIAS;
+    // The column is as wide as the longest alias a session can reach, as the agent decides that
+    // (`plugin_servers::is_reachable`). A plugin's servers file may hold an entry whose alias a
+    // session cannot reach, such as one of thousands of characters, and that alias is drawn as it
+    // is, so it does not widen the column or the indent of every other line.
     let width = listed
         .iter()
-        .filter(|(server, _)| reachable(&server.alias))
+        .filter(|(server, _)| plugin_servers::is_reachable(&server.plugin, &server.named))
         .map(|(server, _)| shown(&server.alias).chars().count())
         .max()
         .unwrap_or_default();
@@ -1271,7 +1271,7 @@ fn carried(
     let mut lines = vec![t!(mcp_list_plugins).to_string()];
     let mut unusable = 0usize;
     for (server, held) in &listed {
-        let row = match reachable(&server.alias) {
+        let row = match plugin_servers::is_reachable(&server.plugin, &server.named) {
             true => pad(&shown(&server.alias), width),
             false => shown(&server.alias),
         };
@@ -5918,6 +5918,49 @@ mod tests {
         assert!(!below.contains(&t!(mcp_plugin_starts)), "{below:?}");
     }
 
+    /// `get` for a server of a plugin whose directory no longer holds what was installed succeeds,
+    /// draws the declaration and the approval it has, says the plugin's files no longer match, and
+    /// does not say a session starts it or asks about it, since a changed plugin starts nothing.
+    ///
+    /// Rejects a `get` that leaves out the note for a changed directory, which shows a server no
+    /// session starts as one that is ready, one that fails for it, and one that says a session
+    /// starts the server or asks about it.
+    #[test]
+    fn get_for_a_plugin_whose_files_changed_draws_the_server_and_says_its_files_changed() {
+        let directory = scratch("cli-mcp-get-plugin-changed");
+        plugin(&directory, "demo", WEATHER);
+        say_yes_to(&directory, "demo_weather", "demo", "weather");
+        let digest = plugin_digest(&directory, "demo_weather");
+        std::fs::write(
+            bravebot_agent::plugins::installed_dir(&directory, "demo").join("extra.txt"),
+            "added after the install",
+        )
+        .expect("change the tree");
+
+        let (outcome, said) = typing(&directory, &["get", "demo_weather"], "");
+
+        assert!(outcome.is_ok(), "{outcome:?}: {said}");
+        assert!(
+            said.contains(&t!(servers_carried_by, plugin = "demo").to_string()),
+            "{said}"
+        );
+        assert!(said.contains("http://127.0.0.1:1/mcp"), "{said}");
+        assert!(said.contains(&digest.to_string()), "{said}");
+        assert!(
+            said.lines().any(|line| line.trim() == t!(mcp_approved)),
+            "{said}"
+        );
+        let changed = t!(
+            servers_plugin_changed,
+            alias = "demo_weather",
+            plugin = "demo"
+        )
+        .to_string();
+        assert!(said.lines().any(|line| line.trim() == changed), "{said}");
+        assert!(!said.contains(&t!(mcp_plugin_starts).to_string()), "{said}");
+        assert!(!said.contains(&t!(mcp_plugin_asks).to_string()), "{said}");
+    }
+
     /// A joined alias over the length an alias may have is listed with the message that says it is
     /// too long, and makes `list` fail, as an unusable declaration does. `get` fails the same way.
     ///
@@ -6237,6 +6280,67 @@ mod tests {
                 text.lines().filter(|line| *line == carried_by).count(),
                 3,
                 "{which}: every line under a row is indented to that width"
+            );
+        }
+    }
+
+    /// A plugin's servers file may hold an entry whose alias is short and is still not one a session
+    /// reaches, because it holds a character an alias lacks. That entry is drawn as it is, written
+    /// out, and does not widen the alias column or the indent under the other rows, which are padded
+    /// to the longest alias a session can reach.
+    ///
+    /// Rejects a column that takes every alias no longer than the limit for one a session reaches,
+    /// which pads each row by the written-out form of an alias holding a control character.
+    #[test]
+    fn a_short_plugin_alias_no_session_reaches_does_not_widen_the_rows_of_the_others() {
+        let directory = scratch("cli-mcp-plugin-short-odd-alias");
+        let entry = r#"{"transport":"http","url":"http://127.0.0.1:1/mcp"}"#;
+        plugin(
+            &directory,
+            "demo",
+            &format!(
+                r#"{{"servers":{{"ok":{entry},"weather":{entry},"x\u001b[2J\nsecond":{entry}}}}}"#
+            ),
+        );
+        let joined = "demo_x\u{1b}[2J\nsecond";
+        assert!(joined.len() <= mcp::MAX_ALIAS, "the alias is short");
+        assert!(!mcp::is_alias(joined), "and no session reaches it");
+        let odd = shown(joined);
+        let widest = "demo_weather".len();
+        assert!(
+            odd.chars().count() > widest,
+            "written out it is wider than the others"
+        );
+
+        let ((outcome, listed), (examined, failed)) = listed_and_examined(&directory);
+
+        let (ending, _) = outcome.expect_err("an entry whose alias is not one fails list");
+        assert_eq!(ending, Ending::Configuration);
+        assert!(failed, "doctor fails where list does");
+        let own_row = format!(
+            "  {odd}  {}",
+            t!(mcp_cannot_be_used, problem = problem(&Problem::Alias))
+        );
+        let padded = format!("  {}  http ", pad("demo_ok", widest));
+        let carried_by = format!(
+            "{}{}",
+            " ".repeat(2 + widest + 2),
+            t!(servers_carried_by, plugin = "demo")
+        );
+        let examined = examined.join("\n");
+        for (which, text) in [("list", &listed), ("doctor", &examined)] {
+            assert!(
+                text.lines().any(|line| line == own_row),
+                "{which}: the alias is drawn as it is, with no padding: {text}"
+            );
+            assert!(
+                text.lines().any(|line| line.starts_with(&padded)),
+                "{which}: a usable server is padded to the longest alias a session reaches: {text}"
+            );
+            assert_eq!(
+                text.lines().filter(|line| *line == carried_by).count(),
+                3,
+                "{which}: every line under a row is indented to that width: {text}"
             );
         }
     }

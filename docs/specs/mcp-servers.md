@@ -1762,6 +1762,7 @@ network that confinement grants each server are listed at the end of the report
 `verified-by: bravebot_agent::servers::plugin_tests::a_held_server_printed_with_debug_leaves_out_the_bearer_token_its_plan_holds`
 `verified-by: bravebot_agent::servers::plugin_tests::a_session_and_a_listing_agree_on_the_states_that_keep_a_plugins_server_from_starting_here`
 `verified-by: bravebot_cli::mcp::a_plugin_alias_no_session_reaches_does_not_widen_the_rows_of_the_others`
+`verified-by: bravebot_cli::mcp::a_short_plugin_alias_no_session_reaches_does_not_widen_the_rows_of_the_others`
 `verified-by: bravebot_cli::mcp::a_plugins_server_no_session_here_starts_says_why_and_fails_nothing`
 `verified-by: bravebot_cli::mcp::list_get_and_examined_ask_a_present_person_nothing_and_leave_the_server_unapproved`
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
@@ -2832,6 +2833,7 @@ decide what runs under that name.
 `verified-by: bravebot_cli::mcp::a_plugin_server_is_approved_only_after_a_yes_to_that_server_is_recorded`
 `verified-by: bravebot_cli::mcp::a_plugin_turned_off_is_named_once_and_its_servers_are_not_listed`
 `verified-by: bravebot_cli::mcp::a_plugin_whose_files_changed_says_so_under_its_server_and_fails_nothing`
+`verified-by: bravebot_cli::mcp::get_for_a_plugin_whose_files_changed_draws_the_server_and_says_its_files_changed`
 `verified-by: bravebot_cli::mcp::a_joined_alias_that_is_too_long_is_listed_as_such_and_fails_list_and_get`
 `verified-by: bravebot_cli::mcp::a_declaration_under_the_same_joined_alias_is_the_only_live_row`
 `verified-by: bravebot_tui::mcp_command::reconnecting_a_plugins_server_without_a_person_or_with_a_recorded_project_starts_it_unasked_never`
