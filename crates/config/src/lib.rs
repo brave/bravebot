@@ -36,6 +36,7 @@ pub mod git_identities;
 pub mod hooks;
 pub mod hooks_approved;
 pub mod install;
+pub mod key_file;
 pub mod keys;
 pub mod limit;
 pub mod lsp;
@@ -54,7 +55,6 @@ mod settings;
 mod testutil;
 pub mod time;
 pub mod usage_ping;
-pub mod web_search_key;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
 pub use named_reach::{
@@ -1358,7 +1358,7 @@ pub struct Config {
     /// sends, if the settings in force name one.
     ///
     /// A path and not a secret. Nothing in this crate opens the file when the configuration is
-    /// built: [`web_search_key::read`] does, where the tool is used.
+    /// built: [`key_file::read`] does, where the tool is used.
     pub web_search_key_file: Option<std::path::PathBuf>,
     /// Where the `web_search` tool sends its requests in place of [`WEB_SEARCH_BASE`].
     ///
@@ -1865,7 +1865,7 @@ impl Config {
     pub fn offers_web_search(&self) -> bool {
         self.web_search_key_file
             .as_deref()
-            .is_some_and(web_search_key::offered)
+            .is_some_and(key_file::offered)
     }
 
     /// The same configuration with the retry count and window its requests to Brave's endpoint are

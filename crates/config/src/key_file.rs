@@ -1,8 +1,15 @@
-//! The key the `web_search` tool sends to the Brave Search API.
+//! A key held in a file a person named, read in one place.
 //!
-//! The key is a file the person names in `webSearch.keyFile`. The file holds the key as plain text
-//! and nothing else, and the whole file, trimmed, is the key. Where the key goes is not stored in
-//! the file or in a setting: the tool sends it to `api.search.brave.com` in one request header.
+//! Every caller that takes a credential from such a file reads it here, so what counts as a key is
+//! stated once. The `web_search` tool reads the file `webSearch.keyFile` names, and the key goes to
+//! `api.search.brave.com` in one request header.
+//!
+//! The file holds the key as plain text and nothing else, and the whole file, trimmed, is the key.
+//! It is refused when it is not a regular file, is over 4,096 bytes, is not UTF-8, is empty after
+//! trimming, or holds whitespace, a control character or a character outside ASCII, since the key
+//! is sent as an HTTP header value. The bytes read are overwritten before [`read`] returns, whether
+//! or not the file was accepted. Where the key goes is the caller's: nothing in the file or in this
+//! module names a host.
 //!
 //! No error here names the path or holds any of the file's content, so a report of one cannot carry
 //! the key.
@@ -14,7 +21,7 @@ use std::path::Path;
 /// Larger than a file holding one key has any reason to be, so it is not read.
 const MAX_BYTES: u64 = 4096;
 
-/// Why a file was not used as the key.
+/// Why a file was not used as a key.
 ///
 /// No variant holds the path or any text from the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

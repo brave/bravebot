@@ -7,7 +7,7 @@ governs:
   - crates/agent/src/tools/offered.rs
   - crates/agent/src/tools/web_search.rs
   - crates/agent/src/web_search.rs
-  - crates/config/src/web_search_key.rs
+  - crates/config/src/key_file.rs
   - crates/core/src/capability.rs
   - crates/core/src/delegate.rs
   - crates/core/src/permissions.rs
@@ -144,7 +144,7 @@ asked, and the planner's sentence names the setting and not the path or what the
 `verified-by: bravebot_agent::web_search::the_tool_is_offered_only_where_a_key_file_is_configured`
 `verified-by: bravebot_agent::web_search::an_unusable_key_file_is_reported_before_a_question_without_its_path_or_content`
 `verified-by: bravebot_config::lib::web_search_is_offered_only_for_a_key_file_that_exists`
-`verified-by: bravebot_config::web_search_key::offered_looks_at_the_file_and_not_at_what_it_holds`
+`verified-by: bravebot_config::key_file::offered_looks_at_the_file_and_not_at_what_it_holds`
 
 <a id="WEBSEARCH-5"></a>
 ### WEBSEARCH-5: arguments are checked against what the vendor documents before anything is sent
@@ -218,12 +218,12 @@ a key held there is handed to each of them, while a file is read by this program
 `verified-by: bravebot_config::settings::a_web_search_key_file_must_be_an_absolute_path`
 `verified-by: bravebot_config::lib::the_web_search_setting_reaches_the_configuration`
 `verified-by: bravebot_config::lib::a_search_key_is_held_exactly_when_web_search_is_offered`
-`verified-by: bravebot_config::web_search_key::a_key_file_is_read_and_trimmed`
-`verified-by: bravebot_config::web_search_key::a_blank_file_is_empty`
-`verified-by: bravebot_config::web_search_key::a_file_over_the_bound_is_too_large`
-`verified-by: bravebot_config::web_search_key::a_text_that_cannot_be_a_header_value_is_not_a_key`
-`verified-by: bravebot_config::web_search_key::a_file_that_is_not_text_is_unreadable`
-`verified-by: bravebot_config::web_search_key::a_missing_file_and_a_directory_are_unreadable_and_not_offered`
+`verified-by: bravebot_config::key_file::a_key_file_is_read_and_trimmed`
+`verified-by: bravebot_config::key_file::a_blank_file_is_empty`
+`verified-by: bravebot_config::key_file::a_file_over_the_bound_is_too_large`
+`verified-by: bravebot_config::key_file::a_text_that_cannot_be_a_header_value_is_not_a_key`
+`verified-by: bravebot_config::key_file::a_file_that_is_not_text_is_unreadable`
+`verified-by: bravebot_config::key_file::a_missing_file_and_a_directory_are_unreadable_and_not_offered`
 `verified-by: bravebot_cli::doctor::the_web_search_key_is_reported_by_its_setting_and_never_by_its_value`
 `verified-by: bravebot_agent::web_search::a_search_returns_a_reference_sends_the_key_in_one_header_and_asks_about_the_query`
 

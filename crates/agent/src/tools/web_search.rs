@@ -78,7 +78,7 @@ pub(super) fn web_search<S: Sink, C: Confirmer>(
     let Some(path) = tools.chat.config.web_search_key_file.clone() else {
         return Produced::problem(NO_KEY);
     };
-    let Ok(key) = bravebot_config::web_search_key::read(&path) else {
+    let Ok(key) = bravebot_config::key_file::read(&path) else {
         return Produced::problem(NO_KEY);
     };
 
