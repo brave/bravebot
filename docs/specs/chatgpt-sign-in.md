@@ -1375,7 +1375,8 @@ change nothing, in the notice every front end gets for a skill. The info panel n
 `/status` names it and says which level was chosen where that is another, in the words for a recorded
 level or for one chosen with `/effort session`. The info panel draws no `this session only` row under
 a level sent that is not the one chosen with `/effort session`. The sentences are in the message
-catalog, in English and in French.
+catalog, in English and in French. The desktop model picker, on a model of the account that reads a
+level, names the level the conversation is sent and the level chosen, where they differ.
 
 Nothing else a reply, a model or a settings file says is added to a request to this host: a gateway's
 options are carried into its requests, and this service takes none. The sign-in stores no identifier of the
@@ -1473,6 +1474,9 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_agent::chatgpt_effort_in_french::the_sentences_about_a_level_a_chatgpt_session_keeps_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
 `verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
+`verified-by: bravebot_ui_bridge::account_session_tests::effort_get_names_the_level_an_open_session_began_with_whatever_is_chosen_after`
+`verified-by: bravebot_ui_bridge::account_session_tests::effort_get_without_an_open_session_carries_no_starting_level`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/drive-models.mjs opens the real picker on a model of the ChatGPT account and holds that no note is drawn at the level the conversation began with, that choosing another level draws a note naming both, that choosing the first level again removes it, and that a model of another service, a model that takes no level and a report that names no open session draw none; pnpm --dir ui drive:models runs it)`
 
 <a id="CHATGPT-11"></a>
 ### CHATGPT-11: logging out, status and doctor never print the sign-in
