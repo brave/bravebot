@@ -13,7 +13,7 @@ checks is a bug against this directory rather than an entry in it.
 | Read | For |
 |---|---|
 | [best-practices/specs.md](best-practices/specs.md) | prose a clause is allowed to be, and a change agreeing with the specs that govern it |
-| [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, proving it fails first, and a test waiting for the condition it asserts on |
+| [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, proving it fails first, a test waiting for the condition it asserts on, and a flaky-test fix naming the race |
 | [best-practices/verification.md](best-practices/verification.md) | which code gets a Verus contract, and a contract saying what the code is for and being shown to fail |
 | [best-practices/writing.md](best-practices/writing.md) | what a comment is for, and a comment describing the code as it is |
 | [best-practices/dependencies.md](best-practices/dependencies.md) | what a dependency has to be worth across package managers |

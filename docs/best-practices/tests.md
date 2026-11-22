@@ -113,3 +113,29 @@ same instruction.
 
 **Why:** a delay long enough on one machine is too short on a loaded one, so the test fails at a
 rate that depends on the machine and the cause stays in the code.
+
+---
+
+<a id="TS-006"></a>
+
+## A fix for a flaky test names the race
+
+**A change described as fixing a flaky test names the two actions that race and the event, channel
+or lock that now orders them.** A diff that adds or lengthens a sleep, repeats the assertion until
+it passes, or reorders lines until the test passes does not remove the race, and the description
+has no cause to name.
+
+A reviewer compares the description with the diff and checks that the ordering it names is in the
+code. Where the cause is not found, the description says so and cites the `Flaky test: <name>`
+issue ([labelling-issues.md](../development/labelling-issues.md#flaky-tests)). Where the failure
+cannot be shown on the old code, [TS-003](#TS-003) says to report the fix as reasoned only.
+
+```text
+Wrong: Fixes flaky `a_reply_arrives_before_the_deadline` by waiting 200 ms before the assertion.
+
+Right: The assertion ran after the request was accepted and before the reply was written. The
+       test now waits for the reply on the channel the server sends it on.
+```
+
+**Why:** a timing change moves the failure rate on the machine where it was tried. The race stays
+and the same test fails again somewhere else.
