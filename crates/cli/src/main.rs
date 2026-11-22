@@ -29,6 +29,7 @@ mod plain;
 mod progress;
 mod push_identity;
 mod reopen;
+mod resume_flags;
 mod sandbox_check;
 mod schedule;
 mod session_delete;
@@ -151,6 +152,10 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         bravebot_tui::app::background_cannot_carry(flag);
     }
 
+    // What each flag below took, for the line printed when a session is left, which repeats them
+    // so that running it resumes the session under the rules it ran under (SESSION-8).
+    let mut typed = resume_flags::Typed::default();
+
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
     //
@@ -161,6 +166,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // and refusing it would be a rule about privacy's typing rather than about privacy.
     if take_flag(args, INCOGNITO) {
         bravebot_core::incognito::engage();
+        typed.incognito = true;
     }
 
     // Beside the mode above and for the same reason: every loader it turns off is reached while a
@@ -171,12 +177,14 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // to forget it in each.
     if take_flag(args, SAFE) {
         bravebot_core::safe::engage();
+        typed.safe = true;
     }
 
     // Beside the mode above, which it includes, and before the first setting is read: a settings
     // layer read once from a checkout cannot be unread. The bypass flag is refused here and not
     // after the arguments are parsed, so that nothing else the line says is acted on first.
     let locked = take_flag(args, "--locked");
+    typed.locked = locked;
     if locked {
         bravebot_core::safe::engage();
         bravebot_config::lock();
@@ -196,6 +204,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // there is a case for it, not before.
     if take_flag(args, VET) {
         bravebot_core::vetting::ask_for_it();
+        typed.vet = true;
     }
 
     // Taken out before anything dispatches on the first argument, because this one belongs to every
@@ -217,6 +226,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     } else {
         SKIP_PERMISSIONS
     };
+    typed.bypass = skip_permissions.then_some(bypass_flag);
     if locked && skip_permissions {
         return Err(stopped_before_the_turn(
             wants_json(args),
@@ -239,6 +249,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // The auto mode is refused beside either of the others for the same reason: each answers a
     // different set of questions, and a line that gave two does not say which its author meant.
     let auto = take_flag(args, AUTO);
+    typed.auto = auto;
     if auto && skip_permissions {
         return Err(stopped_before_the_turn(
             wants_json(args),
@@ -270,7 +281,14 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?
     {
         None => {}
-        Some(path) if path.is_file() => bravebot_config::name_a_settings_file(path),
+        Some(path) if path.is_file() => {
+            typed.settings = Some(path.clone());
+            // Where a relative path was read from, for the line a session that moved prints. The
+            // process's own directory, which `/cd` does not change and which may be another than the
+            // session's where a link moved the process after this ran.
+            typed.read_in = std::env::current_dir().ok();
+            bravebot_config::name_a_settings_file(path);
+        }
         // Refused rather than ignored, and for the audience CLI-11 refuses a directory for: a run
         // told to configure itself from a file is a run whose configuration is the file, so falling
         // back to whatever was found would be the wrong configuration used in silence. A mistyped
@@ -287,10 +305,10 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // After the settings file is registered, which the settings it reads include, and before a
     // session is assembled: a stage started under one answer and the next under another would
     // make the network a property of the line rather than of the session.
-    bravebot_config::settle_run_network(
-        take_run_network(args)
-            .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?,
-    );
+    let run_network = take_run_network(args)
+        .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?;
+    typed.run_network = run_network;
+    bravebot_config::settle_run_network(run_network);
 
     // Settled with the network and for the same reason: the lists a stage is held to are a property
     // of the session, and a line started under one answer and the next under another would make
@@ -298,6 +316,13 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // what their settings say.
     let sandbox_lists = take_sandbox_filesystem(args)
         .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?;
+    let paths_of = |entries: &[bravebot_sandbox::rules::Entry]| -> Vec<String> {
+        entries.iter().map(|entry| entry.path.clone()).collect()
+    };
+    typed.allow_read = paths_of(&sandbox_lists.allow_read);
+    typed.deny_read = paths_of(&sandbox_lists.deny_read);
+    typed.allow_write = paths_of(&sandbox_lists.allow_write);
+    typed.deny_write = paths_of(&sandbox_lists.deny_write);
     // Counted before the settings are layered, which decides whether the file `--settings` named
     // may grant where the sandbox cannot hold it back from a directory the run may write.
     crate::workspace::count_written_roots(
@@ -327,6 +352,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // into, and before the first thing that could fail in a way worth recording.
     let level = take_log_level(args)
         .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?;
+    typed.log_level = level;
     bravebot_diag::configure(
         level.unwrap_or(bravebot_diag::Level::Error),
         bravebot_agent::home::writable(),
@@ -343,6 +369,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // refuses (CLI-20). The mode is resolved further down, once the settings it reads are in place.
     let sandbox_flag = take_sandbox(args)
         .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?;
+    typed.sandbox = sandbox_flag;
 
     // Taken out here, like the settings file, because a session, a session in lines and a one-shot
     // run all use the name the same way. It is matched later, by whichever of them starts, because
@@ -371,6 +398,8 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // one-shot run all carry the words the same way (CLI-19).
     let prompts = take_system_prompts(args)
         .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?;
+    typed.system_prompt = prompts.replacing.clone();
+    typed.append_system_prompt = prompts.appending.clone();
     if let Some(flag) = flag_named(&prompts)
         && let Some(refused) = without_a_prompt_to_give(flag, args.first().map(String::as_str))
     {
@@ -453,6 +482,8 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         {
             return Err(stopped_before_the_turn(as_json, Ending::Argument, refused));
         }
+        typed.tools = tool_limit.only.clone();
+        typed.no_shell = tool_limit.no_shell;
         bravebot_core::tool_set::settle(tool_limit);
     }
 
@@ -484,6 +515,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
             .to_string(),
         ));
     }
+    resume_flags::record(typed);
     Ok(Settled {
         as_json,
         skip_permissions,
@@ -2675,20 +2707,14 @@ fn interactive(
         // session is worth resuming far more often than anybody thinks to write its name down
         // beforehand, and the picker is no help to someone who has already closed the window.
         Ok(bravebot_tui::app::Ended::Left(Some(left))) => {
-            println!("{}", resume_hint(&left, workspace.root()));
+            say_the_way_back_on(&mut std::io::stdout().lock(), &left, workspace.root());
             ExitCode::SUCCESS
         }
         Ok(bravebot_tui::app::Ended::Left(None)) => ExitCode::SUCCESS,
         // After the terminal is handed back, so what it says survives on the screen. The process
         // that starts the background session is this one, run by the person (BG-2).
         Ok(bravebot_tui::app::Ended::Background { left, mode }) => {
-            match background::hand_over(&left, mode) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(code) => {
-                    eprintln!("{}", resume_hint(&left, workspace.root()));
-                    code
-                }
-            }
+            hand_over_to_the_background(&left, mode, workspace.root())
         }
         // Printed after the terminal is handed back, like the hint above, with the argument status:
         // the session never took a turn, and a one-shot run exits with the same status for the
@@ -2731,15 +2757,101 @@ fn end_the_session(
 ///
 /// Said only when the two differ. Telling somebody the directory they are already standing in
 /// reads as though something had happened to it.
-fn resume_hint(left: &Resumable, started_in: &Path) -> String {
-    let heading = match left.directory == started_in {
-        true => t!(cli_resume_heading).to_string(),
-        false => t!(
-            cli_resume_moved,
-            directory = progress::printable_path(&left.directory)
+///
+/// The flags the session was started with follow the id, because a record keeps none of them and a
+/// resume without one runs under what the settings and defaults give, asking again where the bypass
+/// flag had stopped the questions (SESSION-8). The id is the session's own, so `-i`, a prompt,
+/// `--resume <old id>`, `--fork` and `--from-pr` are not repeated.
+///
+/// Where the session moved the line is run from another directory, so each relative value of
+/// `--settings` and of the four `--sandbox-*` path flags is written as the absolute path it was read
+/// as when the session started, which `started_in` is for the sandbox paths. A sandbox entry that
+/// cannot be written out, because a name of that directory holds `*` or `?` and no absolute spelling
+/// means the same place, is left off the line and named in a note after it, one for each entry
+/// (SESSION-8).
+fn resume_hint(left: &Resumable, started_in: &Path, flags: &resume_flags::Typed) -> String {
+    let (heading, suffix, notes) = match left.directory == started_in {
+        true => (
+            t!(cli_resume_heading).to_string(),
+            flags.suffix(),
+            Vec::new(),
         ),
+        false => {
+            let moved = flags.with_paths_made_absolute(started_in);
+            (
+                t!(
+                    cli_resume_moved,
+                    directory = progress::printable_path(&left.directory)
+                ),
+                moved.flags.suffix(),
+                moved.notes(),
+            )
+        }
     };
-    format!("{heading}\nbravebot --resume {}", left.id)
+    let mut hint = format!("{heading}\nbravebot --resume {}{suffix}", left.id);
+    for note in notes {
+        hint.push('\n');
+        hint.push_str(&note);
+    }
+    hint
+}
+
+/// Say how to resume `left` to `out`, the stream the person reads the result on.
+fn say_the_way_back(
+    left: &Resumable,
+    started_in: &Path,
+    flags: &resume_flags::Typed,
+    out: &mut impl std::io::Write,
+) {
+    // A stream the person closed has nobody to read the line, as with `println!` ending the
+    // program, which this does not do.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a closed stream has no reader to tell"
+    )]
+    let _ = writeln!(out, "{}", resume_hint(left, started_in, flags));
+}
+
+/// Say how to resume `left` to `out` with the flags this process was started with.
+fn say_the_way_back_on(out: &mut impl std::io::Write, left: &Resumable, started_in: &Path) {
+    say_the_way_back(left, started_in, &resume_flags::typed(), out);
+}
+
+/// Hand `left` to a background process, saying how to resume it on stderr where that fails.
+///
+/// One call into [`hand_over_or_say_the_way_back`] and nothing else, so the stream a failure is
+/// said on and the hand-over are the only things this chooses.
+fn hand_over_to_the_background(
+    left: &Resumable,
+    mode: bravebot_session::jobs::Mode,
+    started_in: &Path,
+) -> ExitCode {
+    hand_over_or_say_the_way_back(
+        left,
+        mode,
+        started_in,
+        background::hand_over,
+        &mut std::io::stderr().lock(),
+    )
+}
+
+/// Hand `left` to a background process, and where that fails say how to resume it to `beside`,
+/// the stream a failure is said on, with the flags this process was started with and the status the
+/// hand-over failed with.
+fn hand_over_or_say_the_way_back(
+    left: &Resumable,
+    mode: bravebot_session::jobs::Mode,
+    started_in: &Path,
+    hand_over: impl FnOnce(&Resumable, bravebot_session::jobs::Mode) -> Result<(), ExitCode>,
+    beside: &mut impl std::io::Write,
+) -> ExitCode {
+    match hand_over(left, mode) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => {
+            say_the_way_back_on(beside, left, started_in);
+            code
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2841,7 +2953,7 @@ mod tests {
             id: "abc".to_string(),
             directory: PathBuf::from("/work"),
         };
-        let hint = resume_hint(&left, Path::new("/work"));
+        let hint = resume_hint(&left, Path::new("/work"), &resume_flags::Typed::default());
 
         assert!(hint.contains("bravebot --resume abc"), "{hint}");
         assert!(
@@ -2859,12 +2971,260 @@ mod tests {
             id: "abc".to_string(),
             directory: PathBuf::from("/other"),
         };
-        let hint = resume_hint(&left, Path::new("/work"));
+        let hint = resume_hint(&left, Path::new("/work"), &resume_flags::Typed::default());
 
         assert!(hint.contains("bravebot --resume abc"), "{hint}");
         assert!(
             hint.contains("/other"),
             "the line does not say where the session went: {hint}"
+        );
+    }
+
+    /// SESSION-8: the line printed on the way out repeats the flags the session was started with,
+    /// after the id and on the line that holds it, whether the session stayed where it started or
+    /// moved. A record keeps none of them, so a line without them resumes a session that asks again.
+    /// The regressions it rejects are a hint that drops the flags, and a moved-directory form that
+    /// builds its line apart from the other and drops them.
+    #[test]
+    fn the_line_names_the_flags_the_session_was_started_with_where_it_stayed_and_where_it_moved() {
+        let flags = resume_flags::Typed {
+            bypass: Some(crate::flags::SKIP_PERMISSIONS),
+            sandbox: Some(bravebot_sandbox::SandboxMode::Strict),
+            ..resume_flags::Typed::default()
+        };
+        let line = "bravebot --resume abc --dangerously-skip-permissions --sandbox strict";
+        for directory in ["/work", "/other"] {
+            let left = Resumable {
+                id: "abc".to_string(),
+                directory: PathBuf::from(directory),
+            };
+            let hint = resume_hint(&left, Path::new("/work"), &flags);
+
+            assert_eq!(hint.lines().last(), Some(line), "{directory}: {hint}");
+            assert_eq!(hint.lines().count(), 2, "{directory}: {hint}");
+        }
+    }
+
+    /// SESSION-8: a session that moved prints its line for the directory it moved to, so a relative
+    /// value of `--settings` or of a `--sandbox-*` path flag is the absolute path it was read as when
+    /// the session started, and the line of a session that stayed carries each value as typed. The
+    /// heading and the flags come out together. The regressions it rejects are a moved line that
+    /// repeats a relative value, which names another file or confines another place from the new
+    /// directory, a rewrite applied where the session stayed, and a rewrite that joins an absolute
+    /// or home value to a directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_session_names_relative_paths_as_they_were_read_and_one_that_stayed_as_typed() {
+        let flags = resume_flags::Typed {
+            deny_write: vec!["out".to_string(), "/abs".to_string(), "~/h".to_string()],
+            settings: Some(PathBuf::from("x.json")),
+            read_in: Some(PathBuf::from("/process")),
+            safe: true,
+            ..resume_flags::Typed::default()
+        };
+        let moved = Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/other"),
+        };
+        let stayed = Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/work"),
+        };
+
+        let hint = resume_hint(&moved, Path::new("/work"), &flags);
+        assert!(hint.contains("/other"), "{hint}");
+        assert_eq!(
+            hint.lines().last(),
+            Some(
+                "bravebot --resume abc --sandbox-deny-write /work/out --sandbox-deny-write /abs \
+                 --sandbox-deny-write '~/h' --settings /process/x.json --safe"
+            ),
+            "{hint}"
+        );
+
+        let hint = resume_hint(&stayed, Path::new("/work"), &flags);
+        assert_eq!(
+            hint.lines().last(),
+            Some(
+                "bravebot --resume abc --sandbox-deny-write out --sandbox-deny-write /abs \
+                 --sandbox-deny-write '~/h' --settings x.json --safe"
+            ),
+            "{hint}"
+        );
+    }
+
+    /// SESSION-8: the person sees the line on the stream the interface left them looking at, with
+    /// the flags, and a hand-over to the background that fails says the same line on the stream a
+    /// failure is said on. One that succeeds says nothing, since the session is running. The
+    /// regressions it rejects are a line that is written without the flags, a failed hand-over that
+    /// prints the line without the flags, one that prints it when the hand-over worked, and a failed
+    /// hand-over that ends with the success status. A session that moved from a directory with a `?`
+    /// in its name has its relative entry left off and the note after the line at both places: a
+    /// place that printed the line and not the note is the regression.
+    ///
+    /// It calls the two functions the program calls, which take the flags from the one place
+    /// `settle_flags` records them, so recording them here is how a test sets them. Only this test
+    /// records them, since the first record is the one that stays.
+    #[test]
+    fn the_two_places_that_print_the_line_say_it_with_the_flags_the_process_recorded() {
+        use bravebot_session::jobs::Mode;
+        let flags = resume_flags::Typed {
+            bypass: Some(crate::flags::SKIP_PERMISSIONS),
+            deny_write: vec!["/a b".to_string(), "rel".to_string()],
+            ..resume_flags::Typed::default()
+        };
+        resume_flags::record(flags.clone());
+        assert_eq!(resume_flags::typed(), flags, "another test recorded flags");
+        let line = "bravebot --resume abc --dangerously-skip-permissions \
+                    --sandbox-deny-write '/a b' --sandbox-deny-write rel";
+        let left = Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/work"),
+        };
+
+        let mut said = Vec::new();
+        say_the_way_back_on(&mut said, &left, Path::new("/work"));
+        let said = String::from_utf8(said).expect("text");
+        assert!(said.ends_with(&format!("{line}\n")), "{said}");
+
+        let mut beside = Vec::new();
+        let code = hand_over_or_say_the_way_back(
+            &left,
+            Mode::Ask,
+            Path::new("/work"),
+            |_, _| Err(ExitCode::FAILURE),
+            &mut beside,
+        );
+        let beside = String::from_utf8(beside).expect("text");
+        assert!(beside.ends_with(&format!("{line}\n")), "{beside}");
+        assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::FAILURE));
+
+        let mut quiet = Vec::new();
+        let code = hand_over_or_say_the_way_back(
+            &left,
+            Mode::Ask,
+            Path::new("/work"),
+            |_, _| Ok(()),
+            &mut quiet,
+        );
+        assert!(quiet.is_empty(), "{quiet:?}");
+        assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
+
+        // Moved from a directory with a `?` in a name: `rel` is not carried, and each place says so
+        // on the line after the line.
+        let moved = Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/other"),
+        };
+        let wildcard = Path::new("/work/a?b");
+        let carried = "bravebot --resume abc --dangerously-skip-permissions \
+                       --sandbox-deny-write '/a b'";
+        let note = "Not carried: --sandbox-deny-write rel, because the directory this session started \
+                    in has a * or ? in its name, and no spelling of the entry names the same place \
+                    from another directory.";
+        let mut said = Vec::new();
+        say_the_way_back_on(&mut said, &moved, wildcard);
+        let said = String::from_utf8(said).expect("text");
+        assert!(said.ends_with(&format!("{carried}\n{note}\n")), "{said}");
+
+        let mut beside = Vec::new();
+        let code = hand_over_or_say_the_way_back(
+            &moved,
+            Mode::Ask,
+            wildcard,
+            |_, _| Err(ExitCode::FAILURE),
+            &mut beside,
+        );
+        assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::FAILURE));
+        let beside = String::from_utf8(beside).expect("text");
+        assert!(
+            beside.ends_with(&format!("{carried}\n{note}\n")),
+            "{beside}"
+        );
+    }
+
+    /// SESSION-8: a session that moved from a directory with a `?` or `*` in a name carries the
+    /// other flags, leaves off each relative `--sandbox-*` entry, and says so on a line after the
+    /// line, naming the flag and the value. The same directory, where the session stayed, prints the
+    /// entry as typed and says nothing more, and a directory with no wildcard carries the entry made
+    /// absolute and says nothing more. The regressions it rejects are a moved line that joins the
+    /// entry to the directory, which a write list refuses and a read list widens, a note where the
+    /// session stayed or where every entry was carried, and a note for an entry that was carried.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_session_from_a_directory_with_a_wildcard_leaves_off_the_entry_and_says_so() {
+        let flags = resume_flags::Typed {
+            deny_write: vec!["out".to_string(), "/abs".to_string()],
+            safe: true,
+            ..resume_flags::Typed::default()
+        };
+        let at = |directory: &str| Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from(directory),
+        };
+        for started_in in ["/work/a?b", "/work/a*", "/work/a?b/sub"] {
+            let hint = resume_hint(&at("/other"), Path::new(started_in), &flags);
+            let lines: Vec<&str> = hint.lines().collect();
+
+            assert_eq!(lines.len(), 3, "{started_in}: {hint}");
+            assert!(lines[0].contains("/other"), "{hint}");
+            assert_eq!(
+                lines[1], "bravebot --resume abc --sandbox-deny-write /abs --safe",
+                "{started_in}: {hint}"
+            );
+            assert_eq!(
+                lines[2],
+                "Not carried: --sandbox-deny-write out, because the directory this session started \
+                 in has a * or ? in its name, and no spelling of the entry names the same place \
+                 from another directory.",
+                "{started_in}: {hint}"
+            );
+            assert!(!hint.contains("a?b/out"), "{hint}");
+
+            // The session that stayed there is read from the directory the entry was typed for.
+            let stayed = resume_hint(&at(started_in), Path::new(started_in), &flags);
+            assert_eq!(
+                stayed.lines().last(),
+                Some(
+                    "bravebot --resume abc --sandbox-deny-write out --sandbox-deny-write /abs --safe"
+                ),
+                "{started_in}: {stayed}"
+            );
+            assert_eq!(stayed.lines().count(), 2, "{started_in}: {stayed}");
+        }
+        let plain = resume_hint(&at("/other"), Path::new("/work/ok"), &flags);
+        assert_eq!(plain.lines().count(), 2, "{plain}");
+        assert_eq!(
+            plain.lines().last(),
+            Some(
+                "bravebot --resume abc --sandbox-deny-write /work/ok/out --sandbox-deny-write /abs --safe"
+            ),
+            "{plain}"
+        );
+    }
+
+    /// SESSION-8: the line is written to the stream it is given, and says the flags it is given.
+    /// A line written to another stream, or without the flags, is not what the person reads.
+    #[test]
+    fn the_line_is_written_to_the_stream_it_is_given_with_the_flags_it_is_given() {
+        let flags = resume_flags::Typed {
+            bypass: Some(crate::flags::SKIP_PERMISSIONS),
+            deny_write: vec!["/a b".to_string()],
+            ..resume_flags::Typed::default()
+        };
+        let left = Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/work"),
+        };
+        let mut said = Vec::new();
+        say_the_way_back(&left, Path::new("/work"), &flags, &mut said);
+        let said = String::from_utf8(said).expect("text");
+
+        assert!(
+            said.ends_with(
+                "bravebot --resume abc --dangerously-skip-permissions --sandbox-deny-write '/a b'\n"
+            ),
+            "{said}"
         );
     }
 
@@ -3410,7 +3770,11 @@ mod tests {
             directory: PathBuf::from("/tmp/x\u{1b}]0;T\u{7}dir"),
         };
 
-        let hint = resume_hint(&left, Path::new("/tmp/elsewhere"));
+        let hint = resume_hint(
+            &left,
+            Path::new("/tmp/elsewhere"),
+            &resume_flags::Typed::default(),
+        );
 
         assert_eq!(
             hint.chars().find(|c| c.is_control() && *c != '\n'),

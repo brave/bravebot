@@ -442,6 +442,11 @@ cli-resume-heading = Reprenez cette session avec :
 # Quand /cd a déplacé la session, le shell où ceci s'affiche n'est pas là où se trouve
 # l'enregistrement, et --resume cherche un identifiant sous le répertoire où il est lancé.
 cli-resume-moved = Cette session s'est déplacée vers { $directory }. Reprenez-la depuis là avec :
+# Après la ligne, une pour chaque entrée --sandbox-* que la ligne ne reprend pas. Une entrée relative
+# se lit depuis le répertoire où la session a commencé, et lorsqu'un nom de ce répertoire contient
+# un * ou un ?, le même chemin écrit en entier lit ce caractère comme un joker, ce qu'aucune écriture
+# ne peut empêcher.
+cli-resume-entry-not-carried = Non reprise : { $flag } { $value }, car le répertoire où cette session a commencé contient un * ou un ? dans son nom, et aucune écriture de l'entrée ne désigne le même endroit depuis un autre répertoire.
 
 
 ## L'état de la configuration et du confinement

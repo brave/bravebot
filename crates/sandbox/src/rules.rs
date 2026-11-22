@@ -818,16 +818,57 @@ fn overridden(rules: &Rules) -> Vec<usize> {
     out
 }
 
-/// The paths one entry names, or why it names none.
-fn one(
-    list: List,
-    entry: &Entry,
-    prelude: Option<Prelude>,
-    home: Option<&Path>,
-    moved: Option<&Path>,
-    base: &Path,
-) -> Result<Vec<PathBuf>, Reason> {
-    let spelled = entry.path.trim();
+/// An entry's spelling read by name alone: the path it spells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryRead {
+    /// The entry as a path: its anchor with each name pushed, `.` dropped and each `..` removing
+    /// the name before it. Nothing is read from the file system, no link is followed and no
+    /// wildcard is expanded, so a `..` after a name that is a link removes the name, and the `*`
+    /// and `?` of a pattern are characters of a name.
+    pub path: PathBuf,
+    /// Whether the spelling names a place of its own, an absolute path or one that starts at the
+    /// home directory, so it is read as the same path from every directory.
+    pub absolute: bool,
+    /// How many components of `path` the anchor holds. A pattern is expanded after them, so a `*`
+    /// in the directory the entry is read from is a character and not a wildcard.
+    anchored: usize,
+    /// Whether the text after the anchor holds `*` or `?`.
+    pattern: bool,
+}
+
+impl EntryRead {
+    /// Whether the spelling held a wildcard that a `..` removed along with the name it was in, so
+    /// that `path` holds none.
+    ///
+    /// An entry is judged as a pattern when its spelling holds a wildcard, whatever the walk leaves.
+    /// A write list refuses it, and a read list expands a pattern with no wildcard left in it, which
+    /// names nothing, so the entry is not read as the plain path `path` is.
+    pub fn lost_its_wildcard(&self) -> bool {
+        self.pattern
+            && !self
+                .path
+                .components()
+                .skip(self.anchored)
+                .any(|part| part.as_os_str().to_string_lossy().contains(['*', '?']))
+    }
+}
+
+/// Read the spelling of an entry as the sandbox reads it, by name alone, or say why it names no
+/// path.
+///
+/// The one reading of what an entry spells, which [`resolve`] judges the path of. The line a
+/// session prints on the way out writes a relative `--sandbox-*` entry as the path this returns, so
+/// what that line says is what the sandbox reads.
+///
+/// The spelling is trimmed. One that starts with a variable is [`Reason::NamesAVariable`]. One
+/// that starts with `~` alone, or with `~/` or `~\`, is read from `home`, which is whatever the
+/// caller names: `None` is [`Reason::NoHome`], and no home directory is looked up here. An absolute
+/// one is read as it is, and any other, a name such as `~user` included, from `base`. A `..` of
+/// a relative entry removes a name the entry holds, and one with no name left to remove climbs out
+/// of `base`; an absolute or home entry has no place to climb from, so a `..` in one is the same
+/// [`Reason::Climbs`].
+pub fn read_entry(spelled: &str, home: Option<&Path>, base: &Path) -> Result<EntryRead, Reason> {
+    let spelled = spelled.trim();
     if starts_with_a_variable(spelled) {
         return Err(Reason::NamesAVariable);
     }
@@ -866,18 +907,56 @@ fn one(
             }
         }
     }
-    let wildcard = rest.contains(['*', '?']);
+    Ok(EntryRead {
+        path,
+        absolute,
+        anchored: anchor.components().count(),
+        pattern: rest.contains(['*', '?']),
+    })
+}
+
+/// Whether `directory` can anchor an absolute spelling of a relative entry, so that the spelling
+/// means what the relative entry meant.
+///
+/// A relative entry is read from `directory`, and `expand` takes the components inside that anchor
+/// literally (its `at < anchored` rule), so a `*` or `?` in a name of `directory` is a character of
+/// that name. The entry written out as an absolute path has no anchor, so the same `*` or `?` is a
+/// wildcard: a write list refuses it ([`Reason::GlobOnAWrite`]) and a read list also matches every
+/// sibling name the wildcard meets. The matcher has no way to write a wildcard character as a plain
+/// one, so no absolute spelling of the entry names the same place, and it means the right thing only
+/// where it is read from `directory`.
+///
+/// False where a name of `directory` holds `*` or `?`. Only a name counts (`Component::Normal`):
+/// the root and a Windows prefix such as `\\?\C:` are not names. A pure function of the path:
+/// nothing is read from the file system.
+pub fn can_anchor_an_absolute_entry(directory: &Path) -> bool {
+    !directory.components().any(
+        |part| matches!(part, Component::Normal(name) if name.to_string_lossy().contains(['*', '?'])),
+    )
+}
+
+/// The paths one entry names, or why it names none.
+fn one(
+    list: List,
+    entry: &Entry,
+    prelude: Option<Prelude>,
+    home: Option<&Path>,
+    moved: Option<&Path>,
+    base: &Path,
+) -> Result<Vec<PathBuf>, Reason> {
+    let read = read_entry(&entry.path, home, base)?;
+    let wildcard = read.pattern;
     if wildcard && list.is_a_write() {
         return Err(Reason::GlobOnAWrite);
     }
     let named = if wildcard {
         // What a pattern names is judged where it leads, as a path written out is.
-        expand(&path, anchor.components().count(), list.is_a_denial())?
+        expand(&read.path, read.anchored, list.is_a_denial())?
             .iter()
             .map(|found| resolved(found))
             .collect()
     } else {
-        vec![resolved(&path)]
+        vec![resolved(&read.path)]
     };
     let mut kept = Vec::new();
     for path in named {
@@ -1402,6 +1481,233 @@ mod tests {
             refusal_of(&resolve(&only(List::DenyRead, "~/x"), None, None, &base)),
             Some(Reason::NoHome)
         );
+    }
+
+    /// SANDBOX-25: the walk of an entry's spelling is one function, [`read_entry`], by name alone, so
+    /// the path an entry is read as can be named without a session. Each value is read from the
+    /// directory `/work` with `/home/me` as the home directory, and the table holds what decides the
+    /// walk: a `..` that removes a name the entry holds, one with no name left to remove (it climbs),
+    /// a `.`, a trailing slash, white space, an absolute entry, the three spellings that start at the
+    /// home directory, a variable, a glob, and a `..` that removes the name holding a wildcard. A
+    /// `..` kept in place instead of removed, an entry that climbs that is accepted, a `~` read
+    /// from the base or an absolute entry read from it are the regressions it rejects.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_is_read_by_name_to_the_absolute_path_it_spells() {
+        let base = Path::new("/work");
+        let home = Path::new("/home/me");
+        // (spelled, the path, whether a `..` removed the only name that held a wildcard)
+        let read = |spelled: &str, home: Option<&Path>| {
+            read_entry(spelled, home, base)
+                .map(|read| (read.path.clone(), read.lost_its_wildcard()))
+        };
+        let at = |path: &str, lost: bool| Ok((PathBuf::from(path), lost));
+        for (spelled, expected) in [
+            ("x.json", at("/work/x.json", false)),
+            ("sub/../x", at("/work/x", false)),
+            ("./x", at("/work/x", false)),
+            ("a/b/../../c", at("/work/c", false)),
+            ("x/", at("/work/x", false)),
+            ("  sub/../x ", at("/work/x", false)),
+            ("a/./b", at("/work/a/b", false)),
+            ("", at("/work", false)),
+            ("g/*/x", at("/work/g/*/x", false)),
+            ("a/*/*/../x", at("/work/a/*/x", false)),
+            ("a/*/../x", at("/work/a/x", true)),
+            ("a/?/../x", at("/work/a/x", true)),
+            ("..", Err(Reason::Climbs)),
+            ("../x", Err(Reason::Climbs)),
+            ("sub/../../x", Err(Reason::Climbs)),
+            ("a/*/../../../x", Err(Reason::Climbs)),
+            ("~user/x", at("/work/~user/x", false)),
+            ("%100/x", at("/work/%100/x", false)),
+            ("/abs/p", at("/abs/p", false)),
+            ("/abs/../p", Err(Reason::Climbs)),
+            ("~", at("/home/me", false)),
+            ("~/notes", at("/home/me/notes", false)),
+            ("~\\notes", at("/home/me/notes", false)),
+            ("~/a/../b", Err(Reason::Climbs)),
+            ("$HOME/x", Err(Reason::NamesAVariable)),
+            ("${HOME}/x", Err(Reason::NamesAVariable)),
+            ("%USERPROFILE%/x", Err(Reason::NamesAVariable)),
+        ] {
+            assert_eq!(read(spelled, Some(home)), expected, "{spelled:?}");
+        }
+        // No home directory is named, and none is looked up: a home entry is refused for it.
+        for spelled in ["~", "~/notes", "~\\notes"] {
+            assert_eq!(read(spelled, None), Err(Reason::NoHome), "{spelled:?}");
+        }
+        assert_eq!(read("x/../y", None), at("/work/y", false));
+        // An absolute entry and one that starts at the home directory are read as the same path from
+        // every directory, and nothing else is.
+        for (spelled, absolute) in [
+            ("x", false),
+            ("sub/../x", false),
+            ("~user/x", false),
+            ("/abs/p", true),
+            ("~", true),
+            ("~/notes", true),
+            ("~\\notes", true),
+        ] {
+            let read = read_entry(spelled, Some(home), base).unwrap();
+            assert_eq!(read.absolute, absolute, "{spelled:?}");
+        }
+    }
+
+    /// The path [`one`] judges is the path [`read_entry`] returns, and the refusal is the one it
+    /// returns, so the sandbox holds no second walk. Each value is put through `resolve` in a list
+    /// that expands nothing it is not told to, and the in-force path is the walk's, resolved. A walk
+    /// in `one` that differed from [`read_entry`] (a `..` that does not remove, an entry that
+    /// climbs and is accepted) is the regression it rejects.
+    #[cfg(unix)]
+    #[test]
+    fn the_sandbox_judges_the_path_the_reading_returns_and_refuses_for_the_reason_it_gives() {
+        let home = fresh("rules-reading-home");
+        let base = fresh("rules-reading-base");
+        for spelled in [
+            "x.json",
+            "sub/../x",
+            "./x",
+            "a/b/../../c",
+            "x/",
+            "  sub/../x ",
+            "..",
+            "../x",
+            "sub/../../x",
+            "~/notes",
+            "~/a/../b",
+            "$HOME/x",
+            "/abs/p",
+            "/abs/../p",
+        ] {
+            let read = read_entry(spelled, Some(&home), &base);
+            let judged = resolve(&only(List::DenyRead, spelled), Some(&home), None, &base);
+            let expected = match &read {
+                Ok(read) => State::InForce(vec![resolved(&read.path)]),
+                Err(reason) => State::Refused(*reason),
+            };
+            assert_eq!(judged.items()[0].state, expected, "{spelled:?}");
+        }
+        // An entry whose `..` removes the only name that held a wildcard is judged as a pattern: a
+        // write list refuses it, and a read list expands a pattern with no wildcard left, which
+        // names nothing, so the entry is in force over no path.
+        let read = read_entry("a/*/../x", Some(&home), &base).unwrap();
+        assert!(read.lost_its_wildcard());
+        for (list, expected) in [
+            (List::AllowRead, State::InForce(Vec::new())),
+            (List::DenyRead, State::InForce(Vec::new())),
+            (List::AllowWrite, State::Refused(Reason::GlobOnAWrite)),
+            (List::DenyWrite, State::Refused(Reason::GlobOnAWrite)),
+        ] {
+            let judged = resolve(&only(list, "a/*/../x"), Some(&home), None, &base);
+            assert_eq!(judged.items()[0].state, expected, "{list:?}");
+        }
+    }
+
+    /// SANDBOX-25: a directory anchors an absolute spelling of a relative entry only where no name in
+    /// it holds `*` or `?`. The table has a plain directory, a wildcard in the last name and in an
+    /// earlier one, each of the two characters alone, the root, a relative path, and characters
+    /// other glob syntaxes use that this matcher reads as plain (`[`, `{`, `%`). A check of `*`
+    /// alone, of `?` alone, of the last name alone, or one that is false for every directory is the
+    /// regression it rejects.
+    #[test]
+    fn a_directory_anchors_an_absolute_entry_only_where_no_name_in_it_holds_a_wildcard() {
+        for (directory, expected) in [
+            ("/work", true),
+            ("/work/ok/sub", true),
+            ("/", true),
+            ("/work/a.b", true),
+            ("/work/[ab]", true),
+            ("/work/{a,b}", true),
+            ("/work/100%", true),
+            ("/work/a?b", false),
+            ("/work/a*", false),
+            ("/work/a?b/sub", false),
+            ("/work/a*/sub", false),
+            ("/work/*", false),
+            ("/work/?", false),
+            ("/?/work", false),
+            ("relative/a*b", false),
+        ] {
+            assert_eq!(
+                can_anchor_an_absolute_entry(Path::new(directory)),
+                expected,
+                "{directory}"
+            );
+        }
+    }
+
+    /// A Windows prefix is not a name: `\\?\C:` holds a `?` and is not a wildcard component, and a
+    /// name after it that holds one is. A path with a prefix cannot be built on another platform.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_prefix_does_not_count_as_a_name_holding_a_wildcard() {
+        for (directory, expected) in [
+            (r"\\?\C:\work", true),
+            (r"\\?\C:\work\ok\sub", true),
+            (r"\\?\UNC\server\share\work", true),
+            (r"\\?\C:\work\a?b", false),
+            (r"\\?\C:\work\a*", false),
+            (r"\\?\UNC\server\share\a*\work", false),
+        ] {
+            assert_eq!(
+                can_anchor_an_absolute_entry(Path::new(directory)),
+                expected,
+                "{directory}"
+            );
+        }
+    }
+
+    /// `can_anchor_an_absolute_entry` says what the sandbox does: for each directory, the entry `x`
+    /// read from it and the absolute entry for the same path read from another directory come to
+    /// the same state in all four lists exactly where the function is true. The directories are real,
+    /// with sibling directories the wildcard of a name meets and a wildcard in a name that is not the
+    /// last, so a read list that matches a sibling and a write list that refuses a pattern are both
+    /// seen. The regression it rejects is a function that is true for a directory whose absolute
+    /// spelling the sandbox reads as another path or refuses, or false for one that it reads the
+    /// same, which would drop an entry that could have been written out.
+    #[cfg(unix)]
+    #[test]
+    fn the_absolute_spelling_of_an_entry_is_read_the_same_exactly_where_the_directory_can_anchor_it()
+     {
+        let top = fresh("rules-anchor-wildcard");
+        let home = fresh("rules-anchor-wildcard-home");
+        assert!(
+            can_anchor_an_absolute_entry(&top),
+            "the scratch holds a wildcard: {top:?}"
+        );
+        for name in ["plain", "a?b", "a*", "a?b/sub", "aXb", "aYY", "aXb/sub"] {
+            fs::create_dir_all(top.join(name).join("x")).unwrap();
+        }
+        let state = |list: List, spelled: &str, base: &Path| -> State {
+            resolve(&only(list, spelled), Some(&home), None, base).items()[0]
+                .state
+                .clone()
+        };
+        for (name, anchors) in [
+            ("plain", true),
+            ("a?b", false),
+            ("a*", false),
+            ("a?b/sub", false),
+        ] {
+            let directory = top.join(name);
+            let absolute = directory.join("x").display().to_string();
+            for list in [
+                List::AllowRead,
+                List::DenyRead,
+                List::AllowWrite,
+                List::DenyWrite,
+            ] {
+                let typed = state(list, "x", &directory);
+                let written_out = state(list, &absolute, &top);
+                assert_eq!(
+                    typed == written_out,
+                    anchors,
+                    "{name} {list:?}: {typed:?} against {written_out:?}"
+                );
+                assert_eq!(can_anchor_an_absolute_entry(&directory), anchors, "{name}");
+            }
+        }
     }
 
     /// SANDBOX-25: an entry that starts with a variable names a directory no program has, since no

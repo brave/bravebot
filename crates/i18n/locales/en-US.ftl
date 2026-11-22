@@ -494,6 +494,10 @@ cli-resume-heading = Resume this session with:
 # When /cd moved the session, the shell this is printed into is not where the record is, and
 # --resume looks an id up under the directory it runs in.
 cli-resume-moved = This session moved to { $directory }. Resume it from there with:
+# After the line, one for each --sandbox-* entry the line does not carry. A relative entry is read from
+# the directory the session started in, and where a name of that directory has a * or ? in it, the same
+# path written out in full reads that character as a wildcard, which no spelling can prevent.
+cli-resume-entry-not-carried = Not carried: { $flag } { $value }, because the directory this session started in has a * or ? in its name, and no spelling of the entry names the same place from another directory.
 
 
 ## Reporting configuration and confinement

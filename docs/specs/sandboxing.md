@@ -3626,6 +3626,15 @@ need a file made in the tree and a refusal that names a file the volume holds ap
 back. A glob in `allowRead` is compared exactly, since an allowance that names more adds reach the
 person did not write.
 
+A relative entry is read from a directory, and a name in that directory is a name and not a
+pattern, whatever characters it holds, so a `*` or `?` in it is a character. The same path written
+out as an absolute entry has no such directory, so the `*` or `?` is a wildcard there: a write list
+refuses it, and a read list meets every sibling name the wildcard meets. A wildcard has no spelling
+as a plain character, so no absolute entry means what the relative one meant when a name of the
+directory holds `*` or `?`. `bravebot_sandbox::rules::can_anchor_an_absolute_entry` says whether a
+directory can anchor an absolute spelling that keeps the entry's meaning: it is false where a name
+of the directory holds either character, and a root or a Windows prefix is not a name.
+
 An entry of `denyRead` or `denyWrite` that names a path that is not on disk keeps the spelling it
 was written in beneath the part that is. A volume that opens a name under every canonically
 equivalent form (APFS) opens a file made there later under either form, so the path of a request and
@@ -3705,6 +3714,11 @@ because the path it names is the one the person was protecting.
 
 `verified-by: bravebot_sandbox::rules::a_name_is_met_by_a_star_and_a_question_mark_and_nothing_looser`
 `verified-by: bravebot_sandbox::rules::an_entry_is_read_from_where_its_spelling_says`
+`verified-by: bravebot_sandbox::rules::an_entry_is_read_by_name_to_the_absolute_path_it_spells`
+`verified-by: bravebot_sandbox::rules::the_sandbox_judges_the_path_the_reading_returns_and_refuses_for_the_reason_it_gives`
+`verified-by: bravebot_sandbox::rules::a_directory_anchors_an_absolute_entry_only_where_no_name_in_it_holds_a_wildcard`
+`verified-by: bravebot_sandbox::rules::a_windows_prefix_does_not_count_as_a_name_holding_a_wildcard`
+`verified-by: bravebot_sandbox::rules::the_absolute_spelling_of_an_entry_is_read_the_same_exactly_where_the_directory_can_anchor_it`
 `verified-by: bravebot_sandbox::rules::an_entry_that_starts_with_a_variable_is_refused_in_every_list`
 `verified-by: bravebot_sandbox::rules::a_link_is_judged_by_where_it_leads`
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
