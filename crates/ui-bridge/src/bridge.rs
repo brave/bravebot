@@ -3757,10 +3757,8 @@ impl Bridge {
     /// The call is matched against the rules the session holds (PERM-12), not the files read
     /// again. Nothing is opened, started, fetched, granted or revoked.
     fn permissions_check(&mut self, request: &Request) -> Result<Value, Failure> {
-        use bravebot_agent::confirm::{shown_path, shown_text};
         use bravebot_agent::granted::Proposed;
-        use bravebot_agent::rule_check::{Call, Decision, Origin};
-        use bravebot_core::permissions::Ruling;
+        use bravebot_agent::rule_check::Call;
         const USAGE: &str = "Name a call as a family (Read, Edit, Bash, WebFetch, WebSearch or Mcp) \
             and its words: a path, a command line, a host or URL, nothing, or server:tool.";
         let handle = request.string("session")?;
@@ -3813,6 +3811,15 @@ impl Bridge {
             &open.project,
         );
         drop(state);
+        Ok(Self::permissions_check_answer(&explained))
+    }
+
+    /// The answer `permissions.check` sends for what [`bravebot_agent::rule_check::explain`]
+    /// found: the deciding rule and its file, raw and as shown, and a checkout's rule not in force.
+    fn permissions_check_answer(explained: &bravebot_agent::rule_check::Explained) -> Value {
+        use bravebot_agent::confirm::{shown_path, shown_text};
+        use bravebot_agent::rule_check::{Decision, Origin};
+        use bravebot_core::permissions::Ruling;
         let mut answer = json!({
             "decision": "none",
             "rule": null,
@@ -3861,7 +3868,7 @@ impl Bridge {
             }),
             None => Value::Null,
         };
-        Ok(answer)
+        answer
     }
 
     /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
