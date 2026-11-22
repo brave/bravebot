@@ -290,6 +290,9 @@ pub const DENIED: &[&str] = &[
     "bug-report.compose",
     // What the desktop window reports about its own page, which a client of the host has none of.
     "window.fault",
+    // The text of the desktop window's own title (PANEL-19), which a client of the host has no
+    // window to show.
+    "window.title",
     // Which of the session-bus names the desktop window's main process holds lead to a socket a
     // stage may write (SANDBOX-30). The directories a session may write are those of this process,
     // and a client of the host has no opener to protect.

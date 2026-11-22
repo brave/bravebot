@@ -521,6 +521,9 @@ const deliver = eventQueue({
 })
 
 function createWindow(): void {
+  // The main window's title follows the page title, which the renderer sets from the session on
+  // screen (`useWindowTitle`). Do not prevent `page-title-updated` here as small-window.ts does,
+  // or the title stops changing.
   window = new BrowserWindow({
     ...(devIcon && process.platform !== 'darwin' ? { icon: devIcon } : {}),
     width: 1280,
@@ -706,6 +709,8 @@ const ALLOWED = new Set([
   'doctor',
   'changelog.read',
   'schedule.command',
+  // The text of the window's own title, for the name and state the window gives (PANEL-19).
+  'window.title',
   'hooks.inspect',
   'effort.get',
   'effort.set',

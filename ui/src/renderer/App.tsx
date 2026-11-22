@@ -40,6 +40,7 @@ import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/upd
 import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
+import { useWindowTitle } from './window-title'
 import { type Fork, forkedSessions } from '../shared/forks'
 import { activeBots, type Bot } from '../shared/bots'
 import type { Summon } from '../shared/summons'
@@ -1127,6 +1128,7 @@ export function App(): React.JSX.Element {
     [live, draft, collapsed, canExport, includeTools, backendReady, caffeinated],
   )
   usePublishedState(menuState)
+  useWindowTitle(live)
 
   // Stable, so the memoised columns either side of the transcript are not re-drawn by typing.
   const stableShowSession = useEvent(showSession)

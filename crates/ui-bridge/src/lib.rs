@@ -88,6 +88,7 @@ pub mod usage_ping;
 pub mod variant;
 pub mod view;
 pub mod window_fault;
+pub mod window_title;
 pub mod wire;
 pub mod workers;
 

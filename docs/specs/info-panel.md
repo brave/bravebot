@@ -9,13 +9,17 @@ governs:
   - crates/tui/src/pointer.rs
   - crates/tui/src/state/references.rs
   - crates/agent/src/links.rs
+  - crates/agent/src/title.rs
+  - crates/ui-bridge/src/window_title.rs
+  - ui/src/shared/window-title.ts
+  - ui/src/renderer/window-title.ts
 documented-by: docs/website/docs/using/sessions.md
 ---
 
 ## Scope
 
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
-title, and the info panel beside the transcript, which holds the session's name, its goal, the
+title, the desktop app's window title ([PANEL-19](#PANEL-19)), and the info panel beside the transcript, which holds the session's name, its goal, the
 issues and pull requests it is for and has met, the model and effort it runs on, its context and
 cache, its token total, the language servers and MCP servers it has started, and its plan, and the
 checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)). A session
@@ -813,6 +817,36 @@ link ([RUN-4](tools/run.md#RUN-4), [PANEL-11](#PANEL-11)).
 `verified-by: bravebot_agent::links::a_reference_named_before_any_creation_is_not_kept_for_later`
 `verified-by: bravebot_agent::references::the_pull_request_a_clean_creation_is_followed_by_becomes_the_sessions_link`
 `verified-by: bravebot_session::sessions::an_inferred_link_fills_an_empty_slot_and_never_replaces_one`
+
+<a id="PANEL-19"></a>
+### PANEL-19: the desktop window's title names the session on screen and says what it is doing
+
+The desktop app's main window is titled `Bravebot · {name}` for the session on screen, and the bare
+`Bravebot` when that session has no name or no session is open. The markers of
+[PANEL-15](#PANEL-15) stand in front of it: `✦` while a turn runs, `[!]` while a question or an
+approval in the transcript waits for the person, and none otherwise, a failed turn included. The
+state is the same one the sessions list draws as the row's dot, taken from the session's running
+flag and its open prompts and never from what the turn produced. As in [PANEL-2](#PANEL-2), control
+characters in the name are replaced by visible ones and the title is cut to 60 characters, marker
+included, with an ellipsis where it was cut; the desktop counts characters, not terminal columns.
+The text is built by the same Rust code that builds the terminal's title (`bravebot_agent::title`),
+which the window reaches through the bridge's `window.title`; the window decides only the state.
+The title follows the session on screen: switching sessions in the sidebar rewrites it, and a
+session in the background does not change it. It is written when its text changes and not again
+while the text stays the same, and an answer for a session no longer on screen is not written. The
+window owns its title, so nothing is pushed or popped as in [PANEL-3](#PANEL-3), and the
+`terminalTitle` setting of [PANEL-4](#PANEL-4) does not apply to it.
+
+**Why.** Several app windows, Mission Control and the Linux taskbar show only the window title, so
+a fixed title cannot tell the windows apart. The tests of the state rule and of when the title is
+written are node tests in `ui/scripts/window-title.test.mjs`, which this check cannot cite.
+
+`verified-by: bravebot_ui_bridge::window_title::the_window_is_titled_bravebot_and_the_session_with_its_marker`
+`verified-by: bravebot_ui_bridge::window_title::a_window_with_no_session_name_is_the_bare_prefix`
+`verified-by: bravebot_ui_bridge::window_title::a_long_title_is_cut_to_sixty_characters_marker_included`
+`verified-by: bravebot_ui_bridge::window_title::a_name_outside_the_basic_plane_is_cut_by_character`
+`verified-by: bravebot_ui_bridge::window_title::control_characters_in_a_name_do_not_reach_the_window`
+`verified-by: bravebot_agent::title::control_and_invisible_characters_in_a_name_are_made_visible`
 
 ## Known costs
 
