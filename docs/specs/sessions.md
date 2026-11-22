@@ -24,6 +24,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
+  - crates/cli/src/resume_flags.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/background.rs
   - crates/agent/src/aside.rs
@@ -317,16 +318,98 @@ the directory the command is run in and the shell reading this line never moved.
 ended where it started, the directory goes unsaid: naming the one somebody is standing in reads as
 though something had happened to it.
 
+The command carries the process-wide flags the session was started with, after the id, in the form
+`bravebot --resume <id> <flags>`: `--dangerously-skip-permissions` or
+`--dangerously-bypass-approvals-and-sandbox`, whichever was typed, `--auto`, `--sandbox <mode>`,
+`--run-network <word>`, each `--sandbox-allow-read`, `--sandbox-deny-read`,
+`--sandbox-allow-write` and `--sandbox-deny-write` path, `--settings <path>`, `--safe`, `--locked`,
+`--vet`, `--incognito`, `--tools <list>`, `--no-shell`, `--log-level <level>`,
+`--system-prompt <text>` and `--append-system-prompt <text>`. A record keeps none of them, and keeps
+no system prompt ([INSTR-5](instructions.md#INSTR-5)), so a resume without one runs under what the
+settings and defaults give, and a resume without the bypass flag asks again. A resumed session takes
+each of them on `--resume <id>` ([CLI-19](cli.md#CLI-19), [CLI-26](cli.md#CLI-26)), so the line is
+accepted when it is pasted. A flag typed twice is carried once, with the value the scan of the
+command line resolved it to (the last of two `--sandbox`, `--run-network`, `--settings`, `--tools`,
+`--log-level`, `--system-prompt` or `--append-system-prompt` values), and a path flag typed twice is
+carried once per path, in the order typed, an identical path twice included. Each value is printed
+in the spelling its flag parses and without the white space the scan drops, so it is the value the
+session ran with and not always the bytes typed (see Known costs). A session started with none of
+them prints the id and nothing after it. The flags are the process's own, as it started: a mode left
+with the mode key and a `/sandbox` change after the start are not in the line (see Known costs). They
+are the person's own arguments, recorded by `settle_flags` as each is taken from the command line,
+so what is printed is never decided from a record, a checkout or a setting: the paths of the four
+lists are the ones typed, and none that a settings file or the managed file holds. `--incognito` is
+carried because a session started with it prints a line where it resumed a record an ordinary
+session wrote, and prints none where it wrote no record. `-i` and its prompt, `--resume <old id>`,
+`--fork` and `--from-pr` start the session and are not repeated, since the id is the session's own.
+`--agent`, `--issue` and `--pr` are not carried because the record keeps them. `--accept-edits` is
+not carried because it is refused for an interactive session and is never one this line is printed
+for. Both places that print the line carry the flags, the one printed when the interface is left and
+the one printed to stderr when handing the session to the background fails.
+
+A relative value is read from a directory, and the line of a session that moved is run from
+another. Where the session stayed, each value is printed as scanned. Where it moved, each relative
+value of the four path flags is printed as the absolute entry the sandbox reads it as from the
+directory the session started in ([SANDBOX-25](sandboxing.md#SANDBOX-25)): the directory joined to
+the value with `.` and `..` resolved by name, nothing read from the filesystem. The sandbox reads a
+relative entry that way and refuses an absolute entry that holds `..`, so `sub/../x` is printed as
+`<directory>/x`. An entry that climbs out of the directory (`..`, `../x`, `sub/../../x`), or whose
+`..` follows a name holding a wildcard, is refused when typed and so was never in force. It is
+joined with its `..` in place and is refused again. An absolute value and one that starts with `~`
+names the same place from every directory and is printed as typed. One that starts with a variable
+is refused when typed, is printed as typed and is refused again.
+
+A relative `--settings` value is read from the directory the process was in when the flags were
+read. Where the session moved it is joined to that directory with any `..` in place, which names the
+same file. A `~` that a shell did not expand is joined the same way: settings loading expands no
+`~`, so `~/x` names a file called `~` in that directory, and it is not printed as typed.
+
+The line is read and run by the person who typed the flags, so it carries the ones that loosen the
+session as well as the ones that narrow it. [HERDR-10](herdr.md#HERDR-10) differs because herdr
+types its command with nobody asking.
+
+Each value is one word of a shell: left as it is where it holds only letters, digits and `_@+:,./-`,
+and otherwise in single quotes with a quote written `'\''`. A control character, a bidirectional
+control and a character that draws as nothing in a value are drawn as pictures or `‹U+XXXX›`
+([LAYER-3](layering.md#LAYER-3)), so the line never moves the cursor. The value pasted back is
+therefore not the value typed (see Known costs).
+
 **Why.** A session is worth resuming far more often than anybody thinks to write its name down
 beforehand, and the Sessions screen is no use to someone who has already closed the window. Naming a
 session with no record behind it would be worse than saying nothing: the command would answer "no
 session by that name". Naming one in the wrong directory is worse again, because it does not fail:
 the same id in the directory left behind is the same session as it was before the move, so the line
-would quietly resume work that stops partway.
+would quietly resume work that stops partway. A resume under other flags than the session ran under
+is a different session to the person who typed `--dangerously-skip-permissions`, because the record
+keeps no mode ([MODE-10](permission-modes.md#MODE-10)), so the line says the flags too.
 
 `verified-by: bravebot_tui::sessions::a_session_is_named_once_there_is_a_record_to_name`
 `verified-by: bravebot_cli::main::a_session_that_stayed_put_is_named_by_its_id_alone`
 `verified-by: bravebot_cli::main::a_session_that_moved_says_where_to_resume_it`
+`verified-by: bravebot_cli::main::the_line_names_the_flags_the_session_was_started_with_where_it_stayed_and_where_it_moved`
+`verified-by: bravebot_cli::main::a_moved_session_names_relative_paths_as_they_were_read_and_one_that_stayed_as_typed`
+`verified-by: bravebot_cli::main::the_two_places_that_print_the_line_say_it_with_the_flags_the_process_recorded`
+`verified-by: bravebot_cli::main::the_line_is_written_to_the_stream_it_is_given_with_the_flags_it_is_given`
+`verified-by: bravebot_cli::resume_flags::the_bypass_flag_as_typed_and_the_sandbox_mode_are_repeated`
+`verified-by: bravebot_cli::resume_flags::every_flag_a_resume_does_not_take_back_is_repeated_with_its_value`
+`verified-by: bravebot_cli::resume_flags::the_log_level_is_repeated_in_the_spelling_the_flag_parses`
+`verified-by: bravebot_cli::resume_flags::a_relative_sandbox_entry_is_written_as_the_absolute_entry_the_sandbox_reads_it_as`
+`verified-by: bravebot_cli::resume_flags::a_moved_sandbox_entry_means_to_the_sandbox_what_the_typed_entry_meant`
+`verified-by: bravebot_cli::resume_flags::a_settings_path_is_joined_to_the_directory_it_was_read_from`
+`verified-by: bravebot_cli::resume_flags::a_moved_session_names_each_relative_path_as_it_was_read_when_it_started`
+`verified-by: bravebot_cli::resume_flags::a_session_started_with_no_flag_repeats_none`
+`verified-by: bravebot_cli::resume_flags::a_hostile_value_is_one_shell_word_and_is_drawn_without_a_control_character`
+`verified-by: bravebot_cli::resume_line::a_session_started_with_no_flag_prints_the_id_and_nothing_after_it`
+`verified-by: bravebot_cli::resume_line::the_bypass_flag_and_the_sandbox_mode_typed_on_the_command_line_reach_the_line`
+`verified-by: bravebot_cli::resume_line::every_flag_that_shapes_the_session_reaches_the_line_as_the_scan_resolved_it`
+`verified-by: bravebot_cli::resume_line::a_resumed_session_prints_its_own_id_once_with_the_flags_it_was_resumed_with`
+`verified-by: bravebot_cli::resume_line::the_bypass_flag_that_unconfines_is_carried_as_typed_beside_the_flags_that_go_with_it`
+`verified-by: bravebot_cli::resume_line::a_settings_file_typed_is_carried_and_the_sandbox_paths_a_settings_file_holds_are_not`
+`verified-by: bravebot_cli::resume_line::auto_locked_and_no_shell_are_carried_and_a_path_typed_twice_is_carried_twice`
+`verified-by: bravebot_cli::resume_line::a_session_moved_with_cd_names_the_relative_paths_it_was_started_with_as_they_were_read`
+`verified-by: bravebot_cli::resume_line::a_continued_or_forked_session_prints_its_own_id_once_and_not_the_way_it_was_started`
+`verified-by: bravebot_cli::resume_line::an_incognito_session_prints_no_line_unless_it_resumed_a_record_and_then_carries_the_flag`
+`verified-by: bravebot_cli::resume_line::a_hand_over_to_the_background_that_fails_says_the_line_with_the_flags_on_standard_error`
 
 <a id="SESSION-9"></a>
 ### SESSION-9: the theme name is stored globally, like the model
@@ -1871,6 +1954,44 @@ stay behind because they were given for work that the brief describes only in wo
   something it is not.
 - **Only Claude Code is read.** opencode keeps its sessions in a database file and no reader for
   one is built.
+- **The other places that tell the person how to resume a session print no flags.** The Sessions
+  screen reopens a session from another directory by starting the program again with `--resume
+  <id>` or `--fork <id>` and nothing else (`arguments()` in `crates/cli/src/reopen.rs`,
+  [SCREEN-8](sessions-screen.md#SCREEN-8)), and the catalog messages `session-branched`,
+  `handoff-started`, `manifest-recorded` and `sessions-import-copied` name `bravebot --resume <id>`
+  with none. The messages are built in the `tui` crate or in another process, and neither they nor
+  `reopen.rs` read the record of flags the `cli` crate keeps for [SESSION-8](#SESSION-8), so a
+  session picked up through them runs under what the settings and defaults give, and asks again
+  where the bypass flag had stopped the questions.
+- **The line is quoted for a POSIX shell and fish.** The interface runs on Windows and prints the
+  line there, and a value with a backslash, such as the path of a settings file, is written with
+  each backslash outside single quotes, as `'C:'\\'Users'\\'me'\\'x.json'`. A shell with other
+  quoting rules, such as PowerShell or cmd, can read that as something other than one word naming
+  the file, so the line a Windows session prints can need its paths written again by hand
+  (the Known costs of [dropping.md](dropping.md) record the same limit for a dropped path). A
+  background session cannot be started on Windows, so the line printed when handing a session to
+  the background fails is not printed there.
+- **The line carries the flags the process started with, not the state when the session ended.** A
+  session that left the bypass or auto mode with the mode key still prints
+  `--dangerously-skip-permissions` or `--auto`, and a `/sandbox` change after the start is not
+  reflected, so a resume starts in the mode and under the sandbox the process started with. After
+  `/cd` the running session reads a relative sandbox entry against the new directory, because its
+  confinement is built from the session's current directory, while the line names the directory the
+  session started in. The resume reads the entry there, which is the place the person meant when
+  they typed it, and not the place the session last enforced.
+- **A system prompt is written to the terminal when the session ends.** The text of
+  `--system-prompt` and `--append-system-prompt` is part of the line, so it can reach the
+  scrollback, a terminal multiplexer's log or a recording, and a prompt that holds a secret is shown.
+- **A value with a control or bidirectional character is not printed as typed.** It is drawn as
+  pictures so the line cannot move the cursor, so pasting the line gives a different value. A path
+  names another place, and for a `--sandbox-deny-read` or `--sandbox-deny-write` entry the
+  restriction is lost.
+- **Values are printed in the spelling the flag parses, not byte for byte.** `SandboxMode::parse`
+  reads `standard` as the earlier name of `workspace-write` and `SandboxMode::name` returns the
+  current one, so `--sandbox standard` is printed `--sandbox workspace-write`. `--log-level` is
+  printed in the spelling it parses, and `--settings`, the prompts and each tool name are printed
+  without the white space around them. The line resumes the session under the same values, which is
+  not always the text that was typed.
 
 <a id="SESSION-35"></a>
 ### SESSION-35: a process can keep its records in a directory of its own

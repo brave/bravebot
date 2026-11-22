@@ -77,6 +77,32 @@ takes an id, and moves you onto that session without leaving the program.
 
 **Leaving a session prints the command that resumes it**, after the terminal is handed back, so it
 stays on the screen you are left looking at. A session that never wrote a record prints nothing.
+The command carries the flags the session was started with, after the id:
+`--dangerously-skip-permissions` or `--dangerously-bypass-approvals-and-sandbox`, whichever you typed,
+`--sandbox <mode>`, `--run-network`, the `--sandbox-allow-read`, `--sandbox-deny-read`,
+`--sandbox-allow-write` and `--sandbox-deny-write` paths, `--settings`, `--auto`, `--safe`,
+`--locked`, `--vet`, `--incognito`, `--tools`, `--no-shell`, `--log-level`, `--system-prompt` and
+`--append-system-prompt`, because a record keeps none of them and a resume without the flag runs
+under your settings and asks again. A session started with none of them prints the id alone.
+`-i`, its prompt, `--agent`, `--issue` and `--pr` are not repeated: the id names the session and
+the record keeps the rest. `--accept-edits` is not repeated because a session cannot be started
+with it. The paths of the four `--sandbox-*` flags are the ones typed on the command line, and not
+the ones a settings file holds. The line carries the flags the process started with, so a mode you
+left with the mode key, or a `/sandbox` change, is not in it. Values are printed in the spelling the
+flag parses and without the white space around them, so `--sandbox standard` is printed
+`--sandbox workspace-write`. Running the command resumes the session under the rules it started
+under, including the ones that loosen it, so read the flags before you run it. A system prompt is
+written to the terminal with the rest of the line, so it can reach the scrollback or a log. A value
+that holds a control character is drawn as a picture of it, so pasting the line gives another value,
+and for a `--sandbox-deny-read` or `--sandbox-deny-write` path that loses the restriction. Where a
+session moved to another directory with `/cd`, a relative `--sandbox-*` path is printed as the
+absolute entry it meant in the directory the session started in, with `.` and `..` resolved, and a
+relative `--settings` file is printed joined to the directory it was read from, so the line means
+the same from the new directory. On Windows a path with a
+backslash is quoted for a POSIX shell, which PowerShell and cmd do not read as one word. The other
+places that tell you to resume a session, such as the Sessions screen reopening one from another
+directory and the notes after `/branch`, `/handoff`, a manifest run and `sessions import`, name
+the id and no flags.
 
 **A session is open in one place at a time.** The process running a session holds its record, so
 resuming it from a second terminal or window is refused, and the refusal names the session and says
