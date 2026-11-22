@@ -15,7 +15,7 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/specs.md](best-practices/specs.md) | prose a clause is allowed to be, and a change agreeing with the specs that govern it |
 | [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, and proving it fails first |
 | [best-practices/verification.md](best-practices/verification.md) | which code gets a Verus contract, and a contract saying what the code is for and being shown to fail |
-| [best-practices/writing.md](best-practices/writing.md) | what a comment is for |
+| [best-practices/writing.md](best-practices/writing.md) | what a comment is for, and a comment describing the code as it is |
 | [best-practices/dependencies.md](best-practices/dependencies.md) | what a dependency has to be worth across package managers |
 | [best-practices/shared-implementation.md](best-practices/shared-implementation.md) | where shared client behavior lives and how callers reuse it |
 | [best-practices/paths.md](best-practices/paths.md) | carrying paths, programs and arguments as bytes so a lossy rendering never decides what is approved, granted or started, a fix for a spelling that got past a rule covering the file's other names, and a step that turns a name into a key saying which different files it joins, and a program bravebot starts itself being tested for the names it starts, with a fix to one such program checked against the others, and a program bravebot starts for itself with the person's environment either having each variable that chooses code to run removed unless its value is a safe file, directory or program name, or stating why it keeps the environment |
