@@ -61,3 +61,33 @@ test('a name made of characters outside the basic plane is cut by code point', (
   assert.equal(points(cut), MOST_COLUMNS)
   assert.ok(cut.endsWith('😀…'), cut)
 })
+
+const { sessionStatus, titleState } = loadSync(fileURLToPath(new URL('../src/renderer/session-list.ts', import.meta.url)))
+const live = (over = {}) => ({ handle: 'h', summary: { id: 's', title: 'fix', project: 'p', branch: null, directory: '/p' }, entries: [], running: false, bot: null, ...over })
+const lives = {
+  working: live({ running: true }),
+  answer: live({ entries: [{ kind: 'ask', id: 'q', request: { request: 1 }, answers: null }] }),
+  approval: live({ entries: [{ kind: 'run', id: 'r', request: { request: 2 }, decision: null }] }),
+  failed: live({ entries: [{ kind: 'error' }] }),
+  quiet: live(),
+}
+
+test('a session row and the window title read the same state', () => {
+  assert.equal(sessionStatus(lives.working), 'working')
+  assert.equal(sessionStatus(lives.answer), 'answer')
+  assert.equal(sessionStatus(lives.approval), 'approval')
+  assert.equal(sessionStatus(lives.failed), 'failed')
+  assert.equal(sessionStatus(lives.quiet), undefined)
+  assert.equal(titleState(lives.working), 'working')
+  assert.equal(titleState(lives.answer), 'waiting')
+  assert.equal(titleState(lives.approval), 'waiting')
+  assert.equal(titleState(lives.failed), 'ready', 'a failed turn is ready again, as in the terminal')
+  assert.equal(titleState(lives.quiet), 'ready')
+  assert.equal(titleState(null), 'ready')
+})
+
+test('a question waiting outranks a running turn', () => {
+  const both = live({ running: true, entries: lives.answer.entries })
+  assert.equal(sessionStatus(both), 'answer')
+  assert.equal(titleState(both), 'waiting')
+})
