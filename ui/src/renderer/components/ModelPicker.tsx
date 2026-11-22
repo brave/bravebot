@@ -220,7 +220,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   /** The level the column checks: the folder's where its settings outrank the record. */
   const chosenLevel = effort ? (effort.outranked ? effort.inForce : effort.recorded) : null
   // A model of the ChatGPT account is sent the level its conversation began with (CHATGPT-10), so
-  // where another is chosen the column says which one the account gets. A model that takes no
+  // where another is chosen the picker says which one the account gets. A model that takes no
   // level says only that.
   const keptForAccount = inUse?.providerKey === 'chatgpt' && !takesNoLevel
     && effort?.sessionBegan !== undefined && chosenLevel !== effort.sessionBegan
@@ -439,12 +439,14 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
             {effort?.outranked
               ? <p className="model-effort-note" data-test="model-effort-note">This folder’s settings set the level.</p>
               : takesNoLevel && <p className="model-effort-note" data-test="model-effort-note">This model takes no reasoning level.</p>}
-            {keptForAccount && <p className="model-effort-note" role="status" data-test="model-effort-kept">
-              This ChatGPT conversation keeps the level it began with, {effortLabel(effort?.sessionBegan)}. {effortLabel(chosenLevel)} applies to new conversations and to other models.
-            </p>}
             {effortProblem && <p className="model-effort-note" role="alert">{effortProblem}</p>}
           </div>
         </div>
+        {/* Across the menu's width below the columns, which shrink and scroll before it is cut off:
+            the Reasoning column is too narrow and too short at the window's minimum to hold it. */}
+        {keptForAccount && <p className="model-effort-note model-kept-note" role="status" data-test="model-effort-kept">
+          This ChatGPT conversation keeps the level it began with, {effortLabel(effort?.sessionBegan)}. {effortLabel(chosenLevel)} applies to new conversations and to other models.
+        </p>}
         <Hr />
         <p className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'} The reasoning level applies to every conversation. Brave Bot uses text and tools; pricing is not supplied by this catalogue.</p>
       </div>

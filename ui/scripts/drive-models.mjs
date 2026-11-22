@@ -35,7 +35,9 @@ try {
       if (method === 'models.list') {
         if (globalThis.modelTest.fail) return { error: { code: 'offline', message: 'Model listing is offline.' } }
         if (globalThis.modelTest.loading) await new Promise((resolve) => setTimeout(resolve, delay))
-        return { ok: { defaultModel, warnings: [warning.sentence], warningCommands: [warning.command], models: [
+        // Where the account's models are listed, the warning that they could not be is not sent.
+        const warned = !globalThis.modelTest.account
+        return { ok: { defaultModel, warnings: warned ? [warning.sentence] : [], warningCommands: warned ? [warning.command] : [], models: [
           { id: defaultModel, name: 'Claude Haiku 4.5', provider: 'OpenRouter', providerKey: 'gateway:openrouter', readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools'] },
           { id: 'openrouter/anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'OpenRouter', providerKey: 'gateway:openrouter', readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools', 'reasoning'] },
           { id: 'brave-model', name: 'Brave model', provider: 'Brave', providerKey: 'brave', readsEffort: false, premium: false, contextWindow: 24000 },
@@ -313,12 +315,36 @@ try {
   assert.match(keptText, /\bHigh\b/, 'the note names the level chosen')
   assert(keptText.indexOf('Low') < keptText.indexOf('High'), 'the level sent comes first')
   mkdirSync('/tmp/bravebot-ui', { recursive: true })
-  for (const [size, viewport] of [['large', { width: 1440, height: 900 }], ['minimum', MINIMUM]]) {
+  // The large window is tall enough for both columns to show every row whole.
+  for (const [size, viewport] of [['large', { width: 1440, height: 1080 }], ['minimum', MINIMUM]]) {
     await page.setViewportSize(viewport)
+    // A resize can cancel an animation, whose `finished` then rejects.
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))))
+    // The whole note is drawn at every size: inside the menu, unclipped, and with nothing over its
+    // first or last line.
+    assert.deepEqual(await kept.evaluate((element) => {
+      const note = element.getBoundingClientRect()
+      const menu = element.closest('.model-popover').getBoundingClientRect()
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      const rects = [...range.getClientRects()]
+      const seen = (at) => element.contains(document.elementFromPoint(at.x + Math.min(at.width / 2, 8), at.y + at.height / 2))
+      return {
+        inside: note.top >= menu.top - 1 && note.bottom <= menu.bottom + 1 && note.left >= menu.left - 1 && note.right <= menu.right + 1,
+        unclipped: element.scrollHeight <= element.clientHeight + 1,
+        first: seen(rects[0]),
+        last: seen(rects[rects.length - 1]),
+      }
+    }), { inside: true, unclipped: true, first: true, last: true }, `${size}: the whole note is drawn`)
     for (const scheme of ['light', 'dark']) {
       await page.emulateMedia({ colorScheme: scheme })
-      // A resize can cancel an animation, whose `finished` then rejects.
+      // The colours change through a transition, which is waited out so no shot is taken midway.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
       await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))))
+      // The rows chosen are scrolled to the top of their columns, so the shots start on whole rows.
+      await page.evaluate(() => {
+        for (const row of document.querySelectorAll('.model-menu leo-option[data-current="true"]')) row.scrollIntoView({ block: 'start' })
+      })
       await page.screenshot({ path: `/tmp/bravebot-ui/model-effort-kept-${size}-${scheme}.png` })
     }
   }
