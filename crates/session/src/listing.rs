@@ -16,6 +16,7 @@ use crate::jobs::{Held, Mode, Roster, State};
 use crate::sessions::{self, Listed};
 use bravebot_agent::Work;
 use bravebot_aichat::protocol::{Cached, Effort};
+use bravebot_i18n::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -161,6 +162,29 @@ impl Status {
             .iter()
             .position(|status| *status == self)
             .unwrap_or(Self::ORDER.len())
+    }
+
+    /// The word for this status, as the Sessions screen, the list `bravebot sessions` opens and
+    /// the desktop app's list of background sessions all say it (SCREEN-16, BG-17).
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::NeedsInput => t!(sessions_screen_status_needs_input),
+            Self::Interrupted => t!(sessions_screen_status_interrupted),
+            Self::Working => t!(sessions_screen_status_working),
+            Self::Ready => t!(sessions_screen_status_ready),
+            Self::OpenElsewhere => t!(sessions_screen_status_open_elsewhere),
+            Self::Stopped => t!(sessions_screen_status_stopped),
+            Self::Saved => t!(sessions_screen_status_saved),
+        }
+    }
+
+    /// This status as a row says it: its word, and for a session holding a prompt the one word
+    /// for the kind of prompt held, in brackets (BG-5, SCREEN-16).
+    pub fn in_words(self, held: Option<Held>) -> String {
+        match (self, held) {
+            (Self::NeedsInput, Some(held)) => format!("{} ({})", self.word(), held.label()),
+            _ => self.word().to_string(),
+        }
     }
 
     /// The set this status belongs to.
