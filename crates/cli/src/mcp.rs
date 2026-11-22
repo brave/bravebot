@@ -13,7 +13,8 @@
 use crate::exit::{Ending, fail};
 use crate::progress::{printable, printable_path};
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
-use bravebot_agent::servers::{Foreseen, OwnHome};
+use bravebot_agent::plugin_servers::{self, Listed, PluginServers};
+use bravebot_agent::servers::{Foreseen, OwnHome, plugin_problem, stopped_note};
 pub(crate) use bravebot_agent::servers::{
     Home, Person, applies_line, choices_line, covered_line, drawn, indent, no_state_directory,
     problem, say,
@@ -940,8 +941,11 @@ fn get<R: BufRead, W: Write>(
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
     let (directory, declarations) = readable(home)?;
-    let (Some(directory), Some(entry)) = (directory, declarations.get(alias)) else {
+    let Some(directory) = directory else {
         return Err(not_declared(alias));
+    };
+    let Some(entry) = declarations.get(alias) else {
+        return get_carried(alias, directory, home, managed, person);
     };
     let declaration = entry.declaration.map_err(|found| unusable(alias, &found))?;
     let path = mcp::declarations_file(directory);
@@ -967,10 +971,130 @@ fn get<R: BufRead, W: Write>(
     if let Some(refused) = refused(managed, &declaration) {
         say(person, format!("{indent}{refused}"));
     }
+    // A declaration in mcp.json under the same joined alias is the one a session uses. The plugin's
+    // server of that name is not used, and the line below says so.
+    if let Some(Listed::Server(server)) = PluginServers::read(directory).find(alias) {
+        say(
+            person,
+            format!(
+                "{indent}{}",
+                t!(
+                    servers_plugin_shadowed,
+                    alias = shown(alias),
+                    plugin = server.plugin.as_str()
+                )
+            ),
+        );
+    }
     for line in confinement_lines(alias, &declaration, home) {
         say(person, format!("{indent}{line}"));
     }
     Ok(())
+}
+
+/// `get` for a name `mcp.json` does not declare: the server of an installed plugin that carries it,
+/// as a session would find it, or the plugin that is turned off (PLUGIN-11), or nothing.
+///
+/// What it says is read from the one decision a session makes about a plugin's server
+/// ([`bravebot_agent::servers::held_by_plugin_server`]), for this one server. A person's yes to that
+/// server at its first use in a session at a terminal is the only approval, and `bravebot mcp
+/// approve` reads `mcp.json` only, so it is not offered. It reads the plugin's installed files, to
+/// see that they are as installed, the approvals, and where a local server's program and working
+/// directory are on disk. It does not start the server, ask or write.
+fn get_carried<R: BufRead, W: Write>(
+    alias: &str,
+    directory: &Path,
+    home: &Home,
+    managed: &Managed,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
+    let carried = PluginServers::read(directory);
+    let server = match carried.find(alias) {
+        None => return Err(not_declared(alias)),
+        Some(Listed::Disabled(plugin)) => {
+            say(
+                person,
+                t!(
+                    servers_plugin_disabled,
+                    alias = shown(alias),
+                    plugin = plugin
+                ),
+            );
+            return Ok(());
+        }
+        Some(Listed::Server(server)) => server,
+    };
+    let held = bravebot_agent::servers::held_by_plugin_server(
+        server,
+        directory,
+        bravebot_agent::servers::Asking::Person,
+        managed,
+    );
+    say(
+        person,
+        t!(servers_carried_by, plugin = server.plugin.as_str()),
+    );
+    let (Ok(declaration), Some(digest)) = (&server.declaration, server.digest()) else {
+        if let Some(stop) = held.stop {
+            say(person, stopped_note(stop, &server.alias, &server.plugin));
+            return Ok(());
+        }
+        return Err(match &server.declaration {
+            Err(found) => unusable_server(server, found),
+            Ok(_) => not_declared(alias),
+        });
+    };
+    for line in drawn(alias, declaration, &digest.to_string()) {
+        say(person, line);
+    }
+    let indent = indent(alias);
+    match held.approved {
+        true => say(person, format!("{indent}{}", t!(mcp_approved))),
+        false => say(person, format!("{indent}{}", t!(mcp_unapproved_plugin))),
+    }
+    if let Some(stop) = held.stop {
+        say(
+            person,
+            format!(
+                "{indent}{}",
+                stopped_note(stop, &server.alias, &server.plugin)
+            ),
+        );
+    }
+    if let Some(unstarted) = &held.unstarted {
+        say(
+            person,
+            format!(
+                "{indent}{}",
+                t!(mcp_plugin_withheld, reason = plugin_unstarted(unstarted))
+            ),
+        );
+    }
+    for line in confinement_lines(alias, declaration, home) {
+        say(person, format!("{indent}{line}"));
+    }
+    Ok(())
+}
+
+/// Why a session would not start a plugin's server that nobody has stopped, as a person reads it.
+fn plugin_unstarted(unstarted: &bravebot_agent::servers::Unstarted) -> String {
+    use bravebot_agent::servers::Unstarted;
+    match unstarted {
+        Unstarted::Unplanned(reason) | Unstarted::Refused(reason) => reason.clone(),
+        Unstarted::Unconfined => t!(mcp_no_confinement_here).to_string(),
+    }
+}
+
+/// `unusable` for a plugin's server.
+fn unusable_server(server: &plugin_servers::Server, found: &Problem) -> Stopped {
+    (
+        Ending::Configuration,
+        t!(
+            mcp_unusable,
+            alias = shown(&server.alias),
+            problem = plugin_problem(server, found)
+        ),
+    )
 }
 
 /// What a session would confine `declaration` to, as the lines `get` ends with (SERVERS-20): the
@@ -1038,29 +1162,33 @@ fn list<R: BufRead, W: Write>(
     let here = here()?;
     let path = printable_path(&mcp::declarations_file(directory));
     let (rows, unusable) = report(directory, &declarations, managed, &here);
+    let (carried, carried_unusable) = carried(directory, &declarations, managed);
     match declarations.entries().is_empty() {
         true => say(person, t!(mcp_none_declared, path = &path)),
         false => say(person, t!(mcp_list_declared_in, path = &path)),
     }
-    if rows.is_empty() {
-        return Ok(());
+    if !rows.is_empty() {
+        say(
+            person,
+            t!(
+                mcp_list_here,
+                path = printable(&here.project.display().to_string())
+            ),
+        );
     }
-    say(
-        person,
-        t!(
-            mcp_list_here,
-            path = printable(&here.project.display().to_string())
-        ),
-    );
-    for row in rows {
+    for row in rows.into_iter().chain(carried) {
         say(person, row);
     }
-    match unusable {
-        0 => Ok(()),
-        count => Err((
-            Ending::Configuration,
-            t!(mcp_list_unusable, count = count, path = &path),
-        )),
+    let mut failures = Vec::new();
+    if unusable > 0 {
+        failures.push(t!(mcp_list_unusable, count = unusable, path = &path));
+    }
+    if carried_unusable > 0 {
+        failures.push(t!(mcp_list_plugin_unusable, count = carried_unusable));
+    }
+    match failures.is_empty() {
+        true => Ok(()),
+        false => Err((Ending::Configuration, failures.join("\n"))),
     }
 }
 
@@ -1088,13 +1216,141 @@ pub(crate) fn examined(
     let path = printable_path(&mcp::declarations_file(directory));
     let project = printable(&here.project.display().to_string());
     let (rows, unusable) = report(directory, &declarations, managed, &here);
+    let (carried, carried_unusable) = carried(directory, &declarations, managed);
     let heading = match declarations.entries().is_empty() {
         true => t!(doctor_mcp_none, path = path, project = project),
         false => t!(doctor_mcp_servers, path = path, project = project),
     };
     let mut lines = vec![heading];
     lines.extend(rows);
-    (lines, unusable > 0)
+    lines.extend(carried);
+    (lines, unusable + carried_unusable > 0)
+}
+
+/// SERVERS-14's second block: one row for each server an enabled plugin carries, under the heading
+/// that says installed plugins carry them, and how many of those entries cannot be used. Nothing
+/// when no plugin carries a server, none is turned off and none is shadowed.
+///
+/// A row is the joined alias, the transport, the approval and the digest, as a declared server's
+/// is, and under it the plugin that carries it and what a session at a terminal does about it. What
+/// it does is read from [`bravebot_agent::servers::held_by_plugins`], the decision a session makes,
+/// so approval here is a person's yes to that server and nothing a project, a home line for the
+/// same declaration or a mode adds. An unapproved server is listed as unapproved. A plugin whose
+/// directory changed shows its reason and is not a failure, and a plugin turned off is named once
+/// with its servers left out (PLUGIN-11). A server that `mcp.json` declares under the same alias is
+/// not listed: the declaration is the one a session uses, and a line says the plugin's is not.
+fn carried(
+    directory: &Path,
+    declarations: &Declarations,
+    managed: &Managed,
+) -> (Vec<String>, usize) {
+    use bravebot_agent::servers::{Asking, held_by_plugins};
+
+    let read = PluginServers::read(directory);
+    let held = held_by_plugins(&read, directory, Asking::Person, managed);
+    let (shadowed, listed): (Vec<_>, Vec<_>) = held
+        .into_iter()
+        .partition(|(server, _)| declarations.get(&server.alias).is_some());
+    if listed.is_empty() && shadowed.is_empty() && read.disabled().is_empty() {
+        return (Vec::new(), 0);
+    }
+    let approved = t!(mcp_approved).to_string();
+    let unapproved = t!(mcp_unapproved).to_string();
+    let state = approved.chars().count().max(unapproved.chars().count());
+    // The column is as wide as the longest alias a session can reach. A plugin's servers file may
+    // hold an entry with an alias of thousands of characters, and an alias longer than a session
+    // takes is drawn as it is, so it does not widen the column or the indent of every other line.
+    let reachable = |alias: &str| alias.len() <= mcp::MAX_ALIAS;
+    let width = listed
+        .iter()
+        .filter(|(server, _)| reachable(&server.alias))
+        .map(|(server, _)| shown(&server.alias).chars().count())
+        .max()
+        .unwrap_or_default();
+    let under = " ".repeat(2 + width + 2);
+    let mut lines = vec![t!(mcp_list_plugins).to_string()];
+    let mut unusable = 0usize;
+    for (server, held) in &listed {
+        let row = match reachable(&server.alias) {
+            true => pad(&shown(&server.alias), width),
+            false => shown(&server.alias),
+        };
+        match &server.declaration {
+            Ok(declaration) => {
+                let word = match held.approved {
+                    true => &approved,
+                    false => &unapproved,
+                };
+                let digest = held.digest.as_ref().map(|digest| digest.short());
+                lines.push(format!(
+                    "  {row}  {}  {}  {}",
+                    pad(declaration.transport(), 5),
+                    pad(word, state),
+                    digest.unwrap_or_default()
+                ));
+                lines.extend(declaration_lines(&under, declaration));
+            }
+            Err(found) => {
+                if held.unusable.is_some() {
+                    unusable += 1;
+                }
+                lines.push(format!(
+                    "  {row}  {}",
+                    t!(mcp_cannot_be_used, problem = plugin_problem(server, found))
+                ));
+            }
+        }
+        lines.push(format!(
+            "{under}{}",
+            t!(servers_carried_by, plugin = server.plugin.as_str())
+        ));
+        let said = match (&held.stop, &held.unstarted) {
+            (Some(stop), _) => Some(stopped_note(*stop, &server.alias, &server.plugin)),
+            (None, Some(unstarted)) => Some(t!(
+                mcp_plugin_withheld,
+                reason = plugin_unstarted(unstarted)
+            )),
+            // The row already says why an entry that cannot be used is not started.
+            (None, None) if held.unusable.is_some() => None,
+            (None, None) if held.approved => Some(t!(mcp_plugin_starts).to_string()),
+            (None, None) if held.asks => Some(t!(mcp_plugin_asks).to_string()),
+            (None, None) => None,
+        };
+        lines.extend(said.map(|said| format!("{under}{said}")));
+    }
+    for (server, _) in &shadowed {
+        lines.push(format!(
+            "  {}",
+            t!(
+                servers_plugin_shadowed,
+                alias = shown(&server.alias),
+                plugin = server.plugin.as_str()
+            )
+        ));
+    }
+    for plugin in read.disabled() {
+        lines.push(format!(
+            "  {}",
+            t!(mcp_plugin_turned_off, plugin = plugin.as_str())
+        ));
+    }
+    (lines, unusable)
+}
+
+/// What a declaration says about itself under its row, beyond the row's own columns: that every
+/// call is asked about, where it runs, and the arguments and tools whose answers it names.
+fn declaration_lines(under: &str, declaration: &Declaration) -> Vec<String> {
+    let mut lines = Vec::new();
+    if declaration.asks_every_call() {
+        lines.push(format!("{under}{}", t!(mcp_declaration_asks_every_call)));
+    }
+    if let mcp::Backend::OpenShell { image } = declaration.backend() {
+        lines.push(format!("{under}{}", t!(mcp_openshell, image = image)));
+    }
+    lines.extend(choices_line(declaration).map(|line| format!("{under}{line}")));
+    lines.extend(applies_line(declaration).map(|line| format!("{under}{line}")));
+    lines.extend(covered_line(declaration).map(|line| format!("{under}{line}")));
+    lines
 }
 
 /// SERVERS-14's report: one row for each declared server and for each server requested here and
@@ -1116,10 +1372,13 @@ pub(crate) fn report(
     use bravebot_agent::servers::{Grant, Unstarted, grant, named};
 
     let entries = declarations.entries();
+    // A request that names a server an installed plugin carries, or a plugin turned off, is not one
+    // nobody declared: a session reaches it through the plugin, and the plugin's block says so.
+    let carried = PluginServers::read(directory);
     let undeclared: Vec<&(PathBuf, String)> = here
         .requested
         .iter()
-        .filter(|(_, alias)| declarations.get(alias).is_none())
+        .filter(|(_, alias)| declarations.get(alias).is_none() && carried.find(alias).is_none())
         .collect();
     let approvals = Approvals::read(directory);
     let projects = Projects::read(directory);
@@ -1162,15 +1421,7 @@ pub(crate) fn report(
                     Some(refusal) => format!("{line}  {refusal}"),
                     None => line,
                 });
-                if declaration.asks_every_call() {
-                    rows.push(format!("{under}{}", t!(mcp_declaration_asks_every_call)));
-                }
-                if let mcp::Backend::OpenShell { image } = declaration.backend() {
-                    rows.push(format!("{under}{}", t!(mcp_openshell, image = image)));
-                }
-                rows.extend(choices_line(declaration).map(|line| format!("{under}{line}")));
-                rows.extend(applies_line(declaration).map(|line| format!("{under}{line}")));
-                rows.extend(covered_line(declaration).map(|line| format!("{under}{line}")));
+                rows.extend(declaration_lines(&under, declaration));
                 let request = file.map(|file| {
                     match grant(
                         alias,
@@ -5339,5 +5590,880 @@ mod tests {
         let (outcome, screen) = typing(&directory, &["add", "docs", "--", "/opt/docs-mcp"], "y\n");
         assert!(outcome.is_ok(), "{outcome:?}");
         assert!(!screen.contains("not started"), "{screen}");
+    }
+
+    const WEATHER: &str =
+        r#"{"servers":{"weather":{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}"#;
+
+    /// Installs the plugin `name`, whose servers file holds `servers`, into the state directory
+    /// `directory` with the call a front end makes after the person says yes to its listing.
+    fn plugin(directory: &Path, name: &str, servers: &str) {
+        let source = directory.with_file_name(format!(
+            "{}-source-{name}",
+            directory
+                .file_name()
+                .expect("a named directory")
+                .to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::write(
+            source.join("plugin.toml"),
+            format!(
+                "name = \"{name}\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nservers = \"servers.json\"\n"
+            ),
+        )
+        .expect("manifest");
+        std::fs::write(source.join("servers.json"), servers).expect("servers");
+        bravebot_agent::plugins::install(&source, directory).expect("install the plugin");
+    }
+
+    /// What a yes to the plugin's server `alias` is recorded against.
+    fn plugin_digest(directory: &Path, alias: &str) -> bravebot_config::mcp::Digest {
+        let carried = PluginServers::read(directory);
+        let Some(Listed::Server(server)) = carried.find(alias) else {
+            panic!("no server of a plugin is reached as {alias}");
+        };
+        server.digest().expect("a usable server")
+    }
+
+    /// The person's yes to the plugin's server `alias`, as a session at a terminal records it.
+    fn say_yes_to(directory: &Path, alias: &str, plugin: &str, named: &str) {
+        let digest = plugin_digest(directory, alias);
+        let mut approvals = Approvals::read(directory);
+        approvals.approve_plugin(plugin, named, digest);
+        std::fs::write(mcp::approvals_file(directory), approvals.to_text()).expect("approvals");
+    }
+
+    /// What `list` ended with and printed.
+    type Printed = (Result<(), Stopped>, String);
+
+    /// The lines the MCP block of `doctor` prints, and whether it fails.
+    type Examined = (Vec<String>, bool);
+
+    /// `list` and the MCP block of `doctor` for the same state directory and checkout.
+    fn listed_and_examined(directory: &Path) -> (Printed, Examined) {
+        let here = requesting(directory, &[]);
+        let listed = typing_in(directory, &here, &["list"], "");
+        let home = Home {
+            directory: Some(directory.to_path_buf()),
+            writable: false,
+        };
+        let examined = examined(
+            &home,
+            &Managed::at(&directory.join("managed.json")),
+            Ok(here),
+        );
+        (listed, examined)
+    }
+
+    /// The words of the row `list` printed for `alias`, and the lines under it.
+    fn plugin_row<'a>(listed: &'a str, alias: &str) -> (Vec<&'a str>, Vec<&'a str>) {
+        let row = listed
+            .lines()
+            .find(|line| line.split_whitespace().next() == Some(alias))
+            .unwrap_or_else(|| panic!("no row for {alias}: {listed}"));
+        (row.split_whitespace().collect(), under(listed, alias))
+    }
+
+    /// The lines from the heading over the plugin block to the end.
+    fn plugin_block<'a>(lines: &[&'a str]) -> Vec<&'a str> {
+        let heading = t!(mcp_list_plugins).to_string();
+        lines
+            .iter()
+            .position(|line| *line == heading)
+            .map(|at| lines[at..].to_vec())
+            .unwrap_or_default()
+    }
+
+    /// SERVERS-14, PLUGIN-7: `list` gives a row for a server an installed plugin carries, under its
+    /// joined alias `<plugin>_<alias>`, with its transport, `unapproved` where nobody said yes to it,
+    /// its short digest and the plugin that carries it, after the declared servers and under a
+    /// heading of its own. The row says a session at a terminal asks first and never names
+    /// `bravebot mcp approve`, which reads `mcp.json` only. The state directory with no declaration
+    /// still lists it, and one with neither says today's line.
+    ///
+    /// Rejects a `list` that returns early because no declaration is written, which prints nothing
+    /// for the plugin's server, one that prints the row as approved from the declaration's digest, one
+    /// that leaves out a server nobody approved, and a row that does not say which plugin carries it.
+    #[test]
+    fn list_shows_an_installed_plugins_server_unapproved_under_its_joined_alias_with_its_plugin() {
+        let directory = scratch("cli-mcp-list-plugin-server");
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let nothing = t!(
+            mcp_none_declared,
+            path = printable_path(&mcp::declarations_file(&directory))
+        )
+        .to_string();
+        assert_eq!(listed.trim_end(), nothing, "neither declared nor carried");
+
+        plugin(&directory, "demo", WEATHER);
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}: {listed}");
+        assert!(listed.contains(&nothing), "{listed}");
+        let (row, below) = plugin_row(&listed, "demo_weather");
+        let digest = plugin_digest(&directory, "demo_weather").short();
+        assert_eq!(
+            row,
+            ["demo_weather", "http", "unapproved", digest.as_str()],
+            "{listed}"
+        );
+        assert!(
+            below.contains(&t!(servers_carried_by, plugin = "demo").as_str()),
+            "{below:?}"
+        );
+        assert!(
+            below.contains(&t!(mcp_plugin_asks)),
+            "a session at a terminal asks: {below:?}"
+        );
+        assert!(!listed.contains("mcp approve"), "{listed}");
+
+        let heading = listed
+            .lines()
+            .position(|line| line == t!(mcp_list_plugins))
+            .expect("the heading over the plugin block");
+        let row_at = listed
+            .lines()
+            .position(|line| line.trim_start().starts_with("demo_weather "))
+            .expect("the row");
+        assert!(heading < row_at, "{listed}");
+
+        let (outcome, _) = typing(
+            &directory,
+            &["add", "docs", "--http", "https://docs.example"],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let declared = listed
+            .lines()
+            .position(|line| line.trim_start().starts_with("docs "))
+            .expect("the declared row");
+        let carried = listed
+            .lines()
+            .position(|line| line.trim_start().starts_with("demo_weather "))
+            .expect("the plugin's row");
+        assert!(declared < carried, "declared rows come first: {listed}");
+    }
+
+    /// SERVERS-14: `bravebot doctor` prints the rows `list` prints, and fails exactly where `list`
+    /// does. A server of a plugin that cannot be used (its joined alias is too long) fails both, in
+    /// the words of the too-long message and not the one that says the alias is not one, and a
+    /// plugin whose files changed or that is turned off fails neither.
+    ///
+    /// Rejects a `doctor` that prints the declared rows only, one that drifts from `list` in its
+    /// plugin rows, one that fails for a changed tree or a plugin turned off, and a too-long alias
+    /// that is listed and counted nowhere.
+    #[test]
+    fn doctor_prints_the_rows_list_prints_and_fails_exactly_where_list_does() {
+        let directory = scratch("cli-mcp-doctor-plugin-server");
+        plugin(&directory, "demo", WEATHER);
+        let long = "a".repeat(61);
+        plugin(
+            &directory,
+            "wide",
+            &format!(
+                r#"{{"servers":{{"{long}":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}}}}"#
+            ),
+        );
+
+        let ((outcome, screen), (examined, failed)) = listed_and_examined(&directory);
+        let listed: Vec<&str> = screen.lines().collect();
+        let examined: Vec<&str> = examined.iter().map(String::as_str).collect();
+        let listed_block = plugin_block(&listed);
+        assert!(listed_block.len() > 1, "{screen}");
+        assert_eq!(listed_block, plugin_block(&examined), "{screen}");
+        let joined = format!("wide_{long}");
+        let too_long = listed_block
+            .iter()
+            .find(|line| line.trim_start().starts_with(&joined))
+            .unwrap_or_else(|| panic!("no row for the too-long alias: {screen}"));
+        assert!(
+            too_long.contains(&t!(mcp_plugin_too_long).to_string()),
+            "{too_long}"
+        );
+        assert!(
+            !too_long.contains(&t!(mcp_problem_alias).to_string()),
+            "{too_long}"
+        );
+        let (ending, said) = outcome.expect_err("an entry that cannot be used fails list");
+        assert_eq!(ending, Ending::Configuration);
+        assert!(
+            said.contains(&t!(mcp_list_plugin_unusable, count = 1).to_string()),
+            "{said}"
+        );
+        assert!(failed, "doctor fails where list does");
+
+        // The plugin that cannot be used is taken away; a changed tree is listed and fails neither.
+        bravebot_agent::plugins::remove(&directory, "wide").expect("remove the plugin");
+        std::fs::write(
+            bravebot_agent::plugins::installed_dir(&directory, "demo").join("extra.txt"),
+            "added after the install",
+        )
+        .expect("change the tree");
+        let ((outcome, screen), (examined, failed)) = listed_and_examined(&directory);
+        assert!(
+            outcome.is_ok(),
+            "a changed tree is no failure: {outcome:?}: {screen}"
+        );
+        assert!(!failed, "{examined:?}");
+        let listed: Vec<&str> = screen.lines().collect();
+        let examined: Vec<&str> = examined.iter().map(String::as_str).collect();
+        assert_eq!(plugin_block(&listed), plugin_block(&examined), "{screen}");
+    }
+
+    /// A plugin's server is `approved` only after the person's yes to that server is recorded as a
+    /// plugin line, and then a session starts it unasked. A home approval of the same declaration
+    /// under the same alias leaves it `unapproved`.
+    ///
+    /// Rejects a row that reads `Approvals::approves` on the declaration's digest, which says
+    /// approved where a session still asks, and one that never reads the plugin line.
+    #[test]
+    fn a_plugin_server_is_approved_only_after_a_yes_to_that_server_is_recorded() {
+        let directory = scratch("cli-mcp-list-plugin-approval");
+        plugin(&directory, "demo", WEATHER);
+
+        let declaration = Declaration::http("http://127.0.0.1:1/mcp".to_string()).unwrap();
+        let mut approvals = Approvals::default();
+        approvals.approve("demo_weather", declaration.digest());
+        std::fs::write(mcp::approvals_file(&directory), approvals.to_text()).expect("approvals");
+        let (_, listed) = typing(&directory, &["list"], "");
+        let (row, below) = plugin_row(&listed, "demo_weather");
+        assert_eq!(
+            row[2], "unapproved",
+            "a home approval is not a yes to this server: {listed}"
+        );
+        assert!(below.contains(&t!(mcp_plugin_asks)), "{below:?}");
+
+        say_yes_to(&directory, "demo_weather", "demo", "weather");
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (row, below) = plugin_row(&listed, "demo_weather");
+        assert_eq!(row[2], "approved", "{listed}");
+        assert!(below.contains(&t!(mcp_plugin_starts)), "{below:?}");
+        assert!(!below.contains(&t!(mcp_plugin_asks)), "{below:?}");
+    }
+
+    /// A plugin that is turned off is named on one line and its servers are not listed, and that is
+    /// no failure of `list` or `doctor`.
+    ///
+    /// Rejects a listing that reads a turned-off plugin's servers file for display (PLUGIN-11), one
+    /// that says nothing of the plugin, and one that fails for it.
+    #[test]
+    fn a_plugin_turned_off_is_named_once_and_its_servers_are_not_listed() {
+        let directory = scratch("cli-mcp-list-plugin-off");
+        plugin(&directory, "demo", WEATHER);
+        bravebot_agent::plugins::set_enabled(&directory, "demo", false).expect("turn it off");
+
+        let ((outcome, screen), (examined, failed)) = listed_and_examined(&directory);
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(!failed, "{examined:?}");
+        let off = format!("  {}", t!(mcp_plugin_turned_off, plugin = "demo"));
+        assert_eq!(
+            screen.lines().filter(|line| *line == off).count(),
+            1,
+            "{screen}"
+        );
+        assert!(examined.contains(&off), "{examined:?}");
+        assert!(!screen.contains("demo_weather"), "{screen}");
+        assert!(
+            examined.iter().all(|line| !line.contains("demo_weather")),
+            "{examined:?}"
+        );
+
+        let (outcome, said) = typing(&directory, &["get", "demo_weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            said.contains(
+                &t!(
+                    servers_plugin_disabled,
+                    alias = "demo_weather",
+                    plugin = "demo"
+                )
+                .to_string()
+            ),
+            "{said}"
+        );
+    }
+
+    /// A plugin whose directory no longer holds what was installed shows its server with the
+    /// sentence that its files no longer match, and `list` still succeeds.
+    ///
+    /// Rejects a listing that never hashes the plugin's directory again, which would show a changed
+    /// tree as startable, and one that fails where a session would still open.
+    #[test]
+    fn a_plugin_whose_files_changed_says_so_under_its_server_and_fails_nothing() {
+        let directory = scratch("cli-mcp-list-plugin-changed");
+        plugin(&directory, "demo", WEATHER);
+        say_yes_to(&directory, "demo_weather", "demo", "weather");
+        std::fs::write(
+            bravebot_agent::plugins::installed_dir(&directory, "demo").join("extra.txt"),
+            "added after the install",
+        )
+        .expect("change the tree");
+
+        let ((outcome, listed), (examined, failed)) = listed_and_examined(&directory);
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(!failed, "{examined:?}");
+        let (_, below) = plugin_row(&listed, "demo_weather");
+        let changed = t!(
+            servers_plugin_changed,
+            alias = "demo_weather",
+            plugin = "demo"
+        )
+        .to_string();
+        assert!(below.contains(&changed.as_str()), "{below:?}");
+        assert!(!below.contains(&t!(mcp_plugin_starts)), "{below:?}");
+    }
+
+    /// A joined alias over the length an alias may have is listed with the message that says it is
+    /// too long, and makes `list` fail, as an unusable declaration does. `get` fails the same way.
+    ///
+    /// Rejects the message that says the alias is not one, which is untrue of it, and a listing that
+    /// drops the entry or counts nothing.
+    #[test]
+    fn a_joined_alias_that_is_too_long_is_listed_as_such_and_fails_list_and_get() {
+        let directory = scratch("cli-mcp-list-plugin-too-long");
+        let long = "a".repeat(61);
+        plugin(
+            &directory,
+            "demo",
+            &format!(
+                r#"{{"servers":{{"{long}":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}}}}"#
+            ),
+        );
+        let joined = format!("demo_{long}");
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        let (ending, said) = outcome.expect_err("an entry that cannot be used fails list");
+        assert_eq!(ending, Ending::Configuration);
+        assert_eq!(said, t!(mcp_list_plugin_unusable, count = 1), "{said}");
+        let row = listed
+            .lines()
+            .find(|line| line.trim_start().starts_with(&joined))
+            .unwrap_or_else(|| panic!("no row: {listed}"));
+        assert!(row.contains(&t!(mcp_plugin_too_long).to_string()), "{row}");
+        assert!(!row.contains(&t!(mcp_problem_alias).to_string()), "{row}");
+
+        let (outcome, _) = typing(&directory, &["get", &joined], "");
+        let (ending, said) = outcome.expect_err("get fails for an entry that cannot be used");
+        assert_eq!(ending, Ending::Configuration);
+        assert!(
+            said.contains(&t!(mcp_plugin_too_long).to_string()),
+            "{said}"
+        );
+    }
+
+    /// A declaration in `mcp.json` under the same joined alias wins: it is the only live row, the
+    /// plugin's is not listed as one, and a line says once that the plugin's server of that name is
+    /// not used. `get` draws the declared server and says the same.
+    ///
+    /// Rejects a listing that shows both as live rows, which would offer a server a session never
+    /// starts, and one that says nothing about the plugin's.
+    #[test]
+    fn a_declaration_under_the_same_joined_alias_is_the_only_live_row() {
+        let directory = scratch("cli-mcp-list-plugin-shadowed");
+        plugin(&directory, "demo", WEATHER);
+        let (outcome, _) = typing(
+            &directory,
+            &["add", "demo_weather", "--stdio", "--", "/opt/srv"],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let shadowed = t!(
+            servers_plugin_shadowed,
+            alias = "demo_weather",
+            plugin = "demo"
+        )
+        .to_string();
+        let ((outcome, listed), (examined, _)) = listed_and_examined(&directory);
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let examined = examined.join("\n");
+        for (which, text) in [("list", &listed), ("doctor", &examined)] {
+            let words: Vec<Vec<&str>> = text
+                .lines()
+                .map(|line| line.split_whitespace().collect())
+                .filter(|words: &Vec<&str>| words.first() == Some(&"demo_weather"))
+                .collect();
+            assert_eq!(
+                words
+                    .iter()
+                    .filter(|words| words.get(1) == Some(&"stdio"))
+                    .count(),
+                1,
+                "{which}: {text}"
+            );
+            assert!(
+                words.iter().all(|words| words.get(1) != Some(&"http")),
+                "{which}: the plugin's server is not a live row: {text}"
+            );
+            assert_eq!(
+                text.lines().filter(|line| line.trim() == shadowed).count(),
+                1,
+                "{which}: {text}"
+            );
+        }
+
+        let (outcome, said) = typing(&directory, &["get", "demo_weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(said.contains("/opt/srv"), "{said}");
+        assert!(!said.contains("127.0.0.1"), "{said}");
+        assert!(said.lines().any(|line| line.trim() == shadowed), "{said}");
+    }
+
+    /// `get <plugin>_<alias>` draws the declaration a session uses, names the plugin that carries
+    /// it, shows the digest a yes is recorded against and says whether it is approved. The sentence
+    /// for an unapproved one says a session at a terminal asks before starting it and does not name
+    /// `bravebot mcp approve`, which answers `not declared` for a plugin's alias. A name nobody
+    /// carries is still not declared.
+    ///
+    /// Rejects a `get` that fails `not declared` for a plugin's alias, one that says to run
+    /// `bravebot mcp approve`, one that says approved from the declaration's digest, and one that
+    /// shows no digest.
+    #[test]
+    fn get_draws_a_plugins_server_names_its_plugin_and_says_where_it_is_approved() {
+        let directory = scratch("cli-mcp-get-plugin-server");
+        plugin(&directory, "demo", WEATHER);
+        let digest = plugin_digest(&directory, "demo_weather");
+
+        let (outcome, said) = typing(&directory, &["get", "demo_weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            said.contains(&t!(servers_carried_by, plugin = "demo").to_string()),
+            "{said}"
+        );
+        assert!(said.contains("demo_weather"), "{said}");
+        assert!(said.contains("http://127.0.0.1:1/mcp"), "{said}");
+        assert!(said.contains(&digest.to_string()), "{said}");
+        let unapproved = said
+            .lines()
+            .find(|line| line.trim() == t!(mcp_unapproved_plugin))
+            .unwrap_or_else(|| panic!("no unapproved line: {said}"));
+        assert!(!said.contains("mcp approve"), "{said}");
+        assert!(!unapproved.contains("mcp approve"), "{unapproved}");
+
+        say_yes_to(&directory, "demo_weather", "demo", "weather");
+        let (outcome, said) = typing(&directory, &["get", "demo_weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            said.lines().any(|line| line.trim() == t!(mcp_approved)),
+            "{said}"
+        );
+        assert!(
+            !said.contains(&t!(mcp_unapproved_plugin).to_string()),
+            "{said}"
+        );
+
+        let (outcome, _) = typing(&directory, &["get", "demo_nothing"], "");
+        assert_eq!(outcome, Err(not_declared("demo_nothing")));
+        let (outcome, _) = typing(&directory, &["get", "other_weather"], "");
+        assert_eq!(outcome, Err(not_declared("other_weather")));
+    }
+
+    /// What a plugin's servers file chooses is drawn written out: an argument holding ESC and a
+    /// newline and a url holding a character no terminal draws as itself, in `get` and in `list`
+    /// for a server whose alias is valid, and an alias that holds a control character in the list.
+    /// No line printed holds a control character, and the written-out forms are there.
+    ///
+    /// Rejects a `get` that prints argv or url as the plugin wrote them, a row that prints a key the
+    /// plugin chose without `shown`, and a width counted over the raw text.
+    #[test]
+    fn what_a_plugin_wrote_is_drawn_written_out_in_get_and_list() {
+        let directory = scratch("cli-mcp-plugin-control-characters");
+        plugin(
+            &directory,
+            "demo",
+            r#"{"servers":{"shell":{"transport":"stdio","argv":["/bin/echo","a\u001b[2J\nb"]},"maps":{"transport":"http","url":"http://127.0.0.1:1/mcp\u202e"},"x\u001b[2J\nsecond":{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}"#,
+        );
+        let clean = |which: &str, text: &str| {
+            for line in text.lines() {
+                assert!(
+                    !line.chars().any(char::is_control),
+                    "{which}: a control character reached a line: {line:?}"
+                );
+            }
+        };
+
+        let (outcome, said) = typing(&directory, &["get", "demo_shell"], "");
+        assert!(outcome.is_ok(), "{outcome:?}: {said}");
+        clean("get argv", &said);
+        assert!(said.contains("a\\u{1b}[2J\\nb"), "{said}");
+
+        let (outcome, said) = typing(&directory, &["get", "demo_maps"], "");
+        assert!(outcome.is_ok(), "{outcome:?}: {said}");
+        clean("get url", &said);
+        assert!(said.contains("\\u{202e}"), "{said}");
+
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        let (ending, _) = outcome.expect_err("an entry whose alias is not one cannot be used");
+        assert_eq!(ending, Ending::Configuration);
+        clean("list", &listed);
+        assert!(listed.contains("demo_x\\u{1b}[2J\\nsecond"), "{listed}");
+        assert!(listed.contains("demo_shell"), "{listed}");
+    }
+
+    /// SERVERS-14, PLUGIN-7: a checkout whose settings request the alias of a server an installed
+    /// plugin carries, or of a server of a plugin that is turned off, is not told its request is
+    /// `declared nowhere`. A session reaches that alias through the plugin, and the plugin's block
+    /// of the list answers for it. A request for an alias nobody carries and no `mcp.json` declares
+    /// is still told so, once, so the filter drops the plugin's aliases and no other.
+    ///
+    /// Rejects a `report` that calls every request not in `mcp.json` undeclared, which tells the
+    /// person a plugin's server was never found while the plugin block lists it, and a filter that
+    /// hides every request instead of the ones a plugin answers for.
+    #[test]
+    fn a_request_for_an_alias_a_plugin_carries_is_not_reported_as_declared_nowhere() {
+        let directory = scratch("cli-mcp-list-plugin-request");
+        plugin(&directory, "demo", WEATHER);
+        plugin(&directory, "idle", WEATHER);
+        bravebot_agent::plugins::set_enabled(&directory, "idle", false).expect("turn it off");
+        let here = requesting(
+            &directory,
+            &["demo_weather", "idle_weather", "demo_nothing", "calendar"],
+        );
+        let file = &requested_by();
+        // The row pads the alias to the widest one, so it is told by its first word and its ending.
+        let told_nowhere = |listed: &str, alias: &str| {
+            listed
+                .lines()
+                .filter(|line| {
+                    line.split_whitespace().next() == Some(alias)
+                        && line.ends_with(&t!(mcp_requested_undeclared, file = file))
+                })
+                .count()
+        };
+
+        let (outcome, listed) = typing_in(&directory, &here, &["list"], "");
+
+        assert!(outcome.is_ok(), "{outcome:?}: {listed}");
+        for alias in ["calendar", "demo_nothing"] {
+            assert_eq!(
+                told_nowhere(&listed, alias),
+                1,
+                "{alias} is requested and carried by no plugin: {listed}"
+            );
+        }
+        for alias in ["demo_weather", "idle_weather"] {
+            assert_eq!(
+                told_nowhere(&listed, alias),
+                0,
+                "{alias} is answered for by its plugin: {listed}"
+            );
+        }
+        let (row, _) = plugin_row(&listed, "demo_weather");
+        assert_eq!(row[1], "http", "the plugin's block lists it: {listed}");
+        assert!(
+            listed.contains(&format!("  {}", t!(mcp_plugin_turned_off, plugin = "idle"))),
+            "{listed}"
+        );
+    }
+
+    /// A plugin's servers file may hold an entry whose alias is thousands of characters, and the
+    /// file may be 64 KiB. That entry is drawn as it is and does not set the width of the alias
+    /// column or the indent under every other row: no line `list` or `doctor` prints is longer than
+    /// the long alias drawn written out plus 200 characters, the whole output is no more than 2,000
+    /// characters longer than that, and the plugin's other servers are padded to the longest alias
+    /// a session can reach, as before.
+    ///
+    /// Rejects a column width taken from every alias in the plugin's file, which pads each row and
+    /// indents each line under it by the length of an alias no session reaches, so one entry makes
+    /// output of tens of megabytes.
+    #[test]
+    fn a_plugin_alias_no_session_reaches_does_not_widen_the_rows_of_the_others() {
+        let directory = scratch("cli-mcp-plugin-long-alias");
+        let entry = r#"{"transport":"http","url":"http://127.0.0.1:1/mcp"}"#;
+        let (front, back) = ("a".repeat(2_500), "b".repeat(2_499));
+        plugin(
+            &directory,
+            "demo",
+            &format!(
+                r#"{{"servers":{{"ok":{entry},"weather":{entry},"{front}\u001b{back}":{entry}}}}}"#
+            ),
+        );
+        let joined = format!("demo_{front}\u{1b}{back}");
+        let long = shown(&joined);
+        assert!(
+            long.chars().count() > 5_000,
+            "the alias is drawn written out"
+        );
+        let bound = long.chars().count() + 200;
+
+        let ((outcome, listed), (examined, failed)) = listed_and_examined(&directory);
+
+        let (ending, _) = outcome.expect_err("an entry whose alias is not one fails list");
+        assert_eq!(ending, Ending::Configuration);
+        assert!(failed, "doctor fails where list does");
+        let own_row = format!(
+            "  {long}  {}",
+            t!(mcp_cannot_be_used, problem = problem(&Problem::Alias))
+        );
+        let widest = "demo_weather".len();
+        let padded = format!("  {}  http ", pad("demo_ok", widest));
+        let carried_by = format!(
+            "{}{}",
+            " ".repeat(2 + widest + 2),
+            t!(servers_carried_by, plugin = "demo")
+        );
+        let examined = examined.join("\n");
+        for (which, text) in [("list", &listed), ("doctor", &examined)] {
+            let longest = text
+                .lines()
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or_default();
+            assert!(
+                longest <= bound,
+                "{which}: a line of {longest} characters, over the bound of {bound}"
+            );
+            // One long alias padded into every row and indent keeps each line under the bound
+            // above and makes the whole output several times as long, so the total is bounded too.
+            let total = text.chars().count();
+            assert!(
+                total <= bound + 2_000,
+                "{which}: {total} characters in all, over {}",
+                bound + 2_000
+            );
+            assert!(
+                text.lines().any(|line| line == own_row),
+                "{which}: the long alias is drawn as it is, with no padding"
+            );
+            assert!(
+                text.lines().any(|line| line.starts_with(&padded)),
+                "{which}: a usable server is padded to the longest alias a session reaches"
+            );
+            assert_eq!(
+                text.lines().filter(|line| *line == carried_by).count(),
+                3,
+                "{which}: every line under a row is indented to that width"
+            );
+        }
+    }
+
+    /// A joined alias of exactly the longest length an alias may have is a usable server: `list`
+    /// and `doctor` give it a normal row with the approval a session would act on, no too-long line,
+    /// and neither fails, and `get` draws it. One character more is listed with the too-long line
+    /// and fails `list`, `doctor` and `get`. Both lengths come from `mcp::MAX_ALIAS`, the limit
+    /// `mcp::is_alias` checks.
+    ///
+    /// Rejects a limit applied off by one in either direction in the listing: a server at the
+    /// limit listed as too long, or one over it listed as usable.
+    #[test]
+    fn a_joined_alias_at_the_longest_length_lists_as_usable_and_one_more_lists_as_too_long() {
+        let room = mcp::MAX_ALIAS - plugin_servers::alias_of("demo", "").len();
+        let servers = |alias: &str| {
+            format!(
+                r#"{{"servers":{{"{alias}":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}}}}"#
+            )
+        };
+        let too_long = t!(mcp_plugin_too_long).to_string();
+
+        let directory = scratch("cli-mcp-plugin-joined-at-limit");
+        let joined = plugin_servers::alias_of("demo", &"x".repeat(room));
+        assert_eq!(joined.len(), mcp::MAX_ALIAS);
+        assert!(mcp::is_alias(&joined));
+        plugin(&directory, "demo", &servers(&"x".repeat(room)));
+        let ((outcome, listed), (examined, failed)) = listed_and_examined(&directory);
+        assert!(outcome.is_ok(), "{outcome:?}: {listed}");
+        assert!(!failed, "{examined:?}");
+        let digest = plugin_digest(&directory, &joined).short();
+        let (row, below) = plugin_row(&listed, &joined);
+        assert_eq!(
+            row,
+            [joined.as_str(), "http", "unapproved", digest.as_str()],
+            "{listed}"
+        );
+        assert!(
+            below.contains(&t!(servers_carried_by, plugin = "demo").as_str()),
+            "{below:?}"
+        );
+        assert!(below.contains(&t!(mcp_plugin_asks)), "{below:?}");
+        assert!(!listed.contains(&too_long), "{listed}");
+        assert!(examined.iter().all(|line| !line.contains(&too_long)));
+        let (outcome, said) = typing(&directory, &["get", &joined], "");
+        assert!(outcome.is_ok(), "{outcome:?}: {said}");
+        assert!(!said.contains(&too_long), "{said}");
+
+        let directory = scratch("cli-mcp-plugin-joined-over-limit");
+        let joined = plugin_servers::alias_of("demo", &"x".repeat(room + 1));
+        assert_eq!(joined.len(), mcp::MAX_ALIAS + 1);
+        assert!(!mcp::is_alias(&joined));
+        plugin(&directory, "demo", &servers(&"x".repeat(room + 1)));
+        let ((outcome, listed), (examined, failed)) = listed_and_examined(&directory);
+        let (ending, said) = outcome.expect_err("an entry that cannot be used fails list");
+        assert_eq!(ending, Ending::Configuration);
+        assert_eq!(said, t!(mcp_list_plugin_unusable, count = 1), "{said}");
+        assert!(failed, "{examined:?}");
+        let row = listed
+            .lines()
+            .find(|line| line.trim_start().starts_with(&joined))
+            .unwrap_or_else(|| panic!("no row: {listed}"));
+        assert!(row.contains(&too_long), "{row}");
+        assert!(!row.contains("unapproved"), "{row}");
+        let (outcome, _) = typing(&directory, &["get", &joined], "");
+        let (ending, said) = outcome.expect_err("get fails for an entry that cannot be used");
+        assert_eq!(ending, Ending::Configuration);
+        assert!(said.contains(&too_long), "{said}");
+    }
+
+    /// A plugin's server the managed layer refuses, and one whose program is a bare name no PATH
+    /// names, are listed with the line `no session starts it: <reason>` under the row, in `list`,
+    /// `doctor` and `get`, with the reason a session's note gives. Neither says a session starts it
+    /// or asks about it, and neither makes `list` or `doctor` fail. A server the managed layer
+    /// allows has no such line.
+    ///
+    /// Rejects a listing that leaves the line out for a server nothing starts, which reads as one a
+    /// session asks about, one that gives it to a server that can start, and one that counts either
+    /// state as a failure.
+    #[test]
+    fn a_plugins_server_no_session_here_starts_says_why_and_fails_nothing() {
+        let directory = scratch("cli-mcp-plugin-withheld");
+        plugin(
+            &directory,
+            "demo",
+            r#"{"servers":{"refused":{"transport":"http","url":"https://mcp.elsewhere.example/mcp"},"bare":{"transport":"stdio","argv":["weather-mcp"]},"allowed":{"transport":"http","url":"https://mcp.corp.example/mcp"}}}"#,
+        );
+        let managed = directory.join("managed.json");
+        std::fs::write(
+            &managed,
+            r#"{"mcp": {"allow": [{"host": "*.corp.example"}]}}"#,
+        )
+        .expect("managed.json");
+        let refused = t!(
+            mcp_plugin_withheld,
+            reason = t!(managed_not_allowed, path = managed.display().to_string())
+        )
+        .to_string();
+        let not_found = t!(
+            mcp_plugin_withheld,
+            reason = t!(servers_program_without_path, program = "weather-mcp")
+        )
+        .to_string();
+        let lead = t!(mcp_plugin_withheld, reason = "").to_string();
+        let lead = lead.trim_end();
+
+        let ((outcome, listed), (examined, failed)) = listed_and_examined(&directory);
+
+        assert!(outcome.is_ok(), "{outcome:?}: {listed}");
+        assert!(!failed, "{examined:?}");
+        let examined = examined.join("\n");
+        for (alias, said) in [("demo_refused", &refused), ("demo_bare", &not_found)] {
+            let (_, below) = plugin_row(&listed, alias);
+            assert!(below.contains(&said.as_str()), "{alias}: {below:?}");
+            assert!(!below.contains(&t!(mcp_plugin_asks)), "{alias}: {below:?}");
+            assert!(
+                !below.contains(&t!(mcp_plugin_starts)),
+                "{alias}: {below:?}"
+            );
+            assert!(
+                examined.lines().any(|line| line.trim() == said),
+                "doctor, {alias}: {examined}"
+            );
+            let (outcome, got) = typing(&directory, &["get", alias], "");
+            assert!(outcome.is_ok(), "{alias}: {outcome:?}: {got}");
+            assert!(
+                got.lines().any(|line| line.trim() == said),
+                "get {alias}: {got}"
+            );
+        }
+        let (row, below) = plugin_row(&listed, "demo_allowed");
+        assert_eq!(row[1], "http", "{listed}");
+        assert!(below.contains(&t!(mcp_plugin_asks)), "{below:?}");
+        assert!(
+            below.iter().all(|line| !line.starts_with(lead)),
+            "{below:?}"
+        );
+    }
+
+    /// SERVERS-14, SERVERS-27: with a person present whose input would answer yes, `list`, `get` and
+    /// the MCP block of `doctor` ask no question for an unapproved plugin server: the input is left
+    /// unread, neither the question nor its answer prompt is printed, and the server is still
+    /// unapproved, so no approval was recorded. Nothing these commands call takes the means to ask:
+    /// `held_by_plugins` and `hold_plugin_server` take no `Asker`.
+    ///
+    /// Rejects a listing that puts the first-use question when a person is present and reads their
+    /// answer, which the test in tests/running.rs cannot catch because its standard input is no
+    /// terminal.
+    #[test]
+    fn list_get_and_examined_ask_a_present_person_nothing_and_leave_the_server_unapproved() {
+        let directory = scratch("cli-mcp-plugin-present-person");
+        plugin(&directory, "demo", WEATHER);
+        let digest = plugin_digest(&directory, "demo_weather");
+        let question = t!(mcp_question).to_string();
+        let prompt = t!(servers_answer).to_string();
+        assert!(!question.is_empty() && !prompt.is_empty());
+        let answers = "y\n1\nyes\n";
+        let unapproved = |after: &str| {
+            assert!(
+                !Approvals::read(&directory).approves_plugin(&digest),
+                "{after} approved the server"
+            );
+            assert!(
+                !mcp::approvals_file(&directory).exists(),
+                "{after} wrote the approvals file"
+            );
+        };
+        let present = |args: &[&str]| {
+            let home = Home {
+                directory: Some(directory.clone()),
+                writable: true,
+            };
+            let mut person = Person {
+                answers: answers.as_bytes(),
+                screen: Vec::new(),
+                present: true,
+            };
+            let managed = Managed::at(&directory.join("managed.json"));
+            let here = requesting(&directory, &[]);
+            let cwd = here.project.clone();
+            let again = || {
+                Ok(Here {
+                    project: here.project.clone(),
+                    requested: here.requested.clone(),
+                })
+            };
+            let outcome = run(&words(args), Ok(&cwd), &home, &managed, &again, &mut person);
+            let unread = person.answers.len();
+            (outcome, String::from_utf8(person.screen).unwrap(), unread)
+        };
+
+        for args in [&["list"][..], &["get", "demo_weather"]] {
+            let (outcome, screen, unread) = present(args);
+            assert!(outcome.is_ok(), "{args:?}: {outcome:?}: {screen}");
+            assert_eq!(unread, answers.len(), "{args:?} read the person's input");
+            assert!(screen.contains("demo_weather"), "{args:?}: {screen}");
+            for text in [&question, &prompt] {
+                assert!(
+                    !screen.contains(text.as_str()),
+                    "{args:?} asked {text:?}: {screen}"
+                );
+            }
+            assert!(
+                screen.lines().any(|line| {
+                    line.split_whitespace().nth(2) == Some("unapproved")
+                        || line.trim() == t!(mcp_unapproved_plugin)
+                }),
+                "{args:?} did not say the server is unapproved: {screen}"
+            );
+            unapproved(&args.join(" "));
+        }
+
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let (lines, failed) = examined(
+            &home,
+            &Managed::at(&directory.join("managed.json")),
+            Ok(requesting(&directory, &[])),
+        );
+        let lines = lines.join("\n");
+        assert!(!failed, "{lines}");
+        assert!(lines.contains("demo_weather"), "{lines}");
+        for text in [&question, &prompt] {
+            assert!(!lines.contains(text.as_str()), "examined asked {text:?}");
+        }
+        unapproved("examined");
     }
 }

@@ -65,7 +65,7 @@ const HOMES_DIRECTORY: &str = "mcp-home";
 const MAX_BYTES: u64 = 64 * 1024;
 
 /// The longest alias, which is also the first half of every tool name a server offers.
-const MAX_ALIAS: usize = 64;
+pub const MAX_ALIAS: usize = 64;
 
 /// What the digested form starts with, so a later change to that form cannot collide with this one.
 const DIGEST_FORM: &str = "bravebot-mcp-declaration-1";

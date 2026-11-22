@@ -1870,6 +1870,10 @@ mcp-list-declared-in = declared in { $path }
 mcp-approved = approved
 mcp-unapproved = unapproved
 mcp-unapproved-run-approve = unapproved: run bravebot mcp approve { $alias }
+# `get` for a server an installed plugin carries. bravebot mcp approve reads mcp.json only, so it
+# is not named: a yes at the question a session at a terminal puts at the server's first use is the
+# only approval.
+mcp-unapproved-plugin = unapproved: a session at a terminal asks before starting it
 # The heading `get` puts over the policy a session would start a local server under, which the lines
 # beneath it spell out with the labels /status uses.
 mcp-get-policy = a session here would confine it to:
@@ -1886,6 +1890,27 @@ mcp-list-unusable =
 # Under the heading of `bravebot mcp list`: the directory whose session the lines under each server
 # answer for.
 mcp-list-here = for a session started in { $path }
+# Over the second block of `bravebot mcp list` and `doctor`: the servers installed plugins carry,
+# which mcp.json does not declare. Each is named <plugin>_<alias>.
+mcp-list-plugins = carried by installed plugins
+# A plugin that is turned off is named once and its servers are not read.
+mcp-plugin-turned-off = the plugin { $plugin } is turned off, so none of its servers is started
+# Said as the problem of a plugin's server whose joined alias, <plugin>_<alias>, is a valid alias
+# in every way but its length.
+mcp-plugin-too-long =
+    the alias is too long once the plugin's name and a _ are put before the name the plugin gave
+    the server
+# Under each plugin server in the list: whether a session starts it unasked, asks first, or does
+# not start it. Only a person's yes to that server approves a server a plugin carries, and the
+# plugin's files and the settings of a checkout add no approval.
+mcp-plugin-starts = a session starts it unasked
+mcp-plugin-asks = a session at a terminal asks before starting it
+mcp-plugin-withheld = no session starts it: { $reason }
+mcp-list-plugin-unusable =
+    { $count ->
+        [one] one server an installed plugin carries cannot be used
+       *[other] { $count } servers installed plugins carry cannot be used
+    }
 # Under each server in `bravebot mcp list` and `doctor`: which checkout requested it, and whether a
 # session started here holds the grant to call it.
 mcp-not-requested-here = not requested here, so no session here holds a grant to call it
@@ -2130,6 +2155,9 @@ mcp-command-nothing-to-reconnect = Every requested MCP server is running or turn
 mcp-command-reconnected = { $alias } is running. Its tools are put to you before the next turn plans.
 mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
 mcp-command-already-off = { $alias } is already turned off
+# `/mcp list` names an installed plugin that /plugin disable turned off, once and without its servers:
+# none of its files was read, so none of its servers is requested here.
+mcp-command-plugin-off = The plugin { $plugin } is turned off, so none of its servers is requested. /plugin enable { $plugin } turns it on
 command-plugin = Install, list, update, remove, enable or disable a plugin
 plugin-command-usage = /plugin takes add <path or git url[#ref]>, list, update <name>, remove <name>, enable <name> or disable <name>
 plugin-command-needs-an-argument = /plugin { $command } needs a path, a git url or a name

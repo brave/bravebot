@@ -70,6 +70,25 @@ struct Settled {
 
 /// Settle `alias` against the servers the plugins under `home` carry.
 fn settled(root: &Path, home: &Path, alias: &str, asking: Asking, asker: &mut Asked) -> Settled {
+    settled_under(
+        root,
+        home,
+        alias,
+        (&Managed::default(), Prelude::current()),
+        asking,
+        asker,
+    )
+}
+
+/// [`settled`] against the managed layer and the confinement given, not the ones this machine has.
+fn settled_under(
+    root: &Path,
+    home: &Path,
+    alias: &str,
+    (managed, prelude): (&Managed, Option<Prelude>),
+    asking: Asking,
+    asker: &mut Asked,
+) -> Settled {
     let carried = PluginServers::read(home);
     let mut taken = Vec::new();
     let mut notes = Vec::new();
@@ -80,11 +99,11 @@ fn settled(root: &Path, home: &Path, alias: &str, asking: Asking, asker: &mut As
             directory: Some(home.to_path_buf()),
             writable: true,
         },
-        &Managed::default(),
+        managed,
         asking,
         asker,
         &|_| None,
-        Prelude::current(),
+        prelude,
         (&carried, &mut taken),
         &mut notes,
     );
@@ -100,11 +119,28 @@ fn recorded(home: &Path) -> String {
 }
 
 fn edit_the_script(home: &Path) {
+    edit_a_script(home, "demo");
+}
+
+/// Change one file in the installed directory of the plugin `plugin`, and in no other.
+fn edit_a_script(home: &Path, plugin: &str) {
     std::fs::write(
-        crate::plugins::installed_dir(home, "demo").join("server.sh"),
+        crate::plugins::installed_dir(home, plugin).join("server.sh"),
         "#!/bin/sh\nrm -rf /\n",
     )
     .expect("edit");
+}
+
+/// What a listing holds for the server `alias` among the plugins under `home`, read as a session
+/// at a terminal (or not) reads them.
+fn held(home: &Path, alias: &str, asking: Asking) -> PluginHeld {
+    let carried = PluginServers::read(home);
+    let mut rows = held_by_plugins(&carried, home, asking, &Managed::default());
+    let at = rows
+        .iter()
+        .position(|(server, _)| server.alias == alias)
+        .expect("the server is listed");
+    rows.swap_remove(at).1
 }
 
 /// T4. A server a plugin carries is not started before the question that names it, a no starts and
@@ -550,4 +586,712 @@ fn a_plugin_authored_alias_with_a_control_character_and_a_newline_is_drawn_escap
         );
     }
     assert!(asker.shown.is_empty(), "no question was put");
+}
+
+/// A listing calls a plugin's server approved only where the person said yes to that server, and
+/// asked about where nothing has been said and a session at a terminal would ask. A home approval
+/// of the same declaration and a recorded project do not approve it, as a session settles it
+/// (SERVERS-27).
+///
+/// Rejects a listing that reuses the declared-server decision (`approves` on the declaration's
+/// digest, or a recorded project), which would call a server approved that a session still asks
+/// about, and one that never reads the person's yes, which would ask again about an answered one.
+#[test]
+fn a_listing_calls_a_plugins_server_approved_only_for_a_yes_to_that_server() {
+    let root = root("plugin-held-approval");
+    let home = install(&root, "home", "demo", WEATHER);
+
+    let nobody_answered = held(&home, "demo_weather", Asking::Person);
+    assert!(!nobody_answered.approved, "{nobody_answered:?}");
+    assert!(nobody_answered.asks, "a session at a terminal asks");
+    assert!(nobody_answered.digest.is_some());
+    assert!(nobody_answered.stop.is_none() && nobody_answered.unusable.is_none());
+    assert!(nobody_answered.unstarted.is_none());
+
+    let declaration = Declaration::http("http://127.0.0.1:1/mcp".into()).expect("declaration");
+    let mut approvals = Approvals::default();
+    approvals.approve("demo_weather", declaration.digest());
+    let mut projects = Projects::default();
+    projects.add(&root.join("project"));
+    std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("a home approval");
+    std::fs::write(mcp::projects_file(&home), projects.to_text()).expect("a project answer");
+    for asking in [Asking::Person, Asking::Bypass, Asking::OneShot] {
+        let said = held(&home, "demo_weather", asking);
+        assert!(!said.approved, "{asking:?}: {said:?}");
+        assert_eq!(said.asks, asking == Asking::Person, "{asking:?}");
+    }
+
+    let mut yes = Asked::saying(Answer::Once);
+    let started = settled(&root, &home, "demo_weather", Asking::Person, &mut yes);
+    assert_eq!(started.plans.len(), 1, "{:?}", started.notes);
+    for asking in [Asking::Person, Asking::Bypass, Asking::OneShot] {
+        let said = held(&home, "demo_weather", asking);
+        assert!(said.approved && !said.asks, "{asking:?}: {said:?}");
+        assert_eq!(said.digest, Some(yes.digests[0]), "{asking:?}");
+    }
+}
+
+/// A plugin whose files changed holds a stop whatever was answered, and a plugin turned off is
+/// named and holds a stop for a server read before it was turned off. Neither is asked about.
+///
+/// Rejects a listing that never hashes the plugin's directory again, which would call a changed
+/// tree startable, and one that reads a turned-off plugin's servers file for display (PLUGIN-11).
+#[test]
+fn a_listing_holds_a_stop_for_a_changed_tree_and_names_a_plugin_turned_off() {
+    let root = root("plugin-held-stop");
+    let home = install(&root, "home", "demo", WEATHER);
+    let mut yes = Asked::saying(Answer::Once);
+    settled(&root, &home, "demo_weather", Asking::Person, &mut yes);
+    let control = held(&home, "demo_weather", Asking::Person);
+    assert!(control.stop.is_none() && control.approved, "{control:?}");
+
+    edit_the_script(&home);
+    let changed = held(&home, "demo_weather", Asking::Person);
+    assert_eq!(changed.stop, Some(Stop::Changed), "{changed:?}");
+    assert!(!changed.asks, "a changed tree is not asked about");
+
+    let second = install(&root, "second", "demo", WEATHER);
+    let carried = PluginServers::read(&second);
+    crate::plugins::set_enabled(&second, "demo", false).expect("disable");
+    let rows = held_by_plugins(&carried, &second, Asking::Person, &Managed::default());
+    let [(_, off)] = rows.as_slice() else {
+        panic!("one server");
+    };
+    assert_eq!(off.stop, Some(Stop::Disabled), "{off:?}");
+    assert!(!off.asks);
+
+    let again = PluginServers::read(&second);
+    assert_eq!(again.disabled(), ["demo".to_string()]);
+    assert!(again.servers().is_empty(), "nothing of it was read");
+    assert!(again.requested(&[]).is_empty());
+}
+
+/// A joined alias that is too long is told apart from an alias the plugin's file wrote that is not
+/// one and from a declaration that is wrong, so a front end can say which: [`plugin_problem`] gives
+/// the length sentence for the first and the declaration's own problem for the other two.
+///
+/// Rejects a `plugin_problem` that answers every `Problem::Alias` with the length sentence, one that
+/// never says it, and one that gives the three the same words.
+#[test]
+fn a_listing_tells_a_joined_alias_that_is_too_long_from_an_unusable_declaration() {
+    let root = root("plugin-held-unusable");
+    let long = "x".repeat(60);
+    let servers = format!(
+        r#"{{"servers":{{"{long}":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}},"y\u001b[2J":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}},"bad":{{"transport":"smtp"}}}}}}"#
+    );
+    let home = install(&root, "home", "demo", &servers);
+    let carried = PluginServers::read(&home);
+    let rows = held_by_plugins(&carried, &home, Asking::Person, &Managed::default());
+    assert_eq!(rows.len(), 3);
+    let row = |named: &str| {
+        rows.iter()
+            .find(|(server, _)| server.named == named)
+            .expect("listed")
+    };
+    let sentence = |named: &str| {
+        let (server, held) = row(named);
+        plugin_problem(server, held.unusable.as_ref().expect("unusable"))
+    };
+
+    assert_eq!(row(&long).1.unusable, Some(Problem::Alias));
+    assert!(!row(&long).1.asks);
+    assert_eq!(sentence(&long), t!(mcp_plugin_too_long).to_string());
+    assert_ne!(sentence(&long), problem(&Problem::Alias));
+    assert_eq!(row("y\u{1b}[2J").1.unusable, Some(Problem::Alias));
+    assert_eq!(sentence("y\u{1b}[2J"), problem(&Problem::Alias));
+    assert_eq!(row("bad").1.unusable, Some(Problem::Transport));
+    assert_eq!(sentence("bad"), problem(&Problem::Transport));
+}
+
+/// A session's note for an entry a plugin carries that cannot be used is worded as a listing words
+/// it: a joined alias that is too long says the joined alias is too long, and an alias that is not
+/// one and a declaration that is wrong say what `problem` says of them.
+///
+/// Rejects a `settle_plugin` that words every unusable entry with `problem(found)`, which tells a
+/// person whose plugin's name makes the join too long that the alias is not one, and one that
+/// words every `Problem::Alias` as too long.
+#[test]
+fn a_session_words_an_unusable_plugin_entry_as_a_listing_does() {
+    let root = root("plugin-session-unusable-words");
+    let long = "x".repeat(60);
+    let servers = format!(
+        r#"{{"servers":{{"{long}":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}},"y\u001b[2J":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}},"bad":{{"transport":"smtp"}}}}}}"#
+    );
+    let home = install(&root, "home", "demo", &servers);
+    let carried = PluginServers::read(&home);
+    let entries = [
+        (
+            long.as_str(),
+            Problem::Alias,
+            t!(mcp_plugin_too_long).to_string(),
+        ),
+        ("y\u{1b}[2J", Problem::Alias, problem(&Problem::Alias)),
+        ("bad", Problem::Transport, problem(&Problem::Transport)),
+    ];
+
+    for (named, found, wording) in entries {
+        let alias = crate::plugin_servers::alias_of("demo", named);
+        let server = carried
+            .servers()
+            .iter()
+            .find(|server| server.named == named)
+            .expect("listed");
+        assert_eq!(plugin_problem(server, &found), wording, "{named:?}");
+        let mut asker = Asked::saying(Answer::Once);
+
+        let said = settled(&root, &home, &alias, Asking::Person, &mut asker);
+
+        assert!(said.plans.is_empty(), "{named:?}: started");
+        assert!(asker.shown.is_empty(), "{named:?}: asked");
+        assert_eq!(
+            said.notes,
+            [t!(mcp_unusable, alias = shown(&alias), problem = wording).to_string()],
+            "{named:?}"
+        );
+    }
+}
+
+/// A session settling a plugin's server and a listing holding it agree on the same states: the
+/// server starts exactly where the listing holds nothing back and either approves it or lets a
+/// session ask, and a question is put exactly where the listing says `asks`. Where the entry cannot
+/// be used because the joined alias is too long, the session's note is the sentence the listing
+/// gives, not only a refusal.
+///
+/// Rejects a second copy of the decision in either, which drifts from the other as soon as one of
+/// them changes, and a session that refuses a too-long joined alias in other words than a listing
+/// uses.
+#[test]
+fn a_session_and_a_listing_agree_on_every_state_of_a_plugins_server() {
+    let root = root("plugin-held-agree");
+    let long = "x".repeat(60);
+    let too_long = format!(
+        r#"{{"servers":{{"{long}":{{"transport":"http","url":"http://127.0.0.1:1/mcp"}}}}}}"#
+    );
+    let mut checked = 0;
+    for state in [
+        "unanswered",
+        "answered",
+        "home approval and project",
+        "changed",
+        "too long",
+    ] {
+        for asking in [Asking::Person, Asking::OneShot, Asking::Bypass] {
+            let name = format!("home-{checked}");
+            checked += 1;
+            let servers = if state == "too long" {
+                &too_long
+            } else {
+                WEATHER
+            };
+            let alias = if state == "too long" {
+                format!("demo_{long}")
+            } else {
+                "demo_weather".to_string()
+            };
+            let home = install(&root, &name, "demo", servers);
+            match state {
+                "answered" => {
+                    let mut yes = Asked::saying(Answer::Once);
+                    settled(&root, &home, &alias, Asking::Person, &mut yes);
+                }
+                "home approval and project" => {
+                    let declaration =
+                        Declaration::http("http://127.0.0.1:1/mcp".into()).expect("declaration");
+                    let mut approvals = Approvals::default();
+                    approvals.approve("demo_weather", declaration.digest());
+                    let mut projects = Projects::default();
+                    projects.add(&root.join("project"));
+                    std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("home");
+                    std::fs::write(mcp::projects_file(&home), projects.to_text()).expect("project");
+                }
+                "changed" => edit_the_script(&home),
+                _ => {}
+            }
+
+            let listing = held(&home, &alias, asking);
+            let mut asker = Asked::saying(Answer::Once);
+            let session = settled(&root, &home, &alias, asking, &mut asker);
+
+            let held_back =
+                listing.stop.is_some() || listing.unusable.is_some() || listing.unstarted.is_some();
+            let starts = !held_back && (listing.approved || listing.asks);
+            let context = format!("{state}, {asking:?}: {listing:?} {:?}", session.notes);
+            assert_eq!(session.plans.len() == 1, starts, "{context}");
+            assert_eq!(
+                asker.shown.len() == 1,
+                listing.asks && !held_back,
+                "{context}"
+            );
+            if state == "too long" {
+                let carried = PluginServers::read(&home);
+                let server = carried
+                    .servers()
+                    .iter()
+                    .find(|server| server.alias == alias)
+                    .expect("listed");
+                let sentence = plugin_problem(
+                    server,
+                    listing
+                        .unusable
+                        .as_ref()
+                        .expect("the listing holds a problem"),
+                );
+                assert_eq!(sentence, t!(mcp_plugin_too_long).to_string(), "{context}");
+                assert_eq!(
+                    session.notes,
+                    [t!(mcp_unusable, alias = shown(&alias), problem = sentence).to_string()],
+                    "{context}"
+                );
+            }
+        }
+    }
+    assert_eq!(checked, 15);
+}
+
+/// The decision for one server, made by the function a caller that answers for one alias calls, is
+/// the decision the whole listing makes for that server, in each state a plugin's server is in:
+/// unapproved, approved, a tree that changed, a plugin turned off, and an entry that cannot be used.
+///
+/// Rejects a single-server function that does not hash the plugin's directory again, which would
+/// call a changed tree startable, one that reads no approvals, which would ask about an answered
+/// server, and a second copy of the decision that drifts from the listing's.
+#[test]
+fn the_hold_of_one_server_is_the_hold_the_listing_gives_that_server() {
+    let root = root("plugin-held-single");
+    let wrong = r#"{"servers":{"bad":{"transport":"smtp"}}}"#;
+    let fields = |held: &PluginHeld| {
+        (
+            held.stop,
+            held.unusable.clone(),
+            held.unstarted.clone(),
+            held.digest,
+            held.approved,
+            held.asks,
+            held.plan.is_some(),
+        )
+    };
+    let mut checked = 0;
+    for state in [
+        "unapproved",
+        "approved",
+        "changed",
+        "turned off",
+        "unusable",
+    ] {
+        for asking in [Asking::Person, Asking::OneShot] {
+            let name = format!("home-{checked}");
+            checked += 1;
+            let unusable = state == "unusable";
+            let home = install(&root, &name, "demo", if unusable { wrong } else { WEATHER });
+            let alias = if unusable { "demo_bad" } else { "demo_weather" };
+            match state {
+                "approved" => {
+                    let mut yes = Asked::saying(Answer::Once);
+                    settled(&root, &home, alias, Asking::Person, &mut yes);
+                }
+                "changed" => edit_the_script(&home),
+                _ => {}
+            }
+            let carried = PluginServers::read(&home);
+            if state == "turned off" {
+                crate::plugins::set_enabled(&home, "demo", false).expect("disable");
+            }
+
+            let mut listing = held_by_plugins(&carried, &home, asking, &Managed::default());
+            let (server, listed) = listing.pop().expect("one server");
+            assert!(listing.is_empty(), "one server");
+            let single = held_by_plugin_server(server, &home, asking, &Managed::default());
+
+            let context = format!("{state}, {asking:?}: {single:?} against {listed:?}");
+            assert_eq!(fields(&single), fields(&listed), "{context}");
+            match state {
+                "unapproved" => assert!(!single.approved && single.stop.is_none(), "{context}"),
+                "approved" => assert!(single.approved && !single.asks, "{context}"),
+                "changed" => assert_eq!(single.stop, Some(Stop::Changed), "{context}"),
+                "turned off" => assert_eq!(single.stop, Some(Stop::Disabled), "{context}"),
+                _ => assert!(single.unusable.is_some(), "{context}"),
+            }
+        }
+    }
+    assert_eq!(checked, 10);
+}
+
+/// A held server printed with `{:?}` names every field a caller reads and leaves out what its plan
+/// holds: the plan of an HTTP server carries the bearer token read from the environment in its
+/// headers, and a test or a log that prints a `PluginHeld` must not print it.
+///
+/// Rejects a `Debug` derived over the plan, which prints the header `Authorization: Bearer <token>`.
+#[test]
+fn a_held_server_printed_with_debug_leaves_out_the_bearer_token_its_plan_holds() {
+    let root = root("plugin-held-debug");
+    let secure = r#"{"servers":{"secure":{"transport":"http","url":"http://127.0.0.1:1/mcp","bearer_env":"DEMO_TOKEN"}}}"#;
+    let home = install(&root, "home", "demo", secure);
+    let carried = PluginServers::read(&home);
+    let [server] = carried.servers() else {
+        panic!("one server");
+    };
+    let token = "secret-token-value-4454";
+
+    let held = hold_plugin_server(
+        server,
+        Ok(()),
+        &Approvals::default(),
+        &Managed::default(),
+        &|name| (name == "DEMO_TOKEN").then(|| std::ffi::OsString::from(token)),
+        Prelude::current(),
+        &|| true,
+    );
+
+    let Some(Plan::Http { headers, .. }) = &held.plan else {
+        panic!("an HTTP plan: {held:?}");
+    };
+    assert!(
+        headers.contains(&("Authorization".to_string(), format!("Bearer {token}"))),
+        "control: the plan holds the token"
+    );
+    for printed in [format!("{held:?}"), format!("{held:#?}")] {
+        assert!(!printed.contains(token), "{printed}");
+        assert!(printed.contains("plan: Some(..)"), "{printed}");
+        assert!(
+            printed.contains("asks: true") && printed.contains("approved: false"),
+            "{printed}"
+        );
+    }
+}
+
+const TWO_SERVERS: &str = r#"{"servers":{"b":{"transport":"http","url":"http://127.0.0.1:1/mcp"},"c":{"transport":"http","url":"http://127.0.0.1:2/mcp"}}}"#;
+
+/// The plugins `a` and `a-b`, each carrying the servers `b` and `c`, installed under one state
+/// directory called `name`. The name of the first is the start of the name of the second, and the
+/// servers have the same names, so only the whole plugin name tells their servers apart.
+fn two_plugins(root: &Path, name: &str) -> PathBuf {
+    let home = install(root, name, "a", TWO_SERVERS);
+    assert_eq!(
+        install(root, name, "a-b", TWO_SERVERS),
+        home,
+        "one state directory"
+    );
+    home
+}
+
+/// The stop each server of `carried` holds, by alias in sorted order.
+fn stops(carried: &PluginServers, home: &Path, asking: Asking) -> Vec<(String, Option<Stop>)> {
+    let mut stops: Vec<(String, Option<Stop>)> =
+        held_by_plugins(carried, home, asking, &Managed::default())
+            .into_iter()
+            .map(|(server, held)| (server.alias.clone(), held.stop))
+            .collect();
+    stops.sort_by(|left, right| left.0.cmp(&right.0));
+    stops
+}
+
+/// What [`stops`] gives for the four servers of [`two_plugins`] where the servers of `a` hold `a_stop`
+/// and the servers of `a-b` hold `a_b_stop`.
+fn expected_stops(a_stop: Option<Stop>, a_b_stop: Option<Stop>) -> Vec<(String, Option<Stop>)> {
+    vec![
+        ("a-b_b".to_string(), a_b_stop),
+        ("a-b_c".to_string(), a_b_stop),
+        ("a_b".to_string(), a_stop),
+        ("a_c".to_string(), a_stop),
+    ]
+}
+
+/// S6. A change to the files of one plugin stops the servers of that plugin, both of them, and the
+/// servers of the other plugin installed in the same state directory are not stopped, whichever of
+/// the two is changed. A listing and a session say the same of each.
+///
+/// Rejects a `held_by_plugins` that reuses the stop of the first plugin hashed for every server (the
+/// changed `a-b` shows no stop, the changed `a` stops `a-b` too), one that keys the stops it has found
+/// on a prefix of the plugin name, so `a-b` is given what `a` had, and one that hashes a directory
+/// other than the plugin's own. A session that checked the wrong plugin for a server fails the same
+/// rows.
+#[test]
+fn a_change_to_one_plugin_stops_the_servers_of_that_plugin_and_no_other() {
+    let root = root("plugin-held-two-changed");
+    for (changed, expected) in [
+        ("a-b", expected_stops(None, Some(Stop::Changed))),
+        ("a", expected_stops(Some(Stop::Changed), None)),
+    ] {
+        let home = two_plugins(&root, &format!("home-{changed}"));
+        let carried = PluginServers::read(&home);
+        assert_eq!(carried.servers().len(), 4, "four servers are read");
+        assert_eq!(
+            stops(&carried, &home, Asking::Person),
+            expected_stops(None, None),
+            "control, {changed}"
+        );
+
+        edit_a_script(&home, changed);
+
+        for asking in [Asking::Person, Asking::OneShot] {
+            assert_eq!(
+                stops(&carried, &home, asking),
+                expected,
+                "{changed} changed, {asking:?}"
+            );
+        }
+        for server in carried.servers() {
+            let single = held_by_plugin_server(server, &home, Asking::Person, &Managed::default());
+            let wanted = (server.plugin == changed).then_some(Stop::Changed);
+            assert_eq!(single.stop, wanted, "{changed} changed, {}", server.alias);
+        }
+        for plugin in ["a", "a-b"] {
+            let alias = format!("{plugin}_b");
+            let mut asker = Asked::saying(Answer::No);
+            let said = settled(&root, &home, &alias, Asking::Person, &mut asker);
+            assert!(said.plans.is_empty(), "{changed} changed, {alias}");
+            if plugin == changed {
+                assert_eq!(
+                    said.notes,
+                    [t!(
+                        servers_plugin_changed,
+                        alias = alias.as_str(),
+                        plugin = plugin
+                    )
+                    .to_string()],
+                    "{changed} changed, {alias}"
+                );
+                assert!(asker.shown.is_empty(), "{changed} changed, {alias}: asked");
+            } else {
+                assert_eq!(
+                    said.notes,
+                    [t!(servers_declined, alias = alias.as_str()).to_string()],
+                    "{changed} changed, {alias}"
+                );
+                assert_eq!(asker.shown.len(), 1, "{changed} changed, {alias}: asked");
+            }
+        }
+    }
+}
+
+/// S6. A plugin turned off stops its own servers with `Stop::Disabled` and not those of a plugin whose
+/// name starts with its name, and a request for a server the enabled plugin does not carry is not
+/// claimed by the disabled one. Both are asked of a state directory holding `a` and `a-b`.
+///
+/// Rejects a stop looked up by a prefix of the plugin name (`a` taking `a-b` with it), a
+/// `PluginServers::find` that treats an alias starting with a disabled plugin's name as that plugin's
+/// (`a-b_zzz` answered as the disabled `a`), and a session that cannot tell `a_b` from `a-b_b`.
+#[test]
+fn a_plugin_turned_off_stops_its_own_servers_and_not_those_of_a_plugin_named_with_its_name_first() {
+    let root = root("plugin-held-two-disabled");
+    for (off, on, expected) in [
+        ("a", "a-b", expected_stops(Some(Stop::Disabled), None)),
+        ("a-b", "a", expected_stops(None, Some(Stop::Disabled))),
+    ] {
+        let home = two_plugins(&root, &format!("home-{off}"));
+        let carried = PluginServers::read(&home);
+        crate::plugins::set_enabled(&home, off, false).expect("disable");
+
+        assert_eq!(stops(&carried, &home, Asking::Person), expected, "{off}");
+
+        let again = PluginServers::read(&home);
+        assert_eq!(again.disabled(), [off.to_string()], "{off}");
+        assert_eq!(again.servers().len(), 2, "{off}: only {on}'s are read");
+        assert!(
+            matches!(again.find(&format!("{off}_b")), Some(Listed::Disabled(name)) if name == off),
+            "{off}"
+        );
+        assert!(
+            matches!(again.find(&format!("{on}_b")), Some(Listed::Server(server)) if server.plugin == on),
+            "{on}"
+        );
+        assert!(
+            again.find(&format!("{on}_zzz")).is_none(),
+            "{off} is off and {on} does not carry zzz"
+        );
+        let alias = format!("{off}_b");
+        let mut asker = Asked::saying(Answer::Once);
+        let said = settled(&root, &home, &alias, Asking::Person, &mut asker);
+        assert!(said.plans.is_empty(), "{alias}");
+        assert_eq!(
+            said.notes,
+            [t!(
+                servers_plugin_disabled,
+                alias = alias.as_str(),
+                plugin = off
+            )
+            .to_string()],
+            "{alias}"
+        );
+        assert!(asker.shown.is_empty(), "{alias}: asked");
+        let alias = format!("{on}_b");
+        let mut asker = Asked::saying(Answer::Once);
+        let said = settled(&root, &home, &alias, Asking::Person, &mut asker);
+        assert_eq!(said.plans.len(), 1, "{alias}: {:?}", said.notes);
+        assert_eq!(
+            said.taken,
+            [(alias.clone(), on.to_string())],
+            "{alias} is taken from {on}"
+        );
+        assert_eq!(asker.shown.len(), 1, "{alias}");
+    }
+}
+
+const NOT_FOUND: &str = r#"{"servers":{"tool":{"transport":"stdio","argv":["weather-mcp"]}}}"#;
+const LOCAL: &str =
+    r#"{"servers":{"tool":{"transport":"stdio","argv":["${PLUGIN_ROOT}/server.sh"]}}}"#;
+const ELSEWHERE: &str =
+    r#"{"servers":{"tool":{"transport":"http","url":"https://mcp.elsewhere.example/mcp"}}}"#;
+
+/// [`hold_plugin_server`] for the server `alias`, as a listing holds it, against the managed layer and
+/// the confinement given instead of the ones this machine has.
+fn held_with(
+    home: &Path,
+    alias: &str,
+    asking: Asking,
+    managed: &Managed,
+    prelude: Option<Prelude>,
+) -> PluginHeld {
+    let carried = PluginServers::read(home);
+    let Some(Listed::Server(server)) = carried.find(alias) else {
+        panic!("{alias} is a server of a plugin");
+    };
+    hold_plugin_server(
+        server,
+        crate::plugin_servers::may_start(home, &server.plugin),
+        &Approvals::read(home),
+        managed,
+        &|name| std::env::var_os(name),
+        prelude,
+        &|| asking == Asking::Person,
+    )
+}
+
+/// S7. A plugin's server that cannot be started here is held back for the reason a session gives and
+/// a listing holds, in each of the three ways: its program is a bare name and nothing says where to
+/// look for it (`Unplanned`), the machine's managed layer refuses it (`Refused`), and it is a local
+/// server on a host with no confinement (`Unconfined`, given as no confinement). In none a question is
+/// put, an answer is recorded or a server starts, in any mode, though a person is there and would say
+/// yes. The session's note is the text of the state and the listing holds the state.
+///
+/// Rejects a session or a listing that asks about the server before it checks where it would start,
+/// one that words a state as another (`Unplanned` said as a refusal by the managed layer, or the
+/// reverse), one that drops the note for a state so the server is silently absent, and a listing
+/// that holds nothing for a state the session refuses.
+#[test]
+fn a_session_and_a_listing_agree_on_the_states_that_keep_a_plugins_server_from_starting_here() {
+    let root = root("plugin-held-unstarted");
+    let managed_file = root.join("managed.json");
+    std::fs::write(
+        &managed_file,
+        r#"{"mcp": {"allow": [{"host": "*.corp.example"}]}}"#,
+    )
+    .expect("managed.json");
+    let refusing = Managed::at(&managed_file);
+    let open = Managed::default();
+    let path = managed_file.display().to_string();
+    let alias = "demo_tool";
+    let mut checked = 0;
+    for state in ["not found", "refused", "unconfined"] {
+        for asking in [Asking::Person, Asking::OneShot, Asking::Bypass] {
+            let reason = match state {
+                "not found" => {
+                    t!(servers_program_without_path, program = "weather-mcp").to_string()
+                }
+                _ => t!(managed_not_allowed, path = path.clone()).to_string(),
+            };
+            let (servers, managed, prelude, unstarted, note) = match state {
+                "not found" => (
+                    NOT_FOUND,
+                    &open,
+                    Prelude::current(),
+                    Unstarted::Unplanned(reason.clone()),
+                    t!(servers_not_reached, alias = alias, reason = reason).to_string(),
+                ),
+                "refused" => (
+                    ELSEWHERE,
+                    &refusing,
+                    Prelude::current(),
+                    Unstarted::Refused(reason.clone()),
+                    t!(servers_refused_by_managed, alias = alias, reason = reason).to_string(),
+                ),
+                _ => (
+                    LOCAL,
+                    &open,
+                    None,
+                    Unstarted::Unconfined,
+                    t!(servers_no_confinement_here, alias = alias).to_string(),
+                ),
+            };
+            let name = format!("home-{checked}");
+            checked += 1;
+            let home = install(&root, &name, "demo", servers);
+
+            let listing = held_with(&home, alias, asking, managed, prelude);
+            let mut asker = Asked::saying(Answer::Once);
+            let session =
+                settled_under(&root, &home, alias, (managed, prelude), asking, &mut asker);
+
+            let context = format!("{state}, {asking:?}: {listing:?} {:?}", session.notes);
+            assert_eq!(listing.unstarted, Some(unstarted), "{context}");
+            assert!(
+                listing.stop.is_none() && listing.unusable.is_none() && listing.plan.is_none(),
+                "{context}"
+            );
+            assert!(!listing.asks && !listing.approved, "{context}");
+            assert_eq!(session.notes, [note], "{context}");
+            assert!(session.plans.is_empty(), "{context}: started");
+            assert!(session.taken.is_empty(), "{context}: taken");
+            assert!(asker.shown.is_empty(), "{context}: asked");
+            assert_eq!(recorded(&home), "", "{context}: recorded");
+            if state != "unconfined" {
+                let carried = PluginServers::read(&home);
+                let rows = held_by_plugins(&carried, &home, asking, managed);
+                let [(_, host)] = rows.as_slice() else {
+                    panic!("one server");
+                };
+                assert_eq!(host.unstarted, listing.unstarted, "{context}");
+            }
+        }
+    }
+    assert_eq!(checked, 9);
+}
+
+/// S7, the unconfined state as this host gives it. A plugin's local server is `Unconfined` in the
+/// listing and in a session where `Prelude::current()` is `None` (a host with no confinement for a
+/// local server), and where it is `Some` (macOS and Linux) the server has a plan and a session at a
+/// terminal asks the one question. This asserts the state the host has and says which it was in the
+/// failure message, so it holds on either kind of host.
+///
+/// Rejects a `held_by_plugins` or a session that does not read the host's confinement for a plugin's
+/// server (one that always starts it, or one that always holds it back).
+#[test]
+fn a_plugins_local_server_is_unconfined_where_this_host_has_no_confinement_and_asked_about_where_it_has()
+ {
+    let root = root("plugin-held-host-confinement");
+    let home = install(&root, "home", "demo", LOCAL);
+    let carried = PluginServers::read(&home);
+    let rows = held_by_plugins(&carried, &home, Asking::Person, &Managed::default());
+    let [(_, listing)] = rows.as_slice() else {
+        panic!("one server");
+    };
+    let mut asker = Asked::saying(Answer::No);
+
+    let session = settled(&root, &home, "demo_tool", Asking::Person, &mut asker);
+
+    let host = format!("Prelude::current() is {:?}", Prelude::current().is_some());
+    assert!(session.plans.is_empty(), "{host}");
+    match Prelude::current() {
+        None => {
+            assert_eq!(listing.unstarted, Some(Unstarted::Unconfined), "{host}");
+            assert_eq!(
+                session.notes,
+                [t!(servers_no_confinement_here, alias = "demo_tool").to_string()],
+                "{host}"
+            );
+            assert!(asker.shown.is_empty(), "{host}: asked");
+        }
+        Some(_) => {
+            assert!(
+                listing.unstarted.is_none() && listing.plan.is_some() && listing.asks,
+                "{host}: {listing:?}"
+            );
+            assert_eq!(
+                session.notes,
+                [t!(servers_declined, alias = "demo_tool").to_string()],
+                "{host}"
+            );
+            assert_eq!(asker.shown.len(), 1, "{host}: the one question");
+        }
+    }
 }
