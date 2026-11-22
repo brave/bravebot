@@ -178,10 +178,14 @@ Fails a change that adds sites of a clippy lint the tree has hundreds of.
 `make check` runs clippy with `-D warnings`, so a lint is on only where the tree has no site of it.
 Others, such as `let_underscore_must_use`, `string_slice` and the numeric casts, report hundreds of
 sites in the existing code, and turning one on would need every site fixed or marked in the same
-change. This runs clippy over the libraries and binaries at the merge base and at the checkout, and
-fails when a lint reports more sites in a crate than it did at the base. Nothing is recorded in the
-tree, so no list falls behind the code. Both runs use one toolchain on one host, so a clippy release
-that finds more sites, and code that only another platform compiles, change both counts alike.
+change. This runs clippy over every target at the merge base and at the checkout, and fails when a
+lint reports more sites in a crate than it did at the base. Every target, not only the libraries
+and binaries, since these lints are allow by default and this is the only place any of them is
+counted: a `#[cfg(test)]` block, an integration test, an example, a bench or a `test-support` file
+compiles only for tests and would otherwise add any number of sites unseen. Nothing is recorded in
+the tree, so no list falls behind the code. Both runs use one toolchain on one host, so a clippy
+release that finds more sites, and code that only another platform compiles, change both counts
+alike.
 
 `allow_attributes` is counted too, with far fewer sites: an `#[allow]` that remains is one that
 `unsafe_code` or `dead_code` needs on a platform where the lint does not fire, since an `#[expect]`
@@ -196,10 +200,13 @@ refuses the first new site on its own.
 make check-lint-increase          # or contrib/check-lint-increase.py
 ```
 
-`make check` runs it after clippy, and CI runs it on pull requests. It compiles the workspace twice,
-about twenty seconds each with the dependencies built, and skips a change that touches nothing under
-`crates/` or the manifests. `--base REF` compares with another commit, and `BASE_SHA` sets it
-for CI. `--selftest` checks the verdict on known inputs and runs clippy on none of them.
+`make check` runs it after clippy, and CI runs it on pull requests. It compiles the workspace
+twice; measured locally with the dependencies already built, a clean clippy run over the tests,
+examples and benches as well as the libraries and binaries takes about thirty-five seconds against
+about twenty for the libraries and binaries alone, and a second run with nothing changed is near
+instant either way. It skips a change that touches nothing under `crates/` or the manifests.
+`--base REF` compares with another commit, and `BASE_SHA` sets it for CI. `--selftest` checks the
+verdict on known inputs and runs clippy on none of them.
 
 ## check-versions.py
 
