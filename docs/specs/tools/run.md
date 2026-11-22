@@ -856,11 +856,14 @@ one of them back: the removal is applied again after the line's own assignments,
 the planner's and not the person's own.
 
 Those credentials are the signing key, its key id and the crash report submission URL
-(`BACKTRACE_SUBMIT_URL`, whose path holds the project's submission token), and every variable the `env` of a gateway in
-force names as a place its bearer token may live. The gateways in force are the managed layer's where
+(`BACKTRACE_SUBMIT_URL`, whose path holds the project's submission token), every variable the `env` of a gateway in
+force names as a place its bearer token may live, and every variable `webSearch.env` names as a place
+the Brave Search key may live. The gateways in force are the managed layer's where
 it states any, otherwise the person's own provider blocks and the Vertex AI service the environment
-names, so the set follows the configuration with no second list to keep in step. A variable no block
-names is the person's own and stays. The same set is taken off a background job, a hook
+names, so the set follows the configuration with no second list to keep in step. `webSearch.env` is
+read from the person's own settings and the file `--settings` names only, and its names are removed
+through the same set the gateways' are. A variable no block and no setting names is the person's own
+and stays. The same set is taken off a background job, a hook
 ([HOOK-4](../hooks.md#HOOK-4)), a language server ([lsp.md](lsp.md)) and the `aws` CLI the
 Bedrock backend starts. Reading the token for a request is unaffected: only the programs this agent
 starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set. It is
@@ -872,8 +875,8 @@ read ([BACKEND-24](../backends.md#BACKEND-24)).
 **The planner is told what is removed.** The description of `run`, on a turn that offers it, names
 the credentials this agent holds, the signing key, its key id and the crash report submission URL,
 and says that the variables the
-person's settings name as a gateway's token or to be withheld are removed as well, without listing
-them. It says that a program reporting one of them unset, or failing for want of one, says nothing
+person's settings name as a gateway's token, as a search key or to be withheld are removed as well,
+without listing them. It says that a program reporting one of them unset, or failing for want of one, says nothing
 about whether the person has set it. Nothing is said where the filtering is switched off. The build
 script that bakes the configuration into a binary says the same in its failure. Of the variables it
 finds missing it names those `run` removes, as removed if `run` started the build, and none that
@@ -946,6 +949,10 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_lsp::server::a_server_is_not_handed_the_names_it_is_told_to_withhold`
 `verified-by: bravebot_agent::exec::a_background_job_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::exec::a_variable_no_provider_block_names_still_reaches_a_program`
+`verified-by: bravebot_agent::exec::a_variable_web_search_env_names_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_of_a_search_key_variable_does_not_reach_that_step`
+`verified-by: bravebot_config::lib::the_variables_the_search_key_is_read_from_are_withheld_like_a_gateways`
+`verified-by: bravebot_config::settings::the_variables_web_search_env_names_are_withheld_from_a_program`
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::lsp::a_language_server_is_not_handed_a_gateways_environment_token`

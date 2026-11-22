@@ -28,9 +28,9 @@ const MAX_BYTES: u64 = 4096;
 pub enum Problem {
     /// The file is missing, is not a regular file, cannot be read, or is not text.
     Unreadable,
-    /// The file is larger than 4096 bytes.
+    /// The file or the text is larger than 4096 bytes.
     TooLarge,
-    /// The file holds nothing but whitespace.
+    /// The file or the text holds nothing but whitespace.
     Empty,
     /// The text holds whitespace, a control character or a byte outside ASCII, so it cannot be
     /// sent as an HTTP header value.
@@ -79,13 +79,26 @@ pub fn read(path: &Path) -> Result<Secret, Problem> {
             return Err(Problem::Unreadable);
         }
     };
-    let parsed = from_text(&text);
-    crate::scrub(&mut text);
+    from_text(&mut text)
+}
+
+/// The key `text` holds, held to the rules of a file's content: at most 4096 bytes, trimmed, not
+/// empty, and ASCII with no whitespace or control character inside it.
+///
+/// For a caller whose key arrives as text and not as a file, such as the value of a variable. `text`
+/// is a copy of the key, so it is overwritten before this returns, whether or not it was accepted.
+pub fn from_text(text: &mut String) -> Result<Secret, Problem> {
+    let parsed = if text.len() as u64 > MAX_BYTES {
+        Err(Problem::TooLarge)
+    } else {
+        parse(text)
+    };
+    crate::scrub(text);
     parsed
 }
 
-/// The key in the file's text.
-fn from_text(text: &str) -> Result<Secret, Problem> {
+/// The key in a text that is within the bound.
+fn parse(text: &str) -> Result<Secret, Problem> {
     let key = text.trim();
     if key.is_empty() {
         return Err(Problem::Empty);

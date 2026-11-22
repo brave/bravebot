@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/tools/web_search.rs
   - crates/agent/src/web_search.rs
   - crates/config/src/key_file.rs
+  - crates/config/src/web_search_key.rs
   - crates/core/src/capability.rs
   - crates/core/src/delegate.rs
   - crates/core/src/permissions.rs
@@ -128,21 +129,31 @@ answer about the next.
 `verified-by: bravebot_core::policy::approving_a_search_never_trusts_what_comes_back_and_covers_one_request`
 
 <a id="WEBSEARCH-4"></a>
-### WEBSEARCH-4: the tool is offered only where a key file is configured
+### WEBSEARCH-4: the tool is offered only where a key source is configured
 
-`web_search` is on the planner's list when `webSearch.keyFile` names a file that exists. With no
-setting, or a name that is not a file, it is not on the list and the name is answered as an unknown
-tool ([TOOL-3](tool-surface.md#TOOL-3)), so the planner is not sent after a tool that can only fail.
-Which of these holds is read from the configuration and the file's metadata, and the key is not read
-to decide it.
+`web_search` is on the planner's list when a variable `webSearch.env` names holds text, or
+`webSearch.keyFile` names a file that exists. With neither, it is not on the list and the name is
+answered as an unknown tool ([TOOL-3](tool-surface.md#TOOL-3)), so the planner is not sent after a tool
+that can only fail. Which of these holds is read from the configuration, the process environment and
+the file's metadata, and the key is not read to decide it.
 
-A key file that exists and holds no usable key is reported when the tool is called, before anybody is
-asked, and the planner's sentence names the setting and not the path or what the file held.
+The list is settled when a turn starts. A variable exported after that turn began is offered from the
+next turn, and one removed after it began leaves the tool on the list for the rest of the turn: a
+search then reads the key when it is made and is reported as having no usable key, in words that
+name the two settings and neither a variable nor a path.
+
+A key source that exists and holds no usable key is reported when the tool is called, before anybody
+is asked, and the planner's sentence names the settings and not a variable, a path or what either held.
 
 **Why.** A tool that is offered and always fails costs a round and a question to a person.
 
 `verified-by: bravebot_agent::web_search::the_tool_is_offered_only_where_a_key_file_is_configured`
+`verified-by: bravebot_agent::web_search::a_variable_alone_offers_the_tool_and_the_key_reaches_only_the_header`
+`verified-by: bravebot_agent::web_search::variables_that_hold_nothing_do_not_offer_the_tool`
+`verified-by: bravebot_agent::web_search::a_variable_removed_after_the_turn_started_is_reported_as_an_unusable_key`
 `verified-by: bravebot_agent::web_search::an_unusable_key_file_is_reported_before_a_question_without_its_path_or_content`
+`verified-by: bravebot_config::web_search_key::a_named_variable_that_holds_nothing_offers_no_key`
+`verified-by: bravebot_config::web_search_key::a_variable_alone_offers_a_key`
 `verified-by: bravebot_config::lib::web_search_is_offered_only_for_a_key_file_that_exists`
 `verified-by: bravebot_config::key_file::offered_looks_at_the_file_and_not_at_what_it_holds`
 
@@ -185,39 +196,83 @@ place a planner's text reaches the wire as something other than a query.
 `verified-by: bravebot_agent::web_search::an_argument_off_the_documented_range_is_refused_before_a_question_or_a_request`
 
 <a id="WEBSEARCH-6"></a>
-### WEBSEARCH-6: the key is a file a person named in their own settings, and it reaches one header
+### WEBSEARCH-6: the key is a variable or a file a person named in their own settings, and it reaches one header
 
-`webSearch.keyFile` is read from `~/.bravebot/settings.json` and from the file `--settings` names, and
-from no other: a project or local file that names it is ignored and reported, since a checkout could
-otherwise choose which file on this machine is sent to a host. The value is an absolute path.
+`webSearch.env` and `webSearch.keyFile` are read from `~/.bravebot/settings.json` and from the file
+`--settings` names, and from no other: a project or local file that names either is ignored and
+reported, since a checkout could otherwise choose which variable or file on this machine is sent to a
+host. `webSearch.env` is a list of variable names, tried in the order written, and an entry that is
+blank or is not a string is dropped, as an entry of a provider's `env` is. `webSearch.keyFile` is an
+absolute path.
 
-The file is read when a search is made. It is refused when it is not a regular file, is over 4,096
-bytes, is not UTF-8, is empty after trimming, or holds a space, a control character or a character
-outside ASCII. The text and the bytes it was read through are overwritten, and no error carries the
-path or the content. The value is held as a `Secret`, and is sent in one header,
+The key is read when a search is made, so a variable exported in an open session is used by the next
+search. The first variable of `webSearch.env` that holds text is the key, and a variable that is unset
+or holds only whitespace is passed over. Where no variable holds text, the file `webSearch.keyFile`
+names is the key. A variable that holds text is used before the file, whether or not the text is a
+usable key: one that is not is refused and the file is not read in its place, so a variable exported
+wrongly is reported and not hidden by a file that works.
+
+Whichever held it, the text is refused when it is over 4,096 bytes, is empty after trimming, or holds a
+space, a control character or a character outside ASCII, and a file is refused as well when it is not a
+regular file or is not UTF-8. The text and the bytes it was read through are overwritten, and no error
+carries a variable's name, a path or any text. The refusal the planner reads names the two settings and
+nothing the person wrote. The value is held as a `Secret`, and is sent in one header,
 `X-Subscription-Token`, of the request to the search host. It is not in the URL, a result, a prompt,
 the trail, the log, an error or anything the planner is sent. A hop of the request that leaves the host
 is sent without it ([WEBSEARCH-7](#WEBSEARCH-7)). The header is held on the request as a socket header,
 and a `Request` formats as the names of its headers and never their values
 ([NET-1](../network-egress.md#NET-1)).
 
-There is no command-line argument and no environment variable that carries it
-([CRED-24](../credential-protection.md#CRED-24)).
+No command-line argument carries the key ([CRED-24](../credential-protection.md#CRED-24)).
 
-`bravebot doctor` prints a `web search` line that says whether the setting names a file and whether
-the file exists, with the path the person wrote, and never the key. Its credential record names the key
-at Held, and what would end it ([CRED-2](../credential-protection.md#CRED-2),
+The variables `webSearch.env` names are removed from the environment of every program this agent
+starts, in the way the variables a provider's `env` names are ([RUN-12](run.md#RUN-12)), so the key
+is read by this program and handed to no program a turn runs. The planner is not told the names,
+which are strings the person wrote.
+
+`bravebot doctor` prints a `web search` line that says which source the key would come from: a
+variable that holds text, said by its place in `webSearch.env` and never by its name, or the file, said
+with the path the person wrote, or that neither exists. It never prints the key or a variable's name.
+Its credential record names the key at Held, and names the variable, the setting and the file as what
+ends this machine's custody and leaves the key working at the search service until it is revoked in
+the dashboard ([CRED-2](../credential-protection.md#CRED-2),
 [CRED-25](../credential-protection.md#CRED-25)).
 
-**Why a file and no variable.** A person's environment is inherited by every program a turn starts, so
-a key held there is handed to each of them, while a file is read by this program at the moment of use.
-**Why home only.** The setting chooses what this program sends to a host.
+**Why a variable is allowed.** The environment is a way of handing a program a credential that
+[CRED-24](../credential-protection.md#CRED-24) lists as allowed, and a provider's token is read from
+one. What a variable costs is that a program the `run` tool starts inherits the environment of this
+process, so a key held there would be handed to each program a turn starts. [RUN-12](run.md#RUN-12)
+answers that by withholding the named variables from those programs, and a file is not inherited by
+anything.
+**Why home only.** The settings choose which variable or file of the person's is sent to a host, and
+which variables are kept from their programs.
 
 `verified-by: bravebot_net::lib::a_request_prints_its_header_names_and_never_their_values`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_a_web_search_key_file`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_a_web_search_variable`
+`verified-by: bravebot_config::settings::a_web_search_block_that_is_not_an_object_takes_neither_setting_away`
+`verified-by: bravebot_config::lib::debugging_the_config_does_not_leak_the_key`
+`verified-by: bravebot_config::settings::the_two_web_search_settings_are_each_refused_to_a_project_layer_on_their_own`
+`verified-by: bravebot_config::settings::web_search_variable_names_are_read_as_a_providers_env_is`
+`verified-by: bravebot_config::settings::a_file_that_only_names_a_web_search_variable_is_not_empty_settings`
+`verified-by: bravebot_config::settings::the_variables_web_search_env_names_are_withheld_from_a_program`
 `verified-by: bravebot_config::settings::a_web_search_key_file_must_be_an_absolute_path`
 `verified-by: bravebot_config::lib::the_web_search_setting_reaches_the_configuration`
+`verified-by: bravebot_config::lib::the_web_search_variables_reach_the_configuration_as_names`
+`verified-by: bravebot_config::lib::the_variables_the_search_key_is_read_from_are_withheld_like_a_gateways`
 `verified-by: bravebot_config::lib::a_search_key_is_held_exactly_when_web_search_is_offered`
+`verified-by: bravebot_config::lib::a_search_key_from_a_variable_is_held_without_a_file`
+`verified-by: bravebot_config::web_search_key::a_variable_wins_over_the_file_and_the_file_answers_where_none_holds_text`
+`verified-by: bravebot_config::web_search_key::the_first_variable_with_text_wins_and_an_empty_one_is_skipped`
+`verified-by: bravebot_config::web_search_key::a_variable_holding_no_usable_key_is_refused_and_the_file_is_not_used_instead`
+`verified-by: bravebot_config::web_search_key::a_variables_text_is_trimmed_as_a_files_is`
+`verified-by: bravebot_agent::web_search::a_variable_beats_the_key_file`
+`verified-by: bravebot_agent::web_search::the_key_file_answers_where_no_named_variable_holds_text`
+`verified-by: bravebot_agent::web_search::the_first_named_variable_that_holds_text_is_the_key`
+`verified-by: bravebot_agent::web_search::a_variable_holding_no_usable_key_is_refused_without_its_name_or_its_text`
+`verified-by: bravebot_agent::exec::a_variable_web_search_env_names_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_of_a_search_key_variable_does_not_reach_that_step`
+`verified-by: bravebot_cli::doctor::the_web_search_source_is_reported_by_place_and_never_by_the_variable_or_its_text`
 `verified-by: bravebot_config::key_file::a_key_file_is_read_and_trimmed`
 `verified-by: bravebot_config::key_file::a_blank_file_is_empty`
 `verified-by: bravebot_config::key_file::a_file_over_the_bound_is_too_large`
@@ -301,9 +356,10 @@ and the rate-limit headers are not read.
 
 ## Known costs
 
-- **The key file is read before the prompt.** A call reads and checks the key file before the rules
-  and the prompt are consulted, so a search a `deny` rule refuses or a person declines has still read
-  the file. The value is dropped without being sent, and nothing of it reaches a refusal or the trail.
+- **The key is read before the prompt.** A call reads and checks the key before the rules and the
+  prompt are consulted, from the first variable `webSearch.env` names that holds text or else from the
+  key file, so a search a `deny` rule refuses or a person declines has still read the variable or the
+  file. The value is dropped without being sent, and nothing of it reaches a refusal or the trail.
 - **The `spawn_agent` description does not name `web_search`.** A planner that writes a delegate's task
   is told that a delegate cannot call `fetch_url` or `download_url`, and is not told the same of
   `web_search`. A delegate told to search is answered as for an unknown name and the planner learns it

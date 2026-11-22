@@ -893,7 +893,9 @@ fn run_names_its_own_credentials_and_says_what_an_unset_report_means() {
         "the statement does not say what an unset report means: {run}"
     );
     assert!(
-        run.contains("the person's settings name as a gateway's token or to be withheld, which are not listed"),
+        run.contains(
+            "name as a gateway's token, as a search key or to be withheld, which are not listed"
+        ),
         "the statement does not say that settings add variables it does not list: {run}"
     );
 }

@@ -1417,6 +1417,7 @@ read as the table says.
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
 | `references`, `attribution`, `askIdleSeconds`, `permissions.startInAuto` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way. The managed file is not read for `permissions.startInAuto`, and `doctor` says so where it names it ([AUTO-1](auto-mode.md#AUTO-1)) |
+| `webSearch.keyFile`, `webSearch.env` | home layer, and the file `--settings` names; a project or local layer naming either is ignored and reported, and the rest of that layer's `webSearch` block is read as before ([WEBSEARCH-6](tools/web-search.md#WEBSEARCH-6)) |
 | `limit` | home layer, and the file `--settings` names, decide it as they would any key; a project or local layer may only narrow what they settled on (below) |
 | `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
 | `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |

@@ -152,8 +152,9 @@ name is. The capability is held, so no gate refuses that call, which is why the 
 tool list is written out a second time as a refusal. The planner is told in the `spawn_agent`
 description that a delegate cannot call `fetch_url` or `download_url`
 ([AGENT-1](tools/spawn-agent.md#AGENT-1)). The description does not name `web_search`, which a
-planner is offered only where a key file is configured; a delegate that is told to call it is answered
-as for any unknown name ([WEBSEARCH-8](tools/web-search.md#WEBSEARCH-8)).
+planner is offered only where a key source is configured, a variable `webSearch.env` names that holds
+text or a key file ([WEBSEARCH-4](tools/web-search.md#WEBSEARCH-4)); a delegate that is told to call
+it is answered as for any unknown name ([WEBSEARCH-8](tools/web-search.md#WEBSEARCH-8)).
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`

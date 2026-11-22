@@ -2690,9 +2690,10 @@ pub fn offer_set_link(tools: &mut Vec<Tool>) {
 
 /// Add `web_search` to a planner's list (WEBSEARCH-1), beside `fetch_url`.
 ///
-/// Built here rather than in the table because it is offered only where a key file is configured
-/// and never to a delegate. The one argument that decides anything is `service`, a word from a
-/// closed set the driver reads as a literal; the host and the path are written in this crate.
+/// Built here rather than in the table because it is offered only where a key source is configured,
+/// a variable `webSearch.env` names that holds text or a key file, and never to a delegate. The one
+/// argument that decides anything is `service`, a word from a closed set the driver reads as a
+/// literal; the host and the path are written in this crate.
 pub fn offer_web_search(tools: &mut Vec<Tool>) {
     let mut search = Tool::function(
         "web_search",
@@ -2993,10 +2994,10 @@ fn withheld_variables_sentence(names: &[&str]) -> String {
     let listed: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
     format!(
         "The credentials this agent holds for itself ({}), and the variables the person's settings \
-         name as a gateway's token or to be withheld, which are not listed, are removed from the \
-         environment of every program this tool starts, whatever the person's shell holds. A program \
-         that reports one of them unset, or fails for want of one, says nothing about whether the \
-         person has set it.",
+         name as a gateway's token, as a search key or to be withheld, which are not listed, are \
+         removed from the environment of every program this tool starts, whatever the person's shell \
+         holds. A program that reports one of them unset, or fails for want of one, says nothing \
+         about whether the person has set it.",
         listed.join(", ")
     )
 }

@@ -805,6 +805,85 @@ fn a_variable_no_provider_block_names_still_reaches_a_program() {
     );
 }
 
+/// A home directory whose settings name the variables the web search key is read from, with each
+/// set to a live-looking value, and a variable of the same family that no setting names.
+///
+/// The names are not a gateway's, so a withheld set built from the provider blocks alone passes
+/// none of the tests below.
+#[cfg(unix)]
+fn with_a_search_key_variable(scratch: &Scratch) -> EnvGuard {
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join(".bravebot")).expect("create the home");
+    std::fs::write(
+        home.join(".bravebot").join("settings.json"),
+        r#"{"webSearch": {"env": ["SEARCH_KEY_FIRST", "SEARCH_KEY_SECOND"]}}"#,
+    )
+    .expect("write the settings");
+    with_env(&[
+        ("HOME", Some(home.to_str().expect("a path"))),
+        ("BRAVEBOT_HOME", None),
+        ("SEARCH_KEY_FIRST", Some("a-live-search-key")),
+        ("SEARCH_KEY_SECOND", Some("a-live-second-search-key")),
+        ("SEARCH_KEY_UNNAMED", Some("a-search-key-no-setting-names")),
+        ("BRAVEBOT_SUBPROCESS_ENV_SCRUB", None),
+    ])
+}
+
+/// RUN-12: every variable `webSearch.env` names is withheld from a program the planner chose, in
+/// the first stage and a later one, and a variable of the same family that the setting does not
+/// name still reaches it. The faults this rejects are withholding only the first name the list
+/// holds, leaving the search key in the environment of every program a turn starts, and widening
+/// the set to every variable that looks like a key.
+#[cfg(unix)]
+#[test]
+fn a_variable_web_search_env_names_does_not_reach_a_program_it_runs() {
+    let scratch = Scratch::new("scrub-web-search");
+    let _guard = with_a_search_key_variable(&scratch);
+
+    let ran = run(
+        Pipeline::new(vec![
+            Stage::new("true", Vec::new()),
+            Stage::new("env", Vec::new()),
+        ]),
+        &scratch.path,
+    )
+    .expect("the pipeline runs");
+
+    assert!(ran.succeeded());
+    assert!(
+        !ran.stdout.contains("a-live-search-key"),
+        "the search key reached a program the planner chose"
+    );
+    assert!(
+        !ran.stdout.contains("a-live-second-search-key"),
+        "only the first variable the setting lists was withheld"
+    );
+    assert!(
+        ran.stdout.contains("a-search-key-no-setting-names"),
+        "a variable the setting does not name was withheld"
+    );
+}
+
+/// RUN-12: an assignment in front of a program does not bring a search key's variable back, for the
+/// reason it does not bring a gateway's. The fault this rejects is removing the names before the
+/// line's own assignments are applied.
+#[cfg(unix)]
+#[test]
+fn a_steps_own_assignment_of_a_search_key_variable_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-web-search-assigned");
+    let _guard = with_a_search_key_variable(&scratch);
+
+    let ran = line("SEARCH_KEY_FIRST=the-lines-own env", &scratch.path);
+
+    assert!(ran.succeeded(), "{}", ran.stdout);
+    assert_eq!(
+        value_of(&ran.stdout, "SEARCH_KEY_FIRST"),
+        None,
+        "an assignment of a search key's variable reached the program: {}",
+        ran.stdout
+    );
+}
+
 /// The escape hatch restores a gateway's variable along with the signing key.
 #[cfg(unix)]
 #[test]

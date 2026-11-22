@@ -73,12 +73,10 @@ pub(super) fn web_search<S: Sink, C: Confirmer>(
     let host = host_of_base(&base);
 
     // A key that cannot be used is said before anybody is asked about a search that could not be
-    // made. The words name the setting and never the path, the content or the reason the file was
-    // refused.
-    let Some(path) = tools.chat.config.web_search_key_file.clone() else {
-        return Produced::problem(NO_KEY);
-    };
-    let Ok(key) = bravebot_config::key_file::read(&path) else {
+    // made. The words name the settings and never a variable, a path, the content or the reason the
+    // source was refused: a variable's name is a string the person wrote, and one pasted into the
+    // wrong field is the key itself.
+    let Ok(key) = tools.chat.config.web_search_key() else {
         return Produced::problem(NO_KEY);
     };
 
@@ -144,10 +142,11 @@ pub(super) fn web_search<S: Sink, C: Confirmer>(
     }
 }
 
-/// What the planner is told when no usable key is configured.
-const NO_KEY: &str = "error: web_search cannot be used: the key file named by the setting \
-                      webSearch.keyFile is missing or cannot be used as a key. Say so in your \
-                      reply; only the user can fix it.";
+/// What the planner is told when no usable key is configured. It names the two settings and no
+/// variable and no path.
+const NO_KEY: &str = "error: web_search cannot be used: the key named by the settings \
+                      webSearch.env or webSearch.keyFile is missing or cannot be used as a key. Say \
+                      so in your reply; only the user can fix it.";
 
 /// The planner's sentence for a failed request, chosen from the kind of failure and never from
 /// anything the service wrote (TOOL-4). The status number is formatted into one sentence that is

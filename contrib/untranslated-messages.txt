@@ -76,12 +76,17 @@ fr:doctor-retrieval-on
 fr:doctor-settings-repeated
 fr:doctor-settings-repeated-key
 fr:doctor-settings-shared-skill-directories-ignored
+fr:doctor-settings-web-search-env-ignored
 fr:doctor-settings-web-search-key-file-ignored
 fr:doctor-skills-shared-not-read
 fr:doctor-web-search
 fr:doctor-web-search-absent
 fr:doctor-web-search-keyed
+fr:doctor-web-search-keyed-no-variable
 fr:doctor-web-search-missing
+fr:doctor-web-search-missing-and-variables
+fr:doctor-web-search-variable
+fr:doctor-web-search-variables-empty
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
 fr:hover-panel-close-peek

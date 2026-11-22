@@ -41,7 +41,8 @@ that is merely carried.
 | [`set_link`](#set_link) | `kind`, `url` | none | no |
 
 Six more are offered only where they mean something.
-[`web_search`](#web_search) goes to a session whose settings name a Brave Search API key file, so not
+[`web_search`](#web_search) goes to a session whose settings name a Brave Search API key, as a variable
+in `webSearch.env` that holds text or a file in `webSearch.keyFile`, so not
 to one without it and not to a delegate.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
@@ -886,8 +887,9 @@ a compact form and a full page reads that as a request for the page.
 ## `web_search`
 
 Searches the web through the [Brave Search API](https://api-dashboard.search.brave.com/documentation).
-It is offered only where `webSearch.keyFile` names a key file ([setting it
-up](../customize/configuration.md#websearchkeyfile)). **You approve every search, unless a `WebSearch`
+It is offered only where a variable named in `webSearch.env` holds a key or `webSearch.keyFile` names a
+key file ([setting it up](../customize/configuration.md#websearchenv)). **You approve every search,
+unless a `WebSearch`
 rule allows it.**
 
 | Parameter | |
@@ -912,8 +914,11 @@ the words of a fetch. Your answer is for that one search and nothing is remember
 `WebFetch` rule does not cover a search. An `allow` rule stops answering once the planner has been
 shown content of yours that is private, since a query may carry some, and the search asks then.
 
-**The key goes in one header to one host.** It is read from the file when a search is made and sent as
-`X-Subscription-Token` to `api.search.brave.com`. A redirect to another host is refused without
+**The key goes in one header to one host.** It is read from the variable or the file when a search is
+made, a variable that holds text before the file, and sent as
+`X-Subscription-Token` to `api.search.brave.com`. A variable you name in `webSearch.env` is withheld
+from every program the [`run`](#run) tool starts, since a program it starts inherits the environment.
+A redirect to another host is refused without
 asking, and the key does not go there. A failure is reported in bravebot's own words, by its kind
 (a refused key, a plan that does not cover the request, a rejected request, a rate limit, no answer);
 nothing of what the service wrote is shown to the planner.

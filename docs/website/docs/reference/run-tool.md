@@ -685,7 +685,8 @@ assignments. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
 
 The description of `run` tells the planner that these three are removed, and that the variables your
-settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
+settings name as a gateway's token, as the Brave Search key or in `run.scrubEnv` are removed too,
+without listing those. It
 also says that a program reporting one of them unset says nothing about whether you have set it, so a
 build that fails for want of one is not reported to you as a gap in your setup.
 
