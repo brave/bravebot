@@ -940,6 +940,37 @@ fn settings_override_is_validated_and_diagnostics_use_the_linked_agent() {
     assert!(cleared["selected"].is_null());
 }
 
+/// DIAG-5: with a fresh state directory the settings report names `<state>/logs` and says this
+/// process writes there, before any log exists, and asking creates nothing (DIAG-3, DIAG-6).
+#[test]
+fn the_settings_report_names_the_log_directory_before_any_log_exists() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let home = bravebot_agent::home::directory().expect("a state directory");
+    let logs = home.join(bravebot_diag::DIRECTORY);
+    assert!(
+        !logs.exists(),
+        "{} existed before the test asked",
+        logs.display()
+    );
+
+    let (mut bridge, _) = harness();
+    let report = call(&mut bridge, "settings.inspect", json!({})).unwrap();
+
+    assert_eq!(
+        report["logs"]["directory"],
+        logs.to_str().expect("a text path"),
+        "{report}"
+    );
+    assert_eq!(report["logs"]["writing"], true, "{report}");
+    assert!(
+        !logs.exists(),
+        "asking for the report created {}",
+        logs.display()
+    );
+}
+
 /// TRUST-14: a desktop session is given a directory of its own outside the project, says where it
 /// is, and the directory goes when the session is closed.
 #[test]
