@@ -17,7 +17,7 @@
 // shared client's scripts built (`pnpm --dir ../packages/agent-client run build`).
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs'
+import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -151,6 +151,8 @@ try {
   page.on('requestfailed', (request) => errors.push(`${request.url()} failed`))
   page.on('console', (message) => message.type() === 'error' && !/Failed to load resource/.test(message.text()) && errors.push(message.text()))
   const text = (selector) => page.locator(selector).first().innerText()
+  /** A picture of the window at a step, kept beside the others so a person can see what was checked. */
+  const shot = (name) => page.screenshot({ path: `${SHOTS_DIR}/prototype-${name}.png` })
 
   // 1. The desktop opens a session and answers the question about the folder, which only it may.
   await page.locator('[data-test="prototype"]').waitFor()
@@ -158,8 +160,10 @@ try {
   // It holds no session of its own: what the list shows is what the host holds, which is nothing yet.
   await page.getByText('The host holds no sessions.').waitFor()
   assert.equal(await page.locator('[data-test="prototype-held"]').count(), 0)
+  await shot('1-no-sessions')
   await page.locator('[data-test="prototype-new"]').click()
   await page.getByRole('dialog', { name: 'Project trust', exact: true }).waitFor()
+  await shot('2-trust-question')
   await page.locator('[data-test="trust-decline"]').click()
   await page.locator('[data-test="prototype-status"]').filter({ hasText: 'Ready' }).waitFor()
   assert.match(await text('[data-test="prototype-actor"]'), /Last action: desktop \(this window\)/)
@@ -179,10 +183,12 @@ try {
   await page.getByText('plan:write', { exact: false }).first().waitFor()
   await page.locator('[data-test="prototype-actor"]').filter({ hasText: 'Last action: phone' }).waitFor()
   await page.locator('.confirm-actions .approve:not([aria-disabled="true"])').waitFor()
+  await shot('3-phone-message-and-write-question')
   await page.locator('.confirm-actions .approve').click()
   await page.locator('[data-test="prototype-status"]').filter({ hasText: 'Done' }).waitFor()
   assert.equal(readFileSync(join(project, 'out.txt'), 'utf8'), 'written after approval\n')
   await phoneSays(/status completed actor desktop/)
+  await shot('4-approved-from-the-desktop')
 
   // 4. A send during a turn is refused as busy, and the draft stays in the window.
   phoneTypes('send plan:hold1')
@@ -192,6 +198,7 @@ try {
   await page.locator('[data-test="prototype-send"]').click()
   await page.locator('[data-test="prototype-notice"]').filter({ hasText: 'already running' }).waitFor()
   assert.equal(await page.locator('.prototype-input').inputValue(), 'and this too', 'the draft was kept')
+  await shot('5-busy-send-keeps-the-draft')
   phoneTypes('send plan:hold1')
   await phoneSays(/failed: turn_in_flight/)
   gate('hold1').release()
@@ -208,6 +215,7 @@ try {
   phoneTypes('cancel')
   await page.locator('[data-test="prototype-status"]').filter({ hasText: 'Cancelled' }).waitFor()
   await page.locator('[data-test="prototype-actor"]').filter({ hasText: 'Last action: phone' }).waitFor()
+  await shot('6-cancelled-by-the-phone')
   gate('hold2').release()
 
   // 6. A message typed and not sent is kept when the view is closed and opened again. The desktop
@@ -229,13 +237,15 @@ try {
   phoneTypes('send plan:hold4')
   await phoneSays(/^sent turn 6/)
   await within(gate('hold4').reached, 'the model to reach the fourth hold')
-  await page.screenshot({ path: `${SHOTS_DIR}/prototype-desktop.png` })
+  await shot('7-turn-running-before-the-window-closes')
   await page.close()
   await hostSays('bravebot-host: client desktop ended')
   phoneTypes('list')
   await phoneSays(new RegExp(`^held ${handle} open attached true working true`))
   gate('hold4').release()
   await phoneSays(/status completed actor phone/)
+  // What the other client said throughout, kept beside the pictures: it is the witness to what the window showed.
+  writeFileSync(`${SHOTS_DIR}/prototype-other-client.txt`, `${phoneLines().join('\n')}\n`)
   assert.equal(host.exitCode, null, 'the host went on')
   assert.deepEqual(errors, [], 'the window raised errors')
   console.log(`The desktop and a second client shared ${handle}: each sent, answered and cancelled, the views named who acted, a busy send kept its draft, and closing the window left the session running.`)
