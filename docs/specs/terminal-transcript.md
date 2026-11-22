@@ -30,6 +30,7 @@ governs:
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
+  - crates/tui/src/effort_prompt.rs
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/ThinkingTail.tsx
   - ui/src/renderer/thinking.ts
@@ -1640,6 +1641,62 @@ what the rows contain and the rule is kept ([SCROLL-5](scroller.md#SCROLL-5)).
 `verified-by: bravebot_tui::app::tests::jump::the_hint_under_the_box_stays_while_the_button_is_drawn`
 `verified-by: bravebot_tui::app::tests::jump::a_copy_never_takes_the_words_of_the_button`
 `verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
+
+<a id="VIEW-46"></a>
+### VIEW-46: the effort picker names its scope in the title and the footer, and Tab switches it
+
+`/effort` draws a bordered panel in the middle of the screen, over the session it was opened from,
+with a row for each level and a row for no level, and opens in one of two scopes. The scope is named
+and switched as the model picker's is ([VIEW-14](#VIEW-14)). `/effort` opens it in the scope that
+records the pick for every session, titled `effort · every session`. `/effort session` opens it in
+the scope that records nothing, titled `effort · this session only`. A picker opened with no scope
+named is in the every-session scope. The footer has two rows: the scope line, `Enter: every session
+·  Tab: this session only` or `Enter: this session only  ·  Tab: every session`, and under it the
+keys, `↑↓ choose  ·  Esc keep current`. The keys do not say that Enter selects, because the scope
+line says what Enter does.
+
+Tab and Shift-Tab each switch the scope in both directions, in the picker at rest and while a turn
+runs, and the title and the scope line change with it. They move nothing else: the cursor, the row
+marked `current` and the rows stay as they are, and nothing is typed into the box. Enter takes the row
+under the cursor in the scope the picker is in when it is pressed, and so does a second press on a
+row ([MOUSE-15](mouse.md#MOUSE-15)).
+
+A scope line wider than the panel is drawn whole on a second row, split before the Tab half, and the
+panel is made one row taller for it, so no level is hidden behind the footer. The effort panel is 52
+columns wide, which leaves 49 for the line. At 80 columns the English line, which is 47 columns wide,
+is drawn on one row, and the French line, which is 50 columns wide, is drawn on two. The five levels
+and the row for no level keep their rows in a 24-row terminal in both scopes.
+
+The pickers of `/config`, `/theme` and `/sidebar` have no scope: they draw no scope line and no extra
+footer row, and Tab changes nothing in them.
+
+**Why.** A level that applies to one session and a level that applies to every later session are
+different choices, and a person pressing Enter has to see which one the picker is making. The title
+and the footer both name the scope, and the footer says what Enter does, so no key has to be learned
+from the documentation. One set of rules for the model picker and the effort picker means a person
+who has used one has used both.
+
+`verified-by: bravebot_tui::effort_prompt::a_picker_opens_in_the_every_session_scope_unless_told_otherwise`
+`verified-by: bravebot_tui::effort_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::effort_prompt::a_picker_opened_by_bare_effort_draws_the_every_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::effort_prompt::a_picker_opened_by_effort_session_draws_the_this_session_scope_in_title_and_footer`
+`verified-by: bravebot_tui::effort_prompt::tab_changes_what_the_title_and_footer_say_in_both_directions`
+`verified-by: bravebot_tui::effort_prompt::the_keys_row_does_not_say_enter_selects`
+`verified-by: bravebot_tui::effort_prompt::the_scope_line_wraps_whole_at_forty_columns`
+`verified-by: bravebot_tui::effort_prompt::the_scope_line_stays_on_one_row_at_eighty_columns`
+`verified-by: bravebot_tui::effort_prompt::the_extra_footer_row_takes_no_row_from_a_list_that_fits`
+`verified-by: bravebot_tui::effort_prompt::the_picker_is_drawn_as_a_centred_panel`
+`verified-by: bravebot_tui::effort_prompt::the_panel_stays_inside_a_tiny_terminal`
+`verified-by: bravebot_tui::list_picker::the_row_is_handed_back_with_the_scope_in_force`
+`verified-by: bravebot_tui::list_picker::a_scope_line_wider_than_the_room_is_split_whole_at_its_separator`
+`verified-by: bravebot_tui::list_picker::the_panel_grows_by_the_rows_the_scope_line_takes`
+`verified-by: bravebot_tui::list_picker::a_picker_with_no_scope_has_none_and_ignores_tab`
+`verified-by: bravebot_tui::list_picker::a_panel_with_no_scope_line_draws_no_footer_row`
+`verified-by: bravebot_tui::config_prompt::the_panel_of_preferences_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::theme_prompt::the_theme_picker_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::sidebar_prompt::the_sidebar_checklist_has_no_scope_and_ignores_tab`
+`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
 
 ## Known costs
 

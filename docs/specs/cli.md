@@ -962,7 +962,7 @@ a time, and only where a check completed and found nothing.
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would
 
 `--effort <level>` names how hard the model is asked to think for one run, and outranks every
-settings file and the level `/effort` recorded. The word is one `/effort` takes, in any case. Where
+settings file and the level `/effort` recorded. The word is a level `/effort` takes, in any case. Where
 no flag names one, the level is the one a session opening in the same directory would ask for, in
 the order [BACKEND-43](backends.md#BACKEND-43) gives. A `--effort` with no word after it, a blank
 one, or a word that is no level is refused before the run starts, and the refusal names the levels.
@@ -2006,7 +2006,9 @@ watch the task and be able to stop it. A one-shot in its place, with `--dangerou
 would make every change with nobody watching.
 
 **Known cost.** A bare `bravebot` has no way to name a model or a level: those are what `/model`,
-`/model session` and `/effort` set, or what a settings file names. Only `-i` takes them from the line.
+`/model session`, `/effort` and `/effort session` set, or what a settings file names. `/model` and
+`/effort` record what they set, and the two `session` forms set it for the running session only and
+record nothing. Only `-i` takes them from the line.
 
 `verified-by: bravebot_cli::main::the_prompt_a_session_opens_on_is_the_argument_as_written`
 `verified-by: bravebot_cli::main::a_session_given_no_prompt_is_refused`

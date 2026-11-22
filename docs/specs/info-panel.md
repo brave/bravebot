@@ -244,7 +244,16 @@ and the hit rate, and the token total and the two cache rows are not drawn.
    error from the service quotes that. A model the configuration does not name is drawn by its
    request name. A pick made with `/model session` is drawn with a row under the model that says
    `this session only`, and no other pick, nor the model `--model` named, has that row. The row goes
-   when a later pick is recorded. The model is the person's
+   when a later pick is recorded. The effort level in force is drawn the same way: a level chosen with
+   `/effort session` has a row under the effort that says `this session only`, and a level that was
+   recorded, a level `--effort` named and a level the settings file named have none. `/status` says
+   `chosen with /effort session, for this session only` beside such a level, except where a ChatGPT
+   account is sent another level, which `/status` says in the words of
+   [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10). The row goes when a later level is recorded, and it
+   is not drawn where the level drawn is not the one chosen,
+   which is where a ChatGPT account is sent the level its session began with and not the level
+   chosen. The row is not a click target ([MOUSE-11](mouse.md#MOUSE-11)). A session-only choice of no
+   level draws no effort row, so it has no such row either. The model is the person's
    choice, never the name an endpoint replied with, so a reply
    that names another model changes nothing here. The effort row is left out where the model reads
    none. Both come from the session's settings, so the section is left out while the person has
@@ -294,7 +303,13 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_model_section_shows_the_choice_and_the_effort_in_force_and_ignores_a_reply`
 `verified-by: bravebot_tui::panel::the_model_section_names_a_tier_rather_than_the_tail_of_its_arn`
 `verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_pick_and_names_the_model_either_way`
+`verified-by: bravebot_tui::panel::the_info_panel_marks_a_session_only_level_and_names_it_either_way`
+`verified-by: bravebot_tui::app::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
+`verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`
 `verified-by: bravebot_tui::status::the_status_line_names_a_session_only_pick_as_it_names_a_recorded_one`
+`verified-by: bravebot_tui::status::the_status_line_says_a_session_only_level_is_for_this_session_only`
+`verified-by: bravebot_tui::status::on_the_account_a_session_only_level_is_said_to_apply_from_clear_and_not_the_next_session`
+`verified-by: bravebot_tui::app::the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session`
 `verified-by: bravebot_tui::status::the_model_line_names_a_tier_and_keeps_its_arn_beneath`
 `verified-by: bravebot_tui::status::a_name_a_provider_block_chose_is_shown_without_a_service_added`
 `verified-by: bravebot_config::lib::a_request_name_finds_its_entry_in_either_kind_of_account`

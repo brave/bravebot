@@ -18,7 +18,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/request` | | Show the last request sent to the model, and where each part of it came from |
 | `/model` | `[session]` | Choose which model to think with, for every session or, with `session`, for this one only |
 | `/theme` | `[name]` | Choose which theme paints the interface |
-| `/effort` | `[level]` | Choose how hard to think before answering |
+| `/effort` | `[session] [level]` | Choose how hard to think before answering, for every session or, with `session`, for this one only |
 | `/variant` | `[name \| off]` | Pick a named set of options the model offers, list them, or drop the pick |
 | `/config` | | Choose how the input box edits text |
 | `/language` | `[tag \| auto]` | Choose the interface language for the next start, or drop the choice |
@@ -113,7 +113,7 @@ Reports everything the session knows about itself:
   transcript says one was kept but not where;
 - the model in force, and whether it was chosen or defaulted. Where the server substituted a
   different one, the model that actually answered is shown beside it;
-- the [effort level](#effort-level), and whether this model reads one;
+- the [effort level](#effort-session-level), and whether this model reads one;
 - which deployment the endpoint names, and **which tier the last turn ran on**, rather than which
   tier the build was compiled to reach;
 - the confinement available here, and under `workspace-write` on a Linux kernel older
@@ -346,21 +346,43 @@ the pick. A name the model does not offer changes nothing and says which it does
 session and is not written anywhere. Typed while a turn runs, it is taken at once and the next turn is
 the first sent with it.
 
-## `/effort [level]`
+## `/effort [session] [level]`
 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
-directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
-field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
-is the first sent at it, since the running one keeps the level it began with. On a model of a ChatGPT
-account the level is fixed for the whole session instead: the account is sent the level the session began
-with, and the choice applies from the next session. The bare `/effort` waits for the turn to end.
+directly. The title and the first footer row say what Enter does. Opened with `/effort`, the picker
+records the pick in `~/.bravebot`, so it outlives the session. A word that names no level changes
+nothing and says so rather than reaching a request field.
 
-The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
+`/effort session` opens the same picker in the other scope: Enter puts the level in force for this
+session only and records nothing, so the next session opens on the level it would have had. Tab or
+Shift-Tab in the picker switches between the two scopes. `/effort session high` takes a level for this
+session only without opening the picker. The row for no level, taken in this scope, puts no level in
+force for this session and leaves the record as it is. A level set this way outranks every settings
+file and [`--effort`](cli.md#--effort-level) for this session, and the info panel and
+[`/status`](#status) say it is for this session only. `/clear`, `/handoff` and `/branch` keep it.
+`/resume` opens another session, which opens on the level a new session would have. `session` is the
+only word `/effort` takes besides the levels, and it is matched whole and in lower case, so
+`/effort sessions` and `/effort Session high` are refused. A word after `session` that names no level
+changes nothing and says so.
+
+Typing `/effort ` offers `session` and the five levels after the caret, and typing `/effort session `
+offers the levels. Tab finishes a started word, so `/effort s` becomes `/effort session` and
+`/effort session h` becomes `/effort session high`, and leaves a start that fits more than one level,
+such as `m`, as typed.
+
+Typed while a turn runs with nothing waiting, `/effort high` and `/effort session high` are taken at
+once and the next turn is the first sent at the level, since the running one keeps the level it began
+with. The bare `/effort` and `/effort session` open their picker over the turn, which keeps running. On
+a model of a ChatGPT account the level is fixed for the whole session instead: the account is sent the
+level the session began with, a level chosen with `/effort` applies from the next session, and one
+chosen with `/effort session` applies from `/clear` and is not recorded.
+
+A level chosen with `/effort` is written to `~/.bravebot`, so it applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
-is recorded. Picking the row for none removes the record, so from the next session your own file's
-level answers again. See
+is recorded. Taking the row for none in the every-session scope removes the record, so from the next session your
+own file's level answers again. See
 [Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
@@ -1757,7 +1779,7 @@ included. `/rename` and `/note` act on the name and the notes the session's reco
 carried out as you type them behind a command line, behind `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`, `/pr`,
 `/sandbox`, `/model`, `/effort` and `/advisor`, and behind a waiting `/note` or `/rename`: a `/note` typed behind a waiting `!make` is written at once.
 `/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
-request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
+request or leaves for another session, and behind the other two. `/effort session`, with or without a level, waits as `/effort` does. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
 `/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
 out as you type them. `/style` picks what every turn opens its prompt with, so it waits behind a prompt, behind a command that begins a turn, behind `/clear`, `/cd`, `/add-dir`,
 `/reach` and `/branch`, which move or end the paths a style file under `~/.bravebot` may not be read from, and behind `/handoff`, `/resume`, `/bg` and `/exit`, which
@@ -1766,10 +1788,10 @@ begin another session; behind a command line, `/compact`,
 directory, which a program a prompt or a command line runs can change the meaning of by making a `.git` entry, so it waits behind those as well as behind the
 commands that start a session here, move the directory or leave the session, and behind `/undo`, `/rewind`, `/hunks` and `/mcp`; it is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/branch`, `/after` and the settings commands
 above it. What they say goes into the history as you type them,
-so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
+so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone, and `/model session` and `/effort session`, open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn
-ends stays open. A model picked this way is the next turn's, and the turn running keeps its own.
+ends stays open. A model or a level picked this way, in either scope, is the next turn's, and the turn running keeps its own.
 
 Every other command typed mid-turn comes off the box and joins the lines waiting for the turn to end,
 exactly as a prompt does: the box clears, the history remembers it, and it is drawn under the box

@@ -849,6 +849,53 @@ fn a_model_and_a_level_the_command_line_named_are_recorded_nowhere() {
     });
 }
 
+/// A level chosen with `/effort session` is in force over a recorded level, a settings file's key
+/// and the command line's level, and writes nothing: the effort file keeps the recorded level, is
+/// not created where nothing was recorded, and is not removed by choosing no level. The next
+/// session opens on the level it would have had. A session that went through `choose_effort`
+/// would put the level where the person's own picks go, and one that removed the file for "no
+/// level" would forget the recorded pick.
+#[test]
+fn a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it() {
+    use bravebot_aichat::protocol::Effort;
+    with_temp_home("effort-session-only", || {
+        let file = store::directory().expect("a home").join("effort");
+        let settings = settings(r#"{"effort": "medium"}"#, "{}");
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_effort(&settings);
+        session.name_effort(Effort::High);
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        assert_eq!(
+            session.effort(),
+            Some(Effort::Max),
+            "the line's level outranked the session's own choice"
+        );
+        assert!(session.effort_is_for_this_session());
+        assert!(!file.exists(), "a level was recorded where none was");
+        assert_eq!(store::load_effort(), None);
+
+        store::save_effort(Some(Effort::Low));
+        session.choose_effort_for_this_session(Some(Effort::Xhigh));
+        session.choose_effort_for_this_session(None);
+        assert_eq!(session.effort(), None);
+        assert_eq!(
+            store::load_effort(),
+            Some(Effort::Low),
+            "the session-only choice rewrote or removed the recorded level"
+        );
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_effort(&settings);
+        assert_eq!(
+            next.effort(),
+            Some(Effort::Low),
+            "the next session did not open on the recorded level"
+        );
+        assert!(!next.effort_is_for_this_session());
+    });
+}
+
 /// The effort choice outlives the session that made it, the same way the model choice does.
 #[test]
 fn a_chosen_effort_is_read_back_next_session() {

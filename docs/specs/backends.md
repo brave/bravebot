@@ -1112,8 +1112,10 @@ choice of something.
 **A ChatGPT account is sent one level for a whole session.** The level in force when a session begins is the
 one the account is sent for all of it ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)): a request that asks for
 a level carries that one, in the field [BACKEND-21](#BACKEND-21) states, whatever was chosen afterwards, and
-a request that asks for none carries none. What is chosen applies to the account from the next session, and
-to every other service at once. A model of the account that refuses a request carrying the level is the
+a request that asks for none carries none. What is chosen with `/effort` applies to the account from the
+next session, what is chosen with `/effort session` applies from `/clear`, which begins the next ChatGPT
+session, and what is chosen applies to every other service at once. A model of the account that refuses
+a request carrying the level is the
 exception, as [BACKEND-22](#BACKEND-22) has it for any model: that refusal outranks the level the session
 began with, and no later request carries a level to that model.
 
@@ -3352,6 +3354,18 @@ and writing one down would make reading a file once enough to outlive the file.
 Nothing else names a level: no release bakes one in, no variable is read for one, and the
 machine-level layer of [BACKEND-38](#BACKEND-38) does not pin it.
 
+A level chosen with `/effort session` ranks as a level chosen in the running session does: above
+`--effort`, above the recorded level and above every settings file, for the session that chose it
+and for no other. It is written to no file of the effort setting, so the next session opens on the
+level it would have had without it. A level recorded with `/effort` afterwards replaces it. The
+session record, which the Sessions screen reads for its Reasoning line, holds the level in force when
+a turn finished. A turn that finished while a session-only level was in force leaves that level in the
+record, as it does for a recorded level, and a level chosen after the last turn finished is not in it.
+A resumed session opens on the recorded level or the settings file's and not on a session-only one,
+because nothing reads a level back out of a record into a running session. `/clear`, `/handoff` and
+`/branch` keep a session-only level for the session that chose it. An incognito session takes it and
+writes nothing.
+
 **Why.** A pick is stored once per person and read back by every run. Ranked above every file, it
 would be the one thing a checkout cannot override: two checkouts in one account cannot want
 different levels, and "the work in this repository is worth thinking hard about" is undone by
@@ -3382,6 +3396,14 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_session::store::a_checkouts_level_outranks_the_saved_pick_and_the_home_file_does_not`
 `verified-by: bravebot_session::store::a_settings_file_naming_no_level_asks_for_none`
 `verified-by: bravebot_tui::persist::a_recorded_level_answers_between_a_checkouts_file_and_the_persons_own`
+`verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::a_turn_begun_after_effort_session_is_asked_for_that_level`
+`verified-by: bravebot_tui::app::a_session_only_level_survives_a_clear_and_a_handoff`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded`
 `verified-by: bravebot_cli::running::a_run_sends_a_checkouts_level_over_the_recorded_one`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`

@@ -905,6 +905,12 @@ fn head(session: &Session, text: usize, refs_room: usize) -> Body {
     if let Some(level) = session.effort_in_force() {
         model_targets.push((model.len(), Target::Effort));
         model.push(row(t!(panel_effort, level = level.as_str()), dim()));
+        // The row says the level drawn is the one `/effort session` chose. A level the ChatGPT
+        // account is sent instead of it is not that level, so it has no such row (PANEL-9). The
+        // row is not a click target: a click on the level opens the every-session picker.
+        if session.effort_in_force_is_for_this_session() {
+            model.push(row(t!(panel_model_this_session).to_string(), dim()));
+        }
     }
     if !model.is_empty() && shown.shows(Section::Model) {
         let count = model.len();
@@ -1427,8 +1433,124 @@ mod tests {
         );
     }
 
-    /// MOUSE-11. Rejects: a target on the heading above the rows, one on the border column, one on
-    /// a row cut for want of room, and an effort row for a model that reads none.
+    /// PANEL-9. The effort row names the level in force whatever scope it was
+    /// chosen in, and a level chosen with `/effort session` has a row under it saying so, which a
+    /// recorded level, a level `--effort` named and a level the ChatGPT account is sent in place of
+    /// the session-only one do not. A session-only choice of no level draws no effort row, so it has
+    /// no marker either. Rejects: a marker drawn for a recorded level or for `--effort`, none for a
+    /// session-only level, one drawn under the effort because the model was picked for this session
+    /// only, one drawn on an account where the level shown is the account's and not the one chosen,
+    /// one cut short at the narrowest panel, and one that stays after a later recorded choice.
+    #[test]
+    fn the_info_panel_marks_a_session_only_level_and_names_it_either_way() {
+        use bravebot_aichat::protocol::Effort;
+        let marker = t!(panel_model_this_session).to_string();
+        let effort = |level: &str| t!(panel_effort, level = level).to_string();
+        let rows = |session: &Session| texts(&lines(session, WIDTH, 40));
+        let markers = |drawn: &[String]| drawn.iter().filter(|row| **row == marker).count();
+        // The row after `row`, which is where a marker for it would be.
+        let after = |drawn: &[String], row: &str| {
+            let at = drawn
+                .iter()
+                .position(|drawn| drawn == row)
+                .unwrap_or_else(|| panic!("{row:?} is not drawn: {drawn:?}"));
+            drawn.get(at + 1).cloned()
+        };
+        let no_effort_row = |drawn: &[String]| !drawn.iter().any(|row| row.starts_with("effort"));
+
+        let mut recorded = Session::new("none");
+        recorded.choose_effort(Some(Effort::High));
+        let drawn = rows(&recorded);
+        assert!(drawn.contains(&effort("high")), "{drawn:?}");
+        assert_eq!(markers(&drawn), 0, "a recorded level was marked: {drawn:?}");
+
+        let mut named = Session::new("none");
+        named.name_effort(Effort::High);
+        let drawn = rows(&named);
+        assert!(drawn.contains(&effort("high")), "{drawn:?}");
+        assert_eq!(markers(&drawn), 0, "--effort's level was marked: {drawn:?}");
+
+        let mut session = Session::new("none");
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        let drawn = rows(&session);
+        assert_eq!(
+            after(&drawn, &effort("max")),
+            Some(marker.clone()),
+            "no marker under the level: {drawn:?}"
+        );
+        assert_eq!(markers(&drawn), 1, "{drawn:?}");
+        let narrow = texts(&lines(&session, 24, 40));
+        assert_eq!(
+            after(&narrow, &effort("max")),
+            Some(marker.clone()),
+            "the marker was cut at the narrowest panel: {narrow:?}"
+        );
+
+        // A model picked for this session only has its own marker, and a recorded level under it
+        // has none; with both session-only each has one under it.
+        let mut model = Session::new("none");
+        model.choose_model_for_this_session("claude-haiku");
+        model.choose_effort(Some(Effort::High));
+        let drawn = rows(&model);
+        assert_eq!(after(&drawn, "claude-haiku"), Some(marker.clone()));
+        assert_ne!(
+            after(&drawn, &effort("high")),
+            Some(marker.clone()),
+            "the model's marker was taken for the level's: {drawn:?}"
+        );
+        assert_eq!(markers(&drawn), 1, "{drawn:?}");
+        model.choose_effort_for_this_session(Some(Effort::High));
+        let drawn = rows(&model);
+        assert_eq!(after(&drawn, "claude-haiku"), Some(marker.clone()));
+        assert_eq!(after(&drawn, &effort("high")), Some(marker.clone()));
+        assert_eq!(markers(&drawn), 2, "{drawn:?}");
+
+        // No level in force is no effort row, so there is nothing for a marker to sit under.
+        session.choose_effort_for_this_session(None);
+        let drawn = rows(&session);
+        assert!(no_effort_row(&drawn), "{drawn:?}");
+        assert_eq!(markers(&drawn), 0, "{drawn:?}");
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        session.note_model_reads_effort(false);
+        let drawn = rows(&session);
+        assert!(no_effort_row(&drawn), "{drawn:?}");
+        assert_eq!(markers(&drawn), 0, "{drawn:?}");
+        session.note_model_reads_effort(true);
+
+        // On the account the level drawn is the one the session began with. It is marked only
+        // where it is also the one chosen for this session only.
+        let mut account = Session::new("none");
+        account.name_effort(Effort::Low);
+        account.begin_account_session();
+        account.choose_effort_for_this_session(Some(Effort::High));
+        account.note_model_is_account(true);
+        let drawn = rows(&account);
+        assert!(drawn.contains(&effort("low")), "{drawn:?}");
+        assert!(!drawn.contains(&effort("high")), "{drawn:?}");
+        assert_eq!(
+            markers(&drawn),
+            0,
+            "the level the account is sent was marked as the session-only one: {drawn:?}"
+        );
+        account.note_model_is_account(false);
+        let drawn = rows(&account);
+        assert_eq!(after(&drawn, &effort("high")), Some(marker.clone()));
+        account.choose_effort_for_this_session(Some(Effort::Low));
+        account.note_model_is_account(true);
+        let drawn = rows(&account);
+        assert_eq!(after(&drawn, &effort("low")), Some(marker.clone()));
+
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        session.choose_effort(Some(Effort::High));
+        let drawn = rows(&session);
+        assert!(drawn.contains(&effort("high")), "{drawn:?}");
+        assert_eq!(markers(&drawn), 0, "the marker outlived the recorded level");
+    }
+
+    /// MOUSE-11, PANEL-9. Rejects: a target on the heading above the rows, one on the border
+    /// column, one on a row cut for want of room, an effort row for a model that reads none, and
+    /// one on the `this session only` row under a session-only level, which would make a click there
+    /// open the picker for a row that names no choice.
     #[test]
     fn only_the_drawn_model_and_effort_rows_are_click_targets() {
         let mut session = Session::new("none");
@@ -1462,6 +1584,24 @@ mod tests {
 
         session.note_model_reads_effort(false);
         assert_eq!(target_at(&session, area, area.y + effort, inside), None);
+
+        // A level chosen for this session only has a row under it saying so. The level above it
+        // is a target as it is for a recorded level, and the row is not one.
+        session.note_model_reads_effort(true);
+        session.choose_effort_for_this_session(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        let rows = lines(&session, area.width, area.height);
+        let marker = t!(panel_model_this_session).to_string();
+        let marked = effort + 1;
+        assert_eq!(
+            rows[usize::from(marked)].to_string().trim(),
+            marker,
+            "no marker under the level: {rows:?}"
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + effort, inside),
+            Some(Target::Effort)
+        );
+        assert_eq!(target_at(&session, area, area.y + marked, inside), None);
     }
 
     /// MOUSE-12. Rejects: a target on the Context heading or on the rows below the reading, and

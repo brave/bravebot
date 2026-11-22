@@ -1228,8 +1228,12 @@ pub struct Session {
     ///
     /// Read from `~/.bravebot` at startup and rewritten when `/effort` picks one, the same as the
     /// model: how hard to think is a preference about the work rather than a property of a
-    /// checkout.
+    /// checkout. A level chosen with `/effort session` is held here and written nowhere.
     effort: Option<Effort>,
+    /// Whether `effort` was chosen for this session only (`/effort session`), so it is not the
+    /// level the next session opens on. Set by that choice and cleared by a choice that is
+    /// recorded, by `--effort` and by settling the level from the files.
+    effort_is_for_this_session: bool,
     /// Whether the model in force reads the effort level, as its roster row stated.
     ///
     /// True until a listing says otherwise, so a session that has never reached one sends what the
@@ -1609,6 +1613,7 @@ impl Session {
             turn_model: None,
             model_labels: Vec::new(),
             effort: None,
+            effort_is_for_this_session: false,
             model_reads_effort: true,
             breakpoints_given_up: false,
             awaited_listing: None,
