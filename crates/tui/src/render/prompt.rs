@@ -232,15 +232,19 @@ fn named_words(session: &Session) -> Vec<(usize, usize)> {
 ///
 /// Only where the line is a command or a skill that takes something, a space has been typed after
 /// it, and nothing else has: the first character of the argument replaces the hint. At the end of
-/// the line, since that is where the argument will be typed.
+/// the line, since that is where the argument will be typed. The one line of two words with a hint
+/// of its own is `/effort session `, which draws the levels.
 fn argument_hint(session: &Session) -> Option<String> {
     let line = session.input();
     if session.shell || session.caret() != line.len() {
         return None;
     }
     let word = line.trim_end_matches(' ');
-    if word.len() == line.len() || word.contains(char::is_whitespace) {
+    if word.len() == line.len() {
         return None;
+    }
+    if word.contains(char::is_whitespace) {
+        return crate::command_table::typed_hint_after_word(word).map(|hint| printable(&hint));
     }
     let hint = match crate::command_table::commands()
         .iter()

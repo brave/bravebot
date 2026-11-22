@@ -322,7 +322,7 @@ bravebot --effort high "why does this test fail only on the second run?"
 ```
 
 Names how hard the model is asked to think for one run, in the words
-[`/effort`](commands.md#effort-level) takes (`low`, `medium`, `high`, `xhigh` and `max`, in any
+[`/effort`](commands.md#effort-session-level) takes (`low`, `medium`, `high`, `xhigh` and `max`, in any
 case), and outranks every other way one is named. Where no flag names one, a run asks for the level a
 session opening in the same directory would: an [`effort`](../customize/configuration.md#effort) key
 in the checkout's settings or the file `--settings` names, then the level `/effort` recorded, then the
@@ -1521,7 +1521,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/cost` | Show what each turn of this session has spent |
 | `/model [session]` | Choose which model to think with, for every session or, with `session`, for this one only |
 | `/theme [name]` | Choose which theme paints the interface |
-| `/effort [low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
+| `/effort [session \| low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |
 | `/language [tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |

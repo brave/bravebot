@@ -7825,7 +7825,7 @@ mod tests {
             session.type_char(c);
         }
         session.submit().expect("the prompt is sent");
-        let title = t!(effort_picker_title);
+        let title = t!(effort_picker_heading_every_session);
         assert!(!rendered_at(&session, 120, 40).contains(title));
 
         session.open_picking(crate::picking::Picking::Effort(
@@ -8827,15 +8827,74 @@ mod tests {
         assert!(!input_row(&typed("/compact"), 90).contains("[focus]"));
     }
 
-    /// `/effort` spells out the levels it takes once the word is typed, while the completion list
-    /// keeps `[level]` so its description column does not move.
+    /// `/effort` spells out the word `session` and the levels it takes once the word is typed,
+    /// while the completion list keeps `[level]` so its description column does not move.
     #[test]
     fn the_effort_command_offers_its_levels_after_its_word() {
         let row = input_row(&typed("/effort "), 90);
         assert!(
-            row.ends_with("/effort  [low | medium | high | xhigh | max]"),
+            row.ends_with("/effort  [session | low | medium | high | xhigh | max]"),
             "{row}"
         );
+    }
+
+    /// CMD-21. After `/effort session ` the box draws the five levels, which are the
+    /// words that follow `session`, and not the word `session` again. The hint goes at the first
+    /// character of the level, at the end of the line, outside shell mode, and only after the
+    /// exact word `session`. The faults it rejects are no hint for the second word, so the box
+    /// draws nothing after `/effort session `, the first word's hint repeated there, the hint kept
+    /// over a level being typed or after a finished one, drawn for a longer word or one in another
+    /// case, drawn in shell mode or with the caret moved back into the line, and a hint cut
+    /// across a second row instead of at the row's edge.
+    #[test]
+    fn after_effort_session_the_box_draws_the_levels_alone() {
+        let row = input_row(&typed("/effort session "), 90);
+        assert!(
+            row.ends_with("/effort session  [low | medium | high | xhigh | max]"),
+            "{row}"
+        );
+        assert!(!row.contains("[session"), "{row}");
+
+        for (line, drawn) in [
+            ("/effort session", "/effort session"),
+            ("/effort session h", "/effort session h"),
+            ("/effort session high ", "/effort session high"),
+            ("/effort sessions ", "/effort sessions"),
+            ("/effort Session ", "/effort Session"),
+            ("/effort  session ", "/effort  session"),
+            ("/effort high ", "/effort high"),
+            ("/model session ", "/model session"),
+        ] {
+            assert_eq!(input_row(&typed(line), 90), drawn, "{line:?}");
+        }
+
+        let mut shell = typed("/effort session ");
+        shell.shell = true;
+        assert_eq!(input_row(&shell, 90), "/effort session");
+
+        let mut moved_back = typed("/effort session ");
+        moved_back.move_left();
+        assert_eq!(input_row(&moved_back, 90), "/effort session");
+
+        let narrow = input_row(&typed("/effort session "), 30);
+        assert!(narrow.starts_with("/effort session  [low | m"), "{narrow}");
+        assert!(narrow.ends_with('…'), "{narrow}");
+    }
+
+    /// CMD-21. The first word's hint is one row however narrow the terminal is, cut at the
+    /// row's edge with an ellipsis, and drawn whole at eighty columns, where the longer list with
+    /// `session` in it must still fit. The faults it rejects are the longer hint wrapping onto a
+    /// row the box did not reserve and the longer hint being cut at eighty columns.
+    #[test]
+    fn the_effort_hint_with_session_in_it_fits_eighty_columns_and_is_cut_below_that() {
+        let whole = "/effort  [session | low | medium | high | xhigh | max]";
+        assert!(input_row(&typed("/effort "), 80).ends_with(whole));
+        assert!(input_row(&typed("/effort "), 60).ends_with(whole));
+
+        let narrow = input_row(&typed("/effort "), 30);
+        assert!(narrow.starts_with("/effort  [session | l"), "{narrow}");
+        assert!(narrow.ends_with('…'), "{narrow}");
+        assert!(!narrow.contains("medium"), "{narrow}");
     }
 
     /// `/sandbox` spells out the modes it takes once the word is typed.

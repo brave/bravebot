@@ -899,9 +899,10 @@ pub(super) fn run_turn_animated(
     ))
 }
 
-/// The level a turn was sent with, kept for the record the turn's save writes, so the Sessions
-/// screen can say how hard the model was asked to think. It is nothing for a model that reads no
-/// level, since none was sent, and it follows `/effort` from one turn to the next.
+/// The level in force when a turn finishes, kept for the record the turn's save writes, so the
+/// Sessions screen can say how hard the model was asked to think. It is the level the turn was sent
+/// with unless `/effort` or `/effort session` chose another while the turn ran. It is nothing for a
+/// model that reads no level, since none is sent, and it follows `/effort` from one turn to the next.
 pub(super) fn keep_the_effort_of(
     stored: &mut bravebot_session::sessions::Handle,
     session: &Session,

@@ -99,7 +99,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/bedrock-refusals.json` | the AWS Bedrock models that refused the request for their thinking to be shown as it happens, each kept for 30 days so the first request of a later session leaves it out; delete the file to ask again |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
-| `~/.bravebot/effort` | the effort level chosen with `/effort` |
+| `~/.bravebot/effort` | the effort level chosen with `/effort`; `/effort session` does not write it |
 | `~/.bravebot/theme` | the theme chosen with `/theme` |
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
 | `~/.bravebot/language` | the interface language chosen with `/language` ([details](language.md)) |
@@ -206,7 +206,7 @@ the state directory in a directory of its own.
 
 ## Choosing how hard to think
 
-`/effort` opens a picker of five levels, and writes the choice to `~/.bravebot/effort`. See [Choosing how hard to think](effort.md).
+`/effort` opens a picker of five levels, and writes the choice to `~/.bravebot/effort`. `/effort session` opens the same picker for this session only and writes nothing. See [Choosing how hard to think](effort.md).
 
 ## Choosing a theme
 
@@ -766,7 +766,7 @@ file you did not write.
 ```
 
 How hard the model is asked to think, in the words
-[`/effort`](../reference/commands.md#effort-level) takes: `low`, `medium`, `high`, `xhigh` and `max`,
+[`/effort`](../reference/commands.md#effort-session-level) takes: `low`, `medium`, `high`, `xhigh` and `max`,
 read whatever their case. A word bravebot does not define is no level at all, so nothing you mistype
 reaches a request; the request carries no such field and the service applies its own default.
 
@@ -776,8 +776,10 @@ A level recorded by `/effort` ranks as a recorded model does: it wins over the k
 wins, and the run asks for none. A blank or a value that is not a string names nothing, so the
 record answers, but it hides the key in a file below it: with nothing recorded, the run asks for no
 level. [`--effort`](../reference/cli.md#--effort-level) on a one-shot run, and a level
-picked in the session that is running, win over everything. A session on a model of a ChatGPT account is
-the exception: it is sent the level it began with, so a level picked in it applies from the next session.
+picked in the session that is running, win over everything. A level chosen with `/effort session` is
+such a pick and records nothing, so the next session opens on the level it would have had. A session on
+a model of a ChatGPT account is the exception: it is sent the level it began with, so a level picked in
+it applies from the next session, or from `/clear` where it was chosen with `/effort session`.
 Nothing bakes a level in and no variable names one.
 
 This is the way a **project** can ask for a level, and the way a machine where nobody ever opens the
@@ -787,7 +789,7 @@ different levels.
 
 Everything under [Choosing how hard to think](effort.md) still applies, including
 the two cases worth knowing: the models that read no level, and the Brave endpoint, which accepts one
-and discards it. Taking the row for no level in the picker removes the record rather than writing an
+and discards it. Taking the row for no level in the every-session scope of the picker removes the record rather than writing an
 empty one, so your own file's level answers again in the next session; unset it there if you want
 none.
 

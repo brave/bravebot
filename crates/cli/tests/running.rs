@@ -15794,6 +15794,42 @@ fn a_completion_script_names_every_command_and_flag_the_usage_table_lists() {
     }
 }
 
+/// CMD-21, CLI-20. `--help` lists `/effort` with the word `session` and the five levels, as the box
+/// draws them after `/effort `, and `/model` with `[session]`. The row is read off the printed
+/// table of interactive commands, whose first column is the command and its hint. The faults it
+/// rejects are the usage table printing the levels alone, which leaves the form `/effort session`
+/// undiscoverable from `--help`, and a hint written out again in the usage code that drifts from
+/// the one the box draws.
+#[test]
+fn help_lists_the_effort_command_with_the_session_word_and_the_levels() {
+    let scratch = Scratch::new("cli-running-help-effort-row");
+    let output = bravebot(&scratch.path, &[], &["--help"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+
+    let row = |command: &str| {
+        stdout
+            .lines()
+            .find(|line| line.starts_with(&format!("  {command} ")))
+            .unwrap_or_else(|| panic!("--help has no row for {command}: {stdout}"))
+            .trim_start()
+            .split("  ")
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    assert!(
+        row("/effort").starts_with("/effort [session | low | medium | high | xhigh | max]"),
+        "{}",
+        row("/effort")
+    );
+    assert!(
+        row("/model").starts_with("/model [session]"),
+        "{}",
+        row("/model")
+    );
+}
+
 /// CLI-20. The script is the same wherever it is asked for and whatever the home holds, and asking
 /// leaves the home as empty as it was. A completer that listed agent definitions or session ids
 /// would read the state directory, so its output would differ between these two homes.

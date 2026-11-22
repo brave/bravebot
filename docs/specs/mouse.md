@@ -321,7 +321,10 @@ a mouse. At the plain prompt the click is [MOUSE-23](#MOUSE-23).
 
 In the info panel, a left click that sweeps nothing on the row that names the model asks for the
 model picker, as `/model` does, and one on the row that names the effort asks for the effort picker,
-as `/effort` does. The commands are typed at the plain prompt, so a click over the scroller or a history search asks for nothing, and [MOUSE-29](#MOUSE-29) says what the click does while something is running. Where a definition in force names the model the click is refused as the command
+as `/effort` does, in the scope that records the pick for every session. That holds whether the level
+in force was recorded or was chosen with `/effort session`, and a second press on a row of the
+opened picker takes the row in the scope the picker is then in ([MOUSE-15](#MOUSE-15)). The row under
+the effort that says `this session only` ([PANEL-9](info-panel.md#PANEL-9)) is not a target. The commands are typed at the plain prompt, so a click over the scroller or a history search asks for nothing, and [MOUSE-29](#MOUSE-29) says what the click does while something is running. Where a definition in force names the model the click is refused as the command
 is ([CLI-17](cli.md#CLI-17)), with the same note. The press and the release are on one cell and the
 press is a single click, so a drag is a selection ([MOUSE-1](#MOUSE-1)), and a press that began
 elsewhere and was let go on the row is not a click on it. A double click asks for the picker once:
@@ -332,6 +335,7 @@ stays the way to do it without a mouse, and the click acts only on rows the pers
 put there ([PANEL-11](info-panel.md#PANEL-11)).
 
 `verified-by: bravebot_tui::app::a_click_on_the_panels_model_or_effort_row_opens_that_picker`
+`verified-by: bravebot_tui::app::a_click_on_the_panels_effort_row_opens_the_every_session_picker_whatever_is_in_force`
 `verified-by: bravebot_tui::app::a_click_off_the_models_rows_asks_for_no_picker`
 `verified-by: bravebot_tui::app::a_drag_over_the_model_row_opens_no_picker_and_a_double_click_opens_it_once`
 `verified-by: bravebot_tui::app::a_press_elsewhere_let_go_on_the_model_row_opens_no_picker`
@@ -409,8 +413,10 @@ drawn, so a list that has scrolled to keep the cursor in view is read as it is d
 that is drawn moves the cursor and leaves the rows where they are, whether or not the list has scrolled,
 so a double click in place takes the row pointed at. A key or a turn of the wheel moves the cursor and
 the rows as it always did, with the cursor on the last row drawn once it is past the first page. Tab in
-the model picker switches its scope ([VIEW-14](terminal-transcript.md#VIEW-14)) and moves neither the
-cursor nor the rows. The
+the model picker and in the effort picker switches its scope ([VIEW-14](terminal-transcript.md#VIEW-14),
+[VIEW-46](terminal-transcript.md#VIEW-46)) and moves neither the cursor nor the rows. A second press on a
+row of the effort picker takes the row in the scope the picker is in, the one it was opened in or the
+one Tab left it in. The
 second press is held to the row and not to the cell: after the wheel has moved the rows, a press on the
 cell of the first row is a first press on the row drawn there now, and one where the first row is
 drawn now takes it. In the model
@@ -481,6 +487,9 @@ cursor ([MOUSE-46](#MOUSE-46)).
 `verified-by: bravebot_tui::model_prompt::a_key_after_a_press_moves_the_list_as_the_keys_alone_do`
 `verified-by: bravebot_tui::app::tests::pickers::the_model_picker_opened_mid_turn_takes_a_press_the_wheel_and_a_press_outside`
 `verified-by: bravebot_tui::app::tab_in_an_open_model_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::effort_prompt::tab_switches_the_scope_in_both_directions_and_touches_nothing_else`
+`verified-by: bravebot_tui::app::tests::pickers::a_second_press_on_a_row_of_the_effort_picker_takes_it_in_the_scope_in_force`
 `verified-by: bravebot_tui::app::tests::history_search::a_press_on_a_prompt_moves_the_cursor_and_a_second_takes_it_into_the_box`
 `verified-by: bravebot_tui::app::tests::history_search::two_presses_on_different_prompts_or_far_apart_take_nothing`
 `verified-by: bravebot_tui::app::tests::history_search::each_row_drawn_is_the_prompt_a_press_on_it_picks_in_a_window_that_has_slid`

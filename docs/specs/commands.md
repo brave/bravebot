@@ -398,7 +398,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -422,6 +422,9 @@ typed unless a line waiting ahead of it could change what it acts on, and otherw
 that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
 leaves, and `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
+`/effort session` and `/effort session <level>` are `/effort` for this: each waits behind the lines
+`/effort <level>` waits behind and is carried out as it is typed behind any other line, and a line
+that waited is read by the parse a line typed at rest is read by ([CMD-35](#CMD-35)).
 Which lines could change what a command acts on depends on the command. A `/sandbox` line in any
 form waits only behind a line typed before it, and it sets nothing but the sandbox mode
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
@@ -569,15 +572,17 @@ does not read:
   moment it is picked, since the next request is the one that has to fit.
 - **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
   level in force when it begins and does not read it again, so a level set mid-turn is the next
-  turn's. A ChatGPT account is sent the level its session began with, so a level set there applies
-  from the next session ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
+  turn's, whether it was set with `/effort <level>` or with `/effort session <level>`. A ChatGPT
+  account is sent the level its session began with, so a level recorded there applies from the next
+  session and one set with `/effort session` applies from `/clear`
+  ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
 - **`/language`.** It saves the language the interface is read in from the next start, and the
   catalog is chosen once, so nothing the turn holds or the screen draws changes
   ([LOCALE-8](localization.md#LOCALE-8)).
 - **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
   the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
   it ([INPUT-24](terminal-input.md#INPUT-24)).
-- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config`, and `/model session`, opens a list. While a turn
+- **The pickers.** The bare word of `/model`, `/theme`, `/effort` and `/config`, and `/model session` and `/effort session`, opens a list. While a turn
   runs the list is a mode of the session and not a loop of its own, so the turn goes on being drawn
   and asked about. The list takes every key the box would have taken, is drawn over the frame with
   the turn still drawn behind it, and is left with Escape or Ctrl-C, which stop nothing. A question
@@ -594,6 +599,8 @@ does not read:
   `verified-by: bravebot_tui::app::the_model_command_opens_its_picker_before_the_listing_has_arrived`
   `verified-by: bravebot_tui::app::model_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
   `verified-by: bravebot_tui::app::a_session_only_model_picked_mid_turn_applies_from_the_next_turn`
+  `verified-by: bravebot_tui::app::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+  `verified-by: bravebot_tui::app::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
   `verified-by: bravebot_tui::app::a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why`
 - **`/sandbox`.** It sets the mode the programs `run` starts are held to
   ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn reads the mode again when each call begins, so a
@@ -748,6 +755,10 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
 `verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
 `verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
@@ -1434,28 +1445,49 @@ least likely to remember what it was doing, and the first thing they would do is
 `verified-by: bravebot_tui::app::a_checkouts_away_recap_does_not_turn_the_recap_on`
 
 <a id="CMD-21"></a>
-### CMD-21: `/effort` spells out its levels after the word, and Tab finishes one
+### CMD-21: `/effort` spells out `session` and its levels after the word, and Tab finishes one
 
-Once `/effort ` is typed, the box draws the five levels it takes, `low`, `medium`, `high`, `xhigh`
-and `max`, after the caret in place of `[level]`. The completion list keeps `[level]` in the table,
-because every row's description starts after the longest word in the list and a spelled-out hint
-would push all of them to the right. `--help` prints the spelled-out form. Both are built from the
-set of levels the program accepts, so a level added there appears in both.
+Once `/effort ` is typed, the box draws the word `session` and the five levels it takes, `low`,
+`medium`, `high`, `xhigh` and `max`, as `[session | low | medium | high | xhigh | max]` after the
+caret in place of `[level]`. Once `/effort session ` is typed, with the caret at the end of the line
+and outside shell mode, it draws the five levels alone, `[low | medium | high | xhigh | max]`. That
+hint is drawn after the exact lower-case word `session` and after no other word: `/effort sessions `,
+`/effort Session `, `/effort high ` and `/model session ` have none, and neither has a line where a
+level is already being typed. The completion list keeps `[level]` in the table, because every row's
+description starts after the longest word in the list and a spelled-out hint would push all of them
+to the right, and it has no row for `/effort ` or `/effort s`: the word and the levels are offered by
+the hint and by Tab. `--help` prints the spelled-out form,
+`/effort [session | low | medium | high | xhigh | max]`. The hint, Tab and `--help` are built from
+the set of levels the program accepts and the one word `session`, so a level added there appears in
+all of them. The hint is cut at the edge of the row where the terminal is narrower than it.
 
-Tab after `/effort ` and the start of a level, with the caret at the end of the line, replaces the
-start with the level it fits, so `/effort h` becomes `/effort high`. A start that fits several
-levels is carried as far as they agree and no further, so `m`, which fits `medium` and `max`, is left
-as typed. A finished level, a word that fits none, a bare `/effort `, another command, a prompt that
-only mentions `/effort`, and a line in shell mode are left as typed. Tab never submits the line.
+Tab after `/effort ` and the start of a word, with the caret at the end of the line, replaces the
+start with the word `session` or the level it fits, so `/effort s` becomes `/effort session` and
+`/effort h` becomes `/effort high`. Tab after `/effort session ` and the start of a level replaces
+the start with the level it fits, so `/effort session h` becomes `/effort session high`, and `session`
+is not offered as a level there. A start that fits several words is carried as far as they agree and
+no further, so `m`, which fits `medium` and `max`, is left as typed after `/effort ` and after
+`/effort session `. A finished word or level, a word that fits none, a bare `/effort `,
+`/effort session` with nothing after it, `/effort sessions`, a level after `/effort Session`,
+another command, a prompt that only mentions `/effort`, a line in shell mode and a line whose caret
+is not at its end are left as typed. Tab never submits the line.
 
-Nothing from the conversation reaches either. They read the typed line and the fixed set of levels.
+Nothing from the conversation reaches either. They read the typed line, the word `session` and the
+fixed set of levels.
 
 **Why.** The words a command takes are what a person cannot guess, and `[level]` did not say them.
 Completing a start from the same set the command accepts keeps the hint, the completion and the
 refusal for an unknown word in step.
 
 `verified-by: bravebot_tui::render::the_effort_command_offers_its_levels_after_its_word`
+`verified-by: bravebot_tui::render::after_effort_session_the_box_draws_the_levels_alone`
+`verified-by: bravebot_tui::render::the_effort_hint_with_session_in_it_fits_eighty_columns_and_is_cut_below_that`
 `verified-by: bravebot_tui::app::the_effort_hint_lists_every_level_and_the_list_stays_short`
+`verified-by: bravebot_tui::command_table::typing_effort_and_a_space_offers_the_session_word_and_the_levels`
+`verified-by: bravebot_tui::command_table::a_start_fitting_session_and_a_level_is_carried_as_far_as_they_agree`
+`verified-by: bravebot_tui::command_table::the_effort_hints_and_tab_and_the_levels_the_command_accepts_are_one_set`
+`verified-by: bravebot_tui::command_table::the_effort_and_sandbox_hints_and_completions_offer_the_same_words`
+`verified-by: bravebot_cli::running::help_lists_the_effort_command_with_the_session_word_and_the_levels`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 `verified-by: bravebot_tui::app::tab_finishes_a_level_started_after_the_effort_command`
 `verified-by: bravebot_tui::app::tab_leaves_alone_a_start_it_cannot_finish`
@@ -2110,3 +2142,105 @@ code the terminal calls, so both front ends send the same requests and refuse th
 `verified-by: bravebot_ui_bridge::background::each_refusal_of_bg_is_made_from_what_the_bridge_holds`
 `verified-by: bravebot_ui_bridge::backgrounding::a_chat_handed_to_the_background_runs_there_and_is_refused_when_opened`
 `verified-by: by-construction (the desktop menu and router are not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts the Compact Conversation…, Hand Off to New Chat… and Continue in Background… rows, that each requires an open idle chat and that the router handles each, and ui/scripts/compacting.test.mjs asserts the notice each ending of a compaction gives; make check-ui runs both)`
+
+## Setting the effort level for one session
+
+<a id="CMD-35"></a>
+### CMD-35: `/effort session` sets the effort level for this session only and records nothing
+
+`/effort` takes one word of its own, `session`, besides the five levels `low`, `medium`, `high`,
+`xhigh` and `max`. `/effort session <level>` puts the level in force for the running session and
+writes nothing to `~/.bravebot/effort`: the next session opens on the level it would have had
+without this one. `/effort <level>` records the level for the sessions after this one, as it does
+without the word, and the bare `/effort` opens the picker in the scope that records the pick for
+every session. `/effort session` with nothing after it opens the same picker in the scope that
+records nothing, and Tab in the open picker switches between the two scopes
+([VIEW-46](terminal-transcript.md#VIEW-46)). A row taken in the picker is carried out in the scope
+the picker is in when it is taken, whichever scope it was opened in.
+
+The word is matched whole and in lower case. The level after it is read in any case, as `/effort
+<level>` reads it, so `/effort session HIGH` is the level `high`. A word after `session` that is no
+level, such as `highest`, `none` or `high now`, changes nothing, writes nothing and is refused naming
+that word, in the sentence `/effort <word>` is refused with. `/effort sessions`,
+`/effort sessionhigh`, `/effort Session high` and `/effort sess high` are not the form: each is read
+as a level to record that is none, and is refused naming everything typed after `/effort`.
+
+The session says the level it holds in the transcript, in the words it uses for a recorded one.
+The row of the picker that asks for no level, taken in the scope that records nothing, puts no level
+in force for this session and leaves the recorded level in the file. Typed while a turn runs,
+`/effort session <level>` is carried out as it is typed, said under the turn, and `/effort session`
+opens its picker as a mode of the session ([CMD-8](#CMD-8)). A line that waited in the queue is
+read by the parse a line typed at rest is read by. A turn is sent with the level in force when it
+begins, so a level set with `/effort session`, mid-turn or not, is the next turn's.
+
+A level chosen with `/effort session` ranks as a level chosen in the running session
+([BACKEND-43](backends.md#BACKEND-43)): it outranks the level `--effort` named, the recorded level
+and every settings file for this session. `--effort` is not marked as a session-only choice, and a
+level recorded afterwards replaces the session-only level and ends its mark. An incognito session
+takes the level and records nothing, as it records nothing for a recorded one.
+
+The level belongs to the session that chose it. `/clear` and `/handoff` begin a new conversation in
+the same session and keep the level. `/branch` goes on in the same session and keeps it, and writes
+nothing to the effort file. `/resume` opens another session, which opens on the level a new session
+would have, the recorded one or the settings file's, so it does not carry the level. A session's
+record keeps the level in force when its last turn finished, whichever command set that level. A turn
+that finished while a level chosen with `/effort session` was in force leaves that level in the record
+and in the copy `/branch` writes from it, as it does for a level recorded with `/effort`, and a level
+chosen after the last turn finished is in neither. On a ChatGPT account the record holds the level
+the account's session began with. Nothing reads a level back out of a record into a running session,
+so a resume takes none from it, and `/effort session` never writes the effort file
+([SESSION-11](sessions.md#SESSION-11)).
+
+On a ChatGPT account the session is sent the level it began with, so a level chosen with
+`/effort session` is not sent until `/clear` begins the next ChatGPT session, which begins at it.
+The session says so where the level chosen is not the one the account is sent, in a sentence that
+names both levels and says the chosen level applies from `/clear` and is not recorded
+([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). The info panel and `/status` say the level is for this
+session only ([PANEL-9](info-panel.md#PANEL-9)). A click on the panel's effort row stands for the
+bare `/effort` ([MOUSE-11](mouse.md#MOUSE-11)).
+
+Nothing from the conversation reaches the command. It reads the typed line, the fixed set of
+levels and the person's pick in a list.
+
+**Why.** A level recorded with `/effort` changes every later session, so trying a level for one
+conversation means changing it back afterwards. The scope is a word the person types or a choice
+they make in the list, and nothing about it is inferred. The word is matched exactly so that a
+sentence mentioning a level is never read as a scope, and a refusal names what was typed so that a
+mistyped word is visible.
+
+`verified-by: bravebot_tui::command_table::effort_takes_session_and_a_level_and_reads_the_rest_as_a_level_to_record`
+`verified-by: bravebot_tui::app::effort_session_asks_for_the_picker_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::typing_the_effort_command_opens_the_picker`
+`verified-by: bravebot_tui::app::the_effort_command_carries_its_level`
+`verified-by: bravebot_tui::app::effort_session_and_a_level_reach_the_action_with_the_level_and_the_scope`
+`verified-by: bravebot_tui::app::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_word_after_effort_session_that_is_no_level_changes_nothing_and_says_so`
+`verified-by: bravebot_tui::app::a_level_this_program_does_not_know_changes_nothing_and_says_so`
+`verified-by: bravebot_tui::app::a_level_named_without_session_is_recorded_and_ends_a_session_only_mark`
+`verified-by: bravebot_tui::app::a_level_picked_in_the_this_session_scope_is_not_recorded`
+`verified-by: bravebot_tui::app::a_level_picked_in_the_every_session_scope_is_recorded`
+`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in`
+`verified-by: bravebot_tui::app::the_effort_picker_opened_at_rest_takes_a_second_press_in_the_scope_tab_left_it_in`
+`verified-by: bravebot_tui::app::tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn`
+`verified-by: bravebot_tui::app::a_turn_begun_after_effort_session_is_asked_for_that_level`
+`verified-by: bravebot_tui::app::effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope`
+`verified-by: bravebot_tui::app::a_session_only_level_picked_mid_turn_applies_from_the_next_turn`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets`
+`verified-by: bravebot_tui::app::effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest`
+`verified-by: bravebot_tui::app::a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_level_chosen_for_this_session_is_held_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_recorded_level_replaces_a_session_only_one_and_ends_the_mark`
+`verified-by: bravebot_tui::app::a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions`
+`verified-by: bravebot_tui::app::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
+`verified-by: bravebot_tui::app::a_session_only_level_survives_a_clear_and_a_handoff`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only`
+`verified-by: bravebot_tui::app::a_clear_begins_the_account_session_at_a_session_only_level`
+`verified-by: bravebot_tui::app::a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded`
+`verified-by: bravebot_tui::app::a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in`

@@ -61,10 +61,12 @@ pub enum Action {
     ChooseTheme,
     /// Apply a theme by name without opening the picker.
     SetTheme(String),
-    /// Ask how hard to think. Needs the terminal, so the loop runs it.
-    ChooseEffort,
-    /// Take a level by name without opening the picker.
-    SetEffort(String),
+    /// Ask how hard to think, and for how long the pick lasts: the picker opens in the scope the
+    /// person typed (`/effort` or `/effort session`). Needs the terminal, so the loop runs it.
+    ChooseEffort(crate::model_prompt::Scope),
+    /// Take a level by name without opening the picker, recorded or for this session only
+    /// according to the scope (`/effort <level>` or `/effort session <level>`).
+    SetEffort(String, crate::model_prompt::Scope),
     Variant(String),
     /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
     /// Needs the configuration to resolve the name against, which the loop owns.

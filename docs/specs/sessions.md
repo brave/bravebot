@@ -405,14 +405,26 @@ The status panel does not read them back. It reports the last turn run in this p
 resumed session shows no cache until a turn has run in it
 ([PANEL-8](info-panel.md#PANEL-8)).
 
-The record also keeps the reasoning effort the terminal sent with the last turn it ran, as the word
-of [SESSION-15](#SESSION-15), under `effort`. It is left out where no level was sent, as with a model
-that reads none, and a record written before it was kept has none. The list reads the word through
+The record also keeps the reasoning effort in force when the last turn it ran finished, as the word
+of [SESSION-15](#SESSION-15), under `effort`. It is left out where no level was in force, as with a
+model that reads none, and a record written before it was kept has none. The list reads the word through
 the fixed set of levels, so a word that names none of them is listed as no effort and the record is
 still listed. The list also reads the record's counts of the calls that changed a file and that ran a
 program and whether the last program ended badly, and the cache figures of the split, so that the
 Sessions screen can say them ([SCREEN-3](sessions-screen.md#SCREEN-3)). A resume keeps the word until
 its next turn replaces it.
+
+The word is the level in force when the last turn finished, however that level came to be in force:
+`/effort`, `/effort session`, `--effort` or a settings file. That is the level the turn was sent with
+unless `/effort` or `/effort session` was carried out while the turn ran. A turn that finished while
+a level chosen with `/effort session` was in force therefore leaves that level in the record and in
+the copy `/branch` writes from it, as it does for a level recorded with `/effort`, except on a
+ChatGPT account, where the level in force is the one the account's session began with
+([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). A level chosen with `/effort session` after the last
+turn finished is in neither. Nothing reads the word back into a running session, so a resumed
+session takes no level from the record and opens on the level a new session opens on, the recorded
+one or the settings file's ([BACKEND-43](backends.md#BACKEND-43)). `/effort session` never writes
+the effort file.
 
 A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
 like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
@@ -450,6 +462,9 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
 `verified-by: bravebot_session::sessions::a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
 `verified-by: bravebot_session::listing::a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
 `verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
@@ -600,6 +615,10 @@ file may name one, which outranks whatever is recorded here, and the person's ow
 which answers only where nothing is recorded. With either written, somebody back where they were
 before they ever chose is somebody a file answers for.
 
+`/effort session` records no choice. The level it puts in force belongs to the running session, so
+it does not write, rewrite or remove this record, including where it asks for no level, and the next
+session opens on the level it would have had ([commands.md](commands.md#CMD-35)).
+
 **Why.** Asking again in every project for the same preference is answering it repeatedly, and a
 project whose work does call for a level of its own says so in its settings rather than in a record
 that cannot tell one checkout from another. Refusing to store a word this program does not define is
@@ -607,6 +626,9 @@ what keeps an edited file from putting an unrecognised level into a request fiel
 
 `verified-by: bravebot_tui::persist::a_chosen_effort_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::asking_for_no_effort_is_read_back_as_no_choice`
+`verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_level_picked_in_the_this_session_scope_is_not_recorded`
 `verified-by: bravebot_session::store::a_stored_effort_is_read_back_without_its_newline`
 `verified-by: bravebot_session::store::a_file_naming_no_level_is_not_a_choice`
 `verified-by: bravebot_session::store::only_the_first_effort_line_is_read`

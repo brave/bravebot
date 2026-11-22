@@ -2432,8 +2432,11 @@ picker-current = current
 
 # Choosing how hard to think. The level names are the words sent and stored, so they are not
 # translated; only what each one is for is.
-effort-picker-title = effort
-effort-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
+effort-picker-heading-every-session = effort · every session
+effort-picker-heading-this-session = effort · this session only
+effort-picker-scope-every-session = Enter: every session  ·  Tab: this session only
+effort-picker-scope-this-session = Enter: this session only  ·  Tab: every session
+effort-picker-keys = ↑↓ choose  ·  Esc keep current
 effort-unset = default
 effort-hint-unset = left to whichever service answers
 effort-hint-low = least thinking, for simple work
@@ -3065,11 +3068,15 @@ status-agent-every-turn = every turn is addressed to it, named with --agent
 status-agent-by-setting = every turn is addressed to it, chosen by the agent setting
 status-effort = Effort
 status-effort-chosen = chosen with /effort
+status-effort-chosen-this-session = chosen with /effort session, for this session only
 status-effort-default = whatever the service does on its own
 status-effort-not-read = chosen with /effort, but this model reads none
 # The level shown is the one a ChatGPT session began with, which that account is sent for the whole
 # session. The level chosen since is a level word or the word for the default.
 status-effort-kept-for-account = the level this ChatGPT session began with; { $chosen } was chosen with /effort and applies from the next session
+# The same where the level chosen was chosen with /effort session, which nothing records and which /clear
+# carries into the next ChatGPT session.
+status-effort-kept-for-account-this-session = the level this ChatGPT session began with; { $chosen } was chosen with /effort session, is not recorded and applies from /clear
 status-theme = Theme
 status-theme-chosen = chosen with /theme
 status-served = Answered by
@@ -3664,8 +3671,8 @@ panel-more-references = +{ $count } more
 # Left in the transcript when a click on the session's name in the info panel finds the line in
 # use, so /rename was not put in it.
 panel-rename-line-in-use = The line is in use, so the session's name was not put in it. Clear the line and click the name again, or type /rename.
-# Under the model in the info panel where it was picked with /model session, so the next session
-# does not open on it.
+# Under the model in the info panel where it was picked with /model session, and under the effort
+# level where it was chosen with /effort session, so the next session does not open on it.
 panel-model-this-session = this session only
 # The reasoning effort and the session's token total in the info panel, one to a row.
 panel-effort = effort { $level }
@@ -4265,6 +4272,9 @@ session-effort-not-read = this model reads no effort level, so requests carry no
 # Said where the level chosen is not the one a session on a ChatGPT model began with, because that
 # account is sent one level for a whole session. Both are level words or the word for the default.
 session-effort-kept-for-account = a ChatGPT session keeps the effort level it began with, { $began }, so { $chosen } applies from the next session, which /clear begins
+# Said instead of the message above where the level chosen was chosen with /effort session, which
+# /clear carries into the next ChatGPT session and which nothing records.
+session-effort-kept-for-account-this-session = a ChatGPT session keeps the effort level it began with, { $began }, so { $chosen } applies from /clear, which begins the next ChatGPT session, and is not recorded
 session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
 session-language-saved = saved choice: { $language }
 session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first

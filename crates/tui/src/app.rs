@@ -193,6 +193,7 @@ fn status_report(
         agent: session.standing_definition(),
         agent_by_setting: session.standing_is_by_setting(),
         effort: session.effort(),
+        effort_for_this_session: session.effort_is_for_this_session(),
         model_reads_effort: session.model_reads_effort(),
         account_effort: session.account_level(),
         served_model: session.served_model(),
@@ -334,8 +335,8 @@ fn carry_out_while_working(
         Action::SetTheme(name) => {
             session.answer_while_working(|session| set_theme(session, &name));
         }
-        Action::SetEffort(level) => {
-            session.answer_while_working(|session| set_effort(session, &level));
+        Action::SetEffort(level, scope) => {
+            session.answer_while_working(|session| set_effort(session, &level, scope));
         }
         Action::Sandbox(word) => session.answer_while_working(|session| {
             let kept = session.sandbox_mode();
@@ -402,7 +403,7 @@ fn carry_out_while_working(
         Action::Aside(question, pasted, attached) => session.answer_while_working(|session| {
             ask_aside_beside_a_turn(session, beside.config, &question, &pasted, &attached);
         }),
-        Action::ChooseEffort => open_effort_picker(session),
+        Action::ChooseEffort(scope) => open_effort_picker(session, scope),
         Action::ChooseEditing => open_editing_picker(session),
         action => return act_while_working(session, action, crate::clipboard::paste),
     }
@@ -429,7 +430,7 @@ fn carry_out_pick(session: &mut Session, config: &mut Config, picked: crate::pic
     match picked {
         Picked::Model(model, scope) => model_picked(session, config, model, scope),
         Picked::Theme(theme) => theme_picked(session, &theme.name),
-        Picked::Effort(row) => effort_picked(session, row.0),
+        Picked::Effort(row, scope) => effort_picked(session, row.0, scope),
         Picked::Editing(row) => config_picked(session, row),
     }
 }
@@ -519,11 +520,12 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             Action::SetTheme(name.to_string())
         };
     }
-    if let Some(level) = argument_to(line, EFFORT_COMMAND) {
-        return if level.is_empty() {
-            Action::ChooseEffort
-        } else {
-            Action::SetEffort(level.to_string())
+    if let Some(argument) = argument_to(line, EFFORT_COMMAND) {
+        return match crate::command_table::effort_request(argument) {
+            crate::command_table::EffortAsk::Picker(scope) => Action::ChooseEffort(scope),
+            crate::command_table::EffortAsk::Level(level, scope) => {
+                Action::SetEffort(level.to_string(), scope)
+            }
         };
     }
     if let Some(word) = argument_to(line, VARIANT_COMMAND) {
@@ -3277,8 +3279,8 @@ fn event_loop(
             Action::ChooseModel(scope) => open_model_picker(held.session, config, scope),
             Action::ChooseTheme => choose_theme(terminal, held.session),
             Action::SetTheme(name) => set_theme(held.session, &name),
-            Action::ChooseEffort => choose_effort(terminal, held.session),
-            Action::SetEffort(level) => set_effort(held.session, &level),
+            Action::ChooseEffort(scope) => choose_effort(terminal, held.session, scope),
+            Action::SetEffort(level, scope) => set_effort(held.session, &level, scope),
             Action::Variant(word) => set_variant(held.session, config, &word),
             Action::Advisor(word) => set_advisor(held.session, config, &word),
             Action::Style(word) => set_style(held.session, held.workspace, &word),
@@ -4844,6 +4846,72 @@ mod tests {
         config.default_model = "gpt-5.5".to_string();
         note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
         assert!(session.model_is_account(), "the pick was not read");
+    }
+
+    /// BACKEND-43, CHATGPT-10. `/status` is built from the session, so the Effort
+    /// line says a level chosen with `/effort session` is for this session only, says so beside the
+    /// level the account is sent when that is another, and keeps the note of a recorded level once
+    /// one is chosen. The faults it rejects are a report built without the session's mark, which
+    /// says nothing of the scope, and the next-session sentence said for a level nothing records.
+    #[test]
+    fn the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-status-session-effort");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        let shown = |session: &Session| {
+            status_report(session, &stored, &workspace, None, &config, None)
+                .lines
+                .into_iter()
+                .find(|line| line.label == t!(status_effort))
+                .map(|line| (line.value, line.note))
+                .expect("an Effort line")
+        };
+
+        carry_out_effort_line(&mut session, "/effort session high");
+        assert_eq!(
+            shown(&session),
+            (
+                "high".to_string(),
+                t!(status_effort_chosen_this_session).to_string()
+            )
+        );
+
+        session.note_model_is_account(true);
+        assert_eq!(
+            shown(&session),
+            (
+                "low".to_string(),
+                t!(status_effort_kept_for_account_this_session, chosen = "high").to_string()
+            )
+        );
+
+        session.note_model_is_account(false);
+        carry_out_effort_line(&mut session, "/effort medium");
+        assert_eq!(
+            shown(&session),
+            ("medium".to_string(), t!(status_effort_chosen).to_string())
+        );
+        session.note_model_is_account(true);
+        assert_eq!(
+            shown(&session),
+            (
+                "low".to_string(),
+                t!(status_effort_kept_for_account, chosen = "medium").to_string()
+            )
+        );
     }
 
     /// CHATGPT-10: `/status` reads the session as it stands: on a model of the account it names the
@@ -6854,7 +6922,11 @@ mod tests {
         adopt_budget_for_current_model(&mut session, &mut config);
         assert!(session.model().is_none(), "something was picked");
 
-        set_effort(&mut session, "high");
+        set_effort(
+            &mut session,
+            "high",
+            crate::model_prompt::Scope::EverySession,
+        );
 
         let kept = t!(
             session_effort_kept_for_account,
@@ -9072,10 +9144,14 @@ mod tests {
         assert_eq!(session.copied, Some(7));
         assert_eq!(session.scroll, 7, "the view was taken to the tail");
 
-        copy_a_reply_clicked(&mut session, Action::ChooseEffort, |text| {
-            handed.push(text.to_string());
-            true
-        });
+        copy_a_reply_clicked(
+            &mut session,
+            Action::ChooseEffort(crate::model_prompt::Scope::EverySession),
+            |text| {
+                handed.push(text.to_string());
+                true
+            },
+        );
         copy_a_reply_clicked(&mut session, Action::Redraw, |text| {
             handed.push(text.to_string());
             true
@@ -9839,8 +9915,52 @@ mod tests {
         assert!(session.selection.is_none());
 
         let (row, column) = find_on(&buffer, "effort");
-        assert_eq!(click(&mut session, row, column), Action::ChooseEffort);
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::ChooseEffort(crate::model_prompt::Scope::EverySession)
+        );
         assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-11, MOUSE-29. A click on the panel's effort row asks for the picker that records
+    /// the pick for every session, at rest and while a turn runs, also when the level in force is
+    /// one chosen for this session only: the click stands for the bare `/effort`, which has no
+    /// scope to carry over. The faults it rejects are a click that opens the picker in the scope of
+    /// the level in force, so a person who clicks to change a recorded level finds the pick will
+    /// record nothing, and a click that opens the picker in the scope that records nothing.
+    #[test]
+    fn a_click_on_the_panels_effort_row_opens_the_every_session_picker_whatever_is_in_force() {
+        use crate::model_prompt::Scope;
+        use bravebot_aichat::protocol::Effort;
+        let (mut session, _) = panel_with_a_model();
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, "effort");
+        let action = click(&mut session, row, column);
+        assert_eq!(action, Action::ChooseEffort(Scope::EverySession));
+        let Action::ChooseEffort(scope) = action else {
+            unreachable!()
+        };
+        open_effort_picker(&mut session, scope);
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&session),
+            Scope::EverySession
+        );
+        assert!(
+            session.effort_is_for_this_session(),
+            "opening the picker changed the level in force"
+        );
+
+        let (mut working, _) = panel_of_command_rows(true);
+        working.choose_effort_for_this_session(Some(Effort::Max));
+        let buffer = drawn(&mut working);
+        let (row, column) = find_cell(&buffer, &t!(panel_effort, level = "max"));
+        beside_a_turn(|beside| clicked_during_a_turn(&mut working, row, column + 1, beside));
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&working),
+            Scope::EverySession
+        );
+        assert!(working.queued.is_empty(), "the click waited");
     }
 
     /// A click on any other row of the panel, or on the transcript, is the copy it always was, and
@@ -10455,7 +10575,7 @@ mod tests {
             return;
         }
         let (mut session, buffer) = panel_of_command_rows(true);
-        open_effort_picker(&mut session);
+        open_effort_picker(&mut session, crate::model_prompt::Scope::EverySession);
         let said = said_in_the_transcript(&session);
         for (needle, _) in command_rows(&session) {
             let (row, column) = find_cell(&buffer, &needle);
@@ -11873,7 +11993,10 @@ mod tests {
         let buffer = drawn_at(&mut session, 120, 24);
         let effort = command_rows(&session)[1].0.clone();
         let (row, column) = find_cell(&buffer, &effort);
-        assert_eq!(click(&mut session, row, column + 1), Action::ChooseEffort);
+        assert_eq!(
+            click(&mut session, row, column + 1),
+            Action::ChooseEffort(crate::model_prompt::Scope::EverySession)
+        );
         assert!(session.selection.is_none(), "the panel click kept it");
 
         // A place in the box.
@@ -11996,7 +12119,10 @@ mod tests {
         let buffer = hold_a_selection(&mut session);
         let effort = command_rows(&session)[1].0.clone();
         let (row, column) = find_cell(&buffer, &effort);
-        assert_eq!(click(&mut session, row, column + 1), Action::ChooseEffort);
+        assert_eq!(
+            click(&mut session, row, column + 1),
+            Action::ChooseEffort(crate::model_prompt::Scope::EverySession)
+        );
 
         // A place in the box.
         let buffer = hold_a_selection(&mut session);
@@ -17806,6 +17932,438 @@ mod tests {
         );
     }
 
+    /// A level chosen for this session only is held and written nowhere: the effort file keeps the
+    /// recorded level, choosing no level for this session does not remove it, and the session
+    /// says the level in force is its own. The faults it rejects are a choice that goes through
+    /// `choose_effort` and so rewrites or removes the file, and a choice that is applied without
+    /// being marked, which leaves the panel and `/status` calling it the recorded level.
+    #[test]
+    fn a_level_chosen_for_this_session_is_held_and_recorded_nowhere() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let mut session = Session::new("none").with_stored_history();
+        assert!(!session.effort_is_for_this_session());
+
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        assert_eq!(session.effort(), Some(Effort::Max));
+        assert!(
+            session.effort_is_for_this_session(),
+            "the level was not marked as this session's alone"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "the session-only level was recorded"
+        );
+
+        session.choose_effort_for_this_session(None);
+        assert_eq!(session.effort(), None, "no level was not taken");
+        assert!(session.effort_is_for_this_session());
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "choosing no level for this session removed the recorded level"
+        );
+    }
+
+    /// A level recorded with `/effort` after a session-only one is written to the effort file and
+    /// ends the mark, since the level in force is then the one the next session opens on. The
+    /// faults it rejects are a recorded choice that leaves the mark set, so the panel goes on
+    /// saying `this session only` about a level that is recorded, and one that stops recording.
+    #[test]
+    fn a_recorded_level_replaces_a_session_only_one_and_ends_the_mark() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let mut session = Session::new("none").with_stored_history();
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        assert!(session.effort_is_for_this_session());
+
+        session.choose_effort(Some(Effort::High));
+
+        assert_eq!(session.effort(), Some(Effort::High));
+        assert!(
+            !session.effort_is_for_this_session(),
+            "a recorded level kept the session-only mark"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::High),
+            "the recorded level was not written"
+        );
+    }
+
+    /// `--effort` describes one start and records nothing, and it is not a choice made in the
+    /// session, so the level it names is not marked as this session's alone, and settling the
+    /// level from the files again puts the recorded level back and ends a mark. The faults it
+    /// rejects are a command-line level marked as session-only, which would draw a row for the
+    /// one pick the info panel does not mark, and a settled level that keeps a stale mark.
+    #[test]
+    fn a_level_the_command_line_named_or_the_files_settled_is_not_marked_as_this_sessions() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let settings = bravebot_config::Settings::default();
+        let mut session = Session::new("none").with_stored_history();
+
+        session.name_effort(Effort::High);
+        assert_eq!(session.effort(), Some(Effort::High));
+        assert!(
+            !session.effort_is_for_this_session(),
+            "the command line's level was marked"
+        );
+
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        session.name_effort(Effort::Medium);
+        assert!(
+            !session.effort_is_for_this_session(),
+            "naming a level on the line left an earlier mark"
+        );
+
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        session.adopt_effort(&settings);
+        assert_eq!(session.effort(), Some(Effort::Low));
+        assert!(
+            !session.effort_is_for_this_session(),
+            "settling the level from the files left an earlier mark"
+        );
+    }
+
+    /// A level chosen for this session only is the one the next turn is asked for, over a level
+    /// the command line named, a recorded level and a settings file's key, and records nothing:
+    /// the effort file still holds the recorded level, and a second session opens on it. The
+    /// faults it rejects are a choice that goes through `choose_effort` and so rewrites the file,
+    /// a recorded level or a settings key that is read again after the choice, and a task built
+    /// from anything but the session's level.
+    #[test]
+    fn a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it()
+     {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let settings = bravebot_config::Settings::parse(r#"{"effort": "medium"}"#);
+        bravebot_session::store::save_effort(Some(Effort::Low));
+
+        let mut session = Session::new("none").with_stored_history();
+        session.adopt_effort(&settings);
+        assert_eq!(session.effort(), Some(Effort::Low));
+        session.name_effort(Effort::High);
+        let run_settings = RunSettings::from_settings(&settings);
+        let task = run_settings.task("it", &session, &Permissions::new());
+        assert_eq!(task.effort, Some(Effort::High), "the line's level");
+
+        session.choose_effort_for_this_session(Some(Effort::Max));
+
+        assert_eq!(session.effort(), Some(Effort::Max));
+        let task = run_settings.task("it", &session, &Permissions::new());
+        assert_eq!(
+            task.effort,
+            Some(Effort::Max),
+            "the turn was not asked for the session-only level"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "the session-only level was recorded"
+        );
+
+        let mut next = Session::new("none").with_stored_history();
+        next.adopt_effort(&settings);
+        assert_eq!(
+            next.effort(),
+            Some(Effort::Low),
+            "the next session did not open on the level it would have had"
+        );
+        assert!(!next.effort_is_for_this_session());
+    }
+
+    /// A record written by a session that held a session-only level is the record of what a turn
+    /// was sent with, and a session resumed from it opens on the level a new session opens on:
+    /// the recorded one. The fault it rejects is a resume that puts the level back from the
+    /// record, which would carry a level chosen for one session into the next.
+    #[test]
+    fn a_resume_after_a_session_only_level_opens_on_the_recorded_level() {
+        use bravebot_aichat::protocol::Effort;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-effort-session-resumed");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let config = a_config_needing_no_sign_in();
+        let settings = bravebot_config::Settings::default();
+        bravebot_session::store::save_effort(Some(Effort::Low));
+
+        let mut session = Session::new("none").with_stored_history();
+        session.adopt_effort(&settings);
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        // The turn that ran was sent with the level in force, and that is what the record keeps.
+        keep_the_effort_of(&mut stored, &session);
+        with_standing(
+            &session,
+            &Conversation::new(),
+            &TrustStore::new(&root),
+            &TrustedPrograms::new(),
+            &workspace,
+            |standing| stored.save("a session", standing),
+        );
+        let record = sessions::load(&root, stored.id()).expect("the record");
+        assert_eq!(
+            record.effort.as_deref(),
+            Some("max"),
+            "the record does not hold the level the turn was sent with"
+        );
+
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(stored);
+        let mut resumed = Session::new("none").with_stored_history();
+        resumed.adopt_effort(&settings);
+        restore_resumed(&mut resumed, &config, &mut workspace, &record)
+            .expect("the record is free");
+
+        assert_eq!(
+            resumed.effort(),
+            Some(Effort::Low),
+            "the resume opened on the level the record held"
+        );
+        assert!(!resumed.effort_is_for_this_session());
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "the resume rewrote the recorded level"
+        );
+    }
+
+    /// SESSION-11. `/branch` goes on in the same session, so a level chosen with `/effort session`
+    /// after the last turn finished is still in force in the copy and still the session's alone:
+    /// the effort file is not rewritten, and the copy's record holds the level in force when the
+    /// last turn finished and not the session-only one. The faults it rejects are a branch that
+    /// writes the level in force into the copy's record or into the effort file, and one that
+    /// loses the level or its mark.
+    #[test]
+    fn a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere() {
+        use bravebot_aichat::protocol::Effort;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-effort-session-branched");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        // The last turn finished at the recorded level, before the session-only one was chosen, so
+        // that is what the original's record holds.
+        stored.set_effort(Some(Effort::Low));
+        let title = stored.title().to_string();
+        with_standing(
+            &session,
+            &conversation,
+            &answers.trust,
+            &answers.programs,
+            &workspace,
+            |standing| stored.save(&title, standing),
+        );
+        let original = sessions::load(&root, stored.id()).expect("the original's record");
+        assert_eq!(original.effort.as_deref(), Some("low"), "the fixture");
+        session.choose_effort_for_this_session(Some(Effort::Max));
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_eq!(session.effort(), Some(Effort::Max));
+        assert!(session.effort_is_for_this_session());
+        let copy = sessions::load(&root, stored.id()).expect("the copy's record");
+        assert_eq!(
+            copy.effort.as_deref(),
+            Some("low"),
+            "the copy's record holds the session-only level"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "the branch recorded the level"
+        );
+    }
+
+    /// SESSION-11. The record's `effort` is the level in force when the last turn finished, and a
+    /// `/branch` copy's record is written from it. A turn begun at `low` that sees `/effort session
+    /// max` carried out while it runs leaves `max` in the record and in the copy, with the effort
+    /// file untouched, and a level chosen with `/effort session` after the turn finished is in
+    /// neither. The faults it rejects are a record that keeps the level the turn began with, one
+    /// that writes nothing or the recorded level for a session-only level, and a branch that
+    /// writes the level in force at the branch into the copy's record or into the effort file.
+    #[test]
+    fn the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished() {
+        use bravebot_aichat::protocol::Effort;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-effort-session-finished");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        session.name_effort(Effort::Low);
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let begun = run_settings.task("again", &session, &Permissions::new());
+        assert_eq!(begun.effort, Some(Effort::Low), "the fixture");
+        // The first turn finished at `low`, which is what the record holds until a turn replaces it.
+        keep_the_effort_of(&mut stored, &session);
+        assert_eq!(stored.effort(), Some(Effort::Low), "the fixture");
+
+        // `/effort session max` is carried out while the next turn runs, and then the turn finishes.
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        keep_the_effort_of(&mut stored, &session);
+        assert_eq!(
+            stored.effort(),
+            Some(Effort::Max),
+            "the record does not hold the level in force when the turn finished"
+        );
+        // A level chosen after the turn finished is not the record's.
+        session.choose_effort_for_this_session(Some(Effort::High));
+        let title = stored.title().to_string();
+        with_standing(
+            &session,
+            &conversation,
+            &answers.trust,
+            &answers.programs,
+            &workspace,
+            |standing| stored.save(&title, standing),
+        );
+        let original = sessions::load(&root, stored.id()).expect("the original's record");
+        assert_eq!(
+            original.effort.as_deref(),
+            Some("max"),
+            "the record holds a level chosen after the turn finished"
+        );
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_eq!(session.effort(), Some(Effort::High));
+        assert!(session.effort_is_for_this_session());
+        let copy = sessions::load(&root, stored.id()).expect("the copy's record");
+        assert_eq!(
+            copy.effort.as_deref(),
+            Some("max"),
+            "the copy's record does not hold what the original's holds"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "a session-only level was recorded in the effort file"
+        );
+    }
+
+    /// `/clear` and a handoff begin a new conversation in the same session, and the level in
+    /// force is the person's and not the conversation's, so a session-only level stays in force,
+    /// stays marked as the session's alone, and writes nothing to the effort file or to the new
+    /// record. The fault it rejects is a clear that drops the level, or that keeps the level and
+    /// loses the mark the panel reads.
+    #[test]
+    fn a_session_only_level_survives_a_clear_and_a_handoff() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-effort-session-cleared");
+        std::fs::create_dir_all(&root).expect("create");
+        bravebot_session::store::save_effort(Some(Effort::Low));
+
+        for handed_from in [None, Some("an-earlier-id")] {
+            let mut workspace = Workspace::new(&root).expect("workspace");
+            let mut session = Session::new("none").with_stored_history();
+            session.choose_effort_for_this_session(Some(Effort::Max));
+
+            let (_, stored) = clear_session(&mut session, &mut workspace, handed_from);
+
+            assert_eq!(session.effort(), Some(Effort::Max), "{handed_from:?}");
+            assert!(session.effort_is_for_this_session(), "{handed_from:?}");
+            assert_eq!(
+                stored.effort(),
+                None,
+                "the new record took a level with no turn run ({handed_from:?})"
+            );
+            assert_eq!(
+                bravebot_session::store::load_effort(),
+                Some(Effort::Low),
+                "the effort file was rewritten ({handed_from:?})"
+            );
+        }
+    }
+
+    /// An incognito session takes a session-only level, as it takes a recorded one, and writes
+    /// nothing: the directory holds what it held before. The faults it rejects are a level
+    /// refused because the session does not persist, and a write that goes around the store's own
+    /// gate. A choice that calls the store's own save is stopped by that gate here, and is
+    /// rejected by `a_level_chosen_for_this_session_is_held_and_recorded_nowhere`.
+    #[test]
+    fn an_incognito_session_takes_a_session_only_level_and_writes_nothing() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let directory = bravebot_session::store::directory().expect("a home");
+        let listing = || {
+            let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&directory)
+                .expect("the directory")
+                .map(|entry| {
+                    let path = entry.expect("an entry").path();
+                    (
+                        path.file_name().unwrap().to_string_lossy().into_owned(),
+                        std::fs::read(&path).unwrap_or_default(),
+                    )
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let before = listing();
+        assert!(!before.is_empty(), "nothing was seeded to compare with");
+        bravebot_core::incognito::engage();
+
+        let mut session = Session::new("none").with_stored_history();
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        session.choose_effort_for_this_session(None);
+        session.choose_effort_for_this_session(Some(Effort::High));
+
+        assert_eq!(session.effort(), Some(Effort::High));
+        assert!(session.effort_is_for_this_session());
+        assert_eq!(listing(), before, "an incognito session wrote");
+        assert_eq!(bravebot_session::store::load_effort(), Some(Effort::Low));
+    }
+
     /// R19, R52. Tab pressed with the picker open reaches the picker and switches its scope, at
     /// rest and under a turn, and edits nothing else: the line stays empty and no suggestion or
     /// completion takes the key first. Shift-Tab switches it back. It rejects a Tab taken by the
@@ -17830,6 +18388,442 @@ mod tests {
         handle_key_while_working(&mut working, key(KeyCode::Tab));
         assert_eq!(the_scope_of_the_open_picker(&working), Scope::ThisSession);
         assert!(working.input().is_empty(), "Tab edited the line");
+    }
+
+    fn the_scope_of_the_open_effort_picker(session: &Session) -> crate::model_prompt::Scope {
+        let Some(crate::picking::Picking::Effort(picker)) = session.picking() else {
+            panic!("no effort picker is open");
+        };
+        picker.scope().expect("an effort picker always has a scope")
+    }
+
+    /// CMD-35, CMD-8. `/effort session` asks for the picker in the this-session scope and the bare
+    /// command asks for it in the every-session one, at rest and under a turn, and the picker
+    /// opens in the scope it was asked for. The faults it rejects are a word that is ignored, so
+    /// both open the same scope, a prefix, case-insensitive or trailing-word match that takes
+    /// `/effort sessions`, `/effort Session` or `/effort session now` for the form, and a form
+    /// that is only recognised at rest.
+    #[test]
+    fn effort_session_asks_for_the_picker_in_the_this_session_scope() {
+        use crate::model_prompt::Scope;
+        use bravebot_aichat::protocol::Effort;
+        assert_eq!(crate::command_table::EFFORT_SESSION_WORD, "session");
+        let mut session = Session::new("none");
+        assert_eq!(
+            enter_line(&mut session, "/effort session"),
+            Action::ChooseEffort(Scope::ThisSession)
+        );
+        assert!(!session.command_sent_as_prompt, "the command was marked");
+        assert_eq!(
+            enter_line(&mut session, "/effort"),
+            Action::ChooseEffort(Scope::EverySession)
+        );
+        for line in [
+            "/effort sessions",
+            "/effort Session",
+            "/effort sess",
+            "/effort session now",
+        ] {
+            let action = enter_line(&mut session, line);
+            assert!(
+                !matches!(action, Action::ChooseEffort(_)),
+                "{line:?} opened the picker: {action:?}"
+            );
+        }
+
+        let mut working = a_turn_running_on("first");
+        for c in "/effort session".chars() {
+            handle_key_while_working(&mut working, key(KeyCode::Char(c)));
+        }
+        let action = handle_key_while_working(&mut working, key(KeyCode::Enter));
+        assert_eq!(action, Action::ChooseEffort(Scope::ThisSession));
+
+        let mut opened = Session::new("none");
+        opened.choose_effort_for_this_session(Some(Effort::High));
+        open_effort_picker(&mut opened, Scope::ThisSession);
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&opened),
+            Scope::ThisSession
+        );
+        open_effort_picker(&mut opened, Scope::EverySession);
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&opened),
+            Scope::EverySession
+        );
+        let Some(crate::picking::Picking::Effort(picker)) = opened.picking() else {
+            panic!("no effort picker is open");
+        };
+        assert_eq!(
+            picker.chosen().copied(),
+            Some(crate::effort_prompt::Row(Some(Effort::High))),
+            "the picker did not open on the level in force"
+        );
+    }
+
+    /// The effort picker opened in `scope`, moved by `moves` from the row of the level in force,
+    /// and taken with Enter, handed back as the pick it holds.
+    fn an_effort_row_taken(
+        session: &mut Session,
+        scope: crate::model_prompt::Scope,
+        moves: &[KeyCode],
+    ) -> crate::picking::Picked {
+        open_effort_picker(session, scope);
+        for code in moves {
+            session.press_in_picking(*code, KeyModifiers::NONE);
+        }
+        session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+        session.take_pick().expect("Enter took no row")
+    }
+
+    /// CMD-35. Enter on a row of the picker opened in the this-session scope puts that level in force
+    /// for this session and writes nothing: the effort file still holds the earlier level, which is
+    /// the level the next session opens on, and the row that asks for no level does not remove it
+    /// either. The transcript says the level as it does for a recorded one. The faults it rejects are
+    /// a pick that is recorded whatever the scope, one that is not applied, and one that does not
+    /// mark the level as this session's alone.
+    #[test]
+    fn a_level_picked_in_the_this_session_scope_is_not_recorded() {
+        use crate::model_prompt::Scope;
+        use crate::picking::Picked;
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut config = a_config_needing_no_sign_in();
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let mut session = Session::new("none").with_stored_history();
+        let transcript = session.transcript.len();
+
+        let down = [KeyCode::Char('j'); 3];
+        let picked = an_effort_row_taken(&mut session, Scope::ThisSession, &down);
+        assert_eq!(
+            picked,
+            Picked::Effort(
+                crate::effort_prompt::Row(Some(Effort::High)),
+                Scope::ThisSession
+            )
+        );
+        carry_out_pick(&mut session, &mut config, picked);
+
+        assert_eq!(
+            session.effort(),
+            Some(Effort::High),
+            "the pick was not applied"
+        );
+        assert!(
+            session.effort_is_for_this_session(),
+            "the pick was not marked"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "the pick was recorded"
+        );
+        assert_eq!(session.transcript.len(), transcript + 1);
+        assert_eq!(
+            session.transcript[transcript].text,
+            said_of(Some(Effort::High))
+        );
+
+        // The row that asks for no level, taken in the same scope, is in force and recorded nowhere.
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        let up = [KeyCode::Char('k'); 5];
+        let picked = an_effort_row_taken(&mut session, Scope::ThisSession, &up);
+        assert_eq!(
+            picked,
+            Picked::Effort(crate::effort_prompt::Row(None), Scope::ThisSession)
+        );
+        carry_out_pick(&mut session, &mut config, picked);
+
+        assert_eq!(
+            session.effort(),
+            None,
+            "the row for no level was not applied"
+        );
+        assert!(session.effort_is_for_this_session());
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "the row for no level removed the recorded level"
+        );
+        assert_eq!(last_note(&session), said_of(None));
+    }
+
+    /// CMD-35. The same picks taken in the every-session scope, which the bare `/effort` opens, are
+    /// recorded: a level is written to the effort file and ends a mark left by an earlier
+    /// session-only level, and the row that asks for no level removes the record. It rejects a change
+    /// that stops recording the picks of the bare command, whether it applies the level to this
+    /// session only or does not write it.
+    #[test]
+    fn a_level_picked_in_the_every_session_scope_is_recorded() {
+        use crate::model_prompt::Scope;
+        use crate::picking::Picked;
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut config = a_config_needing_no_sign_in();
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let mut session = Session::new("none").with_stored_history();
+        session.choose_effort_for_this_session(Some(Effort::Max));
+        assert!(session.effort_is_for_this_session());
+
+        // The cursor opens on max, the level in force, so three presses of `k` reach medium.
+        let up = [KeyCode::Char('k'); 3];
+        let picked = an_effort_row_taken(&mut session, Scope::EverySession, &up);
+        assert_eq!(
+            picked,
+            Picked::Effort(
+                crate::effort_prompt::Row(Some(Effort::Medium)),
+                Scope::EverySession
+            )
+        );
+        carry_out_pick(&mut session, &mut config, picked);
+
+        assert_eq!(session.effort(), Some(Effort::Medium));
+        assert!(
+            !session.effort_is_for_this_session(),
+            "a recorded pick kept the session-only mark"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Medium),
+            "the pick was not recorded"
+        );
+        assert_eq!(last_note(&session), said_of(Some(Effort::Medium)));
+
+        // The row that asks for no level removes the record.
+        let up = [KeyCode::Char('k'); 2];
+        let picked = an_effort_row_taken(&mut session, Scope::EverySession, &up);
+        assert_eq!(
+            picked,
+            Picked::Effort(crate::effort_prompt::Row(None), Scope::EverySession)
+        );
+        carry_out_pick(&mut session, &mut config, picked);
+        assert_eq!(session.effort(), None);
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            None,
+            "the row for no level did not remove the record"
+        );
+    }
+
+    /// CMD-35, CHATGPT-10. A level picked on a ChatGPT account's model says the sentence for the
+    /// scope it was picked in: a recorded level applies from the next session, and one picked for
+    /// this session only applies from `/clear` and is not recorded. The level is set before the
+    /// sentence is chosen, so the fault it rejects is a pick that says the sentence first and sets
+    /// the level after, which says the recorded sentence for a level that is recorded nowhere.
+    #[test]
+    fn a_level_picked_on_a_chatgpt_account_says_the_sentence_of_the_scope_it_was_picked_in() {
+        use crate::model_prompt::Scope;
+        use bravebot_aichat::protocol::Effort;
+        for (scope, expected) in [
+            (
+                Scope::ThisSession,
+                t!(
+                    session_effort_kept_for_account_this_session,
+                    began = "low",
+                    chosen = "high"
+                )
+                .to_string(),
+            ),
+            (
+                Scope::EverySession,
+                t!(
+                    session_effort_kept_for_account,
+                    began = "low",
+                    chosen = "high"
+                )
+                .to_string(),
+            ),
+        ] {
+            let mut session = Session::new("none");
+            session.name_effort(Effort::Low);
+            session.begin_account_session();
+            session.note_model_is_account(true);
+
+            effort_picked(&mut session, Some(Effort::High), scope);
+
+            assert_eq!(last_note(&session), expected, "{scope:?}");
+        }
+    }
+
+    /// VIEW-46, CMD-35. Tab pressed with the effort picker open reaches the picker and switches
+    /// its scope, at rest and under a turn, and edits nothing else: the line stays empty, the row
+    /// under the cursor stays, and no suggestion or completion takes the key first. Shift-Tab
+    /// switches it back. The row taken afterwards carries the scope Tab left the picker in. It
+    /// rejects a Tab taken by the box, by a suggestion or by the turn's own loop, and a pick that
+    /// carries the scope the picker was opened in instead of the one in force.
+    #[test]
+    fn tab_in_an_open_effort_picker_switches_the_scope_at_rest_and_under_a_turn() {
+        use crate::model_prompt::Scope;
+        use crate::picking::Picked;
+        use bravebot_aichat::protocol::Effort;
+        let row = crate::effort_prompt::Row(Some(Effort::High));
+        let cursor = |session: &Session| {
+            let Some(crate::picking::Picking::Effort(picker)) = session.picking() else {
+                panic!("no effort picker is open");
+            };
+            picker.chosen().copied()
+        };
+
+        let mut session = Session::new("none");
+        session.choose_effort(Some(Effort::High));
+        open_effort_picker(&mut session, Scope::EverySession);
+        handle_key(&mut session, key(KeyCode::Tab));
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&session),
+            Scope::ThisSession
+        );
+        handle_key(&mut session, key(KeyCode::Tab));
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&session),
+            Scope::EverySession
+        );
+        handle_key(&mut session, key(KeyCode::BackTab));
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&session),
+            Scope::ThisSession
+        );
+        assert!(session.input().is_empty(), "Tab edited the line");
+        assert_eq!(cursor(&session), Some(row), "Tab moved the cursor");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(
+            session.take_pick(),
+            Some(Picked::Effort(row, Scope::ThisSession)),
+            "the pick did not carry the scope Tab left"
+        );
+
+        let mut working = a_turn_running_on("first");
+        working.choose_effort(Some(Effort::High));
+        open_effort_picker(&mut working, Scope::EverySession);
+        handle_key_while_working(&mut working, key(KeyCode::Tab));
+        assert_eq!(
+            the_scope_of_the_open_effort_picker(&working),
+            Scope::ThisSession
+        );
+        assert!(working.input().is_empty(), "Tab edited the line");
+        assert_eq!(cursor(&working), Some(row), "Tab moved the cursor");
+        handle_key_while_working(&mut working, key(KeyCode::Enter));
+        assert_eq!(
+            working.take_pick(),
+            Some(Picked::Effort(row, Scope::ThisSession)),
+            "the pick under a turn did not carry the scope Tab left"
+        );
+    }
+
+    /// VIEW-46, CMD-35. The picker `/effort` opens at rest reads its own keys, and the scope in force
+    /// when Enter takes a row decides whether the level is recorded: the scope it was opened in,
+    /// switched by each Tab. The faults it rejects are a loop that starts in the scope it was
+    /// asked for and records whichever it ends in, one that records by the scope it was opened in,
+    /// and one that ignores Tab.
+    #[test]
+    fn the_effort_picker_opened_at_rest_records_by_the_scope_tab_left_it_in() {
+        use crate::model_prompt::Scope;
+        use bravebot_aichat::protocol::Effort;
+        use ratatui::backend::TestBackend;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for (start, tabs, recorded) in [
+            (Scope::EverySession, 0, true),
+            (Scope::EverySession, 1, false),
+            (Scope::EverySession, 2, true),
+            (Scope::ThisSession, 0, false),
+            (Scope::ThisSession, 1, true),
+        ] {
+            bravebot_session::store::save_effort(Some(Effort::Low));
+            let mut session = Session::new("none").with_stored_history();
+            session.choose_effort(Some(Effort::Low));
+            let mut keys = vec![KeyCode::Tab; tabs];
+            keys.extend([KeyCode::Down, KeyCode::Enter]);
+            let _held =
+                crate::input::script::hold(keys.into_iter().map(|code| TermEvent::Key(key(code))));
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+
+            choose_effort(&mut terminal, &mut session, start);
+
+            let case = format!("opened in {start:?}, {tabs} Tab");
+            assert_eq!(session.effort(), Some(Effort::Medium), "{case}");
+            assert_eq!(
+                session.effort_is_for_this_session(),
+                !recorded,
+                "{case}: the mark"
+            );
+            assert_eq!(
+                bravebot_session::store::load_effort(),
+                Some(if recorded {
+                    Effort::Medium
+                } else {
+                    Effort::Low
+                }),
+                "{case}: the record"
+            );
+            assert_eq!(crate::input::script::unread(), 0, "{case}");
+        }
+    }
+
+    /// VIEW-46, MOUSE-15. A second press on a row of the picker `/effort` opens at rest takes the
+    /// row in the scope the picker is in when it is pressed: the scope it was opened in, switched by
+    /// each Tab. That picker reads its own events, and the mouse arm of its loop answers for the
+    /// scope as the key arm does. The faults it rejects are a mouse arm that hands the scope back
+    /// as none, so a level asked to be kept for this session only is recorded for every session,
+    /// and one that hands back the scope the picker was opened in and not the one Tab left it in.
+    #[test]
+    fn the_effort_picker_opened_at_rest_takes_a_second_press_in_the_scope_tab_left_it_in() {
+        use crate::model_prompt::Scope;
+        use bravebot_aichat::protocol::Effort;
+        use ratatui::backend::TestBackend;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for (start, tabs, recorded) in [
+            (Scope::EverySession, 0, true),
+            (Scope::EverySession, 1, false),
+            (Scope::EverySession, 2, true),
+            (Scope::ThisSession, 0, false),
+            (Scope::ThisSession, 1, true),
+        ] {
+            bravebot_session::store::save_effort(Some(Effort::Low));
+            let mut session = Session::new("none").with_stored_history();
+            session.choose_effort(Some(Effort::Low));
+            // The rows are the unset one, then low, medium, high, xhigh and max.
+            let in_scope = (0..tabs).fold(start, |scope, _| scope.other());
+            let shown = crate::effort_prompt::placed(
+                ratatui::layout::Rect::new(0, 0, 80, 24),
+                &crate::effort_prompt::Picker::new(Some(Effort::Low)).starting_in(in_scope),
+            );
+            let (row, column) = (shown.list.y + 3, shown.list.x + 3);
+            let down = MouseEventKind::Down(MouseButton::Left);
+            let mut events = vec![TermEvent::Key(key(KeyCode::Tab)); tabs];
+            events.extend([
+                TermEvent::Mouse(drag(down, row, column)),
+                TermEvent::Mouse(drag(MouseEventKind::Up(MouseButton::Left), row, column)),
+                TermEvent::Mouse(drag(down, row, column)),
+            ]);
+            let _held = crate::input::script::hold(events);
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+
+            choose_effort(&mut terminal, &mut session, start);
+
+            let case = format!("opened in {start:?}, {tabs} Tab");
+            assert_eq!(session.effort(), Some(Effort::High), "{case}");
+            assert_eq!(
+                session.effort_is_for_this_session(),
+                !recorded,
+                "{case}: the mark"
+            );
+            assert_eq!(
+                bravebot_session::store::load_effort(),
+                Some(if recorded { Effort::High } else { Effort::Low }),
+                "{case}: the record"
+            );
+            assert_eq!(
+                crate::input::script::unread(),
+                0,
+                "{case}: an event was left unread, so the picker ended on the first press"
+            );
+        }
     }
 
     /// The bare command is still the command: the picker opens and nothing is sent, so there is no
@@ -17914,7 +18908,10 @@ mod tests {
     }
 
     /// The hint after `/effort ` is the list a person can pick from, built from the levels the
-    /// program accepts, and the completion list keeps its short form.
+    /// program accepts and the word `session`, the hint after `/effort session ` is the levels
+    /// alone, and the completion list keeps its short form and offers no row for either. The
+    /// faults it rejects are `session` missing from the hint, the long hint put into the table so
+    /// the description column moves (CMD-21), and a row offered for `/effort ` or `/effort s`.
     #[test]
     fn the_effort_hint_lists_every_level_and_the_list_stays_short() {
         let all = commands();
@@ -17923,8 +18920,17 @@ mod tests {
             .find(|command| command.name == EFFORT_COMMAND)
             .unwrap();
 
-        assert_eq!(command.typed_hint(), "[low | medium | high | xhigh | max]");
+        assert_eq!(
+            command.typed_hint(),
+            "[session | low | medium | high | xhigh | max]"
+        );
         assert_eq!(command.argument, "[level]");
+        assert!(crate::command_table::completions("/effort ").is_empty());
+        assert!(crate::command_table::completions("/effort s").is_empty());
+        assert_eq!(
+            crate::command_table::typed_hint_after_word("/effort session").as_deref(),
+            Some("[low | medium | high | xhigh | max]")
+        );
     }
 
     /// The hint after `/sandbox ` names every mode the program accepts, built from the type the
@@ -18022,7 +19028,10 @@ mod tests {
         }
     }
 
-    /// Tab on a started level finishes it, so `/effort h` becomes `/effort high`.
+    /// Tab on a started level finishes it, so `/effort h` becomes `/effort high`, Tab on a started
+    /// `session` finishes the word, and Tab on a level started after `/effort session ` finishes
+    /// the level. The faults it rejects are `s` finished to a level or not at all, no completion
+    /// of the second word, and the second word finished to the word `session`.
     #[test]
     fn tab_finishes_a_level_started_after_the_effort_command() {
         for (typed, finished) in [
@@ -18030,6 +19039,13 @@ mod tests {
             ("/effort x", "/effort xhigh"),
             ("/effort L", "/effort low"),
             ("/effort me", "/effort medium"),
+            ("/effort s", "/effort session"),
+            ("/effort sess", "/effort session"),
+            ("/effort session h", "/effort session high"),
+            ("/effort session x", "/effort session xhigh"),
+            ("/effort session L", "/effort session low"),
+            ("/effort session me", "/effort session medium"),
+            ("/effort session ma", "/effort session max"),
         ] {
             let mut session = Session::new("none");
             for c in typed.chars() {
@@ -18040,8 +19056,10 @@ mod tests {
         }
     }
 
-    /// Nothing is guessed: `m` fits `medium` and `max`, a finished level and an unknown word stay
-    /// as typed, and another command or a prompt mentioning the command is not touched.
+    /// Nothing is guessed: `m` fits `medium` and `max`, a finished level or `session` and an unknown
+    /// word stay as typed, and another command or a prompt mentioning the command is not touched.
+    /// The same holds after `session`: `m` stays, a finished level stays, a word that fits no level
+    /// stays, and `session` is not a level there. Tab does not submit the line.
     #[test]
     fn tab_leaves_alone_a_start_it_cannot_finish() {
         for typed in [
@@ -18051,17 +19069,30 @@ mod tests {
             "/effort nope",
             "/theme h",
             "tell me about /effort h",
+            "/effort session",
+            "/effort session ",
+            "/effort session m",
+            "/effort session high",
+            "/effort session nope",
+            "/effort session s",
+            "/effort sessions",
+            "/effort Session h",
+            "/model session h",
+            "tell me about /effort session h",
+            "tell me about /effort s",
         ] {
             let mut session = Session::new("none");
             for c in typed.chars() {
                 session.type_char(c);
             }
-            handle_key(&mut session, key(KeyCode::Tab));
+            let action = handle_key(&mut session, key(KeyCode::Tab));
             assert_eq!(session.input(), typed, "{typed:?}");
+            assert!(!matches!(action, Action::Submit(_)), "{typed:?} submitted");
         }
     }
 
-    /// In shell mode the line is a command line, so `/effort h` there is not finished.
+    /// In shell mode the line is a command line, so `/effort h` there is not finished, nor is
+    /// `/effort s` or a level after `/effort session `.
     #[test]
     fn tab_leaves_a_shell_line_alone() {
         let mut session = Session::new("none");
@@ -18071,10 +19102,18 @@ mod tests {
         handle_key(&mut session, key(KeyCode::Tab));
 
         assert_eq!(session.input(), "/effort h");
+
+        for line in ["/effort s", "/effort session h"] {
+            let mut session = Session::new("none");
+            type_line(&mut session, &format!("!{line}"));
+            assert!(session.shell, "{line:?} did not enter shell mode");
+            handle_key(&mut session, key(KeyCode::Tab));
+            assert_eq!(session.input(), line, "{line:?}");
+        }
     }
 
     /// Tab finishes what is being typed at the end of the line, so with the caret moved back into
-    /// it the line is left as typed.
+    /// it the line is left as typed, for the word `session` and for a level after it as well.
     #[test]
     fn tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end() {
         let mut session = Session::new("none");
@@ -18084,6 +19123,14 @@ mod tests {
         handle_key(&mut session, key(KeyCode::Tab));
 
         assert_eq!(session.input(), "/effort h");
+
+        for line in ["/effort s", "/effort session h"] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+            handle_key(&mut session, key(KeyCode::Left));
+            handle_key(&mut session, key(KeyCode::Tab));
+            assert_eq!(session.input(), line, "{line:?}");
+        }
     }
 
     /// A command, not a prompt: asking how hard to think must not also ask the planner about it.
@@ -18096,7 +19143,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::ChooseEffort
+            Action::ChooseEffort(crate::model_prompt::Scope::EverySession)
         );
         assert!(session.input().is_empty(), "the command stayed on the line");
         assert!(
@@ -19445,6 +20492,485 @@ mod tests {
         );
     }
 
+    /// The name and bytes of every file in the isolated profile's state directory, in name order,
+    /// leaving out the files the box keeps the lines typed into it in. Those are written for every
+    /// line submitted, a command included, and say nothing about what the command recorded.
+    fn files_of_the_profile() -> Vec<(String, Vec<u8>)> {
+        let Some(directory) = bravebot_session::store::directory() else {
+            return Vec::new();
+        };
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&directory)
+            .map(|entries| {
+                entries
+                    .map(|entry| {
+                        let path = entry.expect("an entry").path();
+                        (
+                            path.file_name().unwrap().to_string_lossy().into_owned(),
+                            std::fs::read(&path).unwrap_or_default(),
+                        )
+                    })
+                    .filter(|(name, _)| !["history", "history.lock"].contains(&name.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files
+    }
+
+    /// An `/effort` line typed at rest and carried out the way the loop carries out what Enter on
+    /// it dispatches.
+    fn carry_out_effort_line(session: &mut Session, line: &str) {
+        match enter_line(session, line) {
+            Action::SetEffort(level, scope) => set_effort(session, &level, scope),
+            Action::ChooseEffort(scope) => open_effort_picker(session, scope),
+            other => panic!("{line:?} was not an effort command: {other:?}"),
+        }
+    }
+
+    /// CMD-35. The line reaches the action with the level as typed and the scope the
+    /// word `session` asks for, so `/effort session high` is a level for this session only and
+    /// every other form is the level to record. The faults it rejects are the scope dropped on the
+    /// way to the action, the word read by prefix or in another case, and the whole text carried as
+    /// the level.
+    #[test]
+    fn effort_session_and_a_level_reach_the_action_with_the_level_and_the_scope() {
+        use crate::model_prompt::Scope::{EverySession, ThisSession};
+        for (line, level, scope) in [
+            ("/effort session high", "high", ThisSession),
+            ("/effort session HIGH", "HIGH", ThisSession),
+            ("/effort session   xhigh", "xhigh", ThisSession),
+            ("/effort session highest", "highest", ThisSession),
+            ("/effort high", "high", EverySession),
+            ("/effort HIGH", "HIGH", EverySession),
+            ("/effort highest", "highest", EverySession),
+            ("/effort sessions", "sessions", EverySession),
+            ("/effort sessionhigh", "sessionhigh", EverySession),
+            ("/effort Session high", "Session high", EverySession),
+            ("/effort sess high", "sess high", EverySession),
+        ] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                enter_line(&mut session, line),
+                Action::SetEffort(level.to_string(), scope),
+                "{line}"
+            );
+            assert!(!session.command_sent_as_prompt, "{line} was marked");
+        }
+    }
+
+    /// CMD-35. `/effort session <level>` puts the level in force for the running
+    /// session, in any case as `/effort <level>` takes it, marks it as this session's alone and
+    /// writes nothing: the effort file still holds the recorded level and no file appears or
+    /// goes. It says the level as a recorded one is said. The faults it rejects are the scope
+    /// dropped between the line and the setter, so the level is recorded, a level that is applied
+    /// and not marked, and a level read case-sensitively.
+    #[test]
+    fn a_level_named_with_effort_session_is_in_force_and_recorded_nowhere() {
+        use crate::model_prompt::Scope;
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let before = files_of_the_profile();
+        assert!(!before.is_empty(), "nothing was seeded to compare with");
+
+        for (line, level) in [
+            ("/effort session high", Effort::High),
+            ("/effort session HIGH", Effort::High),
+            ("/effort session Medium", Effort::Medium),
+            ("/effort   session   xhigh  ", Effort::Xhigh),
+            ("/effort session max", Effort::Max),
+        ] {
+            let mut session = Session::new("none").with_stored_history();
+            let Action::SetEffort(word, scope) = enter_line(&mut session, line) else {
+                panic!("{line:?} was not a level");
+            };
+            assert_eq!(scope, Scope::ThisSession, "{line}");
+            let transcript = session.transcript.len();
+
+            set_effort(&mut session, &word, scope);
+
+            assert_eq!(session.effort(), Some(level), "{line}");
+            assert_eq!(session.effort_in_force(), Some(level), "{line}");
+            assert!(
+                session.effort_is_for_this_session(),
+                "{line}: the level was not marked"
+            );
+            assert_eq!(
+                bravebot_session::store::load_effort(),
+                Some(Effort::Low),
+                "{line}: the level was recorded"
+            );
+            assert_eq!(files_of_the_profile(), before, "{line}: a file was written");
+            assert_eq!(session.transcript.len(), transcript + 1, "{line}");
+            assert_eq!(
+                session.transcript[transcript].text,
+                said_of(Some(level)),
+                "{line}"
+            );
+        }
+    }
+
+    /// CMD-35. A word after `session` that is no level changes nothing, writes nothing and
+    /// is refused with the sentence `/effort <word>` is refused with, naming that word and not the
+    /// whole text, and a word that only starts with `session` or has another case is no form of
+    /// the command, so the refusal names everything typed after `/effort`. The level in force and
+    /// its mark stay as they were, whether the level was chosen for this session only or not. The
+    /// faults it rejects are a refusal that names `session highest`, the word read by prefix
+    /// (`sessions`, `sessionhigh`, `sess high`) or in another case (`Session high`), and a refused
+    /// word that replaces or clears the level.
+    #[test]
+    fn a_word_after_effort_session_that_is_no_level_changes_nothing_and_says_so() {
+        use crate::model_prompt::Scope::{EverySession, ThisSession};
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let before = files_of_the_profile();
+
+        for (line, named, scope) in [
+            ("/effort session highest", "highest", ThisSession),
+            ("/effort session none", "none", ThisSession),
+            ("/effort session high now", "high now", ThisSession),
+            ("/effort highest", "highest", EverySession),
+            ("/effort sessions", "sessions", EverySession),
+            ("/effort sessionhigh", "sessionhigh", EverySession),
+            ("/effort Session high", "Session high", EverySession),
+            ("/effort SESSION high", "SESSION high", EverySession),
+            ("/effort sess high", "sess high", EverySession),
+        ] {
+            for marked in [false, true] {
+                let mut session = Session::new("none").with_stored_history();
+                if marked {
+                    session.choose_effort_for_this_session(Some(Effort::Medium));
+                } else {
+                    session.name_effort(Effort::Medium);
+                }
+                let Action::SetEffort(word, asked) = enter_line(&mut session, line) else {
+                    panic!("{line:?} was not a level");
+                };
+                assert_eq!((word.as_str(), asked), (named, scope), "{line}");
+                let transcript = session.transcript.len();
+
+                set_effort(&mut session, &word, asked);
+
+                assert_eq!(session.effort(), Some(Effort::Medium), "{line}");
+                assert_eq!(session.effort_is_for_this_session(), marked, "{line}");
+                assert_eq!(session.transcript.len(), transcript + 1, "{line}");
+                assert_eq!(
+                    session.transcript[transcript].text,
+                    t!(session_no_such_effort, effort = named).to_string(),
+                    "{line}"
+                );
+                assert_eq!(files_of_the_profile(), before, "{line}: a file was written");
+            }
+        }
+    }
+
+    /// CMD-35. `/effort <level>` records the level, and a recorded level ends the mark a
+    /// session-only one left. The faults it rejects are the form
+    /// without `session` taking the scope that records nothing, and a recorded level that leaves
+    /// the mark set.
+    #[test]
+    fn a_level_named_without_session_is_recorded_and_ends_a_session_only_mark() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let mut session = Session::new("none").with_stored_history();
+
+        carry_out_effort_line(&mut session, "/effort session high");
+        assert!(session.effort_is_for_this_session());
+        assert_eq!(bravebot_session::store::load_effort(), Some(Effort::Low));
+
+        carry_out_effort_line(&mut session, "/effort max");
+        assert_eq!(session.effort(), Some(Effort::Max));
+        assert!(
+            !session.effort_is_for_this_session(),
+            "a recorded level kept the session-only mark"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Max),
+            "/effort max was not recorded"
+        );
+
+        carry_out_effort_line(&mut session, "/effort MEDIUM");
+        assert_eq!(session.effort(), Some(Effort::Medium));
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Medium),
+            "/effort MEDIUM was not recorded"
+        );
+    }
+
+    /// CMD-35. A turn is asked for the level in force when it begins, a session-only one
+    /// included, over the recorded level and the settings key, and a level recorded afterwards
+    /// replaces it. Reached through the command line, as the other tests of the task are not. The
+    /// fault it rejects is a task that reads the level from the effort file, or from the settings,
+    /// and so ignores a level that was chosen for this session only.
+    #[test]
+    fn a_turn_begun_after_effort_session_is_asked_for_that_level() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let settings = bravebot_config::Settings::parse(r#"{"effort": "medium"}"#);
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut session = Session::new("none").with_stored_history();
+        session.adopt_effort(&settings);
+        let asked =
+            |session: &Session| run_settings.task("it", session, &Permissions::new()).effort;
+        assert_eq!(asked(&session), Some(Effort::Low));
+
+        carry_out_effort_line(&mut session, "/effort session max");
+        assert_eq!(
+            asked(&session),
+            Some(Effort::Max),
+            "the turn was not asked for the session-only level"
+        );
+        assert_eq!(bravebot_session::store::load_effort(), Some(Effort::Low));
+
+        carry_out_effort_line(&mut session, "/effort high");
+        assert_eq!(asked(&session), Some(Effort::High));
+
+        carry_out_effort_line(&mut session, "/effort session xhigh");
+        assert_eq!(
+            asked(&session),
+            Some(Effort::Xhigh),
+            "the recorded level was asked for over the session-only one"
+        );
+        assert_eq!(bravebot_session::store::load_effort(), Some(Effort::High));
+    }
+
+    /// CMD-8, CMD-35. `/effort session <level>` typed while a turn runs is carried out as it
+    /// is typed, as `/effort <level>` is: not queued, not handed to the turn, said under the turn,
+    /// the level in force and marked, nothing written. A word that is no level is refused under
+    /// the turn naming what the refusal names at rest. The faults it rejects are the scope lost on
+    /// the mid-turn path, so the level is recorded, the form read as a prompt so that it waits or
+    /// is handed to the turn, and the refusal naming the whole text.
+    #[test]
+    fn effort_session_with_a_level_typed_mid_turn_is_carried_out_as_typed_and_recorded_nowhere() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let before = files_of_the_profile();
+
+        for (line, level) in [
+            ("/effort session high", Effort::High),
+            ("/effort session MAX", Effort::Max),
+        ] {
+            let mut session = a_persisting_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            assert_eq!(session.effort(), Some(level), "{line}");
+            assert!(
+                session.effort_is_for_this_session(),
+                "{line} was not marked"
+            );
+            assert_eq!(
+                bravebot_session::store::load_effort(),
+                Some(Effort::Low),
+                "{line} was recorded"
+            );
+            assert_eq!(files_of_the_profile(), before, "{line} wrote a file");
+            let said = said_of(Some(level));
+            assert_eq!(said_under_the_turn(&session), vec![said.as_str()], "{line}");
+            assert!(session.queued.is_empty(), "{line} waited");
+            assert_eq!(
+                session.interjections().take(),
+                None,
+                "the running turn was handed {line}"
+            );
+            assert_eq!(session.input(), "", "{line} was left in the box");
+            assert!(session.a_turn_is_running(), "{line} ended the turn");
+        }
+
+        for (line, named) in [
+            ("/effort session highest", "highest"),
+            ("/effort sessions", "sessions"),
+            ("/effort Session high", "Session high"),
+        ] {
+            let mut session = a_persisting_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            let refused = t!(session_no_such_effort, effort = named).to_string();
+            assert_eq!(
+                said_under_the_turn(&session),
+                vec![refused.as_str()],
+                "{line}"
+            );
+            assert_eq!(session.effort(), None, "{line} set a level");
+            assert!(!session.effort_is_for_this_session(), "{line} was marked");
+            assert!(session.queued.is_empty(), "{line} waited");
+            assert_eq!(files_of_the_profile(), before, "{line} wrote a file");
+        }
+    }
+
+    /// CMD-8. An `/effort` line typed behind a waiting command waits for it, and when it is
+    /// taken off the queue it is dispatched by the parse a line typed at rest is dispatched by, so
+    /// the scope and the level are the ones the same text gets at rest. The faults it rejects are
+    /// a queue that reads the line with a parse of its own, which gives a different scope or the
+    /// whole text as the level, and a line the queue classifies as something other than a command
+    /// carried out as typed.
+    #[test]
+    fn a_queued_effort_line_is_dispatched_by_the_parse_a_line_typed_at_rest_gets() {
+        use crate::model_prompt::Scope::{EverySession, ThisSession};
+        use bravebot_aichat::protocol::Effort;
+        for (line, asked, in_force, marked) in [
+            (
+                "/effort session high",
+                Action::SetEffort("high".to_string(), ThisSession),
+                Some(Effort::High),
+                true,
+            ),
+            (
+                "/effort high",
+                Action::SetEffort("high".to_string(), EverySession),
+                Some(Effort::High),
+                false,
+            ),
+            (
+                "/effort session highest",
+                Action::SetEffort("highest".to_string(), ThisSession),
+                None,
+                false,
+            ),
+            (
+                "/effort sessions",
+                Action::SetEffort("sessions".to_string(), EverySession),
+                None,
+                false,
+            ),
+            (
+                "/effort session",
+                Action::ChooseEffort(ThisSession),
+                None,
+                false,
+            ),
+            ("/effort", Action::ChooseEffort(EverySession), None, false),
+        ] {
+            let mut session = a_turn_running_on("first");
+            wait_as(&mut session, "/compact");
+            assert!(
+                crate::command_table::runs_while_working(line),
+                "{line} was not classified as carried out as typed"
+            );
+            let before = said_under_the_turn(&session).len();
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            let said = said_under_the_turn(&session);
+            assert!(
+                said.len() == before + 1 && said[before].ends_with("behind /compact."),
+                "{line} was not held behind the waiting /compact: {said:?}"
+            );
+            assert_eq!(waiting_prompts(&session), vec!["/compact", line]);
+            assert_eq!(session.effort(), None, "{line} was carried out ahead of it");
+            session.complete("answered", Vec::new(), 0);
+
+            let compact = session.take_queued_command().expect("the /compact waited");
+            assert_eq!(compact.line, "/compact");
+            let queued = session
+                .take_queued_command()
+                .expect("the effort line waited");
+            assert_eq!(queued.line, line);
+            let action = dispatch_command(&mut session, queued);
+            assert_eq!(
+                action, asked,
+                "{line} was dispatched differently when queued"
+            );
+            assert_eq!(
+                enter_line(&mut Session::new("none"), line),
+                action,
+                "{line} was dispatched differently at rest"
+            );
+            if let Action::SetEffort(word, scope) = action {
+                set_effort(&mut session, &word, scope);
+            }
+            assert_eq!(session.effort(), in_force, "{line}");
+            assert_eq!(session.effort_is_for_this_session(), marked, "{line}");
+        }
+    }
+
+    /// CMD-8. `/effort session <level>` is classified as `/effort <level>` is: carried
+    /// out as it is typed behind a waiting line that leaves the choice alone, and held behind one
+    /// that could change it, whichever scope the line names. The fault it rejects is a line the
+    /// queue sorts by the whole text and not by the command, so a form with `session` in it is
+    /// held behind every waiting line, or carried out ahead of a prompt typed with the earlier level.
+    #[test]
+    fn effort_session_with_a_level_waits_behind_what_could_change_the_choice_and_not_behind_the_rest()
+     {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for line in ["/effort session high", "/effort session"] {
+            for waiting in [CLEAR_COMMAND, "/cd crates/tui", "/rename deploy watch"] {
+                let mut session = a_turn_running_on("first");
+                wait_as(&mut session, waiting);
+                let before = said_under_the_turn(&session).len();
+
+                nothing_beside(|beside| {
+                    typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+                });
+
+                assert_eq!(
+                    waiting_prompts(&session),
+                    vec![waiting],
+                    "{line} waited behind {waiting}"
+                );
+                if line.ends_with("high") {
+                    assert_eq!(
+                        session.effort(),
+                        Some(Effort::High),
+                        "{line} waited behind {waiting}"
+                    );
+                    assert!(session.effort_is_for_this_session());
+                    assert_eq!(
+                        said_under_the_turn(&session)[before..],
+                        [said_of(Some(Effort::High)).as_str()]
+                    );
+                } else {
+                    assert!(
+                        session.picking().is_some(),
+                        "{line} waited behind {waiting}"
+                    );
+                }
+            }
+            for waiting in ["second", "/compact", "/effort low"] {
+                let mut session = a_turn_running_on("first");
+                wait_as(&mut session, waiting);
+                let before = said_under_the_turn(&session).len();
+
+                nothing_beside(|beside| {
+                    typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+                });
+
+                let said = said_under_the_turn(&session);
+                assert_eq!(said.len(), before + 1, "{line} behind {waiting}: {said:?}");
+                assert!(said[before].contains("behind"), "{line}: {said:?}");
+                assert_eq!(session.effort(), None, "{line} behind {waiting}");
+                assert!(session.picking().is_none(), "{line} behind {waiting}");
+                assert_eq!(waiting_prompts(&session), vec![waiting, line]);
+            }
+        }
+    }
+
     /// Naming a level on the line takes it without opening the picker.
     #[test]
     fn the_effort_command_carries_its_level() {
@@ -19455,7 +20981,10 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::SetEffort("xhigh".to_string())
+            Action::SetEffort(
+                "xhigh".to_string(),
+                crate::model_prompt::Scope::EverySession
+            )
         );
     }
 
@@ -19465,7 +20994,11 @@ mod tests {
         let mut session = Session::new("none");
         assert_eq!(session.effort(), None);
 
-        set_effort(&mut session, "max");
+        set_effort(
+            &mut session,
+            "max",
+            crate::model_prompt::Scope::EverySession,
+        );
         assert_eq!(
             session.effort(),
             Some(bravebot_aichat::protocol::Effort::Max)
@@ -19477,7 +21010,11 @@ mod tests {
     #[test]
     fn asking_for_no_level_puts_the_session_back_to_sending_none() {
         let mut session = Session::new("none");
-        set_effort(&mut session, "max");
+        set_effort(
+            &mut session,
+            "max",
+            crate::model_prompt::Scope::EverySession,
+        );
 
         session.choose_effort(None);
         assert_eq!(session.effort(), None);
@@ -19488,8 +21025,16 @@ mod tests {
     #[test]
     fn a_level_this_program_does_not_know_changes_nothing_and_says_so() {
         let mut session = Session::new("none");
-        set_effort(&mut session, "high");
-        set_effort(&mut session, "highest");
+        set_effort(
+            &mut session,
+            "high",
+            crate::model_prompt::Scope::EverySession,
+        );
+        set_effort(
+            &mut session,
+            "highest",
+            crate::model_prompt::Scope::EverySession,
+        );
 
         assert_eq!(
             session.effort(),
@@ -19510,7 +21055,11 @@ mod tests {
     #[test]
     fn a_level_is_withheld_from_a_model_that_reads_none() {
         let mut session = Session::new("none");
-        set_effort(&mut session, "max");
+        set_effort(
+            &mut session,
+            "max",
+            crate::model_prompt::Scope::EverySession,
+        );
         assert_eq!(
             session.effort_in_force(),
             Some(bravebot_aichat::protocol::Effort::Max)
@@ -19968,7 +21517,11 @@ mod tests {
         session.note_model_is_account(true);
         assert_eq!(session.effort_in_force(), Some(Effort::Low));
 
-        set_effort(&mut session, "high");
+        set_effort(
+            &mut session,
+            "high",
+            crate::model_prompt::Scope::EverySession,
+        );
         assert_eq!(session.effort(), Some(Effort::High), "the choice was lost");
         assert_eq!(
             session.effort_in_force(),
@@ -19988,7 +21541,7 @@ mod tests {
         assert_eq!(session.account_level(), Some(Some(Effort::Low)));
 
         // Giving the level up is a change too, and the account keeps the one it was begun with.
-        effort_picked(&mut session, None);
+        effort_picked(&mut session, None, crate::model_prompt::Scope::EverySession);
         assert_eq!(session.effort_in_force(), Some(Effort::Low));
         assert!(
             last_note(&session).contains("began with, low, so default applies"),
@@ -19997,7 +21550,11 @@ mod tests {
         );
 
         // The level it began with is no change, so nothing is said of one.
-        set_effort(&mut session, "low");
+        set_effort(
+            &mut session,
+            "low",
+            crate::model_prompt::Scope::EverySession,
+        );
         assert!(
             !last_note(&session).contains("began with"),
             "{}",
@@ -20005,7 +21562,11 @@ mod tests {
         );
 
         // Every other model is sent the choice, and a new conversation begins at it.
-        set_effort(&mut session, "high");
+        set_effort(
+            &mut session,
+            "high",
+            crate::model_prompt::Scope::EverySession,
+        );
         session.note_model_is_account(false);
         assert_eq!(session.effort_in_force(), Some(Effort::High));
         assert_eq!(
@@ -20014,7 +21575,11 @@ mod tests {
             "a level of the account's was reported for another model"
         );
         let before = session.transcript.len();
-        set_effort(&mut session, "medium");
+        set_effort(
+            &mut session,
+            "medium",
+            crate::model_prompt::Scope::EverySession,
+        );
         assert!(
             session.transcript[before..]
                 .iter()
@@ -20024,6 +21589,271 @@ mod tests {
         session.note_model_is_account(true);
         session.clear();
         assert_eq!(session.effort_in_force(), Some(Effort::Medium));
+    }
+
+    /// CHATGPT-10: the account is sent the level its session began with, and a level chosen for
+    /// this session only is a level chosen since the session began, so it is held back as a
+    /// recorded one is: the turn and the account session its requests carry both hold the starting
+    /// level, and every other model is sent the choice. The faults it rejects are a session-only
+    /// level that reaches the account at once because the mark makes it the level in force, and a
+    /// task built from the level chosen instead of the level in force.
+    #[test]
+    fn a_chatgpt_account_is_sent_the_level_its_session_began_with_when_another_is_chosen_for_this_session_only()
+     {
+        use bravebot_aichat::protocol::Effort;
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let permissions = Permissions::new();
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.note_model_is_account(true);
+
+        session.choose_effort_for_this_session(Some(Effort::High));
+
+        assert_eq!(session.effort(), Some(Effort::High), "the choice was lost");
+        assert!(session.effort_is_for_this_session());
+        assert_eq!(
+            session.effort_in_force(),
+            Some(Effort::Low),
+            "the account was sent the session-only level"
+        );
+        let task = run_settings.task("one", &session, &permissions);
+        assert_eq!(
+            task.effort,
+            Some(Effort::Low),
+            "the turn was asked for the session-only level"
+        );
+        assert_eq!(
+            task.account_session().effort(),
+            Some(Effort::Low),
+            "the account session carries the session-only level"
+        );
+        assert_eq!(session.account_level(), Some(Some(Effort::Low)));
+
+        // Giving the level up for this session only is a change too, and the account keeps the
+        // level it began with.
+        session.choose_effort_for_this_session(None);
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+
+        // Every other model is sent the choice.
+        session.choose_effort_for_this_session(Some(Effort::High));
+        session.note_model_is_account(false);
+        assert_eq!(session.effort_in_force(), Some(Effort::High));
+    }
+
+    /// CHATGPT-10: `/clear` begins another ChatGPT session at the level the session holds, which
+    /// is the first moment a session-only level reaches the account, and it stays the session's
+    /// own, so a second `/clear` begins at it again. The faults it rejects are a new account
+    /// session that begins at the recorded level and so forgets the choice, and one that begins at
+    /// no level because the level is marked as the session's alone.
+    #[test]
+    fn a_clear_begins_the_account_session_at_a_session_only_level() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.note_model_is_account(true);
+        session.choose_effort_for_this_session(Some(Effort::High));
+        let first = session.account_session().identifier().to_string();
+        assert_eq!(session.account_session().effort(), Some(Effort::Low));
+
+        session.clear();
+
+        assert_ne!(session.account_session().identifier(), first);
+        assert_eq!(
+            session.account_session().effort(),
+            Some(Effort::High),
+            "the new account session did not begin at the session-only level"
+        );
+        assert_eq!(session.effort_in_force(), Some(Effort::High));
+        assert!(
+            session.effort_is_for_this_session(),
+            "the clear dropped the mark"
+        );
+
+        session.choose_effort_for_this_session(None);
+        session.clear();
+        assert_eq!(
+            session.account_session().effort(),
+            None,
+            "a session-only default was not carried into the next account session"
+        );
+    }
+
+    /// CHATGPT-10: where the level chosen is the session's alone and the account keeps another,
+    /// the person is told, in the sentence for a level that is recorded nowhere: it names both
+    /// levels, says the choice applies from `/clear` and says it is not recorded. It is not the
+    /// sentence for a recorded level, which promises the next session. Nothing is said where the
+    /// choice is the level the session began with, where the model is not the account's or where
+    /// it reads no level. The faults it rejects are the recorded sentence for a session-only
+    /// level, which promises a session that will not open on it, and a sentence said whatever the
+    /// level, model or support.
+    #[test]
+    fn a_session_only_level_on_a_chatgpt_account_is_said_to_apply_from_clear_and_not_to_be_recorded()
+     {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.note_model_is_account(true);
+
+        session.choose_effort_for_this_session(Some(Effort::High));
+        say_if_kept_for_account(&mut session);
+
+        let said = last_note(&session).to_string();
+        assert_eq!(
+            said,
+            t!(
+                session_effort_kept_for_account_this_session,
+                began = "low",
+                chosen = "high"
+            )
+            .to_string()
+        );
+        assert_ne!(
+            said,
+            t!(
+                session_effort_kept_for_account,
+                began = "low",
+                chosen = "high"
+            )
+            .to_string(),
+            "the sentence for a recorded level was said"
+        );
+        assert!(
+            said.contains("began with, low, so high applies from /clear")
+                && said.contains("not recorded"),
+            "{said}"
+        );
+        assert!(!said.contains("from the next session"), "{said}");
+
+        // Giving the level up for this session only is named by the word for the default.
+        session.choose_effort_for_this_session(None);
+        say_if_kept_for_account(&mut session);
+        assert!(
+            last_note(&session).contains("began with, low, so default applies from /clear"),
+            "{}",
+            last_note(&session)
+        );
+
+        // The level it began with is no change, a model that is not the account's is sent the
+        // choice, and a model that reads no level is sent nothing, so nothing is said of them.
+        let before = session.transcript.len();
+        session.choose_effort_for_this_session(Some(Effort::Low));
+        say_if_kept_for_account(&mut session);
+        session.choose_effort_for_this_session(Some(Effort::High));
+        session.note_model_is_account(false);
+        say_if_kept_for_account(&mut session);
+        session.note_model_is_account(true);
+        session.note_model_reads_effort(false);
+        say_if_kept_for_account(&mut session);
+        assert_eq!(session.transcript.len(), before, "{:?}", notes_of(&session));
+    }
+
+    /// CHATGPT-10: a level recorded with `/effort <level>` is said to apply from the next session,
+    /// also after a level was chosen for this session only, because the recorded pick is the level
+    /// the next session opens on and ends the mark. The fault it rejects is a mark that outlives a
+    /// recorded pick, which would say the session-only sentence of a level that is recorded.
+    #[test]
+    fn a_recorded_level_on_a_chatgpt_account_is_said_to_apply_from_the_next_session_after_a_session_only_one()
+     {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.note_model_is_account(true);
+        session.choose_effort_for_this_session(Some(Effort::High));
+        say_if_kept_for_account(&mut session);
+        assert!(
+            last_note(&session).contains("applies from /clear"),
+            "{}",
+            last_note(&session)
+        );
+
+        session.choose_effort(Some(Effort::Medium));
+        say_if_kept_for_account(&mut session);
+
+        assert_eq!(
+            last_note(&session),
+            t!(
+                session_effort_kept_for_account,
+                began = "low",
+                chosen = "medium"
+            )
+            .to_string()
+        );
+    }
+
+    /// CHATGPT-10: picking a model of the account while the level the session holds is its alone
+    /// and is not the one the account session began with says the sentence for a session-only
+    /// level, and one picked while the level is recorded says the sentence for a recorded level.
+    /// The faults it rejects are a model pick that says the recorded sentence whatever scope chose
+    /// the level, and one that says it for neither.
+    #[test]
+    fn picking_a_chatgpt_model_after_a_session_only_level_says_the_session_only_sentence() {
+        use bravebot_aichat::protocol::Effort;
+        let account = || {
+            let mut account = provider_models(&gateway(r#"{"a-model": {}}"#)).remove(0);
+            account.key = "chatgpt/a-model".to_string();
+            account.provider = Some("ChatGPT".to_string());
+            account
+        };
+        let said_after = |choose: fn(&mut Session)| {
+            let mut session = Session::new("none");
+            session.name_effort(Effort::Low);
+            session.begin_account_session();
+            choose(&mut session);
+            let mut config = a_config_offering_three_tiers();
+            model_picked(
+                &mut session,
+                &mut config,
+                account(),
+                crate::model_prompt::Scope::EverySession,
+            );
+            assert!(session.model_is_account(), "the pick was not the account's");
+            notes_of(&session)
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<String>>()
+        };
+
+        let session_only = said_after(|session| {
+            session.choose_effort_for_this_session(Some(Effort::High));
+        });
+        let sentence = t!(
+            session_effort_kept_for_account_this_session,
+            began = "low",
+            chosen = "high"
+        )
+        .to_string();
+        assert!(
+            session_only.contains(&sentence),
+            "the session-only sentence was not said: {session_only:?}"
+        );
+        assert!(
+            session_only
+                .iter()
+                .all(|text| !text.contains("from the next session")),
+            "the recorded sentence was said of a session-only level: {session_only:?}"
+        );
+
+        let recorded = said_after(|session| session.choose_effort(Some(Effort::High)));
+        let sentence = t!(
+            session_effort_kept_for_account,
+            began = "low",
+            chosen = "high"
+        )
+        .to_string();
+        assert!(
+            recorded.contains(&sentence),
+            "the recorded sentence was not said: {recorded:?}"
+        );
+        assert!(
+            recorded
+                .iter()
+                .all(|text| !text.contains("applies from /clear")),
+            "the session-only sentence was said of a recorded level: {recorded:?}"
+        );
     }
 
     /// The turn holds the session's own handle, so a limit typed while it runs reaches its next
@@ -20572,7 +22402,11 @@ mod tests {
     fn a_level_a_model_cannot_use_is_kept_rather_than_forgotten() {
         let mut session = Session::new("none");
         session.note_model_reads_effort(false);
-        set_effort(&mut session, "max");
+        set_effort(
+            &mut session,
+            "max",
+            crate::model_prompt::Scope::EverySession,
+        );
 
         assert_eq!(
             session.effort(),
@@ -20593,7 +22427,11 @@ mod tests {
     fn asking_for_a_level_a_model_cannot_use_says_so() {
         let mut session = Session::new("none");
         session.note_model_reads_effort(false);
-        set_effort(&mut session, "max");
+        set_effort(
+            &mut session,
+            "max",
+            crate::model_prompt::Scope::EverySession,
+        );
 
         assert!(
             session
@@ -20611,7 +22449,11 @@ mod tests {
     #[test]
     fn a_level_the_service_refused_stops_being_reported_as_in_force() {
         let mut session = Session::new("none");
-        set_effort(&mut session, "max");
+        set_effort(
+            &mut session,
+            "max",
+            crate::model_prompt::Scope::EverySession,
+        );
         assert!(session.model_reads_effort(), "the roster said nothing yet");
 
         note_a_refused_level(&mut session, true);
@@ -20684,7 +22526,11 @@ mod tests {
 
         // A level chosen after that is said to be read by none, and not to be the one a session
         // keeps, since nothing is sent for it to differ from.
-        set_effort(&mut session, "high");
+        set_effort(
+            &mut session,
+            "high",
+            crate::model_prompt::Scope::EverySession,
+        );
         assert_eq!(session.effort(), Some(Effort::High));
         assert_eq!(last_note(&session), t!(session_effort_not_read).to_string());
     }
@@ -20697,7 +22543,11 @@ mod tests {
     fn a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread() {
         let mut session = Session::new("none");
         session.note_model_reads_effort(false);
-        set_effort(&mut session, "max");
+        set_effort(
+            &mut session,
+            "max",
+            crate::model_prompt::Scope::EverySession,
+        );
 
         note_a_refused_level(&mut session, false);
 
@@ -30703,6 +32553,155 @@ mod tests {
 
         session.complete("answered", Vec::new(), 0);
         assert_eq!(session.model_of_the_turn(), Some("sonnet-arn"));
+    }
+
+    /// CMD-8. `/effort session` typed mid-turn opens its list in the this-session scope,
+    /// and the bare `/effort` in the every-session one, and neither is queued or handed to the turn.
+    /// Rejects: the words read as a prompt while a turn runs, which queues them or hands them to
+    /// the turn, and a mid-turn picker that opens in the every-session scope whatever was typed.
+    #[test]
+    fn effort_session_typed_mid_turn_opens_its_list_in_the_this_session_scope() {
+        use crate::model_prompt::Scope;
+        for (line, scope) in [
+            ("/effort session", Scope::ThisSession),
+            ("/effort", Scope::EverySession),
+        ] {
+            let mut session = a_turn_running_on("first");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            assert_eq!(
+                the_scope_of_the_open_effort_picker(&session),
+                scope,
+                "{line}"
+            );
+            assert!(session.queued.is_empty(), "{line} waited");
+            assert_eq!(
+                session.interjections().take(),
+                None,
+                "the running turn was handed {line}"
+            );
+            assert_eq!(session.input(), "", "{line} was left in the box");
+            assert!(said_under_the_turn(&session).is_empty());
+        }
+        assert!(crate::command_table::runs_while_working("/effort session"));
+    }
+
+    /// CMD-8. A level picked in the `/effort session` list mid-turn is the next
+    /// turn's and the running turn keeps its own, as a recorded pick does, is marked as session-only,
+    /// writes nothing, and is said in the transcript as any pick is. Rejects: a pick that records,
+    /// one that waits for the turn to end before it applies, one that is applied but not marked, and
+    /// a letter that reaches the box under the picker.
+    #[test]
+    fn a_session_only_level_picked_mid_turn_applies_from_the_next_turn() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        bravebot_session::store::save_effort(Some(Effort::Low));
+        let mut session = a_persisting_turn_running_on("first");
+        let transcript = session.transcript.len();
+        let cancel = Cancel::new();
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/effort session", key(KeyCode::Enter), beside);
+            for code in [KeyCode::Char('j'), KeyCode::Char('j'), KeyCode::Enter] {
+                turn_key(&mut session, key(code), &cancel, beside);
+            }
+        });
+
+        assert_eq!(session.effort(), Some(Effort::Medium), "the pick waited");
+        assert!(
+            session.effort_is_for_this_session(),
+            "the pick was not marked"
+        );
+        assert_eq!(
+            bravebot_session::store::load_effort(),
+            Some(Effort::Low),
+            "the pick was recorded"
+        );
+        assert!(session.picking().is_none(), "the picker stayed open");
+        assert_eq!(
+            session.input(),
+            "",
+            "a key reached the box under the picker"
+        );
+        assert_eq!(
+            said_under_the_turn(&session).first().copied(),
+            Some(said_of(Some(Effort::Medium)).as_str())
+        );
+        assert_eq!(session.transcript.len(), transcript + 1);
+        assert!(!cancel.is_cancelled());
+
+        // A pick from the bare `/effort` picker mid-turn is recorded, and ends the mark.
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/effort", key(KeyCode::Enter), beside);
+            for code in [KeyCode::Char('j'), KeyCode::Enter] {
+                turn_key(&mut session, key(code), &cancel, beside);
+            }
+        });
+        assert_eq!(session.effort(), Some(Effort::High));
+        assert!(!session.effort_is_for_this_session());
+        assert_eq!(bravebot_session::store::load_effort(), Some(Effort::High));
+    }
+
+    /// CMD-8, CMD-35. A level set while a turn runs, with the bare word's form or with
+    /// `/effort session`, is the next turn's: the session holds it as soon as it is typed, the task
+    /// the running turn was built from still carries the level the turn began with, and the task
+    /// the next turn is built from carries the new one, whichever form set it. The faults it rejects
+    /// are a level that waits for the turn to end before the session holds it, and a task built
+    /// for a turn that follows the session's level once the turn has begun. A `Task` holds its level
+    /// by value, so a level set after the task was built does not reach it.
+    #[test]
+    fn a_level_set_mid_turn_is_the_next_turns_and_the_running_turn_keeps_its_own() {
+        use bravebot_aichat::protocol::Effort;
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        for (line, level, for_this_session) in [
+            ("/effort session max", Effort::Max, true),
+            ("/effort high", Effort::High, false),
+        ] {
+            let mut session = Session::new("none");
+            session.name_effort(Effort::Low);
+            let running = run_settings.task("first", &session, &Permissions::new());
+            type_line(&mut session, "first");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert!(session.a_turn_is_running());
+            assert_eq!(running.effort, Some(Effort::Low), "{line}");
+
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+
+            assert_eq!(
+                session.effort(),
+                Some(level),
+                "{line} waited for the turn to end"
+            );
+            assert_eq!(session.effort_is_for_this_session(), for_this_session);
+            assert_eq!(
+                running.effort,
+                Some(Effort::Low),
+                "{line} moved the turn that was running"
+            );
+            assert_eq!(
+                run_settings
+                    .task("again", &session, &Permissions::new())
+                    .effort,
+                Some(level),
+                "{line}: the next turn was not asked for the level set"
+            );
+
+            session.complete("answered", Vec::new(), 0);
+            assert_eq!(
+                run_settings
+                    .task("next", &session, &Permissions::new())
+                    .effort,
+                Some(level),
+                "{line}: the level was lost when the turn ended"
+            );
+        }
     }
 
     /// `/reach` carries its argument whole to the loop, bare for the list, and a longer word is
