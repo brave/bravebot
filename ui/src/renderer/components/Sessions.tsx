@@ -48,6 +48,8 @@ interface Props {
   onPurge: (directory: string, project: string) => void
   /** Offer the project's Claude Code sessions for copying here. */
   onImport: (directory: string, project: string) => void
+  /** Show what the project's recorded sessions spent, in tokens (CLI-37). */
+  onStats: (directory: string, project: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
   /**
@@ -137,6 +139,7 @@ export function Sessions({
   onNew,
   onPurge,
   onImport,
+  onStats,
   onNewChat,
   grouped,
   onGroup,
@@ -279,6 +282,7 @@ export function Sessions({
               onNew={onNew}
               onPurge={onPurge}
               onImport={onImport}
+              onStats={onStats}
             />
           ))}
         {archivedShown && (
@@ -360,6 +364,7 @@ function Group({
   onNew,
   onPurge,
   onImport,
+  onStats,
 }: {
   group: Group
   shown: number
@@ -374,6 +379,7 @@ function Group({
   onNew: (directory: string) => void
   onPurge: (directory: string, project: string) => void
   onImport: (directory: string, project: string) => void
+  onStats: (directory: string, project: string) => void
 }): React.JSX.Element {
   const drawn = page(group.sessions, shown, keep)
   return (
@@ -407,6 +413,9 @@ function Group({
           tooltip={false} data-test="session-group-menu">
           <leo-menu-item onClick={() => onImport(group.directory, group.project)}>
             <span className="menu-icon-row"><Icon name="import-arrow" />Import from Claude Code…</span>
+          </leo-menu-item>
+          <leo-menu-item data-test="session-group-stats" onClick={() => onStats(group.directory, group.project)}>
+            <span className="menu-icon-row"><Icon name="bar-chart" />Token spend in {group.project}…</span>
           </leo-menu-item>
           <leo-menu-item className="session-delete" onClick={() => onPurge(group.directory, group.project)}>
             <span className="menu-icon-row"><Icon name="trash" />Delete all chats in {group.project}…</span>

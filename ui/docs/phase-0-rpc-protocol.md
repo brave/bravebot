@@ -535,6 +535,48 @@ plain text.
 - `bad_request` if `ids` is not a list of names the listing gives.
 - `no_home` if there is no home directory to read from, or no state directory to copy into.
 
+#### `session.stats`
+
+```json
+{ "id": 11, "method": "session.stats", "params": { "directory": "/Users/me/repos/thing", "days": 7 } }
+```
+
+```json
+{ "id": 11, "ok": {
+  "directory": "/Users/me/repos/thing", "days": 7,
+  "total": { "sessions": 3, "turns": 12, "tokens": 90000,
+             "read": 70000, "written": 8000, "unsplit": 12000 },
+  "models": [
+    { "model": "claude-opus-5-5", "sessions": 2, "turns": 10, "tokens": 88000,
+      "read": 70000, "written": 8000, "unsplit": 10000 },
+    { "model": null, "sessions": 1, "turns": 2, "tokens": 2000,
+      "read": 0, "written": 0, "unsplit": 2000 } ],
+  "unreadable": 0 } }
+```
+
+Totals what the recorded sessions spent, as `bravebot stats --models` does (CLI-37), by calling
+`bravebot_session::stats::totals`. Both params are optional. `directory` keeps the records whose
+stored path is that directory, the way `--project <dir>` does; without it every project is
+totalled. `days` keeps the sessions last written within that many days of 24 hours, the way
+`--days` does. Both are sent back, `directory` resolved and cleaned of the characters a terminal
+would act on, and `null` when not given.
+
+`total` and each row of `models` carry `sessions`, `turns`, `tokens`, `read`, `written` and
+`unsplit`, which is the tokens of sessions that kept no split, so `read + written + unsplit` is
+`tokens`. `models` comes from `Totals::by_shown_model`, the grouping the terminal uses: names are
+cleaned and cut to 60 characters, names that read alike are one row, and rows are ordered by
+tokens, then sessions, then name. `model` is `null` for the sessions whose record names no model,
+or a name with nothing left after cleaning; the client labels it `unknown`. `unreadable` counts the
+entries under the sessions directory that could not be read as a record; they add to no figure and
+are never named. No figure is in money.
+
+The method writes nothing, needs no open session, and answers the same under incognito, where no
+session adds a record.
+
+- `not_a_directory` if `directory` is not one.
+- `bad_request` if `directory` is not a string, or `days` is not a whole number from 1 to
+  9223372036854775807.
+
 #### `session.fork`
 
 ```json

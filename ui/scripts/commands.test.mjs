@@ -40,6 +40,17 @@ test('the session status, token spend, the context breakdown and the last reques
   }
 })
 
+test('Token Spend Across Chats… is offered with nothing open, and the menu and router reach it (CLI-37)', () => {
+  const spend = command('spend.report')
+  assert.equal(spend.label, 'Token Spend Across Chats…')
+  assert.equal(spend.requires, 'always')
+  assert.equal(isEnabled(spend.requires, NOTHING_OPEN), true)
+  assert.equal(isEnabled(spend.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), true)
+  assert.match(readFileSync('src/main/menu.ts', 'utf8'), /item\('spend\.report'\)/)
+  assert.match(readFileSync('src/renderer/commands.ts', 'utf8'), /case 'spend\.report':\s*return act\.spend\(\)/)
+  assert.match(readFileSync('src/main/index.ts', 'utf8'), /'session\.stats',/)
+})
+
 test('the menu places the reports in the Chat menu', () => {
   const menu = readFileSync('src/main/menu.ts', 'utf8')
   const chat = menu.slice(menu.indexOf("label: 'Chat'"), menu.indexOf("role: 'windowMenu'"))

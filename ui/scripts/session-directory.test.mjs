@@ -78,6 +78,7 @@ const NO_GATE = {
   'connectors.preview': 'a stdio connector\'s own working folder, typed into the form',
   'connectors.connect': 'a stdio connector\'s own working folder, typed into the form',
   'session.folders.close': 'names a folder only to take it away from the session, which the agent refuses unless it is open there',
+  'session.stats': 'reads records and opens no session; a directory it names is held to mayOpenSessionIn by a check of its own, since it may name none',
 }
 const TAKES_NO_DIRECTORY = [
   'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.limit', 'session.rewind',
@@ -110,6 +111,13 @@ test('every method the window may send is classified by whether it carries a dir
   assert.deepEqual(allowed.filter(name => !placed.includes(name)), [], 'a method added to ALLOWED is placed here, and gated if it opens or deletes a session by directory')
   assert.deepEqual(placed.filter(name => !allowed.includes(name)), [], 'and a name that left ALLOWED leaves this list')
   assert.equal(new Set(placed).size, placed.length, 'and no method is in two of the sets')
+})
+test('the request handler refuses a session.stats directory the app did not offer, and lets one with no directory through', () => {
+  const index = readFileSync('src/main/index.ts', 'utf8')
+  const gate = /if \(method === 'session\.stats'\) \{\s*const directory = ([^\n]*)\n\s*if \(directory !== undefined && directory !== null && !mayOpenSessionIn\(directory\)\) \{\s*return \{ error/.exec(index)
+  assert.ok(gate, 'a named folder the app did not offer is answered with an error')
+  assert.equal(gate[1], GATE_ARGUMENT, 'and what it checks is the directory the window named')
+  assert.ok(index.indexOf('bridge.request(method', gate.index) > gate.index, 'and the check comes before the request is forwarded')
 })
 test('the request handler forwards a session list through the sanitiser, which drops a directory', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')

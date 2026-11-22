@@ -2584,6 +2584,23 @@ record that holds no turns or tokens counts as a session with none. A record who
 than its own tokens is cut to the tokens, so a figure somebody edited cannot make the tokens left
 without a split wrap.
 
+The desktop app answers the same totals through the bridge method `session.stats`, which calls the
+same totalling and the same grouping into model rows as the command, and shows them in a "Token
+Spend Across Chats…" dialog, opened from the command list for every project or from a project
+heading's menu for that project. `directory` stands for `--project <dir>` and `days` for
+`--days <n>`, and the answer always carries the total and a row for each model, so the dialog's "by
+model" choice only changes which rows it draws. A model row with no name has `null` for its model,
+which the dialog shows as `unknown`, and the directory sent back is cleaned as the scope sentence's
+is. A directory that is not one is refused with `not_a_directory`, and a count of zero, a negative
+count, one above 9223372036854775807 and one that is not a whole number with `bad_request`, and a
+refusal carries no figures. The answer gives the count of entries that could not be read as
+`unreadable`, and the dialog says how many there were when there were any, and always says that an
+incognito session is not counted. The method writes nothing, needs no open session, and answers the
+same under incognito. The dialog shows tokens and no money, for the reason under Known costs. The
+window may ask about a directory only when the app offered it, as for `session.purge`
+([TRUST-20](trust-map.md#TRUST-20)), so a project never opened in the desktop app is counted there
+only in the total for every project.
+
 **Why.** `/cost` answers what one session spent, and nothing answers what a week of them spent,
 which models took it, or which project it went to without opening each record. The figures are the
 ones the program already wrote down, so nothing here is estimated, and a person asking is the one
@@ -2657,6 +2674,11 @@ reading the answer, so none of it goes to a planner.
 `verified-by: bravebot_cli::running::a_muddled_stats_request_is_refused_with_the_argument_status_and_no_figures`
 `verified-by: bravebot_cli::running::stats_runs_under_incognito_and_counts_the_records_written_before`
 `verified-by: bravebot_cli::running::stats_reports_how_the_tokens_of_one_shot_runs_divided`
+`verified-by: bravebot_ui_bridge::stats::no_parameters_total_every_project_with_a_row_for_each_model`
+`verified-by: bravebot_ui_bridge::stats::a_model_name_reaches_the_answer_cleaned_of_its_escape`
+`verified-by: bravebot_ui_bridge::stats::a_directory_keeps_only_the_records_that_ran_in_it`
+`verified-by: bravebot_ui_bridge::stats::days_leave_out_a_record_last_written_before_the_cut`
+`verified-by: bravebot_ui_bridge::stats::a_count_that_is_no_number_of_days_and_a_path_that_is_no_directory_are_refused`
 
 <a id="CLI-38"></a>
 ### CLI-38: `--max-rounds` and `--max-tokens` stop a one-shot run at a limit, on a status of their own

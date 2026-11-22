@@ -61,6 +61,8 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   if (method === 'crash_reports.set') return { enabled: held.enabled }
   if (method === 'accounts.list') return { session: held.session }
   if (method === 'accounts.signOut') return { session: held.session, way: held.way, id: held.id }
+  // A spend report reads a folder and a number of days (CLI-37), and no other field crosses.
+  if (method === 'session.stats') return { directory: held.directory, days: held.days }
   if (method === 'session.list') {
     const { directory: _directory, ...rest } = held
     return rest

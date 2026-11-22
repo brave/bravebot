@@ -12,7 +12,7 @@ function load(path) {
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   return module.exports
 }
-const { costNotice, contextNotice, statusNotice, tokens } = load('src/renderer/reports.ts')
+const { costNotice, contextNotice, statusNotice, statsRows, statsScope, tokens } = load('src/renderer/reports.ts')
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
@@ -205,5 +205,41 @@ test('each empty state of the context is named rather than shown as an empty tab
   assert.match(contextNotice({ state: 'no-request', total: 900, budget: 10_000, sections: [] }).body, /no request of its own/)
   for (const state of ['not-measured', 'compacted', 'no-request']) {
     assert.equal(empty(state).subtitle, undefined, state)
+  }
+})
+
+// Token Spend Across Chats… (CLI-37), from what session.stats answers.
+const figures = (tokens) => ({ sessions: 1, turns: 2, tokens, read: 0, written: 0, unsplit: tokens })
+const stats = (models) => ({ directory: null, days: null, total: figures(900), models, unreadable: 0 })
+
+test('the spend rows keep the model order the bridge sent and put Total last', () => {
+  const rows = statsRows(stats([{ model: 'big', ...figures(600) }, { model: 'small', ...figures(300) }]))
+  assert.deepEqual(rows.map((row) => row.label), ['big', 'small', 'Total'])
+  assert.deepEqual(rows.map((row) => row.total), [false, false, true])
+  assert.equal(rows[0].tokens, 600)
+  assert.equal(rows[2].tokens, 900)
+  assert.equal(rows[2].unsplit, 900)
+  assert.equal('model' in rows[0], false)
+})
+
+test('a model row of null is labelled unknown, and Total still comes last', () => {
+  const rows = statsRows(stats([{ model: 'big', ...figures(600) }, { model: null, ...figures(300) }]))
+  assert.deepEqual(rows.map((row) => row.label), ['big', 'unknown', 'Total'])
+  assert.equal(rows[1].total, false)
+})
+
+test('with no model rows the table is the Total row alone', () => {
+  assert.deepEqual(statsRows(stats([])).map((row) => [row.label, row.total]), [['Total', true]])
+})
+
+test('the scope sentence says which sessions and which projects are counted', () => {
+  assert.equal(statsScope(null, null), 'Every recorded session, in every project')
+  assert.equal(statsScope(7, null), 'Sessions last written in the last 7 days, in every project')
+  assert.equal(statsScope(1, null), 'Sessions last written in the last day, in every project')
+  assert.equal(statsScope(null, '/work/app'), 'Every recorded session in /work/app')
+  assert.equal(statsScope(30, '/work/app'), 'Sessions last written in the last 30 days, in /work/app')
+  assert.equal(statsScope(1, '/work/app'), 'Sessions last written in the last day, in /work/app')
+  for (const directory of [null, '/work/app']) {
+    assert.doesNotMatch(statsScope(1, directory), /1 days/)
   }
 })

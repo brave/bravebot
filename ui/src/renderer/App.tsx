@@ -65,6 +65,7 @@ import { contextNotice, costNotice, statusNotice, type ContextReport, type CostR
 import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
+import { SpendReport } from './components/SpendReport'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
@@ -581,13 +582,21 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [closeSession, refresh, readForks, readBots, readSummons])
 
-  /** The project whose group menu asked to delete all its chats or to import some, while it asks. */
-  const [projectAction, setProjectAction] = useState<{ kind: 'purge' | 'import'; directory: string; opened: ReadonlySet<string> } | null>(null)
+  /**
+   * The project whose group menu asked to delete all its chats, to import some or to show what
+   * they spent, while it asks. A spend report with no directory covers every project.
+   */
+  const [projectAction, setProjectAction] = useState<
+    | { kind: 'purge' | 'import'; directory: string; opened: ReadonlySet<string> }
+    | { kind: 'stats'; directory: string | null }
+    | null
+  >(null)
   const askPurge = useCallback((directory: string) => {
     const opened = new Set([...openedLives.current.values()].flatMap((item) => item.summary.directory === directory && item.summary.id ? [item.summary.id] : []))
     setProjectAction({ kind: 'purge', directory, opened })
   }, [])
   const askImport = useCallback((directory: string) => setProjectAction({ kind: 'import', directory, opened: new Set() }), [])
+  const askStats = useCallback((directory: string | null) => setProjectAction({ kind: 'stats', directory }), [])
   const leaveProjectAction = useCallback(() => setProjectAction(null), [])
 
   /**
@@ -1059,6 +1068,7 @@ export function App(): React.JSX.Element {
     cost: () => void cost(),
     context: () => void contextBreakdown(),
     request: () => void lastRequest(),
+    spend: () => askStats(null),
     bugReport: () => setBugReportOpen(true),
     openSession,
     closeNamed,
@@ -1170,6 +1180,7 @@ export function App(): React.JSX.Element {
         onNew={stableCreate}
         onPurge={askPurge}
         onImport={askImport}
+        onStats={askStats}
         onNewChat={stableNewChat}
         onTab={stableSwitchTab}
         bots={bots}
@@ -1328,6 +1339,7 @@ export function App(): React.JSX.Element {
       {projectAction?.kind === 'import' && (
         <ImportSessions directory={projectAction.directory} onClose={leaveProjectAction} onImported={() => void refresh()} />
       )}
+      {projectAction?.kind === 'stats' && <SpendReport directory={projectAction.directory} onClose={leaveProjectAction} />}
       {noting && live?.handle === noting && (
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
       )}
