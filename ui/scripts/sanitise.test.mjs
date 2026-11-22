@@ -74,6 +74,14 @@ test('a session list is always the whole one, whatever directory the window put 
   assert.deepEqual(sanitised('session.list', undefined), {})
 })
 
+test('a spend report forwards the folder and the days, and nothing else', () => {
+  assert.deepEqual(
+    sanitised('session.stats', { directory: '/Users/me/app', days: 7, session: 's1', directories: ['/etc'] }),
+    { directory: '/Users/me/app', days: 7 },
+  )
+  assert.deepEqual(JSON.parse(JSON.stringify(sanitised('session.stats', undefined))), {})
+})
+
 test('a new session opens no folder beside its project that the window named', () => {
   const forwarded = sanitised('session.new', { directory: '/Users/me/app', directories: ['/Users/me/.ssh'] })
 

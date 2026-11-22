@@ -656,6 +656,9 @@ const ALLOWED = new Set([
   'session.report.context',
   'session.report.request',
   'session.report.status',
+  // What recorded sessions spent, overall or for one project (CLI-37). Read-only. A directory it
+  // names is held to the folders this app offered, in the handler below.
+  'session.stats',
   'turn.send',
   'turn.cancel',
   'turn.interject',
@@ -795,6 +798,14 @@ if (primary) app.whenReady().then(() => {
     // are held to the same folders.
     if (method === 'session.new' || method === 'session.open' || method === 'session.delete' || method === 'session.purge' || method === 'session.import') {
       if (!mayOpenSessionIn((params as { directory?: unknown } | null)?.directory)) {
+        return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
+      }
+    }
+    // A spend report that names no directory totals every project (CLI-37). One that names a
+    // directory is held to the same folders.
+    if (method === 'session.stats') {
+      const directory = (params as { directory?: unknown } | null)?.directory
+      if (directory !== undefined && directory !== null && !mayOpenSessionIn(directory)) {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
       }
     }
