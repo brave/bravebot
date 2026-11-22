@@ -61,6 +61,8 @@ export interface CommandActions {
   context: () => void
   /** Show the last request the open session's turn sent the model, span by span (TRACE-9). */
   request: () => void
+  /** Show what every recorded session spent, in tokens, as `bravebot stats` totals it (CLI-37). */
+  spend: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
   /** Open the session a right-click named. */
@@ -161,6 +163,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.context()
         case 'session.request':
           return act.request()
+        case 'spend.report':
+          return act.spend()
         case 'session.compact':
           return act.compact()
         case 'session.handoff':

@@ -303,6 +303,7 @@ function buildMenu(): void {
         item('session.cost'),
         item('session.context'),
         item('session.request'),
+        item('spend.report'),
         item('session.compact'),
         item('session.handoff'),
         item('session.background'),

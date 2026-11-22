@@ -181,6 +181,38 @@
   word-break: break-word;
 }
 
+/* ---------------------------------------------------------- spend across chats */
+
+/* What the recorded sessions spent (CLI-37): a days choice and a by-model toggle over a table of
+   six figures per row, the Total row last. The label column truncates a long model name. */
+.spend-report-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--leo-spacing-l);
+  margin-bottom: var(--leo-spacing-l);
+}
+.spend-report-by-model { display: flex; align-items: center; gap: var(--leo-spacing-m); font: var(--type-body); color: var(--ink-primary); }
+.spend-report-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font: var(--type-body);
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+}
+.spend-report-table th, .spend-report-table td {
+  padding: var(--leo-spacing-m);
+  border-bottom: 1px solid var(--border-hairline);
+  text-align: right;
+}
+.spend-report-table thead th { font: var(--type-meta-strong); color: var(--ink-secondary); }
+.spend-report-table th:first-child { width: 28%; text-align: left; }
+.spend-report-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: normal; color: var(--ink-primary); }
+.spend-report-total th, .spend-report-total td { border-bottom: none; font: var(--type-body-strong); font-variant-numeric: tabular-nums; }
+.modal .spend-report-note { margin: var(--leo-spacing-l) 0 0; font: var(--type-meta); color: var(--ink-secondary); text-wrap: pretty; }
+
 /* ---------------------------------------------------------- last request */
 
 /* The request a turn sent, span by span. The modal body scrolls; each span is as long as it is. */
