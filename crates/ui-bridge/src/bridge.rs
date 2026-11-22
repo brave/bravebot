@@ -2193,6 +2193,9 @@ impl Bridge {
         // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
         // between turns applies to the next one.
         let effort = recorded_effort(&settings);
+        // The variant the window picked for this session, read when the turn starts so a pick
+        // made while a turn runs applies to the next one (BACKEND-66).
+        let variant = open.variant.clone();
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
@@ -2293,6 +2296,7 @@ impl Bridge {
                 config,
                 attribution,
                 effort,
+                variant,
                 output_cap,
                 download_cap,
                 deadlines,
@@ -4482,6 +4486,9 @@ struct Work {
     /// How hard the model is asked to think: the recorded level and the settings layers, ranked as
     /// BACKEND-43 ranks them. `None` asks for the service's own default.
     effort: Option<bravebot_session::store::Effort>,
+    /// The named option set of the model that the window picked through `session.variant`
+    /// (BACKEND-66). `None` asks with the model's options alone.
+    variant: Option<String>,
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
@@ -4615,6 +4622,7 @@ fn work(work: Work) {
         mut config,
         attribution,
         effort,
+        variant,
         output_cap,
         download_cap,
         deadlines,
@@ -4736,6 +4744,7 @@ fn work(work: Work) {
         .in_front_end(front_end)
         .with_model(model)
         .with_effort(effort)
+        .with_variant(variant)
         .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)

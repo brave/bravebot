@@ -59,6 +59,7 @@ fn take_a_turn_at(
         workspace: workspace.clone(),
         attribution: Default::default(),
         effort,
+        variant: None,
         output_cap: None,
         download_cap: None,
         deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
