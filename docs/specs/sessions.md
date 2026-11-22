@@ -353,11 +353,15 @@ value of the four path flags is printed as the absolute entry the sandbox reads 
 directory the session started in ([SANDBOX-25](sandboxing.md#SANDBOX-25)): the directory joined to
 the value with `.` and `..` resolved by name, nothing read from the filesystem. The sandbox reads a
 relative entry that way and refuses an absolute entry that holds `..`, so `sub/../x` is printed as
-`<directory>/x`. An entry that climbs out of the directory (`..`, `../x`, `sub/../../x`), or whose
-`..` follows a name holding a wildcard, is refused when typed and so was never in force. It is
-joined with its `..` in place and is refused again. An absolute value and one that starts with `~`
-names the same place from every directory and is printed as typed. One that starts with a variable
-is refused when typed, is printed as typed and is refused again.
+`<directory>/x`. An entry that climbs out of the directory (`..`, `../x`, `sub/../../x`) is refused
+when typed and so was never in force. It is joined with its `..` in place and is refused again. An
+entry whose `..` removes the only name that holds a wildcard (`a/*/../x`) is judged by the sandbox as
+a pattern with no wildcard left, which a write list refuses and a read list matches nothing with
+whichever directory it is read from, and is printed as typed. An absolute value and one that starts
+with `~` names the same place from every directory and is printed as typed. One that starts with a
+variable is refused when typed, is printed as typed and is refused again. The reading is
+`bravebot_sandbox::rules::read_entry`, the function the sandbox judges an entry with, so the line
+holds no second copy of it.
 
 A relative `--settings` value is read from the directory the process was in when the flags were
 read. Where the session moved it is joined to that directory with any `..` in place, which names the
@@ -1987,8 +1991,8 @@ stay behind because they were given for work that the brief describes only in wo
   names another place, and for a `--sandbox-deny-read` or `--sandbox-deny-write` entry the
   restriction is lost.
 - **Values are printed in the spelling the flag parses, not byte for byte.** `SandboxMode::parse`
-  reads `standard` as the earlier name of `workspace-write` and `SandboxMode::name` returns the
-  current one, so `--sandbox standard` is printed `--sandbox workspace-write`. `--log-level` is
+  reads `standard` as `workspace-write` and `SandboxMode::name` returns `workspace-write`, so
+  `--sandbox standard` is printed `--sandbox workspace-write`. `--log-level` is
   printed in the spelling it parses, and `--settings`, the prompts and each tool name are printed
   without the white space around them. The line resumes the session under the same values, which is
   not always the text that was typed.

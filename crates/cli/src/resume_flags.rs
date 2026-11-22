@@ -13,7 +13,7 @@
 
 use bravebot_sandbox::SandboxMode;
 use bravebot_sandbox::network::Network;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// The process-wide flags a command line carried, in the form [`Typed::words`] repeats them.
@@ -173,78 +173,52 @@ impl Typed {
     }
 }
 
-/// The entry `value` of a `--sandbox-*` list as an absolute entry that the sandbox reads as the
-/// place the relative entry was read as from `directory`, or as typed where it needs no directory.
+/// The entry `value` of a `--sandbox-*` list as the sandbox reads it from `directory`, written as
+/// an absolute entry, or as typed where it reads the same from every directory.
 ///
-/// The sandbox reads a relative entry from the session's directory and resolves its `.` and `..` by
-/// name as it goes: a `..` removes a name the entry holds, and one with none left to remove
-/// climbs out of the directory, so the entry is refused. It refuses an absolute entry that holds
-/// any `..`, because it cannot say where that one climbs from (`one` in
-/// `crates/sandbox/src/rules.rs`, which judges `absolute || climbed == 0` as `Reason::Climbs`).
-/// A relative entry joined to `directory` with its `..` left in place would therefore be refused
-/// where it was in force, and a deny entry that is refused is lost. This resolves `.` and `..` the
-/// way the sandbox does, so the entry names the same path whichever directory the line is run
-/// from. Wildcards and trailing slashes are left to the sandbox: a name holding one is pushed as it
-/// is, and a trailing slash adds no name.
+/// The reading is `bravebot_sandbox::rules::read_entry`, the function the sandbox judges an entry
+/// with, so what is printed is what the sandbox would read: a `.` is dropped, a trailing slash adds
+/// no name, and a `..` removes the name before it, so `sub/../x` is printed `<directory>/x`. The
+/// sandbox refuses an absolute entry that holds `..`, so a relative entry joined to `directory`
+/// with its `..` left in place would be refused where it was in force, and a deny entry that is
+/// refused is lost.
 ///
-/// Returned as typed: an absolute entry, one that starts at the home directory (`~`, `~/` or `~\`,
-/// the three spellings the sandbox reads from home), one that is blank, and one that starts with a
-/// variable, which the sandbox refuses before it reads a path and which a joined path would turn
-/// into a place that exists. An entry that climbs out of the directory (`..`, `../x`,
-/// `sub/../../x`) is joined to `directory` with its `..` left in place: the sandbox refused it as
-/// typed, so it was never in force, and the absolute entry holding a `..` is refused the same way.
-/// Resolving it would turn an entry that was refused into one that is in force. So is an entry
-/// whose `..` removes a name that holds a wildcard (`a/*/../x`): the sandbox reads it as a pattern,
-/// which a write list refuses and a read list matches nothing with, and the resolved entry would
-/// name a path.
+/// Written as typed: an entry that starts at the home directory (`~`, `~/` or `~\`, which
+/// `read_entry` reads from a home directory this function does not name), one that starts with a
+/// variable, which the sandbox refuses before it reads a path, an absolute entry, and one whose `..`
+/// removes the only name that holds a wildcard (`a/*/../x`). The sandbox judges that one as a
+/// pattern with no wildcard left, which a write list refuses and a read list matches nothing with,
+/// whichever directory it is read from, so no other spelling means the same.
 ///
-/// A pure function of its arguments, which read nothing from the filesystem and resolve no link, so
-/// a `..` after a name that is a link removes the name, as the sandbox's own reading does.
+/// An entry that climbs out of the directory (`..`, `../x`, `sub/../../x`) is joined to `directory`
+/// with its `..` left in place: the sandbox refused it as typed, so it was never in force, and the
+/// absolute entry holding a `..` is refused the same way. Resolving it would turn an entry that was
+/// refused into one that is in force.
+///
+/// A pure function of its arguments: nothing is read from the filesystem and no link is followed.
 pub(crate) fn sandbox_path_from(value: &str, directory: &Path) -> String {
+    use bravebot_sandbox::rules::{Reason, read_entry};
     let spelled = value.trim();
-    let from_home = spelled
-        .strip_prefix('~')
-        .is_some_and(|after| after.is_empty() || after.starts_with(['/', '\\']));
-    if spelled.is_empty()
-        || from_home
-        || starts_with_a_variable(spelled)
-        || Path::new(spelled).is_absolute()
-    {
+    if spelled.is_empty() {
         return value.to_string();
     }
-    let left_unresolved = || directory.join(spelled).to_string_lossy().into_owned();
-    let mut path = directory.to_path_buf();
-    let mut names: Vec<&std::ffi::OsStr> = Vec::new();
-    for part in Path::new(spelled).components() {
-        match part {
-            Component::Prefix(_) | Component::RootDir => path.push(part.as_os_str()),
-            Component::CurDir => {}
-            Component::Normal(name) => {
-                path.push(name);
-                names.push(name);
+    match read_entry(spelled, None, directory) {
+        // No home directory is named here, so a home entry is refused for want of one and is
+        // printed as typed, which names the same place from every directory.
+        Err(Reason::NoHome | Reason::NamesAVariable) => value.to_string(),
+        // Reading refuses nothing else but a `..` with no name to remove. Joined to the directory
+        // as any path is, an absolute entry is its own spelling and is printed as typed.
+        Err(_) => {
+            let joined = directory.join(spelled);
+            if joined == Path::new(spelled) {
+                value.to_string()
+            } else {
+                joined.to_string_lossy().into_owned()
             }
-            Component::ParentDir => match names.pop() {
-                Some(name) if !name.to_string_lossy().contains(['*', '?']) => {
-                    path.pop();
-                }
-                _ => return left_unresolved(),
-            },
         }
+        Ok(read) if read.absolute || read.lost_its_wildcard() => value.to_string(),
+        Ok(read) => read.path.to_string_lossy().into_owned(),
     }
-    path.to_string_lossy().into_owned()
-}
-
-/// Whether an entry starts with a variable the way the sandbox reads one (`starts_with_a_variable`
-/// in `crates/sandbox/src/rules.rs`): `$NAME`, `${`, or `%NAME%`.
-fn starts_with_a_variable(spelled: &str) -> bool {
-    let name_start = |c: char| c.is_ascii_alphabetic() || c == '_';
-    if let Some(after) = spelled.strip_prefix('$') {
-        return after.starts_with(name_start) || after.starts_with('{');
-    }
-    if let Some(after) = spelled.strip_prefix('%') {
-        return after.starts_with(name_start) && after.contains('%');
-    }
-    false
 }
 
 /// The `--settings` file `value` as the absolute path it names when read from `directory`, or as
@@ -474,11 +448,14 @@ mod tests {
     /// entry the sandbox reads it as: the directory with the entry's `.` and `..` resolved by name,
     /// leading white space dropped and a trailing slash adding nothing. The sandbox refuses an
     /// absolute entry that holds a `..`, so a `..` that is left in place keeps the refusal an entry
-    /// that climbs out of the directory already had, and one that removes a name holding a wildcard
-    /// is left unresolved too, since resolving it would name a path where the entry named none. The
-    /// regressions it rejects are a relative value left as typed, a home value or an absolute one
-    /// joined to a directory, a `..` left in the middle of an entry the sandbox accepted (the entry
-    /// is then refused and a deny entry lost), and a `..` of an entry that climbs resolved away.
+    /// that climbs out of the directory already had. An entry whose `..` removes the only name that
+    /// holds a wildcard is left as typed: the sandbox judges it as a pattern with no wildcard left,
+    /// which a write list refuses and a read list matches nothing with, from every directory, so
+    /// resolving it would name a path where the entry named none. The regressions it rejects are a
+    /// relative value left as typed, a home value or an absolute one joined to a directory, a `..`
+    /// left in the middle of an entry the sandbox accepted (the entry is then refused and a deny
+    /// entry lost), a `..` of an entry that climbs resolved away, and a wildcard entry resolved to a
+    /// path.
     #[cfg(unix)]
     #[test]
     fn a_relative_sandbox_entry_is_written_as_the_absolute_entry_the_sandbox_reads_it_as() {
@@ -496,7 +473,7 @@ mod tests {
             ("..", "/work/.."),
             ("../up", "/work/../up"),
             ("sub/../../x", "/work/sub/../../x"),
-            ("a/*/../x", "/work/a/*/../x"),
+            ("a/*/../x", "a/*/../x"),
             ("~user/x", "/work/~user/x"),
             ("%dir/x", "/work/%dir/x"),
             ("/abs/p", "/abs/p"),
@@ -517,14 +494,17 @@ mod tests {
     /// typed from the session's directory and as printed from the directory the session moved to,
     /// in each of the four lists, and the two come to the same path or the same refusal. The table
     /// holds the values that decide it: a `..` that removes a name the entry holds, one that has no
-    /// name to remove and so climbs, a `.`, a trailing slash, white space, a glob, a variable, a home
-    /// entry and an absolute one. The regression it rejects is a printed entry the sandbox reads as
-    /// another path or refuses where the typed one was in force, which is a restriction lost for a
-    /// deny entry and a grant lost for an allow entry.
+    /// name to remove and so climbs, a `.`, a trailing slash, white space, a glob, a `..` that
+    /// removes the only name holding a wildcard (judged as a pattern, so a write list refuses it and
+    /// a read list matches nothing), a variable, a home entry and an absolute one. The regression it
+    /// rejects is a printed entry the sandbox reads as another path or refuses where the typed one
+    /// was in force, which is a restriction lost for a deny entry and a grant lost for an allow
+    /// entry.
     #[cfg(unix)]
     #[test]
     fn a_moved_sandbox_entry_means_to_the_sandbox_what_the_typed_entry_meant() {
         use bravebot_sandbox::rules::{Entry, List, Lists, Reason, State, resolve};
+        use std::path::Component;
 
         let scratch = crate::test_support::Scratch::new("resume-flags-sandbox-entries");
         let session = scratch.directory("session");
@@ -552,23 +532,35 @@ mod tests {
         };
         let in_force = |path: PathBuf| State::InForce(vec![path]);
         let climbs = State::Refused(Reason::Climbs);
-        let typed_values: Vec<(String, State)> = vec![
-            ("sub/../x".into(), in_force(session.join("x"))),
-            ("./x".into(), in_force(session.join("x"))),
-            ("a/b/../../c".into(), in_force(session.join("c"))),
-            ("x/".into(), in_force(session.join("x"))),
-            ("  sub/../x ".into(), in_force(session.join("x"))),
-            ("g/*/x".into(), in_force(session.join("g/one/x"))),
-            ("..".into(), climbs.clone()),
-            ("../x".into(), climbs.clone()),
-            ("sub/../../x".into(), climbs.clone()),
-            ("$HOME/x".into(), State::Refused(Reason::NamesAVariable)),
-            ("~/x".into(), in_force(home.join("x"))),
-            (absolute.display().to_string(), in_force(absolute.clone())),
-            (format!("{}/../p", absolute.display()), climbs),
+        // What the sandbox reads each typed value as, and whether the printed value keeps a `..`:
+        // it does for an entry that climbs, which keeps the `..` it was refused for, and for an
+        // entry whose `..` removes the only wildcard name, which is left as typed.
+        let typed_values: Vec<(String, State, bool)> = vec![
+            ("sub/../x".into(), in_force(session.join("x")), false),
+            ("./x".into(), in_force(session.join("x")), false),
+            ("a/b/../../c".into(), in_force(session.join("c")), false),
+            ("x/".into(), in_force(session.join("x")), false),
+            ("  sub/../x ".into(), in_force(session.join("x")), false),
+            ("g/*/x".into(), in_force(session.join("g/one/x")), false),
+            ("a/*/../x".into(), State::InForce(Vec::new()), true),
+            ("..".into(), climbs.clone(), true),
+            ("../x".into(), climbs.clone(), true),
+            ("sub/../../x".into(), climbs.clone(), true),
+            (
+                "$HOME/x".into(),
+                State::Refused(Reason::NamesAVariable),
+                false,
+            ),
+            ("~/x".into(), in_force(home.join("x")), false),
+            (
+                absolute.display().to_string(),
+                in_force(absolute.clone()),
+                false,
+            ),
+            (format!("{}/../p", absolute.display()), climbs, true),
         ];
 
-        for (typed, expected) in typed_values {
+        for (typed, expected, keeps_a_parent) in typed_values {
             let printed = sandbox_path_from(&typed, &session);
             for list in [
                 List::AllowRead,
@@ -594,8 +586,7 @@ mod tests {
             // An entry in force is written with no `..`, which the sandbox refuses in an absolute
             // one, and an entry it refused as climbing keeps the `..` it was refused for.
             assert_eq!(
-                holds_a_parent,
-                matches!(expected, State::Refused(Reason::Climbs)),
+                holds_a_parent, keeps_a_parent,
                 "{typed:?} printed as {printed:?}"
             );
         }
