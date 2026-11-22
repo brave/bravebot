@@ -851,6 +851,23 @@ impl EntryRead {
                 .skip(self.anchored)
                 .any(|part| part.as_os_str().to_string_lossy().contains(['*', '?']))
     }
+
+    /// Whether a name of the directory the entry is read from holds `*` or `?`.
+    ///
+    /// While the entry is read from that directory those are characters of a name. The matcher has
+    /// no escape, so in an absolute spelling of the same path they are a wildcard: a write list
+    /// refuses the entry as a glob, and a read list also matches the siblings the wildcard meets.
+    /// A relative entry of such a directory therefore has no absolute spelling that means what it
+    /// means. An absolute entry and one that starts at the home directory are not read from that
+    /// directory, so this is false for them.
+    pub fn anchor_holds_a_wildcard_character(&self) -> bool {
+        !self.absolute
+            && self
+                .path
+                .components()
+                .take(self.anchored)
+                .any(|part| part.as_os_str().to_string_lossy().contains(['*', '?']))
+    }
 }
 
 /// Read the spelling of an entry as the sandbox reads it, by name alone, or say why it names no
@@ -1532,6 +1549,41 @@ mod tests {
             let read = read_entry(spelled, Some(home), base).unwrap();
             assert_eq!(read.absolute, absolute, "{spelled:?}");
         }
+    }
+
+    /// SANDBOX-25: a `*` or `?` in a name of the directory an entry is read from is a character of
+    /// that name while the entry is read from there, and a wildcard in an absolute spelling of the
+    /// same path. [`EntryRead::anchor_holds_a_wildcard_character`] says which entries are read
+    /// that way. The regressions it rejects are a check of the entry's own wildcards in place of the
+    /// directory's, one that reads only the last name of the directory, and one that is true of an
+    /// absolute or home entry, whose anchor is not the directory it is read from.
+    #[cfg(unix)]
+    #[test]
+    fn a_wildcard_character_in_the_directory_an_entry_is_read_from_is_reported() {
+        let home = Path::new("/home/me");
+        for (base, spelled, expected) in [
+            ("/work/a?b", "x", true),
+            ("/work/a*b", "x", true),
+            ("/w?rk/sub", "x", true),
+            ("/work/a?b", "g/*/x", true),
+            ("/work/ab", "x", false),
+            ("/work/ab", "g/*/x", false),
+            ("/work/ab", "a/?/../x", false),
+            ("/work/a?b", "/abs/p", false),
+            ("/work/a?b", "~/notes", false),
+            ("/work/ab", "~/notes", false),
+        ] {
+            let read = read_entry(spelled, Some(home), Path::new(base)).unwrap();
+            assert_eq!(
+                read.anchor_holds_a_wildcard_character(),
+                expected,
+                "{spelled:?} read from {base:?}"
+            );
+        }
+        // A home entry is read from the home directory and not from `base`, so a wildcard character
+        // in the home directory's name is not one of the directory the entry is read from.
+        let read = read_entry("~/notes", Some(Path::new("/h?me")), Path::new("/work/ab")).unwrap();
+        assert!(!read.anchor_holds_a_wildcard_character());
     }
 
     /// The path [`one`] judges is the path [`read_entry`] returns, and the refusal is the one it

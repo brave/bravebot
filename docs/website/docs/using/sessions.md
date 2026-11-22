@@ -98,7 +98,10 @@ and for a `--sandbox-deny-read` or `--sandbox-deny-write` path that loses the re
 session moved to another directory with `/cd`, a relative `--sandbox-*` path is printed as the
 absolute entry it meant in the directory the session started in, with `.` and `..` resolved, and a
 relative `--settings` file is printed joined to the directory it was read from, so the line means
-the same from the new directory. On Windows a path with a
+the same from the new directory. A relative `--sandbox-*` entry of a session that started in a
+directory with `*` or `?` in a name cannot be written as an absolute path, because the sandbox
+reads those characters as a wildcard there. It is left off the command and a line after it names
+the flag and the entry, and the resumed session does not have it. On Windows a path with a
 backslash is quoted for a POSIX shell, which PowerShell and cmd do not read as one word. The other
 places that tell you to resume a session, such as the Sessions screen reopening one from another
 directory and the notes after `/branch`, `/handoff`, a manifest run and `sessions import`, name

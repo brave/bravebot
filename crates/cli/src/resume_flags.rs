@@ -74,12 +74,7 @@ impl Typed {
         if let Some(network) = self.run_network {
             words.extend(["--run-network".to_string(), network.name().to_string()]);
         }
-        for (flag, paths) in [
-            ("--sandbox-allow-read", &self.allow_read),
-            ("--sandbox-deny-read", &self.deny_read),
-            ("--sandbox-allow-write", &self.allow_write),
-            ("--sandbox-deny-write", &self.deny_write),
-        ] {
+        for (flag, paths) in self.path_lists() {
             for path in paths {
                 words.extend([flag.to_string(), path.clone()]);
             }
@@ -118,9 +113,36 @@ impl Typed {
         words
     }
 
+    /// The four `--sandbox-*` path flags and the entries typed for each.
+    fn path_lists(&self) -> [(&'static str, &Vec<String>); 4] {
+        [
+            ("--sandbox-allow-read", &self.allow_read),
+            ("--sandbox-deny-read", &self.deny_read),
+            ("--sandbox-allow-write", &self.allow_write),
+            ("--sandbox-deny-write", &self.deny_write),
+        ]
+    }
+
+    /// The flag and the entry of each `--sandbox-*` value that [`with_paths_made_absolute`] leaves
+    /// off the line for a session that started in `session_directory`, because no absolute
+    /// spelling of it means what it meant there ([`sandbox_path_from`]).
+    ///
+    /// [`with_paths_made_absolute`]: Typed::with_paths_made_absolute
+    pub(crate) fn entries_left_off(&self, session_directory: &Path) -> Vec<(&'static str, String)> {
+        self.path_lists()
+            .into_iter()
+            .flat_map(|(flag, paths)| {
+                paths
+                    .iter()
+                    .filter(|path| sandbox_path_from(path, session_directory).is_none())
+                    .map(move |path| (flag, path.clone()))
+            })
+            .collect()
+    }
+
     /// These flags for a session that moved, with each relative value of `--settings` and of the
     /// four `--sandbox-*` path flags written as the absolute path it was read as when the session
-    /// started.
+    /// started, and each entry that has no such path left off ([`Typed::entries_left_off`]).
     ///
     /// A relative value is read from a directory: the process's own, for `--settings`
     /// ([`settings_path_from`]), and the session's, for a sandbox path ([`sandbox_path_from`]). The
@@ -132,7 +154,7 @@ impl Typed {
         let from_the_session = |paths: &[String]| -> Vec<String> {
             paths
                 .iter()
-                .map(|path| sandbox_path_from(path, session_directory))
+                .filter_map(|path| sandbox_path_from(path, session_directory))
                 .collect()
         };
         Typed {
@@ -161,16 +183,16 @@ impl Typed {
     pub(crate) fn suffix(&self) -> String {
         self.words()
             .iter()
-            .map(|word| {
-                format!(
-                    " {}",
-                    bravebot_agent::confirm::printable_spelled_with_tab_pictured(
-                        &bravebot_tui::dropped::shell_word(word)
-                    )
-                )
-            })
+            .map(|word| format!(" {}", drawn(word)))
             .collect()
     }
+}
+
+/// `word` as one word of a shell, drawn so that no character of it moves the cursor.
+pub(crate) fn drawn(word: &str) -> String {
+    bravebot_agent::confirm::printable_spelled_with_tab_pictured(
+        &bravebot_tui::dropped::shell_word(word),
+    )
 }
 
 /// The entry `value` of a `--sandbox-*` list as the sandbox reads it from `directory`, written as
@@ -195,14 +217,20 @@ impl Typed {
 /// absolute entry holding a `..` is refused the same way. Resolving it would turn an entry that was
 /// refused into one that is in force.
 ///
+/// `None` for a relative entry read from a `directory` with a name that holds `*` or `?`. The
+/// sandbox reads those as characters of the name while the entry is read from there, and as a
+/// wildcard in an absolute spelling of the same path, which it has no escape for. `/work/a?b/x` is
+/// refused in a write list and matches `/work/aXb/x` in a read list, so no absolute entry means what
+/// `x` meant and none is printed ([`Typed::entries_left_off`] names the entries the line lacks).
+///
 /// A pure function of its arguments: nothing is read from the filesystem and no link is followed.
-pub(crate) fn sandbox_path_from(value: &str, directory: &Path) -> String {
+pub(crate) fn sandbox_path_from(value: &str, directory: &Path) -> Option<String> {
     use bravebot_sandbox::rules::{Reason, read_entry};
     let spelled = value.trim();
     if spelled.is_empty() {
-        return value.to_string();
+        return Some(value.to_string());
     }
-    match read_entry(spelled, None, directory) {
+    Some(match read_entry(spelled, None, directory) {
         // No home directory is named here, so a home entry is refused for want of one and is
         // printed as typed, which names the same place from every directory.
         Err(Reason::NoHome | Reason::NamesAVariable) => value.to_string(),
@@ -217,8 +245,9 @@ pub(crate) fn sandbox_path_from(value: &str, directory: &Path) -> String {
             }
         }
         Ok(read) if read.absolute || read.lost_its_wildcard() => value.to_string(),
+        Ok(read) if read.anchor_holds_a_wildcard_character() => return None,
         Ok(read) => read.path.to_string_lossy().into_owned(),
-    }
+    })
 }
 
 /// The `--settings` file `value` as the absolute path it names when read from `directory`, or as
@@ -485,7 +514,11 @@ mod tests {
             ("${HOME}/x", "${HOME}/x"),
             ("%USERPROFILE%/x", "%USERPROFILE%/x"),
         ] {
-            assert_eq!(sandbox_path_from(typed, from), expected, "{typed:?}");
+            assert_eq!(
+                sandbox_path_from(typed, from).as_deref(),
+                Some(expected),
+                "{typed:?}"
+            );
         }
     }
 
@@ -561,7 +594,7 @@ mod tests {
         ];
 
         for (typed, expected, keeps_a_parent) in typed_values {
-            let printed = sandbox_path_from(&typed, &session);
+            let printed = sandbox_path_from(&typed, &session).expect("an entry with a spelling");
             for list in [
                 List::AllowRead,
                 List::DenyRead,
@@ -714,6 +747,86 @@ mod tests {
                     "relative words",
                 ]))
         );
+    }
+
+    /// A session started in a directory with `*` or `?` in a name has no absolute spelling for a
+    /// relative sandbox entry: the sandbox reads `/work/a?b/x` as a pattern, refuses it in a write
+    /// list, and matches `/work/aXb/x` as well in a read list, and the matcher has no escape. Such
+    /// an entry is left off a moved line and named by `entries_left_off`, in the list it was typed
+    /// for, and nothing else is: an entry that is the same from every directory is printed as
+    /// typed, the other three flags' entries and the other flags are kept, and a directory with no
+    /// wildcard character prints every entry. The regressions it rejects are an absolute spelling
+    /// printed for the entry (a deny lost), an entry dropped without being named, an absolute or
+    /// home entry dropped with it, and a check of the entry's own wildcard in place of the
+    /// directory's.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_sandbox_entry_with_no_absolute_spelling_is_left_off_and_named() {
+        use bravebot_sandbox::rules::{Entry, Lists, Reason, State, resolve};
+
+        for directory in ["/work/a?b", "/work/a*b", "/w?rk/sub"] {
+            let from = Path::new(directory);
+            for typed in ["x", "sub/../x", "g/*/x", "./y"] {
+                assert_eq!(
+                    sandbox_path_from(typed, from),
+                    None,
+                    "{typed:?} in {directory}"
+                );
+            }
+            for typed in [
+                "/abs/p", "~/notes", "~", "$HOME/x", "", "a/*/../x", "..", "../x",
+            ] {
+                assert!(
+                    sandbox_path_from(typed, from).is_some(),
+                    "{typed:?} in {directory}"
+                );
+            }
+        }
+        for typed in ["x", "g/*/x", "sub/../x"] {
+            assert!(sandbox_path_from(typed, Path::new("/work/ab")).is_some());
+        }
+
+        // The absolute spelling that is not printed is the one the sandbox reads as a pattern.
+        let mut lists = Lists::default();
+        lists.deny_write.push(Entry {
+            path: "/work/a?b/x".to_string(),
+            by: None,
+            pinned: false,
+            from_a_checkout: false,
+        });
+        let judged = resolve(&lists, None, None, Path::new("/work/a?b"));
+        assert_eq!(
+            judged.items()[0].state,
+            State::Refused(Reason::GlobOnAWrite)
+        );
+
+        let typed = Typed {
+            allow_read: vec!["r".into()],
+            deny_read: vec!["/abs".into(), "d".into()],
+            deny_write: vec!["w".into(), "~/h".into()],
+            safe: true,
+            ..Typed::default()
+        };
+        let directory = Path::new("/work/a?b");
+        assert_eq!(
+            typed.entries_left_off(directory),
+            vec![
+                ("--sandbox-allow-read", "r".to_string()),
+                ("--sandbox-deny-read", "d".to_string()),
+                ("--sandbox-deny-write", "w".to_string()),
+            ]
+        );
+        assert_eq!(
+            typed.with_paths_made_absolute(directory).words(),
+            spelled(&[
+                "--sandbox-deny-read",
+                "/abs",
+                "--sandbox-deny-write",
+                "~/h",
+                "--safe",
+            ])
+        );
+        assert!(typed.entries_left_off(Path::new("/work/ab")).is_empty());
     }
 
     /// A session started with none of these flags repeats none, so the line is what it was before

@@ -2765,19 +2765,35 @@ fn end_the_session(
 ///
 /// Where the session moved the line is run from another directory, so each relative value of
 /// `--settings` and of the four `--sandbox-*` path flags is written as the absolute path it was read
-/// as when the session started, which `started_in` is for the sandbox paths.
+/// as when the session started, which `started_in` is for the sandbox paths. A sandbox entry that
+/// no absolute path can carry, because the directory it was read from has `*` or `?` in a name, is
+/// left off the command and named on a line after it.
 fn resume_hint(left: &Resumable, started_in: &Path, flags: &resume_flags::Typed) -> String {
-    let (heading, suffix) = match left.directory == started_in {
-        true => (t!(cli_resume_heading).to_string(), flags.suffix()),
+    let (heading, suffix, not_carried) = match left.directory == started_in {
+        true => (
+            t!(cli_resume_heading).to_string(),
+            flags.suffix(),
+            Vec::new(),
+        ),
         false => (
             t!(
                 cli_resume_moved,
                 directory = progress::printable_path(&left.directory)
             ),
             flags.with_paths_made_absolute(started_in).suffix(),
+            flags.entries_left_off(started_in),
         ),
     };
-    format!("{heading}\nbravebot --resume {}{suffix}", left.id)
+    let mut hint = format!("{heading}\nbravebot --resume {}{suffix}", left.id);
+    for (flag, entry) in not_carried {
+        hint.push('\n');
+        hint.push_str(&t!(
+            cli_resume_entry_not_carried,
+            flag = flag,
+            entry = resume_flags::drawn(&entry)
+        ));
+    }
+    hint
 }
 
 /// Say how to resume `left` to `out`, the stream the person reads the result on.
@@ -3035,6 +3051,50 @@ mod tests {
             ),
             "{hint}"
         );
+    }
+
+    /// SESSION-8: an entry that no absolute path can carry, because the session's directory has `?`
+    /// in a name, is not on the command and is named on a line after it, and only on the line of a
+    /// session that moved, since one that stayed prints the entry as typed. The regressions it
+    /// rejects are an absolute spelling the sandbox reads as a pattern, an entry dropped with no
+    /// word about it, and the same line printed where the session stayed.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_no_absolute_path_can_carry_is_named_after_the_command_where_the_session_moved() {
+        let flags = resume_flags::Typed {
+            deny_write: vec!["out".to_string(), "/abs".to_string()],
+            safe: true,
+            ..resume_flags::Typed::default()
+        };
+        let moved = Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/other"),
+        };
+        let stayed = Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/work/a?b"),
+        };
+
+        let hint = resume_hint(&moved, Path::new("/work/a?b"), &flags);
+        let lines: Vec<&str> = hint.lines().collect();
+        assert_eq!(
+            lines.get(1),
+            Some(&"bravebot --resume abc --sandbox-deny-write /abs --safe"),
+            "{hint}"
+        );
+        assert_eq!(lines.len(), 3, "{hint}");
+        assert!(
+            lines[2].contains("--sandbox-deny-write out") && lines[2].starts_with("Not repeated"),
+            "{hint}"
+        );
+
+        let hint = resume_hint(&stayed, Path::new("/work/a?b"), &flags);
+        assert_eq!(
+            hint.lines().last(),
+            Some("bravebot --resume abc --sandbox-deny-write out --sandbox-deny-write /abs --safe"),
+            "{hint}"
+        );
+        assert_eq!(hint.lines().count(), 2, "{hint}");
     }
 
     /// SESSION-8: the person sees the line on the stream the interface left them looking at, with

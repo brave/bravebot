@@ -359,9 +359,15 @@ entry whose `..` removes the only name that holds a wildcard (`a/*/../x`) is jud
 a pattern with no wildcard left, which a write list refuses and a read list matches nothing with
 whichever directory it is read from, and is printed as typed. An absolute value and one that starts
 with `~` names the same place from every directory and is printed as typed. One that starts with a
-variable is refused when typed, is printed as typed and is refused again. The reading is
-`bravebot_sandbox::rules::read_entry`, the function the sandbox judges an entry with, so the line
-holds no second copy of it.
+variable is refused when typed, is printed as typed and is refused again. A relative entry read
+from a directory with `*` or `?` in a name has no absolute spelling: the sandbox reads those
+characters as a name while the entry is read from the directory and as a wildcard in an absolute
+path, which has no escape, so `/work/a?b/x` is refused in a write list and matches `/work/aXb/x`
+in a read list. That entry is left off the command, and a line after it names the flag and the
+entry and says the resumed session does not have it. The reading is
+`bravebot_sandbox::rules::read_entry`, the function the sandbox judges an entry with, and
+`EntryRead::anchor_holds_a_wildcard_character` says which entries are read that way, so the line
+holds no second copy of either.
 
 A relative `--settings` value is read from the directory the process was in when the flags were
 read. Where the session moved it is joined to that directory with any `..` in place, which names the
@@ -399,6 +405,9 @@ keeps no mode ([MODE-10](permission-modes.md#MODE-10)), so the line says the fla
 `verified-by: bravebot_cli::resume_flags::the_log_level_is_repeated_in_the_spelling_the_flag_parses`
 `verified-by: bravebot_cli::resume_flags::a_relative_sandbox_entry_is_written_as_the_absolute_entry_the_sandbox_reads_it_as`
 `verified-by: bravebot_cli::resume_flags::a_moved_sandbox_entry_means_to_the_sandbox_what_the_typed_entry_meant`
+`verified-by: bravebot_cli::resume_flags::a_relative_sandbox_entry_with_no_absolute_spelling_is_left_off_and_named`
+`verified-by: bravebot_cli::main::an_entry_no_absolute_path_can_carry_is_named_after_the_command_where_the_session_moved`
+`verified-by: bravebot_sandbox::rules::a_wildcard_character_in_the_directory_an_entry_is_read_from_is_reported`
 `verified-by: bravebot_cli::resume_flags::a_settings_path_is_joined_to_the_directory_it_was_read_from`
 `verified-by: bravebot_cli::resume_flags::a_moved_session_names_each_relative_path_as_it_was_read_when_it_started`
 `verified-by: bravebot_cli::resume_flags::a_session_started_with_no_flag_repeats_none`

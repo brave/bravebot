@@ -442,6 +442,9 @@ cli-resume-heading = Reprenez cette session avec :
 # Quand /cd a déplacé la session, le shell où ceci s'affiche n'est pas là où se trouve
 # l'enregistrement, et --resume cherche un identifiant sous le répertoire où il est lancé.
 cli-resume-moved = Cette session s'est déplacée vers { $directory }. Reprenez-la depuis là avec :
+# Une entrée du bac à sable lue depuis un répertoire dont un nom contient `*` ou `?` n'a pas
+# d'écriture absolue : le bac à sable lit ce caractère comme un joker dans un chemin absolu, sans échappement.
+cli-resume-entry-not-carried = Non reprise : { $flag } { $entry }. Elle était lue depuis un répertoire dont le nom contient `*` ou `?`, et aucun chemin absolu ne désigne cet endroit pour le bac à sable, donc la session reprise ne l'a pas.
 
 
 ## L'état de la configuration et du confinement
