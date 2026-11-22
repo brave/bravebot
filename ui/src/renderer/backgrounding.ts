@@ -50,10 +50,11 @@ export async function stopBackground(
   try {
     const answer = await ask(id)
     if (answer.stopped === 'not-running') {
-      return { toast: { title: 'Not running', body: 'This background session had already ended. Its conversation is kept.' } }
+      return { toast: { title: 'Not running', body: 'It had already ended. Its chat is kept.' } }
     }
     return {
-      toast: { title: 'Stopped', body: `Its conversation is kept. Join it again with: bravebot attach ${shortId(id)}` },
+      // One line in the toast, so it is no longer than the hand-over's.
+      toast: { title: 'Stopped', body: `Its chat is kept. Join it with: bravebot attach ${shortId(id)}` },
     }
   } catch (error) {
     return { problem: error instanceof RequestFailed ? error.reason : String(error) }

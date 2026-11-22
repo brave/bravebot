@@ -178,7 +178,7 @@ test('stopping a background session says it stopped and names the start of its i
   const stopped = await stopBackground(async (each) => { asked.push(each); return { stopped: 'stopped' } }, id)
   assert.deepEqual(asked, [id])
   assert.equal(stopped.toast.title, 'Stopped')
-  assert.equal(stopped.toast.body, 'Its conversation is kept. Join it again with: bravebot attach 01234567')
+  assert.equal(stopped.toast.body, 'Its chat is kept. Join it with: bravebot attach 01234567')
   assert.doesNotMatch(stopped.toast.body, /89abcdef/)
 
   const idle = await stopBackground(async () => ({ stopped: 'not-running' }), id)

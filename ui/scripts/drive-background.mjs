@@ -3,7 +3,9 @@
 // picker are substituted. It checks that the item asks to confirm, that confirming closes the chat
 // and shows a toast naming the start of its id, that `bravebot sessions --json` lists the record as
 // running in the background, and that opening the chat again from the list is refused with the
-// held-by-background sentence. Unix only, since background sessions run only there.
+// held-by-background sentence. Then it checks that the row's Stop Background Session stops it, that
+// `bravebot sessions --json` lists it as stopped, and that the chat opens again (BG-11). Unix only,
+// since background sessions run only there.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
@@ -126,6 +128,42 @@ try {
   await page.waitForTimeout(200)
   await page.screenshot({ path: join(shots, 'background-reopen-refused-light.png') })
   console.log('PASS: opening it from the list is refused with the held-by-background sentence')
+
+  // 6. The row's right-click menu stops the background session and keeps the record (BG-11). A
+  // real popup is modal, so `popup` records the items the main process built and chooses one.
+  await app.evaluate(({ Menu }) => {
+    globalThis.__pops = []
+    Menu.prototype.popup = function popup() {
+      globalThis.__pops.push(this.items.map((each) => each.id))
+      const item = this.items.find((each) => each.id === 'context.session.stop-background')
+      if (item) item.click()
+    }
+  })
+  await problem.getByRole('button').first().click()
+  await problem.waitFor({ state: 'detached' })
+  const row = page.locator('.session-row').filter({ hasText: title }).first()
+  assert.equal(await row.locator('.session-status').getAttribute('data-tooltip'), 'Running in the background')
+  for (const name of ['light', 'dark']) {
+    await theme(name)
+    await page.waitForTimeout(200)
+    await row.screenshot({ path: join(shots, `background-row-${name}.png`) })
+  }
+  await row.locator('button.session').click({ button: 'right' })
+  const stoppedToast = page.getByText(`Its chat is kept. Join it with: bravebot attach ${id.slice(0, 8)}`)
+  await stoppedToast.waitFor({ timeout: 30000 })
+  assert.deepEqual(await app.evaluate(() => globalThis.__pops), [['context.session.copy-path', 'context.session.stop-background']])
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: join(shots, 'background-stopped-dark.png') })
+  await theme('light')
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: join(shots, 'background-stopped-light.png') })
+  const after = JSON.parse(cli('sessions', '--json'))
+  const stopped = (Array.isArray(after) ? after : after.sessions ?? []).find((each) => each.id === id)
+  assert.equal(stopped?.state, 'stopped', `bravebot sessions lists ${id} as stopped: ${JSON.stringify(after).slice(0, 400)}`)
+  await until(async () => (await row.locator('.session-status').getAttribute('data-tooltip')) !== 'Running in the background', 'the row no longer says it runs in the background')
+  await page.locator('.session-name', { hasText: title }).first().click()
+  await composer.waitFor({ timeout: 20000 })
+  console.log('PASS: Stop Background Session stops it, bravebot sessions lists it stopped, and the chat opens again')
 
   assert.deepEqual(world.errors, []); assert.deepEqual(failures, [])
   console.log(`PASS: Continue in Background… against the real bridge; screenshots in ${shots}`)
