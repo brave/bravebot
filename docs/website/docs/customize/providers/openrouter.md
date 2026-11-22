@@ -38,7 +38,8 @@ It asks for the key with nothing shown as you type it, and keeps it in
 where none names `openrouter`, the sign-in adds `"provider": {"openrouter": {}}` to your settings,
 which reaches `openrouter.ai` and names no variable. [Signing in](../signing-in.md#gateway) has the
 details. Where more than one source of the key is present, a variable wins, then the stored
-key, then `options.apiKey` ([The credential](openai-compatible.md#the-credential)).
+key, then the file `options.keyFile` names, then `options.apiKey`
+([The credential](openai-compatible.md#the-credential)).
 
 ## Which models are offered
 

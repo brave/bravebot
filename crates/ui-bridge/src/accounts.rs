@@ -151,6 +151,7 @@ fn worded(row: &Row, config: &Result<Config, ConfigError>) -> Value {
     let key_from = match &row.standing {
         Standing::SignedIn(Held::KeyStored) => Some("stored"),
         Standing::SignedIn(Held::KeyFromEnvironment) => Some("environment"),
+        Standing::SignedIn(Held::KeyFromFile) => Some("file"),
         Standing::SignedIn(Held::KeyNotNeeded) => Some("none"),
         _ => None,
     };
@@ -222,6 +223,15 @@ fn detail(standing: &Standing) -> Option<String> {
     };
     let said: &str = match why {
         Why::NothingStored | Why::GatewayNoneStored | Why::NoAwsAccount => return None,
+        Why::GatewayKeyFileUnusable(fault) => {
+            return Some(
+                t!(
+                    desktop_accounts_gateway_key_file_unusable,
+                    reason = bravebot_agent::backend::key_file_fault_said(*fault)
+                )
+                .to_string(),
+            );
+        }
         Why::Nowhere => t!(desktop_accounts_nowhere),
         Why::BraveUnreadable { .. } => t!(desktop_accounts_brave_unreadable),
         Why::ChatGpt(_) => t!(desktop_accounts_chatgpt_unreadable),

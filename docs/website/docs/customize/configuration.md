@@ -322,7 +322,7 @@ one thing leaves everything else in force:
 | `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `run.scrubEnv` | your own file and the file `--settings` names, whose entries are kept together; a project or local file's list is ignored and reported, and the rest of its `run` block is read as before |
 | `permissions.allow` | your own file's entries, the file `--settings` names, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution`, `webSearch.keyFile` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution`, `webSearch.keyFile`, `webSearch.env` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and the file `--settings` names; a project or local file's block is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -384,6 +384,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
 | `webSearch.keyFile` | the file holding a Brave Search API key, which turns on the `web_search` tool. Your own file and the file `--settings` names only ([below](#websearchkeyfile)) |
+| `webSearch.env` | the variables a Brave Search API key may be read from, which turn on the `web_search` tool. Your own file and the file `--settings` names only ([below](#websearchenv)) |
 | `planModel` | the model a turn that begins in plan mode runs on ([below](#planmodel)) |
 | `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
 | `commitMessage.instructions` | the format `/commit-message` follows when none is typed ([below](#commitmessageinstructions)) |
@@ -399,7 +400,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)); `permissions.startInAuto` opens sessions in the auto mode ([below](#permissionsstartinauto)) |
-| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
+| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)). A gateway's token can be named in `env`, stored with `bravebot auth login gateway`, held in a file `options.keyFile` names, or written as `options.apiKey` ([the credential](providers/openai-compatible.md#the-credential)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([details](../security/sandbox.md#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([details](../security/sandbox.md#runnetwork)) |
 | `sandbox.network.allowedHosts`, `deniedHosts`, `onUnlisted` | the hosts a program the agent runs may reach ([details](../security/sandbox.md#sandboxnetwork)) |
@@ -609,15 +610,48 @@ other.** The model is sent the files a processor reads, so a `.bravebot/settings
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
+### `webSearch.env`
+
+```json
+{ "webSearch": { "env": ["BRAVE_SEARCH_API_KEY"] } }
+```
+
+The variables that may hold your Brave Search API key, tried in the order written. The first one that
+holds text is the key, and one that is unset or holds only spaces is passed over. A variable that holds
+text is used before the file `webSearch.keyFile` names, and either one offers the
+[`web_search`](../reference/tools.md#web_search) tool. With neither, the tool is not offered.
+
+The variable is read when a search is made, so exporting a new key in a session that is already open
+takes effect for the next search. The tool is on the model's list from the start of a turn: a variable
+you export in the middle of a turn is offered from the next turn, and one you remove in the middle of a
+turn leaves the tool listed, and the search is reported as having no usable key.
+
+A variable that holds text that is not a key is refused, and the key file is not used in its place.
+The text is held to the same rules as a key file's: at most 4,096 bytes of ASCII with no space inside
+it, and a trailing newline is fine.
+
+The variables you name are withheld from every program the `run` tool starts, in the way the variable
+a [provider block's](providers/openai-compatible.md) `env` names is, since a program the tool starts
+inherits the environment of bravebot and a key held there would be handed to each of them. The model is
+told that some variables are withheld and is never told which. `bravebot doctor` says whether the key
+would come from a variable or from the file, naming the variable by its place in the list and never by
+its name, and never prints the key.
+
+**The list is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names it is ignored and
+reported by `bravebot doctor`, so a repository you cloned cannot choose which of your variables is sent
+to a host, or which are kept from your programs. An entry that is blank or is not a string is dropped.
+
 ### `webSearch.keyFile`
 
 ```json
 { "webSearch": { "keyFile": "/Users/you/.config/brave-search-key.txt" } }
 ```
 
-The file that holds your Brave Search API key. Naming a file that exists is what offers the
-[`web_search`](../reference/tools.md#web_search) tool, and with no setting, or a name that is not a
-file, the tool is not offered.
+The file that holds your Brave Search API key. Naming a file that exists offers the
+[`web_search`](../reference/tools.md#web_search) tool, as a variable named in
+[`webSearch.env`](#websearchenv) that holds text does, and with no variable, no setting, or a name that
+is not a file, the tool is not offered. A variable that holds text is used before this file.
 
 To set it up:
 
@@ -626,18 +660,19 @@ To set it up:
    and nothing else: at most 4,096 bytes of ASCII with no space inside it, and a final newline is fine.
 3. Write the absolute path of that file as `webSearch.keyFile` in `~/.bravebot/settings.json`.
 
-There is no command that takes the key and no environment variable that carries it, since a key typed
-on a command line is readable by every account on the machine. The key is read from the file when a
-search is made and goes in one request header to `api.search.brave.com`. It is not in the query, in a
-result, in the trail or in anything the model is sent.
+No command takes the key, because a key typed on a command line is readable by every account on the
+machine. The key is read when a search is made and goes in one request header to
+`api.search.brave.com`. It is not in the query, in a result, in the trail or in anything the model is
+sent.
 
-`bravebot doctor` has a `web search` line that says whether a key file is configured and whether it
-exists, and prints the path you wrote and never the key. Its list of credentials names the key at
-tier Held, with the dashboard as the place that revokes it: removing the setting or the file stops this
-machine using the key and leaves it working at Brave until you revoke it there.
+`bravebot doctor` has a `web search` line that says which source the key would come from, and prints
+the path you wrote for a file and never the key. Its list of credentials names the key at tier Held,
+with the dashboard as the place that revokes it: unsetting the variable, removing the setting or
+removing the file stops this machine using the key and leaves it working at Brave until you revoke it
+there.
 
-**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
-other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
+**The key file is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from
+no other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
 reported by `bravebot doctor`, so a repository you cloned cannot choose which file on your machine is
 sent to a host. The value must be an absolute path.
 
@@ -1782,10 +1817,10 @@ has the variables, the signing in, and the assumed context window.
 ## Reaching an OpenAI-compatible gateway
 
 A `provider` block in a settings file names a gateway, the models it offers, the variable that
-holds its credential and any extra headers its requests carry. It is opencode's block, so one copied
+holds its credential or the file `options.keyFile` names, and any extra headers its requests carry. It is opencode's block, so one copied
 from `opencode.json` works unedited, and a local Ollama needs no key.
 [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
-has the fields, the credential, the headers, which models are offered, and how to name one.
+has the fields, [the credential](providers/openai-compatible.md#the-credential), the headers, which models are offered, and how to name one.
 
 OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
 needs no `baseURL`. [OpenAI](providers/openai.md) has the details, including which

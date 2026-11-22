@@ -1116,7 +1116,10 @@ be read. `auth status import` is refused, since an import keeps no sign-in. `aut
 asks about each gateway a provider block names and about a service whose key is stored with no block
 naming it, and `auth status gateway openai` asks about that id whether or not a block names it. A
 key stored for `openai`, `openrouter` or `anthropic` with no block naming it is reported as not
-signed in, since no session sends it, and `auth login gateway <id>` records the block.
+signed in, since no session sends it, and `auth login gateway <id>` records the block. A block that
+names an `options.keyFile` that gives no key is reported as not signed in, with the file named only
+as the setting, and storing a key with `auth login gateway <id>` makes the stored key win over the
+file. The desktop accounts list says the same.
 
 ## `import-leo-creds`
 

@@ -97,8 +97,8 @@ pub(super) fn arming_under(task: &Task, watch_file_allowed: bool) -> crate::watc
 /// servers are rooted at the working directory, and a path in the checkout is outside it
 /// (CHECKOUT-20).
 ///
-/// `offers_web_search` is whether a key file is configured, which is what puts `web_search` on the
-/// planner's list (WEBSEARCH-4).
+/// `offers_web_search` is whether a variable `webSearch.env` names holds text or a key file is
+/// configured, which is what puts `web_search` on the planner's list (WEBSEARCH-4).
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"

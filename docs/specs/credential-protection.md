@@ -285,12 +285,13 @@ whatever its tier, which is why the record reaches past the two tiers CRED-25 as
 
 **What stands where.** Every credential the record holds stands at Held: the signing key, the AWS
 credentials, a gateway's token, the premium key, the search key and the ChatGPT and xAI sign-ins. The
-search key is the file `webSearch.keyFile` names, which a person got from the Brave Search API
+search key is the first variable `webSearch.env` names that holds text, or else the file
+`webSearch.keyFile` names, which a person got from the Brave Search API
 dashboard: its walk drops at all three gates as the premium key's does, each recorded as one nobody
 attempted, since the dashboard issues one key, this program presents it itself with nothing deciding a
 use, and nothing here has asked the dashboard for a narrower or shorter one. Revoking it in the
-dashboard is the only thing that ends it, and removing the setting or the file ends this machine's
-custody and leaves the key working. The premium key's
+dashboard is the only thing that ends it, and unsetting the variable or removing the setting or the
+file ends this machine's custody and leaves the key working. The premium key's
 walk drops at all three gates, each recorded as one nobody attempted, as a gateway token's does: the
 premium host issues one key, this program presents it itself with nothing deciding a use, and nothing
 here has asked that host for a narrower or a shorter one. It has no figure for how quickly a leak
@@ -306,6 +307,7 @@ tiers a credential can stand at, and none does.
 `verified-by: bravebot_cli::running::doctor_names_the_tier_of_every_credential_it_accounts_for`
 `verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
 `verified-by: bravebot_config::lib::a_search_key_is_held_exactly_when_web_search_is_offered`
+`verified-by: bravebot_config::lib::a_search_key_from_a_variable_is_held_without_a_file`
 
 <a id="CRED-3"></a>
 ### CRED-3: a gate fails only for a stated reason, and dropping pays what the gate says it costs
@@ -1146,7 +1148,10 @@ program as an argument. Where a program must receive one, it arrives by environm
 descriptor, or in a file the program is told to read; where the authority can perform the action,
 none of those is needed. A key typed in the desktop window's key window goes from its main process
 to the bridge on the bridge's standard input, in a request no client of the bridge but the main
-process may send, and is never an argument of the bridge or of anything it starts.
+process may send, and is never an argument of the bridge or of anything it starts. The variables a
+provider's `env` and `webSearch.env` name are the environment route this clause allows: this program
+reads the key from them itself, and [RUN-12](tools/run.md#RUN-12) withholds them from every program it
+starts.
 
 **Why.** A command line is world-readable while the process lives: `/proc/<pid>/cmdline` on Linux,
 and `ps` on every platform. The environment is covered by [RUN-12](tools/run.md#RUN-12) because a
@@ -1189,9 +1194,17 @@ one ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6), [XAI-12](xai-sign-in.md#XAI-12))
 rather than from the configuration, since the file is held on every machine that made a sign-in. A gateway key stored with `bravebot auth login gateway`
 is named as stored, since neither the environment nor a settings file shows where it came from, and
 the account of ending it names `bravebot auth logout gateway` beside revoking it at the gateway. A
-file of those keys it cannot read is named, and the report ends on the failure status, since every
-key in the file has stopped being sent. A scan reaching it later reads that record rather than
-writing a second one.
+gateway token read from the file `options.keyFile` names is accounted for like the others: the key is
+named as found in that file and never printed, and the account says that removing the file, as well
+as deleting the value from the settings file, unsetting the variable or running `bravebot auth logout
+gateway`, ends this machine's custody and leaves the token live at the gateway until it is revoked
+there. A file of those keys it cannot read is named, and the report ends on the failure status, since every
+key in the file has stopped being sent. The
+search key is named by the source it came from: the variable `webSearch.env` names or the file
+`webSearch.keyFile` names, and the account says that unsetting the variable or removing the setting or
+the file ends this machine's custody and that the key keeps working at Brave until it is revoked in the
+Brave Search API dashboard, which is the only surface that revokes it. A scan reaching it later reads
+that record rather than writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
 `verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
@@ -1203,6 +1216,8 @@ writing a second one.
 `verified-by: bravebot_cli::doctor::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
 `verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_cli::doctor::a_stored_gateway_key_is_named_as_stored_and_never_printed`
+`verified-by: bravebot_cli::doctor::the_account_of_a_gateway_token_names_a_key_file_as_a_source_that_ends_custody`
+`verified-by: bravebot_config::lib::a_gateway_key_file_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_cli::running::doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_config::lib::an_xai_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_cli::xai_sign_in::doctor_names_an_xai_sign_in_by_its_expiry_and_prints_none_of_it`

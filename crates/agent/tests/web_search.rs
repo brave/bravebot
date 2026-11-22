@@ -189,6 +189,23 @@ fn a_turn_with<C: Confirmer + Send>(
     confirmer: &mut C,
     received: &mpsc::Receiver<String>,
 ) -> Vec<String> {
+    a_turn_reporting(
+        config,
+        task,
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        received,
+    )
+}
+
+/// [`a_turn_with`] for any reporter, so a test can act at the moment a call is announced.
+fn a_turn_reporting<C: Confirmer + Send, R: bravebot_agent::report::Reporter + Send>(
+    config: &Config,
+    task: Task,
+    confirmer: &mut C,
+    reporter: &mut R,
+    received: &mpsc::Receiver<String>,
+) -> Vec<String> {
     // One directory for each turn: tests run in parallel, and a shared name has one test remove the
     // directory another is using.
     static TURNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -206,7 +223,7 @@ fn a_turn_with<C: Confirmer + Send>(
         &task,
         &mut Conversation::new(),
         confirmer,
-        &mut bravebot_agent::report::RecordingReporter::default(),
+        reporter,
         &mut RecordingSink::new(),
         trust,
         TrustedPrograms::new(),
@@ -769,4 +786,346 @@ fn an_unusable_key_file_is_reported_before_a_question_without_its_path_or_conten
     );
     assert!(asked.searches.is_empty());
     assert!(heads.recv_timeout(Duration::from_millis(300)).is_err());
+}
+
+/// Serialises the tests below, which set variables of this process, and restores what was there.
+static VARIABLES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Holds a variable of the process for a test and puts it back as it was. Every test that uses one
+/// names a variable of its own, so two of them running side by side read no one else's value.
+struct Exported {
+    name: &'static str,
+    before: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+fn export(name: &'static str, value: &str) -> Exported {
+    let lock = VARIABLES.lock().unwrap_or_else(|e| e.into_inner());
+    let before = std::env::var_os(name);
+    // SAFETY: held under the lock above, with a name no other test uses, and restored on drop.
+    unsafe { std::env::set_var(name, value) };
+    Exported {
+        name,
+        before,
+        _lock: lock,
+    }
+}
+
+impl Drop for Exported {
+    fn drop(&mut self) {
+        // SAFETY: still under the lock this guard holds.
+        match &self.before {
+            Some(value) => unsafe { std::env::set_var(self.name, value) },
+            None => unsafe { std::env::remove_var(self.name) },
+        }
+    }
+}
+
+/// A configuration whose key comes from the variables `names`, and from `key_file` where one is
+/// given, with the stand-in index as the host.
+fn searching_with(
+    endpoint: &str,
+    names: &[&str],
+    key_file: Option<&std::path::Path>,
+    index: &str,
+) -> Config {
+    let config = config_for(endpoint)
+        .with_web_search_env(names)
+        .with_web_search_base(index);
+    match key_file {
+        Some(path) => config.with_web_search_key_file(path),
+        None => config,
+    }
+}
+
+/// The head of the one request the stand-in index was sent, in lower case.
+fn the_request_sent(heads: &mpsc::Receiver<String>) -> String {
+    heads
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the request went out")
+        .to_lowercase()
+}
+
+/// The planner bodies hold neither the key nor a variable's name.
+fn assert_nothing_of_the_variable_reached_the_planner(
+    bodies: &[String],
+    name: &str,
+    values: &[&str],
+) {
+    for body in bodies {
+        assert!(
+            !body.contains(name),
+            "a variable's name reached the planner"
+        );
+        for value in values {
+            assert!(!body.contains(value), "a key reached the planner");
+        }
+    }
+}
+
+/// S2, S3: a variable that holds text offers the tool with no key file at all, and the key reaches
+/// the request in the one header and nowhere else: not the URL, not the planner. The faults this
+/// rejects are offering the tool by the file alone, which leaves the setting doing nothing by
+/// itself, and putting the key anywhere but the header.
+#[test]
+fn a_variable_alone_offers_the_tool_and_the_key_reaches_only_the_header() {
+    const NAME: &str = "BRAVEBOT_TEST_SEARCH_KEY_ALONE";
+    let _held = export(NAME, KEY);
+    let (index, heads) = serve_the_index(vec![json_results("{}")]);
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
+    let mut asked = Asked::answering(Decision::Approve);
+
+    let bodies = a_turn(
+        &searching_with(&endpoint, &[NAME], None, &index),
+        Task::new("search"),
+        &mut asked,
+        &received,
+    );
+
+    assert!(
+        bodies[0].contains("\"web_search\""),
+        "a variable that holds text did not offer the tool"
+    );
+    let head = the_request_sent(&heads);
+    assert_eq!(head.matches(&KEY.to_lowercase()).count(), 1, "{head}");
+    assert!(
+        head.contains(&format!("x-subscription-token: {}", KEY.to_lowercase())),
+        "{head}"
+    );
+    assert!(!head.lines().next().unwrap().contains(&KEY.to_lowercase()));
+    assert_nothing_of_the_variable_reached_the_planner(&bodies, NAME, &[KEY]);
+}
+
+/// S3: variables that hold nothing, and a variable that is not set, offer no tool, and the name is
+/// answered as an unknown tool. The fault this rejects is offering the tool because a variable is
+/// named, which sends a planner after a tool that can only fail.
+#[test]
+fn variables_that_hold_nothing_do_not_offer_the_tool() {
+    const UNSET: &str = "BRAVEBOT_TEST_SEARCH_KEY_UNSET";
+    const BLANK: &str = "BRAVEBOT_TEST_SEARCH_KEY_BLANK";
+    let _held = export(BLANK, "   ");
+    let (index, heads) = serve_the_index(vec![json_results("{}")]);
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
+
+    let bodies = a_turn(
+        &searching_with(&endpoint, &[UNSET, BLANK], None, &index),
+        Task::new("search"),
+        &mut Asked::answering(Decision::Approve),
+        &received,
+    );
+
+    assert!(
+        !bodies[0].contains("\"web_search\""),
+        "variables that hold nothing offered the tool"
+    );
+    assert!(told(&bodies).contains("no such tool"), "{}", told(&bodies));
+    assert!(heads.recv_timeout(Duration::from_millis(300)).is_err());
+}
+
+/// S2: a variable that holds text beats a key file, and the file's key is sent nowhere. The fault
+/// this rejects is reading the file first, which leaves a key exported for one session outranked
+/// by a file left in the settings.
+#[test]
+fn a_variable_beats_the_key_file() {
+    const NAME: &str = "BRAVEBOT_TEST_SEARCH_KEY_BEATS_FILE";
+    const FROM_THE_FILE: &str = "placeholder-search-key-from-the-file";
+    let _held = export(NAME, KEY);
+    let scratch = Scratch::new("search-variable-beats-file");
+    let file = scratch.path.join("key.txt");
+    std::fs::write(&file, FROM_THE_FILE).unwrap();
+    let (index, heads) = serve_the_index(vec![json_results("{}")]);
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
+
+    let bodies = a_turn(
+        &searching_with(&endpoint, &[NAME], Some(&file), &index),
+        Task::new("search"),
+        &mut Asked::answering(Decision::Approve),
+        &received,
+    );
+
+    let head = the_request_sent(&heads);
+    assert!(
+        head.contains(&format!("x-subscription-token: {}", KEY.to_lowercase())),
+        "the variable's key was not sent: {head}"
+    );
+    assert!(
+        !head.contains(FROM_THE_FILE),
+        "the file's key was sent although a variable held one: {head}"
+    );
+    assert_nothing_of_the_variable_reached_the_planner(&bodies, NAME, &[KEY, FROM_THE_FILE]);
+}
+
+/// S2: with the variable unset the key file answers, so the setting adds a source and takes none
+/// away. The fault this rejects is a search that needs a variable once one is named.
+#[test]
+fn the_key_file_answers_where_no_named_variable_holds_text() {
+    const NAME: &str = "BRAVEBOT_TEST_SEARCH_KEY_FALLBACK";
+    let (_keep, file) = a_key_file("search-file-fallback");
+    let (index, heads) = serve_the_index(vec![json_results("{}")]);
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
+    let lock = VARIABLES.lock().unwrap_or_else(|e| e.into_inner());
+
+    a_turn(
+        &searching_with(&endpoint, &[NAME], Some(&file), &index),
+        Task::new("search"),
+        &mut Asked::answering(Decision::Approve),
+        &received,
+    );
+    drop(lock);
+
+    let head = the_request_sent(&heads);
+    assert!(
+        head.contains(&format!("x-subscription-token: {}", KEY.to_lowercase())),
+        "{head}"
+    );
+}
+
+/// S2: the first variable of the list that holds text is the key, in the order written, and an
+/// unset one and an empty one before it are skipped. The faults this rejects are taking the last
+/// variable and stopping at an empty one.
+#[test]
+fn the_first_named_variable_that_holds_text_is_the_key() {
+    const EMPTY: &str = "BRAVEBOT_TEST_SEARCH_KEY_ORDER_EMPTY";
+    const FIRST: &str = "BRAVEBOT_TEST_SEARCH_KEY_ORDER_FIRST";
+    const SECOND: &str = "BRAVEBOT_TEST_SEARCH_KEY_ORDER_SECOND";
+    const OTHER: &str = "placeholder-search-key-from-the-second";
+    let _empty = export(EMPTY, "");
+    let _first = export_without_waiting(FIRST, KEY);
+    let _second = export_without_waiting(SECOND, OTHER);
+    let (index, heads) = serve_the_index(vec![json_results("{}")]);
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
+
+    a_turn(
+        &searching_with(&endpoint, &[EMPTY, FIRST, SECOND], None, &index),
+        Task::new("search"),
+        &mut Asked::answering(Decision::Approve),
+        &received,
+    );
+
+    let head = the_request_sent(&heads);
+    assert!(
+        head.contains(&format!("x-subscription-token: {}", KEY.to_lowercase())),
+        "{head}"
+    );
+    assert!(!head.contains(OTHER), "a later variable was sent: {head}");
+}
+
+/// Sets a variable of the process while the caller already holds the lock, for a test that sets
+/// several.
+fn export_without_waiting(name: &'static str, value: &str) -> RestoredVariable {
+    let before = std::env::var_os(name);
+    // SAFETY: the caller holds the lock of the first variable it set, and the name is this test's.
+    unsafe { std::env::set_var(name, value) };
+    RestoredVariable { name, before }
+}
+
+/// Puts a variable back as it was.
+struct RestoredVariable {
+    name: &'static str,
+    before: Option<std::ffi::OsString>,
+}
+
+impl Drop for RestoredVariable {
+    fn drop(&mut self) {
+        // SAFETY: the lock of the test that set it is still held while this drops.
+        match &self.before {
+            Some(value) => unsafe { std::env::set_var(self.name, value) },
+            None => unsafe { std::env::remove_var(self.name) },
+        }
+    }
+}
+
+/// S2: a variable that holds text that is not a key is refused in the driver's words, which name
+/// the settings and neither the variable nor its text, and the key file is not used in its place.
+/// Nobody is asked and nothing is sent. The faults this rejects are falling through to the file,
+/// which hides a variable exported wrongly, and a refusal that quotes the variable or its name.
+#[test]
+fn a_variable_holding_no_usable_key_is_refused_without_its_name_or_its_text() {
+    const NAME: &str = "BRAVEBOT_TEST_SEARCH_KEY_UNUSABLE";
+    const TEXT: &str = "two words in the variable";
+    let _held = export(NAME, TEXT);
+    let (_keep, file) = a_key_file("search-unusable-variable");
+    let (index, heads) = serve_the_index(vec![json_results("{}")]);
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
+    let mut asked = Asked::answering(Decision::Approve);
+
+    let bodies = a_turn(
+        &searching_with(&endpoint, &[NAME], Some(&file), &index),
+        Task::new("search"),
+        &mut asked,
+        &received,
+    );
+
+    let said = told(&bodies);
+    assert!(said.contains("webSearch.env"), "{said}");
+    assert!(said.contains("webSearch.keyFile"), "{said}");
+    assert!(
+        !said.contains(NAME) && !said.contains("two words"),
+        "the refusal holds the variable's name or its text: {said}"
+    );
+    assert!(asked.searches.is_empty());
+    assert!(
+        heads.recv_timeout(Duration::from_millis(300)).is_err(),
+        "a search was sent although the variable held no usable key"
+    );
+}
+
+/// What the person does in the middle of a turn: the variable the tool was offered for is removed
+/// as the call is announced, which is after the list was settled and before the search reads it.
+struct RemovesTheVariable(&'static str);
+
+impl bravebot_agent::report::Reporter for RemovesTheVariable {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn tool_started(&mut self, _activity: bravebot_agent::report::Activity) {
+        // SAFETY: the test holds the lock for this variable while the turn runs.
+        unsafe { std::env::remove_var(self.0) };
+    }
+}
+
+/// S3, S8: the tool list is settled at the start of the turn, so a variable removed after that
+/// leaves the tool offered, and the call is reported as a key that cannot be used, in words that
+/// hold neither the variable's name nor its text. The planner is not told the tool is unknown, and
+/// nothing is asked or sent. The faults this rejects are asking the environment again at dispatch,
+/// which answers an unknown tool for a tool that was on the list, and reading the key from a copy
+/// kept at the start of the turn, which sends a key the person has since removed.
+#[test]
+fn a_variable_removed_after_the_turn_started_is_reported_as_an_unusable_key() {
+    const NAME: &str = "BRAVEBOT_TEST_SEARCH_KEY_REMOVED";
+    let _held = export(NAME, KEY);
+    let (index, heads) = serve_the_index(vec![json_results("{}")]);
+    let (endpoint, received) =
+        serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
+    let mut asked = Asked::answering(Decision::Approve);
+
+    let bodies = a_turn_reporting(
+        &searching_with(&endpoint, &[NAME], None, &index),
+        Task::new("search"),
+        &mut asked,
+        &mut RemovesTheVariable(NAME),
+        &received,
+    );
+
+    assert!(
+        bodies[0].contains("\"web_search\""),
+        "the tool was not offered at the start of the turn"
+    );
+    let said = told(&bodies);
+    assert!(
+        said.contains("cannot be used") && said.contains("webSearch.env"),
+        "{said}"
+    );
+    assert!(!said.contains("no such tool"), "{said}");
+    assert_nothing_of_the_variable_reached_the_planner(&bodies, NAME, &[KEY]);
+    assert!(asked.searches.is_empty());
+    assert!(
+        heads.recv_timeout(Duration::from_millis(300)).is_err(),
+        "a search was sent with a key the person had removed"
+    );
 }

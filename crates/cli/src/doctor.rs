@@ -306,6 +306,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "permissions.startInAuto" => t!(doctor_settings_start_in_auto_ignored, path = path),
         "run.scrubEnv" => t!(doctor_settings_scrub_env_ignored, path = path),
         "webSearch.keyFile" => t!(doctor_settings_web_search_key_file_ignored, path = path),
+        "webSearch.env" => t!(doctor_settings_web_search_env_ignored, path = path),
         "limit" => t!(doctor_settings_limit_ignored, path = path),
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
@@ -1046,27 +1047,52 @@ fn report_held(held: bravebot_config::Held<'_>) {
     }
 }
 
-/// What `doctor` says of the web search key file: whether the setting names one and whether it is
-/// there.
+/// What `doctor` says of where the web search key would come from: a variable `webSearch.env` names,
+/// the file `webSearch.keyFile` names, or nothing.
 ///
-/// Looks at the file's metadata through [`Config::offers_web_search`] and reads nothing from it, so
-/// the report cannot hold the key. The path is the person's own setting and is not a secret.
+/// Looks at the process environment for whether a named variable holds text, and at the file's
+/// metadata through [`Config::web_search_source`], and reads no text from either into the report, so
+/// the report cannot hold the key. A variable is said by its place in `webSearch.env` and never by
+/// its name: the name is a string the person wrote, and one pasted into the wrong field is the key
+/// itself, which a report people paste would then carry. The path is the person's own setting and is
+/// not a secret.
 fn report_web_search(config: &Config) {
-    fact(t!(doctor_web_search), web_search_line(config));
+    fact(
+        t!(doctor_web_search),
+        web_search_line(config, |name| std::env::var(name).ok()),
+    );
 }
 
-/// The words of [`report_web_search`], separate from the printing so a test can hold them.
-pub(crate) fn web_search_line(config: &Config) -> String {
-    match config.web_search_key_file.as_deref() {
-        None => t!(doctor_web_search_absent).to_string(),
-        Some(path) if config.offers_web_search() => t!(
+/// The words of [`report_web_search`], separate from the printing so a test can hold them, over a
+/// lookup it is handed so a test sets no variable of the process.
+pub(crate) fn web_search_line(config: &Config, lookup: impl Fn(&str) -> Option<String>) -> String {
+    use bravebot_config::web_search_key::Source;
+    let named = !config.web_search_env.is_empty();
+    match (
+        config.web_search_source(lookup),
+        config.web_search_key_file.as_deref(),
+    ) {
+        (Some(Source::Variable { entry }), _) => {
+            t!(doctor_web_search_variable, entry = entry)
+        }
+        (Some(Source::File), Some(path)) if named => t!(
+            doctor_web_search_keyed_no_variable,
+            path = progress::printable_path(path)
+        ),
+        (Some(Source::File), Some(path)) => t!(
             doctor_web_search_keyed,
             path = progress::printable_path(path)
         ),
-        Some(path) => t!(
+        (None, Some(path)) if named => t!(
+            doctor_web_search_missing_and_variables,
+            path = progress::printable_path(path)
+        ),
+        (None, Some(path)) => t!(
             doctor_web_search_missing,
             path = progress::printable_path(path)
         ),
+        (None, None) if named => t!(doctor_web_search_variables_empty).to_string(),
+        (None, None) | (Some(Source::File), None) => t!(doctor_web_search_absent).to_string(),
     }
 }
 
@@ -1800,7 +1826,10 @@ pub(crate) fn gateway_models(provider: &bravebot_config::provider::Provider) -> 
 /// that is working.
 ///
 /// A key `bravebot auth login gateway` stored is named as that, because it is the one place a token
-/// can come from that neither the environment nor the settings file shows (CRED-25).
+/// can come from that neither the environment nor the settings file shows (CRED-25). A key read from
+/// the file `options.keyFile` names is named as that, and a file that gives no key is said with the
+/// reason and without the path: the value is a string the person wrote, and one pasted into the
+/// wrong field is the key itself, so neither it nor any text of the file reaches the report.
 pub(crate) fn gateway_credential(
     provider: &bravebot_config::provider::Provider,
     lookup: impl Fn(&str) -> Option<String>,
@@ -1811,7 +1840,14 @@ pub(crate) fn gateway_credential(
     }
     match provider.credential_and_source(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
+        (Credential::Token(_), Some(Source::KeyFile)) => {
+            t!(doctor_gateway_token_key_file).to_string()
+        }
         (Credential::Token(_), _) => t!(doctor_gateway_token).to_string(),
+        (Credential::KeyFileUnusable(fault), _) => t!(
+            doctor_gateway_token_key_file_unusable,
+            reason = bravebot_agent::backend::key_file_fault_said(fault)
+        ),
         (Credential::Absent, _) => t!(
             doctor_gateway_token_absent,
             id = progress::printable(&provider.id)
@@ -4494,21 +4530,84 @@ mod tests {
         let file = directory.join("key.txt");
         std::fs::write(&file, PLACEHOLDER).expect("a file");
 
-        let absent = web_search_line(&a_configuration());
+        let nothing = |_: &str| None;
+        let absent = web_search_line(&a_configuration(), nothing);
         assert!(absent.contains("webSearch.keyFile"), "{absent}");
 
         let missing = web_search_line(
             &a_configuration().with_web_search_key_file(directory.join("absent.txt")),
+            nothing,
         );
         assert!(missing.contains("webSearch.keyFile"), "{missing}");
         assert_ne!(missing, absent);
 
-        let configured = web_search_line(&a_configuration().with_web_search_key_file(&file));
+        let configured =
+            web_search_line(&a_configuration().with_web_search_key_file(&file), nothing);
         assert!(configured.contains("webSearch.keyFile"), "{configured}");
         assert!(configured.contains("configured"), "{configured}");
         assert!(!configured.contains(PLACEHOLDER), "{configured}");
         assert_ne!(configured, missing);
         assert_ne!(configured, absent);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// S5: `doctor` says which source the key would come from, by the place of a variable in
+    /// `webSearch.env` and never by its name or its text, and a variable that holds text is said
+    /// before the file. The faults this rejects are printing the variable's name, which a person may
+    /// have pasted the key into, printing the text, and saying the file where a variable would win.
+    #[test]
+    fn the_web_search_source_is_reported_by_place_and_never_by_the_variable_or_its_text() {
+        const NAME: &str = "SECRET_LOOKING_NAME_sk_live_0123456789";
+        const TEXT: &str = "placeholder-text-of-the-variable";
+        const FILE_TEXT: &str = "placeholder-text-of-the-file";
+        // The name carries the process id, and this test removes the directory it makes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-doctor-web-search-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, FILE_TEXT).expect("a file");
+        let holding = |name: &str| (name == NAME).then(|| TEXT.to_string());
+        let nothing = |_: &str| None;
+
+        let from_variable = web_search_line(
+            &a_configuration()
+                .with_web_search_env(&["UNSET_FIRST", NAME])
+                .with_web_search_key_file(&file),
+            holding,
+        );
+        assert!(from_variable.contains("entry 2"), "{from_variable}");
+        assert!(!from_variable.contains("key.txt"), "{from_variable}");
+
+        let from_file = web_search_line(
+            &a_configuration()
+                .with_web_search_env(&[NAME])
+                .with_web_search_key_file(&file),
+            nothing,
+        );
+        assert!(from_file.contains("key.txt"), "{from_file}");
+        assert!(!from_file.contains("entry"), "{from_file}");
+
+        let none = web_search_line(&a_configuration().with_web_search_env(&[NAME]), nothing);
+        assert!(none.contains("not offered"), "{none}");
+        assert_ne!(none, from_variable);
+
+        for said in [&from_variable, &from_file, &none] {
+            for withheld in [NAME, TEXT, FILE_TEXT, "sk_live"] {
+                assert!(!said.contains(withheld), "{withheld} is in: {said}");
+            }
+        }
+        let account = what_would_end(bravebot_config::Held::SearchKey);
+        for named in [
+            "webSearch.env",
+            "unsetting the variable",
+            "Brave Search API dashboard",
+        ] {
+            assert!(account.contains(named), "{named} is not in: {account}");
+        }
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -4587,7 +4686,91 @@ mod tests {
         assert_eq!(from_variable, from_file);
     }
 
-    /// A gateway nothing holds a credential for says so. Reporting one as found would answer the
+    /// BACKEND-16, CRED-25: `doctor` says whether the file `options.keyFile` names was found and
+    /// usable, and why it is not, and never what the file holds or the path the setting names: the
+    /// setting is a string the person wrote, and one pasted into the wrong field is the key itself.
+    /// A variable is said before the file, as a request reads them. The regressions it rejects are
+    /// printing the key, printing the path, saying a file that gives no key is found, and saying
+    /// nothing of the file where the block names no other source.
+    #[test]
+    fn a_gateway_key_file_is_reported_as_found_or_unusable_and_never_printed() {
+        const KEY: &str = "placeholder-gateway-file-key";
+        // The name carries the process id, and this test removes the directory it makes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-doctor-gateway-key-file-marker-4c2d-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        let block = |env: &str| {
+            format!(
+                r#"{{"provider": {{"gw": {{{env} "options": {{"baseURL": "https://example.invalid/v1",
+                    "keyFile": {}}}}}}}}}"#,
+                serde_json::json!(file.to_str().expect("a path"))
+            )
+        };
+        let provider = configured_gateway(&block(""));
+
+        std::fs::write(&file, format!("{KEY}\n")).expect("a file");
+        let found = gateway_credential(&provider, |_| None);
+        assert_eq!(found, t!(doctor_gateway_token_key_file));
+
+        let mut said = vec![found];
+        for (contents, reason) in [
+            (None, "is missing"),
+            (Some("\n"), "holds nothing but whitespace"),
+            (Some("two words"), "holds whitespace"),
+        ] {
+            match contents {
+                Some(text) => std::fs::write(&file, text).expect("a file"),
+                None => std::fs::remove_file(&file).expect("a file to remove"),
+            }
+            let line = gateway_credential(&provider, |_| None);
+            assert!(line.contains("options.keyFile"), "{line}");
+            assert!(line.contains(reason), "{line}");
+            assert_ne!(line, t!(doctor_gateway_token_key_file), "{line}");
+            said.push(line);
+        }
+        // The block also names a variable that holds text: that is said, not the file.
+        std::fs::write(&file, format!("{KEY}\n")).expect("a file");
+        let with_variable = configured_gateway(&block(r#""env": ["A_TOKEN_VARIABLE"],"#));
+        let from_variable = gateway_credential(&with_variable, |name| {
+            (name == "A_TOKEN_VARIABLE").then(|| "placeholder-variable-text".to_string())
+        });
+        assert_eq!(from_variable, t!(doctor_gateway_token));
+        said.push(from_variable);
+
+        for line in &said {
+            for held in [KEY, "marker-4c2d", "placeholder-variable-text", "key.txt"] {
+                assert!(!line.contains(held), "{held} is in: {line}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// CRED-25: the account of what would end a gateway token names the file `options.keyFile`
+    /// names beside the other ways custody ends, so somebody who keeps the key in a file is not told
+    /// only to delete a value from the settings or unset a variable. The regression it rejects is an
+    /// account written before the file was a source.
+    #[test]
+    fn the_account_of_a_gateway_token_names_a_key_file_as_a_source_that_ends_custody() {
+        let account = what_would_end(bravebot_config::Held::GatewayToken {
+            host: "gateway.invalid",
+        });
+        for named in [
+            "gateway.invalid",
+            "options.keyFile",
+            "unsetting the variable",
+            "bravebot auth logout gateway",
+            "leaves the token live there",
+        ] {
+            assert!(account.contains(named), "{named} is not in: {account}");
+        }
+    }
+
+    /// BACKEND-16: a gateway nothing holds a credential for says so. Reporting one as found would answer the
     /// question `doctor` exists to answer wrongly, and the request then fails somewhere further away.
     #[test]
     fn a_gateway_with_no_credential_is_reported_as_having_none() {

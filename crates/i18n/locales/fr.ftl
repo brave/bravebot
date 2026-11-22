@@ -473,7 +473,7 @@ doctor-ends-aws-session =
 doctor-ends-premium-key =
     la clé premium : émise par le service premium de Brave, qui est aussi la seule surface qui la révoque ; `bravebot auth logout brave` met fin à la garde de cette machine et laisse la clé active là-bas
 doctor-ends-gateway-token =
-    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
+    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, supprimer le fichier que nomme le réglage `options.keyFile`, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-chatgpt-account =
     une connexion ChatGPT : émise par OpenAI pour le compte qui s'est connecté, et le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne, de sorte que l'expiration du jeton d'accès met fin à cette copie et non à l'accès de ce programme ; on y met fin chez OpenAI en se déconnectant du compte ou en retirant l'accès de ce programme dans ses réglages, car `bravebot auth logout chatgpt` met fin à la garde de cette machine et laisse les jetons actifs là-bas
 doctor-ends-xai-account =

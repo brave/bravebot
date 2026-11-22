@@ -3550,6 +3550,7 @@ says nothing about them.
 `verified-by: bravebot_config::settings::no_allowed_hosts_is_no_list_and_an_empty_one_is_a_list`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_host_key`
 `verified-by: bravebot_config::settings::a_checkout_may_deny_a_host_and_never_allow_one`
+`verified-by: bravebot_config::settings::a_sandbox_block_that_is_not_an_object_takes_no_setting_away`
 `verified-by: bravebot_config::settings::a_checkouts_list_alone_does_not_start_filtering`
 `verified-by: bravebot_config::settings::a_named_file_may_list_hosts_wherever_it_sits`
 `verified-by: bravebot_config::settings::a_misshapen_host_key_is_reported_and_not_read`
@@ -3761,6 +3762,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::confirm::the_persons_filesystem_lists_are_said_once_and_only_where_they_exist`
 `verified-by: bravebot_config::settings::the_home_layer_may_write_every_filesystem_list`
 `verified-by: bravebot_config::settings::a_checkout_may_add_a_refusal_and_never_an_allowance`
+`verified-by: bravebot_config::settings::a_sandbox_block_that_is_not_an_object_takes_no_setting_away`
 `verified-by: bravebot_config::settings::a_named_file_may_widen_wherever_it_sits`
 `verified-by: bravebot_config::settings::a_misshapen_filesystem_list_is_reported_and_a_blank_entry_is_left_out`
 `verified-by: bravebot_config::settings::the_sandbox_block_is_unread_unless_it_holds_only_the_filesystem_lists`

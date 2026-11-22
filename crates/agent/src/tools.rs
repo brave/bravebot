@@ -3428,10 +3428,18 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         },
         // The same refusal for the same reason, and a write on top of it.
         "download_url" if !tools.delegated => download_url(policy, tools, confirmer, &arguments),
-        // Offered only where a key file is configured, and never to a delegate: a call to it from
-        // anywhere else is answered as an unknown name is. Refused here as well as absent from the
-        // list. `read` asks for vet_content's release in the result, as fetch_url's does (WEBSEARCH-9).
-        "web_search" if !tools.delegated && tools.chat.config.offers_web_search() => {
+        // Offered only where a variable or a key file offered a key when the turn started, and never
+        // to a delegate: a call to it from anywhere else is answered as an unknown name is. Refused
+        // here as well as absent from the list. The list the turn settled decides it, and the
+        // environment is not asked again, so a variable removed since is reported as a key that
+        // cannot be used and not as an unknown tool. `read` asks for vet_content's release in the
+        // result, as fetch_url's does (WEBSEARCH-9).
+        "web_search"
+            if !tools.delegated
+                && tools.offered.is_some_and(|list| {
+                    list.iter().any(|tool| tool.function.name == "web_search")
+                }) =>
+        {
             match read_asked_of(&arguments) {
                 Ok(read_asked) => {
                     let mut produced = web_search(policy, tools, confirmer, &arguments);

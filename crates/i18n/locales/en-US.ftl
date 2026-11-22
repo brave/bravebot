@@ -522,12 +522,18 @@ doctor-premium = premium
 doctor-premium-absent = not configured
 doctor-premium-keyed = { $url }, with a premium key
 doctor-premium-unkeyed = { $url }, without a premium key, so requests go to the endpoint above
-# The web search key file named by the setting webSearch.keyFile. The line says a file is named and
-# is there. It never shows the key, and the file is not read to say it.
+# Where the web search key would come from: a variable webSearch.env names, or the file
+# webSearch.keyFile names. A variable is said by its place in the list and never by its name, since a
+# name is a string the person wrote and one pasted into the wrong field is the key itself. The line
+# never shows the key, and no text of the variable or the file is read into it.
 doctor-web-search = web search
-doctor-web-search-absent = not configured: webSearch.keyFile is not set, so the web_search tool is not offered
+doctor-web-search-absent = not configured: neither webSearch.env nor webSearch.keyFile is set, so the web_search tool is not offered
 doctor-web-search-missing = webSearch.keyFile names { $path }, which is not a file, so the web_search tool is not offered
 doctor-web-search-keyed = a key file is configured in webSearch.keyFile ({ $path }); the key is read from it when a search is made and is sent only to api.search.brave.com
+doctor-web-search-variable = the key comes from entry { $entry } of webSearch.env, a variable that holds text; it is read when a search is made, is sent only to api.search.brave.com, and a variable that holds text is used before the key file
+doctor-web-search-keyed-no-variable = a key file is configured in webSearch.keyFile ({ $path }) and no variable webSearch.env names holds text, so the key is read from the file when a search is made and is sent only to api.search.brave.com
+doctor-web-search-missing-and-variables = no variable webSearch.env names holds text and webSearch.keyFile names { $path }, which is not a file, so the web_search tool is not offered
+doctor-web-search-variables-empty = no variable webSearch.env names holds text and webSearch.keyFile is not set, so the web_search tool is not offered
 doctor-key-id = key id
 doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
@@ -557,9 +563,9 @@ doctor-ends-aws-session =
 doctor-ends-premium-key =
     the premium key: issued by Brave's premium service, which is also the only surface that revokes it; `bravebot auth logout brave` ends this machine's custody and leaves the key live there
 doctor-ends-search-key =
-    the Brave Search key: read from the file the setting `webSearch.keyFile` names and sent only to api.search.brave.com in one request header; issued by the Brave Search API dashboard, which is also the only surface that revokes it; removing the setting or the file ends this machine's custody, and the key keeps working at Brave until it is revoked in the Brave Search API dashboard
+    the Brave Search key: read from the first variable the setting `webSearch.env` names that holds text, or else from the file the setting `webSearch.keyFile` names, and sent only to api.search.brave.com in one request header; issued by the Brave Search API dashboard, which is also the only surface that revokes it; unsetting the variable, removing the setting or removing the file ends this machine's custody, and the key keeps working at Brave until it is revoked in the Brave Search API dashboard
 doctor-ends-gateway-token =
-    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
+    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, removing the file the setting `options.keyFile` names, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-chatgpt-account =
     a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
 doctor-ends-xai-account =
@@ -646,7 +652,7 @@ doctor-dropped-search-key-nothing-decides-each-use =
 doctor-dropped-search-key-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the Brave Search API dashboard issues one key and nothing here asks it for a narrower one
 doctor-dropped-search-key-not-minted-for-one-step =
-    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever the file named by `webSearch.keyFile` holds, and it is read again for every search
+    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever the variable named by `webSearch.env` or the file named by `webSearch.keyFile` holds, and it is read again for every search
 doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
@@ -686,6 +692,24 @@ doctor-gateway-token-stored = stored by bravebot auth login gateway (never print
 doctor-gateway-token-absent =
     none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+# The file the block's `options.keyFile` names, which holds the token. The path is not said and the
+# file is not quoted: the setting is a string the person wrote, and one pasted into the wrong field
+# is the key itself, which a report people paste would then carry.
+doctor-gateway-token-key-file = found in the file options.keyFile names (never printed)
+doctor-gateway-token-key-file-unusable =
+    none usable: the file options.keyFile names { $reason } (set a variable its `env` names, fix that file, or run bravebot auth login gateway)
+# Why the file a block's `options.keyFile` names gives no key, completing "the file ... names". One
+# sentence per fault, said the same way by a refused request, `doctor`, `auth status` and the window.
+# None holds the path or any text of the file.
+gateway-key-file-not-absolute = is not an absolute path
+gateway-key-file-unreadable = is missing, is not a regular file, or cannot be read as text
+gateway-key-file-too-large = holds more than 4,096 bytes
+gateway-key-file-empty = holds nothing but whitespace
+gateway-key-file-not-a-key = holds whitespace, a control character or a character outside ASCII inside the key
+# The refusal of a request whose block names a key file that gives no key, with no variable and no
+# stored key before it. `options.apiKey` is not sent in the file's place.
+backend-no-gateway-key-file =
+    no credential for the { $provider } gateway: the file its `options.keyFile` names { $reason }, so nothing was sent; fix the path, or put the key alone in that file
 # A header a gateway block named and this build does not send, with the name the file wrote and the
 # reason. The name only: a header a gateway routes on is often a second credential.
 doctor-header-reserved = { $name } in the provider block is not sent: this program sets that header itself
@@ -832,6 +856,8 @@ doctor-settings-scrub-env-ignored =
     run.scrubEnv in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, and none of its names is withheld
 doctor-settings-web-search-key-file-ignored =
     webSearch.keyFile in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, so no file named there is read as a web search key
+doctor-settings-web-search-env-ignored =
+    webSearch.env in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, so no variable named there is read as a web search key, and none of its names is withheld
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -1440,6 +1466,10 @@ auth-status-brave-nowhere = this machine has nowhere to keep a key, so none is s
 auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name brave, bedrock, gateway, chatgpt or xai
 # Said of a gateway when no key is stored for any service and no provider block names a gateway.
 auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
+# The file the block's `options.keyFile` names gives no key. A stored key is read before the file, so
+# storing one makes the gateway usable. The path is not said.
+auth-status-gateway-key-file-unusable =
+    the file options.keyFile names { $reason }; fix it, or run bravebot auth login gateway { $id }, since a stored key is read before the file
 # The id is a service bravebot knows that no provider block names, so no session sends a key to it.
 auth-status-gateway-none-stored = no key is stored for { $id }; run bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
@@ -4606,6 +4636,7 @@ desktop-accounts-bedrock-timed-out = The AWS CLI did not answer in time, so refr
 desktop-accounts-gateway-none-configured = This computer's managed settings allow no gateway.
 desktop-accounts-gateway-unrecorded = A key is stored for this service, but no settings name it, so no session sends it.
 desktop-accounts-gateway-absent = No key is set for this gateway.
+desktop-accounts-gateway-key-file-unusable = The file this gateway's key file setting names { $reason }. A key stored here is used before the file.
 desktop-accounts-keys-unreadable = The file of gateway keys could not be read, so it was left as it is.
 desktop-accounts-not-checked = Not checked.
 desktop-accounts-not-removed = The sign-in could not be removed from this computer.
@@ -6137,6 +6168,7 @@ ui-accounts-heading = Accounts
 ui-accounts-signed-in = Signed in
 ui-accounts-key-stored = Key stored
 ui-accounts-key-from-environment = Key from the environment
+ui-accounts-key-from-file = Key from a file
 ui-accounts-no-key-needed = No key needed
 ui-accounts-not-signed-in = Not signed in
 ui-accounts-unusable = Can't be used
