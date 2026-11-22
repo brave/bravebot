@@ -39,6 +39,11 @@ try {
           { id: defaultModel, name: 'Claude Haiku 4.5', provider: 'OpenRouter', providerKey: 'gateway:openrouter', readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools'] },
           { id: 'openrouter/anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'OpenRouter', providerKey: 'gateway:openrouter', readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools', 'reasoning'] },
           { id: 'brave-model', name: 'Brave model', provider: 'Brave', providerKey: 'brave', readsEffort: false, premium: false, contextWindow: 24000 },
+          // The ChatGPT account's models, listed only for the scenario that needs them.
+          ...(globalThis.modelTest.account ? [
+            { id: 'chatgpt/gpt-5.1-codex', name: 'GPT-5.1 Codex', provider: 'ChatGPT', providerKey: 'chatgpt', readsEffort: true, premium: false, contextWindow: 272000 },
+            { id: 'chatgpt/codex-mini', name: 'Codex Mini', provider: 'ChatGPT', providerKey: 'chatgpt', readsEffort: false, premium: false, contextWindow: 200000 },
+          ] : []),
         ] } }
       }
       if (method === 'effort.get') return { ok: { recorded: globalThis.modelTest.effort, inForce: globalThis.modelTest.effort, outranked: false, sessionBegan: globalThis.modelTest.sessionBegan } }
@@ -289,6 +294,61 @@ try {
   await page.locator('.model-popover').waitFor({ state: 'hidden' })
   console.log('PASS: the Reasoning column records a level by click and by keyboard, Default removes it, and a model that takes none locks it')
   await page.screenshot({ path: '/tmp/bravebot-model-label.png' })
+
+  // CHATGPT-10: a model of the ChatGPT account is sent the level its conversation began with, so
+  // where another is chosen the column names both. Choosing the starting level again, or a model of
+  // another service, removes the note, and a model that takes no level says only that.
+  const kept = page.locator('[data-test="model-effort-kept"]')
+  await app.evaluate(() => Object.assign(globalThis.modelTest, { account: true, sessionBegan: 'low', effort: 'low' }))
+  await trigger.click()
+  await page.getByRole('option', { name: /GPT-5.1 Codex/ }).click()
+  await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('GPT-5.1 Codex'))
+  assert.equal(await level('low').getAttribute('aria-checked'), 'true', 'the recorded level is checked')
+  assert.equal(await kept.count(), 0, 'the level the conversation began with draws no note')
+  await level('high').click()
+  await kept.waitFor()
+  assert.equal(await kept.getAttribute('role'), 'status', 'the note is announced')
+  const keptText = await kept.innerText()
+  assert.match(keptText, /\bLow\b/, 'the note names the level the conversation is sent')
+  assert.match(keptText, /\bHigh\b/, 'the note names the level chosen')
+  assert(keptText.indexOf('Low') < keptText.indexOf('High'), 'the level sent comes first')
+  mkdirSync('/tmp/bravebot-ui', { recursive: true })
+  for (const [size, viewport] of [['large', { width: 1440, height: 900 }], ['minimum', MINIMUM]]) {
+    await page.setViewportSize(viewport)
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme })
+      // A resize can cancel an animation, whose `finished` then rejects.
+      await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))))
+      await page.screenshot({ path: `/tmp/bravebot-ui/model-effort-kept-${size}-${scheme}.png` })
+    }
+  }
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.setViewportSize(normal)
+  await level('low').click()
+  await kept.waitFor({ state: 'detached' })
+  await level('default').click()
+  await kept.filter({ hasText: /began with, Low\. Default applies/ }).waitFor()
+  await page.getByRole('option', { name: /Claude Sonnet/ }).click()
+  await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('Sonnet'))
+  assert.equal(await kept.count(), 0, 'a model of another service draws no note')
+  await page.getByRole('option', { name: /Codex Mini/ }).click()
+  await page.locator('[data-test="model-effort-note"]').filter({ hasText: 'takes no reasoning level' }).waitFor()
+  assert.equal(await kept.count(), 0, 'an account model that takes no level says only that')
+  await page.getByRole('option', { name: /GPT-5.1 Codex/ }).click()
+  await kept.waitFor()
+  await search.press('Escape')
+  await page.locator('.model-popover').waitFor({ state: 'hidden' })
+  // A report that names no open session, as a bot's does, carries no starting level and no note.
+  await app.evaluate(() => { delete globalThis.modelTest.sessionBegan })
+  await trigger.click()
+  await page.locator('[data-test="model-effort-default"][aria-checked="true"]').waitFor()
+  assert.equal(await kept.count(), 0, 'a report with no starting level draws no note')
+  await page.getByRole('option', { name: /Claude Sonnet/ }).click()
+  await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('Sonnet'))
+  await search.press('Escape')
+  await page.locator('.model-popover').waitFor({ state: 'hidden' })
+  await app.evaluate(() => Object.assign(globalThis.modelTest, { account: false, effort: null }))
+  console.log('PASS: an account model names the level its conversation is sent where another is chosen, and the note goes with the starting level, another service, a model that takes no level, or no session')
 
   const entry = page.locator(COMPOSER_INPUT)
   await entry.fill('')
