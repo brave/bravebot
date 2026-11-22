@@ -544,6 +544,7 @@ impl Bridge {
             "folder.reply" => self.reply_folder(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
+            "permissions.check" => self.permissions_check(request),
             "settings.inspect" => Ok(crate::settings::report(
                 self.project_of(request),
                 self.settings.as_deref(),
@@ -3749,6 +3750,118 @@ impl Bridge {
         // read which one is waiting now (§9.1).
         merge(&mut listed, self.questions_report(&handle));
         Ok(listed)
+    }
+
+    /// `permissions.check`: which of the session's rules decides a call a person names (CLI-30).
+    ///
+    /// The call is matched against the rules the session holds (PERM-12), not the files read
+    /// again. Nothing is opened, started, fetched, granted or revoked.
+    fn permissions_check(&mut self, request: &Request) -> Result<Value, Failure> {
+        use bravebot_agent::confirm::{shown_path, shown_text};
+        use bravebot_agent::granted::Proposed;
+        use bravebot_agent::rule_check::{Call, Decision, Origin};
+        use bravebot_core::permissions::Ruling;
+        const USAGE: &str = "Name a call as a family (Read, Edit, Bash, WebFetch, WebSearch or Mcp) \
+            and its words: a path, a command line, a host or URL, nothing, or server:tool.";
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if open.running.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Stop the current turn before checking a call against the rules.",
+            ));
+        }
+        let family = request.string("family")?;
+        let words = request
+            .params
+            .get("words")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Failure::bad_request(USAGE))?;
+        let mut line = vec![family];
+        for word in words {
+            let word = word.as_str().ok_or_else(|| Failure::bad_request(USAGE))?;
+            line.push(word.to_string());
+        }
+        let call = Call::read(&line).ok_or_else(|| Failure::bad_request(USAGE))?;
+        let state = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "Session state unavailable"))?;
+        let rules = &state.answers.rules;
+        let granted: Vec<Proposed> = rules
+            .granted
+            .iter()
+            .map(|rule| Proposed::new(&rule.file, &rule.rule))
+            .collect();
+        let waiting: Vec<Proposed> = rules
+            .proposed
+            .iter()
+            .map(|rule| Proposed::new(&rule.file, &rule.rule))
+            .collect();
+        let profile = bravebot_agent::home::profile();
+        let explained = bravebot_agent::rule_check::explain(
+            &call,
+            &rules.permissions,
+            &rules.sources,
+            &granted,
+            &waiting,
+            profile.as_deref(),
+            &open.project,
+        );
+        drop(state);
+        let mut answer = json!({
+            "decision": "none",
+            "rule": null,
+            "shownRule": null,
+            "file": null,
+            "shownFile": null,
+            "granted": false,
+            "reason": null,
+        });
+        match &explained.decision {
+            Decision::ShortName => answer["decision"] = json!("shortName"),
+            Decision::NoRule => {}
+            Decision::Rule {
+                ruling,
+                written,
+                origin,
+                reason,
+            } => {
+                answer["decision"] = json!(match ruling {
+                    Ruling::Deny => "deny",
+                    Ruling::Ask => "ask",
+                    Ruling::Allow => "allow",
+                });
+                answer["rule"] = json!(written);
+                answer["shownRule"] = json!(shown_text(written));
+                let (file, granted) = match origin {
+                    Some(Origin::File(file)) => (Some(file), false),
+                    Some(Origin::Granted(file)) => (Some(file), true),
+                    None => (None, false),
+                };
+                if let Some(file) = file {
+                    answer["file"] = json!(file.to_string_lossy());
+                    answer["shownFile"] = json!(shown_path(file));
+                }
+                answer["granted"] = json!(granted);
+                // Display text only: nothing compares it.
+                answer["reason"] = json!(reason.as_deref().map(shown_text));
+            }
+        }
+        answer["notInForce"] = match &explained.not_in_force {
+            Some(waiting) => json!({
+                "rule": waiting.rule,
+                "shownRule": shown_text(&waiting.rule),
+                "file": waiting.file.to_string_lossy(),
+                "shownFile": shown_path(&waiting.file),
+            }),
+            None => Value::Null,
+        };
+        Ok(answer)
     }
 
     /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
