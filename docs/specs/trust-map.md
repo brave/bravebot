@@ -1532,6 +1532,9 @@ behind, and there is no ordering to get right between removing it and still bein
 `verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
 `verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
+`verified-by: bravebot_tui::app::branching_replaces_the_sessions_directory_only_where_a_copy_was_made`
+`verified-by: bravebot_tui::app::clearing_and_a_handoff_each_replace_the_sessions_directory`
+`verified-by: bravebot_tui::app::a_session_begun_from_a_record_is_given_a_directory_of_its_own`
 
 <a id="TRUST-16"></a>
 ### TRUST-16: the session's directory is reachable, and its reach grants no trust
@@ -1789,6 +1792,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_trust_rule_covers_the_file_below_it_wherever_a_backslash_separates`
 `verified-by: bravebot_agent::workspace::a_name_and_its_key_are_spelled_the_way_the_host_separates`
 `verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_agent::workspace::each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key`
 `verified-by: bravebot_agent::workspace::a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash`
 `verified-by: bravebot_agent::workspace::a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else`
 `verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
@@ -1804,6 +1808,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
 `verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
+`verified-by: bravebot_session::sessions::a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
@@ -1831,6 +1836,8 @@ without blocking restoration of other files.
 
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
+`verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other`
+`verified-by: bravebot_agent::workspace::a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap`
 
 ## The session's directory in an incognito session
 
@@ -2230,6 +2237,7 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_program_a_session_starts_does_not_hold_its_directory`
 `verified-by: bravebot_agent::scratch::a_claim_held_for_a_moment_is_waited_out`
 `verified-by: bravebot_agent::scratch::a_claim_held_by_something_else_does_not_stall_the_session`
+`verified-by: bravebot_agent::scratch::the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it`
 
 ## Known costs
 

@@ -3216,6 +3216,109 @@ fn screening_asked_for_makes_no_check_of_a_servers_list_under_bypass() {
     );
 }
 
+/// A mock chat server like [`serve_chat`], except that a check whose request holds the server's
+/// [`DESCRIPTION`] (the check of a list) is answered with `list_check`, a `reply_with` body.
+fn serve_chat_checking_the_list(
+    replies: Vec<String>,
+    list_check: String,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut replies = replies.into_iter();
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let reply = if body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION) {
+                list_check.clone()
+            } else if body.contains(A_CHECK_ASKING) {
+                reply_with(
+                    r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+                )
+            } else {
+                match replies.next() {
+                    Some(reply) => reply,
+                    None => {
+                        let refusal = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        let _ = stream.write_all(refusal.as_bytes());
+                        continue;
+                    }
+                }
+            };
+            let frames = as_sse(&reply);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                frames.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// In a mode that asks, a server's list is sent whole to a check before the person is asked about
+/// it, and the question carries the word and the sentence that check gave (CHECK-10).
+///
+/// The wrong implementation stops checking a list where the person is asked, so the question
+/// carries the driver's own `inconclusive` filler and no check request holds the list. The check
+/// says `unsafe` with a sentence so that the word on the question can only be the check's: a
+/// question built from the `safe` that every other check here gets, or from the filler, differs.
+#[test]
+fn a_servers_list_is_checked_whole_before_it_is_asked_about() {
+    for mode in [PermissionMode::Ask, PermissionMode::AcceptEdits] {
+        let scratch = Scratch::new(&format!("list-checked-{mode:?}"));
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+
+        let (endpoint, chat) = serve_chat_checking_the_list(
+            vec![reply_with("done")],
+            reply_with(
+                r#"{\"verdict\": \"unsafe\", \"reason\": \"REASON-MARKER-FROM-THE-LIST-CHECK\"}"#,
+            ),
+        );
+        let mut asking = Answering::new(Decision::Reject, CallDecision::reject());
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast")
+                .with_mcp(Some(session))
+                .with_permission_mode(mode),
+            &mut asking,
+        );
+
+        let sent: Vec<String> = chat.try_iter().collect();
+        let checks_of_the_list = sent
+            .iter()
+            .filter(|body| body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION))
+            .count();
+        assert_eq!(
+            checks_of_the_list, 1,
+            "{mode:?}: the list was not sent whole to one check before it was asked about"
+        );
+        let [put] = asking.lists.as_slice() else {
+            panic!(
+                "{mode:?}: expected one list question, got {}",
+                asking.lists.len()
+            );
+        };
+        assert_eq!(
+            put.verdict,
+            bravebot_core::vetting::Verdict::Unsafe,
+            "{mode:?}: the question does not carry the word the check gave"
+        );
+        assert!(
+            put.reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("REASON-MARKER-FROM-THE-LIST-CHECK")),
+            "{mode:?}: the question does not carry the sentence the check wrote: {:?}",
+            put.reason
+        );
+    }
+}
+
 /// A list offered in bypass stays offered once the session cycles out of the mode, since its words
 /// are already in the context the planner writes from, and from then on each call is asked.
 #[test]

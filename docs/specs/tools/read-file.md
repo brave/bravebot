@@ -36,6 +36,7 @@ bytes at another.
 `verified-by: bravebot_core::policy::a_read_from_an_unvouched_path_is_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted`
 `verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_no_file_is_there`
+`verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_the_file_is_binary`
 
 <a id="READ-2"></a>
 ### READ-2: a long file is paged, and says where to continue from
@@ -393,12 +394,22 @@ back each time. A conversation is re-sent whole on every round, so each copy is 
 the rounds after it, to tell the planner what it already had.
 
 `verified-by: bravebot_agent::turn::a_repeat_read_of_an_untouched_file_is_answered_with_a_notice`
+`verified-by: bravebot_agent::turn::a_repeat_read_notice_names_the_window_that_was_asked_for`
+`verified-by: bravebot_agent::turn::a_repeat_read_of_a_path_a_gate_now_refuses_is_refused_and_not_noticed`
+`verified-by: bravebot_agent::turn::a_read_refused_for_a_credential_is_not_a_window_the_planner_holds`
+`verified-by: bravebot_agent::turn::a_read_whose_result_carried_no_call_id_is_not_a_window_the_planner_holds`
+`verified-by: bravebot_agent::turn::a_read_that_failed_is_not_a_window_the_planner_holds`
 `verified-by: bravebot_agent::turn::a_file_written_since_it_was_shown_is_sent_again`
+`verified-by: bravebot_agent::turn::a_same_size_rewrite_that_leaves_the_modification_time_alone_is_answered_with_a_notice`
+`verified-by: bravebot_agent::turn::a_rewrite_of_the_same_bytes_is_answered_with_the_lines_again`
 `verified-by: bravebot_agent::turn::a_different_window_of_the_same_file_is_not_answered_with_a_notice`
 `verified-by: bravebot_agent::turn::a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice`
 `verified-by: bravebot_agent::conversation::compaction_forgets_the_reads_whose_rounds_it_removed_and_keeps_the_others`
 `verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
 `verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
+`verified-by: bravebot_agent::conversation::a_read_whose_result_was_dropped_is_forgotten`
+`verified-by: bravebot_agent::turn::a_read_repeated_after_its_result_was_dropped_sends_the_lines_again`
+`verified-by: bravebot_agent::turn::a_read_of_a_file_shown_before_a_resume_sends_the_lines_again`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`
 
 <a id="READ-9"></a>

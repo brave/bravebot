@@ -13811,6 +13811,58 @@ fn a_repeat_read_of_an_untouched_file_is_answered_with_a_notice() {
     );
 }
 
+/// READ-8. The notice names the window the planner asked for, so a planner that read the first line
+/// of a file and the whole of it can tell which of the two the notice stands for. A notice that
+/// named no window, or the same words for every window, would leave it guessing. The notice words
+/// for a read with a `limit` and one without are different, and the limit is the planner's own.
+#[test]
+fn a_repeat_read_notice_names_the_window_that_was_asked_for() {
+    let scratch = Scratch::new("read-repeat-notice-window");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (arguments, window) in [
+        (
+            r#"{"path":"a.txt","offset":2,"limit":1}"#,
+            "a.txt (from line 2, at most 1 lines) has not changed",
+        ),
+        (
+            r#"{"path":"a.txt","offset":2}"#,
+            "a.txt (from line 2) has not changed",
+        ),
+    ] {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", arguments),
+            tool_request_2("read_file", arguments),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let mut conversation = bravebot_agent::Conversation::new();
+        take_a_turn(
+            &config,
+            &workspace,
+            &mut conversation,
+            trusting_the_workspace(),
+            Task::new("read a.txt twice"),
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let _second = received.recv().expect("second request");
+        let third = received.recv().expect("third request");
+        assert!(
+            third.contains(window),
+            "{arguments}: the notice did not name the window asked for ({window}): {third}"
+        );
+        let tokens = tokens_in(&third);
+        assert_eq!(tokens.len(), 2, "{arguments}: both answers carry a token");
+        assert_eq!(
+            tokens[0], tokens[1],
+            "{arguments}: the notice repeats a different token"
+        );
+    }
+}
+
 /// The notice stands for lines the planner holds, so a write must end it: a planner told a file
 /// is unchanged after somebody wrote it would answer from text that is no longer there.
 #[test]
@@ -13862,6 +13914,159 @@ fn a_file_written_since_it_was_shown_is_sent_again() {
     );
 }
 
+/// Sets a file's modification time, so a test can hold it back after a rewrite or move it forward.
+fn stamp_modification_time(path: &std::path::Path, seconds: u64) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("open to stamp")
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+        .expect("set the modification time");
+}
+
+/// Reads `a.txt` in a turn of its own and returns the request that carried the result.
+fn look_at_a_txt(workspace: &Workspace, conversation: &mut bravebot_agent::Conversation) -> String {
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    take_a_turn(
+        &config,
+        workspace,
+        conversation,
+        trusting_the_workspace(),
+        Task::new("read a.txt"),
+    )
+    .expect("turn runs");
+    let _first = received.recv().expect("first request");
+    received.recv().expect("second request")
+}
+
+/// READ-8. The notice compares size and modification time and nothing else, so a rewrite that
+/// changes the bytes but leaves both alone is a notice. An implementation that also compared the
+/// bytes would send the lines, which puts content-derived bits about the file into the comparison.
+#[test]
+fn a_same_size_rewrite_that_leaves_the_modification_time_alone_is_answered_with_a_notice() {
+    const NOTICE: &str = "has not changed since it was shown to you";
+    let scratch = Scratch::new("read-repeat-held-time");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "alpha\n").unwrap();
+    stamp_modification_time(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let shown = look_at_a_txt(&workspace, &mut conversation);
+    assert!(shown.contains("alpha"), "the first read showed no lines");
+
+    // Control: with nothing written, the repeat is the notice.
+    let repeated = look_at_a_txt(&workspace, &mut conversation);
+    assert_eq!(
+        repeated.matches(NOTICE).count(),
+        1,
+        "an untouched file was not answered with a notice: {repeated}"
+    );
+
+    std::fs::write(&path, "omega\n").unwrap();
+    stamp_modification_time(&path, 1_700_000_000);
+    let held_back = look_at_a_txt(&workspace, &mut conversation);
+    assert_eq!(
+        held_back.matches(NOTICE).count(),
+        2,
+        "a rewrite of the same size and modification time was sent again: {held_back}"
+    );
+    assert!(
+        !held_back.contains("omega"),
+        "the rewritten bytes reached the planner: {held_back}"
+    );
+    let tokens = tokens_in(&held_back);
+    assert_eq!(
+        tokens.first(),
+        tokens.last(),
+        "the notice carries a token that moved with the bytes: {held_back}"
+    );
+}
+
+/// READ-8. A write that restores the same bytes is still a write: it moves the modification time,
+/// and the next read sends the lines. An implementation that compared the bytes would answer
+/// with a notice here.
+#[test]
+fn a_rewrite_of_the_same_bytes_is_answered_with_the_lines_again() {
+    const NOTICE: &str = "has not changed since it was shown to you";
+    let scratch = Scratch::new("read-repeat-same-bytes");
+    let path = scratch.path.join("a.txt");
+    std::fs::write(&path, "alpha\n").unwrap();
+    stamp_modification_time(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let shown = look_at_a_txt(&workspace, &mut conversation);
+    assert_eq!(
+        shown.matches("alpha").count(),
+        1,
+        "the first read showed no lines"
+    );
+
+    std::fs::write(&path, "alpha\n").unwrap();
+    stamp_modification_time(&path, 1_700_000_002);
+    let rewritten = look_at_a_txt(&workspace, &mut conversation);
+    assert_eq!(
+        rewritten.matches("alpha").count(),
+        2,
+        "a rewrite of the same bytes was not sent again: {rewritten}"
+    );
+    assert!(
+        !rewritten.contains(NOTICE),
+        "a rewrite of the same bytes was answered with a notice: {rewritten}"
+    );
+    let tokens = tokens_in(&rewritten);
+    assert_ne!(
+        tokens.first(),
+        tokens.last(),
+        "the new read carries the old token: {rewritten}"
+    );
+}
+
+/// READ-8. A resumed conversation starts with no record, so a read of a file the planner was shown
+/// before the resume sends the lines. An implementation that carried the record across a resume
+/// would answer with a notice about lines the resumed planner may not hold.
+#[test]
+fn a_read_of_a_file_shown_before_a_resume_sends_the_lines_again() {
+    const NOTICE: &str = "has not changed since it was shown to you";
+    let scratch = Scratch::new("read-repeat-resumed");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let shown = look_at_a_txt(&workspace, &mut conversation);
+    assert_eq!(
+        shown.matches("alpha").count(),
+        1,
+        "the first read showed no lines"
+    );
+    let mut resumed = bravebot_agent::Conversation::restored(conversation.snapshot());
+
+    // Control: the conversation that was not resumed answers the same read with a notice.
+    let repeated = look_at_a_txt(&workspace, &mut conversation);
+    assert_eq!(
+        repeated.matches(NOTICE).count(),
+        1,
+        "an untouched file was not answered with a notice: {repeated}"
+    );
+
+    // The earlier read is in the resumed history, so the lines are there twice once they are sent.
+    let after_resume = look_at_a_txt(&workspace, &mut resumed);
+    assert_eq!(
+        after_resume.matches("alpha").count(),
+        2,
+        "a resumed conversation was not sent the lines: {after_resume}"
+    );
+    assert!(
+        !after_resume.contains(NOTICE),
+        "a resumed conversation was answered with a notice: {after_resume}"
+    );
+}
+
 /// The notice is for the same window. A different slice of the file is lines nobody has been
 /// shown, whatever the token says about the file as a whole.
 #[test]
@@ -13897,6 +14102,93 @@ fn a_different_window_of_the_same_file_is_not_answered_with_a_notice() {
         !third.contains("has not changed since it was shown to you"),
         "a different window was answered with a notice: {third}"
     );
+}
+
+/// READ-8. Every gate a read passes runs before the notice is considered. A window shown while the
+/// path was readable is answered with a notice while nothing has changed, and with the gate's own
+/// refusal once a deny rule covers the path or nobody vouches for it any more. A lookup of the
+/// notice ahead of those gates would tell the planner that a file it may no longer see has not
+/// changed since it was shown.
+#[test]
+fn a_repeat_read_of_a_path_a_gate_now_refuses_is_refused_and_not_noticed() {
+    let scratch = Scratch::new("read-repeat-gated");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    const NOTICE: &str = "has not changed since it was shown to you";
+
+    // The request the planner is sent after the turn's read, for a turn run under `trust` and
+    // `task`. A check the quarantine runs is also a request, so the last one is taken.
+    let look = |conversation: &mut bravebot_agent::Conversation,
+                trust: bravebot_core::trust::TrustStore,
+                task: Task| {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"a.txt"}"#),
+            reply_with("done"),
+            reply_with("done"),
+        ]);
+        take_a_turn(
+            &config_for(&endpoint),
+            &workspace,
+            conversation,
+            trust,
+            task,
+        )
+        .expect("turn runs");
+        received.try_iter().last().expect("a final request")
+    };
+
+    for (case, refusal) in [
+        ("deny rule", "deny rule"),
+        (
+            "no vouch",
+            "Quarantined: you will not be shown what this file holds",
+        ),
+    ] {
+        let mut conversation = bravebot_agent::Conversation::new();
+        let shown = look(
+            &mut conversation,
+            trusting_the_workspace(),
+            Task::new("read a.txt"),
+        );
+        assert!(shown.contains("alpha"), "{case}: no lines were shown");
+
+        // The control: with every gate open, the repeat is the notice, so the record exists and a
+        // refusal below is the gate's and not a missing record.
+        let repeated = look(
+            &mut conversation,
+            trusting_the_workspace(),
+            Task::new("read a.txt again"),
+        );
+        assert!(
+            repeated.contains(NOTICE),
+            "{case}: the repeat was not answered with a notice: {repeated}"
+        );
+
+        let (trust, task) = match case {
+            "deny rule" => (
+                trusting_the_workspace(),
+                Task::new("read a.txt a third time").with_permissions(rules(
+                    &["Read(./a.txt)"],
+                    &[],
+                    &[],
+                )),
+            ),
+            _ => (
+                bravebot_core::trust::TrustStore::new(workspace.root()),
+                Task::new("read a.txt a third time"),
+            ),
+        };
+        let gated = look(&mut conversation, trust, task);
+        assert!(
+            gated.contains(refusal),
+            "{case}: the gate's answer was not given: {gated}"
+        );
+        assert_eq!(
+            gated.matches(NOTICE).count(),
+            1,
+            "{case}: the repeat behind a gate was answered with a second notice: {gated}"
+        );
+    }
 }
 
 /// A read whose lines the planner was never shown is not a read it holds. Asking twice for a file
@@ -13937,6 +14229,219 @@ fn a_repeat_read_of_a_file_the_planner_may_not_see_is_not_a_notice() {
         2,
         "each read should have been answered with a reference: {third}"
     );
+}
+
+/// READ-8. A read the person declined for holding a credential put no lines in front of the
+/// planner, so asking for the same window again is a read and never a notice about lines it was
+/// not shown. A record made when the read was refused would answer the repeat with the notice
+/// before the scan ran. The control run agrees to the exposure and the repeat is the notice, so
+/// the refusals below stand for a missing record and not for a read that can never be noticed.
+#[test]
+fn a_read_refused_for_a_credential_is_not_a_window_the_planner_holds() {
+    const NOTICE: &str = "has not changed since it was shown to you";
+
+    fn read_the_env_twice<C: bravebot_agent::confirm::Confirmer + Send>(
+        name: &str,
+        confirmer: &mut C,
+    ) -> String {
+        let scratch = Scratch::new(name);
+        std::fs::write(
+            scratch.path.join(".env"),
+            format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+        )
+        .unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":".env"}"#),
+            tool_request_2("read_file", r#"{"path":".env"}"#),
+            reply_with("done"),
+        ]);
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut sink = RecordingSink::new();
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("read .env twice"),
+            &mut conversation,
+            confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+        // The last request is the final round's, whatever other requests the turn made.
+        tool_results(&received.try_iter().last().expect("a final request"))
+    }
+
+    let declined = read_the_env_twice(
+        "read-repeat-credential-declined",
+        &mut bravebot_agent::confirm::Unattended,
+    );
+    assert_eq!(
+        declined
+            .matches("holds what looks like a credential")
+            .count(),
+        2,
+        "each read of the declined file should have been refused: {declined}"
+    );
+    assert!(
+        !declined.contains(NOTICE),
+        "a refused read was answered with a notice for lines the planner never had: {declined}"
+    );
+    assert!(
+        !declined.contains(DECLARED_KEY),
+        "the credential reached the planner: {declined}"
+    );
+
+    let agreed = read_the_env_twice(
+        "read-repeat-credential-agreed",
+        &mut bravebot_agent::confirm::ExposesReads,
+    );
+    assert_eq!(
+        agreed.matches(DECLARED_KEY).count(),
+        1,
+        "the agreed read should have sent the lines once: {agreed}"
+    );
+    assert_eq!(
+        agreed.matches(NOTICE).count(),
+        1,
+        "the repeat of the agreed read should be the notice: {agreed}"
+    );
+}
+
+/// READ-8. A result that carried no call id is sent back as prose and no record is made for it, so
+/// the planner's repeat of the read gets the lines again. The record is made only where a result is
+/// attached to the call it answers; one made for the prose shape would answer the repeat with a
+/// notice pointing at a result the conversation cannot tie to a call. The same two reads with call
+/// ids are the control: there the repeat is the notice.
+#[test]
+fn a_read_whose_result_carried_no_call_id_is_not_a_window_the_planner_holds() {
+    const NOTICE: &str = "has not changed since it was shown to you";
+    let scratch = Scratch::new("read-repeat-no-call-id");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\nbeta\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let read_twice = |with_ids: bool| -> String {
+        let request = |arguments: &str| {
+            let call = tool_request_2("read_file", arguments);
+            match with_ids {
+                true => call,
+                false => call.replace(r#""id":"c1","#, ""),
+            }
+        };
+        let (endpoint, received) = serve_sequence(vec![
+            request(r#"{"path":"a.txt"}"#),
+            request(r#"{"path":"a.txt"}"#),
+            reply_with("done"),
+        ]);
+        let mut conversation = bravebot_agent::Conversation::new();
+        take_a_turn(
+            &config_for(&endpoint),
+            &workspace,
+            &mut conversation,
+            trusting_the_workspace(),
+            Task::new("read a.txt twice"),
+        )
+        .expect("turn runs");
+        received.try_iter().last().expect("a final request")
+    };
+
+    let with_ids = read_twice(true);
+    assert_eq!(
+        with_ids.matches(NOTICE).count(),
+        1,
+        "the control: a repeat whose first result carried a call id should be the notice: {with_ids}"
+    );
+
+    let without_ids = read_twice(false);
+    assert_eq!(
+        without_ids.matches("alpha").count(),
+        2,
+        "a repeat of a read whose result had no call id should send the lines again: {without_ids}"
+    );
+    assert!(
+        !without_ids.contains(NOTICE),
+        "a result with no call id was recorded as a window the planner holds: {without_ids}"
+    );
+}
+
+/// READ-8. A read that failed put no lines in front of the planner, so asking for the same window
+/// again is a read and gets the same error, never a notice about lines it was not shown. A missing
+/// file has no change token to record. A file that cannot be decoded does have one, because the
+/// token comes from its metadata before any byte is read, so a record made for that failure would
+/// match on the repeat and answer it with the notice. A readable file is the control: there the
+/// repeat is the notice, so the errors below stand for a missing record and not for a read that
+/// can never be noticed.
+#[test]
+fn a_read_that_failed_is_not_a_window_the_planner_holds() {
+    const NOTICE: &str = "has not changed since it was shown to you";
+    let scratch = Scratch::new("read-repeat-failed");
+    std::fs::write(scratch.path.join("a.txt"), "alpha\n").unwrap();
+    std::fs::write(scratch.path.join("bin.dat"), [0x00u8, 0xff, 0xfe, 0x01]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // What the planner was told by each of two reads of `name`, in the order it asked.
+    let read_twice = |name: &str| -> Vec<String> {
+        let arguments = format!(r#"{{"path":"{name}"}}"#);
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", &arguments),
+            tool_request_2("read_file", &arguments),
+            reply_with("done"),
+        ]);
+        let mut conversation = bravebot_agent::Conversation::new();
+        take_a_turn(
+            &config_for(&endpoint),
+            &workspace,
+            &mut conversation,
+            trusting_the_workspace(),
+            Task::new("read it twice"),
+        )
+        .expect("turn runs");
+        let last = received.try_iter().last().expect("a final request");
+        tool_results(&last)
+            .split("Result of read_file")
+            .skip(1)
+            .map(str::to_string)
+            .collect()
+    };
+
+    let control = read_twice("a.txt");
+    assert_eq!(control.len(), 2, "two answers expected: {control:?}");
+    assert!(
+        control[0].contains("alpha"),
+        "the control showed no lines: {control:?}"
+    );
+    assert!(
+        control[1].contains(NOTICE),
+        "the control's repeat should be the notice: {control:?}"
+    );
+
+    for (name, error) in [
+        ("missing.txt", "No such file or directory"),
+        ("bin.dat", "binary"),
+    ] {
+        let answers = read_twice(name);
+        assert_eq!(
+            answers.len(),
+            2,
+            "{name}: two answers expected: {answers:?}"
+        );
+        for (which, answer) in answers.iter().enumerate() {
+            assert!(
+                answer.contains(error),
+                "{name}: read {which} was not answered with the error ({error}): {answer}"
+            );
+            assert!(
+                !answer.contains(NOTICE),
+                "{name}: a failed read was answered with a notice for lines the planner never had: {answer}"
+            );
+        }
+    }
 }
 
 /// The model must be told the file is binary, not handed a decoding error it cannot act on.
@@ -20064,20 +20569,26 @@ fn an_answer_that_names_no_document_is_written_nowhere() {
 /// A reference to something a processor wrote is content and nothing else. If it could name a
 /// destination, untrusted text would be choosing where an effect lands, which is the one thing
 /// none of this may permit.
+///
+/// The planner is told the reference names no file. A refusal for a reference nothing holds is
+/// worded differently, so a destination that was refused for the wrong reason, or a reference
+/// that never existed, does not pass.
 #[test]
 fn a_processors_output_cannot_be_a_destination() {
     let scratch = Scratch::new("no-destination");
     std::fs::write(scratch.path.join("game.js"), "const SPEED = 100;\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_sequence(vec![
+    let (endpoint, received) = serve_sequence(vec![
         tool_request("list_files", r#"{"directory":"."}"#),
         tool_request(
             "spawn_processor",
             r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
         ),
-        reply_with("../../etc/passwd"),
-        // ref:4 is what the processor produced, so it names no file.
+        // A processor's answer that names a document, so the output is a reference of its own.
+        processor_reply("../../etc/passwd"),
+        // ref:1 is game.js, which the processor read, and ref:3 is the document it produced, so
+        // ref:3 names no file.
         tool_request("write_file", r#"{"path_ref":"ref:3","contents":"x"}"#),
         reply_with("done"),
     ]);
@@ -20111,6 +20622,65 @@ fn a_processors_output_cannot_be_a_destination() {
         std::fs::read_to_string(scratch.path.join("game.js")).unwrap(),
         "const SPEED = 100;\n",
         "the file was written from a reference that names no file"
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    let told = "'ref:3' does not name a file, so it cannot say where to read from or write to";
+    assert!(
+        bodies.iter().any(|body| body.contains(told)),
+        "the planner was not told the processor's output names no file: {bodies:?}"
+    );
+}
+
+/// The refusal in [`a_processors_output_cannot_be_a_destination`] is about what the reference is.
+/// A reference a listing gave for a file is put to the person as the destination of the same call,
+/// so a gate that refused every `path_ref` write would pass the test above and fail this one.
+#[test]
+fn a_listed_files_reference_is_a_destination_a_person_is_asked_about() {
+    let scratch = Scratch::new("listed-destination");
+    std::fs::write(scratch.path.join("game.js"), "const SPEED = 100;\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request("write_file", r#"{"path_ref":"ref:1","contents":"x"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::rejecting();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    assert_eq!(
+        confirmer.seen.len(),
+        1,
+        "a write to a file a listing named was not put to the person: {:?}",
+        confirmer.seen
+    );
+    assert_eq!(
+        confirmer.seen[0].path, "game.js",
+        "the person was shown a different path from the one the reference names"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("game.js")).unwrap(),
+        "const SPEED = 100;\n",
+        "a write the person rejected landed"
     );
 }
 
@@ -27269,6 +27839,60 @@ fn a_read_the_planner_may_not_see_still_says_when_no_file_is_there() {
                 .iter()
                 .any(|event| matches!(event, Event::SlotDeferred { .. })),
             "{path}: a slot was reserved for a file that is not there"
+        );
+    }
+}
+
+/// READ-1. Whether a file is text is settled at the moment the planner asks, even where nothing
+/// is opened for the planner to see. A file holding a null byte and a file that is mostly control
+/// characters are answered as binary and no reference is reserved: an implementation that reserved
+/// first would hand the planner `[ref:1]` for bytes no processor can use.
+#[test]
+fn a_read_the_planner_may_not_see_still_says_when_the_file_is_binary() {
+    for (path, bytes) in [
+        ("blob.bin", vec![b'a', 0u8, 1, 2, 0xff, 0]),
+        ("control.dat", vec![1u8; 64]),
+    ] {
+        let scratch = Scratch::new("deferred-read-binary");
+        std::fs::write(scratch.path.join(path), &bytes).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("read_file", &format!(r#"{{"path":"{path}"}}"#)),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("what is here?"),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        // A file the person could be asked to vouch for is put to a check first, and the mock
+        // reports that request as well, so the planner's second request is the last one.
+        let bodies: Vec<String> = received.try_iter().collect();
+        let told = newest_tool_result(bodies.last().expect("the planner was asked again").clone());
+        assert!(
+            told.contains("binary file"),
+            "{path}: the planner was not told the file is binary: {told}"
+        );
+        assert!(
+            !told.contains("ref:"),
+            "{path}: the planner was handed a reference to a file that is not text: {told}"
+        );
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::SlotDeferred { .. })),
+            "{path}: a slot was reserved for a file that is not text"
         );
     }
 }

@@ -724,6 +724,7 @@ always a net positive; the cost here is a wait of at most the bound per write.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+`verified-by: bravebot_agent::lsp::quarantined_bytes_written_over_a_vouched_path_report_no_diagnostics`
 `verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`
 

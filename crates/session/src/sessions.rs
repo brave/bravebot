@@ -1574,18 +1574,24 @@ fn drop_checkouts(record: &mut Record) {
 
 /// Load weaker decisions last so equivalent path spellings cannot hide them.
 fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
+    restored_rules_with(root, rules, bravebot_agent::workspace::BACKSLASH_SEPARATES)
+}
+
+/// [`restored_rules`], with the host's answer about what separates supplied, so the Windows one
+/// can be asked for where the tests run.
+fn restored_rules_with(root: &Path, rules: &[StoredRule], backslash_separates: bool) -> TrustStore {
     let mut trust = bravebot_agent::workspace::trust_store(root);
     for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
-        trust.trust(&replayed(&rule.path));
+        trust.trust(&replayed(&rule.path, backslash_separates));
     }
     for rule in rules.iter().filter(|rule| rule.integrity == "undecided") {
-        trust.undecide(&replayed(&rule.path));
+        trust.undecide(&replayed(&rule.path, backslash_separates));
     }
     for rule in rules
         .iter()
         .filter(|rule| rule.integrity != TRUSTED && rule.integrity != "undecided")
     {
-        trust.distrust(&replayed(&rule.path));
+        trust.distrust(&replayed(&rule.path, backslash_separates));
     }
     trust
 }
@@ -1866,9 +1872,8 @@ pub struct StoredRule {
 /// the rule keyed under a name nothing asks about, so a file somebody recorded as untrusted comes
 /// back decided by the answer given about the project, which is the direction that fails open
 /// (TRUST-18).
-fn replayed(path: &str) -> String {
-    bravebot_core::spelling::to_key(path, bravebot_agent::workspace::BACKSLASH_SEPARATES)
-        .into_owned()
+fn replayed(path: &str, backslash_separates: bool) -> String {
+    bravebot_core::spelling::to_key(path, backslash_separates).into_owned()
 }
 
 /// The word for a trusted rule. Anything else reads as untrusted.
@@ -6271,6 +6276,61 @@ mod tests {
         assert!(
             vouched_for(&trust, Path::new("src/main.rs"), true),
             "the answer about the project did not vouch for a file in it"
+        );
+    }
+
+    /// A rule recorded under the host's own spelling of a drive-letter name is replayed under the
+    /// key spelled from `/` where a backslash separates, and under the name it was written with
+    /// where it does not (TRUST-18).
+    ///
+    /// A trusted, an undecided and an untrusted rule each decide a different name below the same
+    /// directory, so a replay that leaves any one of the three under the spelling it was recorded
+    /// in changes that name's answer: an untrusted rule left as `C:\fetched` reads as a file under
+    /// the project, and the file below it is decided by the answer given about the project.
+    #[test]
+    fn a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash() {
+        let rule = |path: &str, integrity: &str| StoredRule {
+            path: path.to_string(),
+            integrity: integrity.to_string(),
+        };
+        let rules = [
+            rule(r"C:\work\notes", TRUSTED),
+            rule(r"C:\work\notes\draft", "undecided"),
+            rule(r"\\?\C:\fetched", UNTRUSTED),
+        ];
+        let root = tempfile::tempdir().expect("a directory to stand for the project");
+
+        let spelled_from_slash = restored_rules_with(root.path(), &rules, true);
+
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/work/notes/x"),
+            Some(Integrity::Trusted),
+            "a trusted drive-letter rule did not reach the file below it"
+        );
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/work/notes/draft/y"),
+            None,
+            "an undecided drive-letter rule did not hold back what the trusted one above it vouches for"
+        );
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/fetched/page.html"),
+            Some(Integrity::Untrusted),
+            "an untrusted drive-letter rule did not reach the file below it"
+        );
+
+        // Where a backslash does not separate, `\\?\C:\fetched` is one file name in the project, and
+        // the rule about it reaches that name and nothing on a drive.
+        let a_file_name = restored_rules_with(root.path(), &rules, false);
+
+        assert_eq!(
+            a_file_name.integrity_of(r"\\?\C:\fetched"),
+            Some(Integrity::Untrusted),
+            "a name with a backslash in it was not kept as a name in the project"
+        );
+        assert_eq!(
+            a_file_name.integrity_of("/C:/fetched/page.html"),
+            None,
+            "a rule about a file name was read as one about a directory on a drive"
         );
     }
 

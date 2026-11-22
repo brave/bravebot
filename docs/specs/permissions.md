@@ -1171,6 +1171,7 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_agent::permissions::an_allow_entry_a_checkout_wrote_is_proposed_only_where_it_is_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_checkouts_unreadable_allow_entry_rather_than_offering_it`
 `verified-by: bravebot_cli::running::a_session_in_lines_names_an_allow_rule_a_checkout_wrote`
+`verified-by: bravebot_tui::app::the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files`
 
 <a id="PERM-15"></a>
 ### PERM-15: a checkout proposes an allow rule, and a question naming every one grants them
@@ -1409,6 +1410,8 @@ exactly the machine somebody else may have a legitimate say in.
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
+`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
 
 <a id="PERM-18"></a>
 ### PERM-18: every layer may write either, and the strictest value any layer named holds

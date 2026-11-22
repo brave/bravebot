@@ -3799,6 +3799,46 @@ mod tests {
         );
     }
 
+    /// SERVERS-14: the servers line of a report built from a session that holds a server takes its
+    /// note from that session, so a list nobody has read, one the person accepted and one the
+    /// person declined each read differently. A line that named the started aliases and left the
+    /// note empty would pass every test that hands the report no session.
+    #[test]
+    fn the_servers_line_of_a_report_says_how_the_held_servers_tools_stand() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let note_of = |servers: &crate::state::Servers| {
+            report(&Facts {
+                servers,
+                ..facts(&config, &trust)
+            })
+            .lines
+            .into_iter()
+            .find(|line| line.label.trim() == t!(status_mcp_servers))
+            .expect("the servers line is on the report")
+            .note
+        };
+
+        let unread =
+            crate::mcp_command::tests::holding_started_under("weather", a_policy_for_the_report());
+        assert_eq!(
+            note_of(&unread.servers),
+            t!(status_mcp_servers_unread, alias = "weather")
+        );
+
+        let accepted = crate::mcp_command::tests::holding_a_list_answered(true);
+        assert_eq!(
+            note_of(&accepted.servers),
+            t!(status_mcp_servers_tools, alias = "weather", count = 1)
+        );
+
+        let declined = crate::mcp_command::tests::holding_a_list_answered(false);
+        assert_eq!(
+            note_of(&declined.servers),
+            t!(status_mcp_servers_declined, alias = "weather")
+        );
+    }
+
     /// The policy a started server's backend was handed, drawn for the tests of `/status`.
     fn a_policy_for_the_report() -> EffectivePolicy {
         use bravebot_agent::servers::PolicyRow;
