@@ -3705,6 +3705,8 @@ because the path it names is the one the person was protecting.
 
 `verified-by: bravebot_sandbox::rules::a_name_is_met_by_a_star_and_a_question_mark_and_nothing_looser`
 `verified-by: bravebot_sandbox::rules::an_entry_is_read_from_where_its_spelling_says`
+`verified-by: bravebot_sandbox::rules::an_entry_is_read_by_name_to_the_absolute_path_it_spells`
+`verified-by: bravebot_sandbox::rules::the_sandbox_judges_the_path_the_reading_returns_and_refuses_for_the_reason_it_gives`
 `verified-by: bravebot_sandbox::rules::an_entry_that_starts_with_a_variable_is_refused_in_every_list`
 `verified-by: bravebot_sandbox::rules::a_link_is_judged_by_where_it_leads`
 `verified-by: bravebot_sandbox::rules::a_write_row_over_the_home_or_the_root_is_refused`
