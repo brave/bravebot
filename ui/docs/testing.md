@@ -101,6 +101,17 @@ matter:
   `schedule-command.test.mjs` pins the `/schedule` line in the composer: which typed lines go to the
   bridge as `schedule.command`, that the answer is drawn as a transcript row and never sent to the
   model, and that a `schedule.ran` event draws the line a `run-now` ends with.
+- `allow-list.test.mjs` pins the rules for the methods the window may send, which `src/main/index.ts`
+  lists in one `const ALLOWED = new Set([...])` literal: no name approves or decides (in any
+  capitalisation), `models.list` is there, no name is listed twice, and a `//` comment inside the
+  literal does not change which names are read. The rule on `approve` and `decide` is a naming check:
+  it stops a method whose name says it approves or decides from being added without a person
+  noticing. The `*.reply` methods carry the person's answers through the window, and
+  `session-directory.test.mjs` classifies each of them and fails for a name added to the literal and
+  not classified there. Nothing counts the names. `scripts/allow-list.mjs` reads the literal for
+  `allow-list.test.mjs`, `session-directory.test.mjs` and `drive:menu`, so the three mean the same
+  list. Seven other tests match text inside the literal with checks of their own. Every reader cuts
+  the literal at its first closing bracket, so keep a `]` out of a comment inside it.
 - `single-instance.test.mjs` and `single-instance-electron.test.mjs` pin the one-instance rule. The
   first runs `src/main/single-instance.ts` against a fake `app` and fake windows (a launch that does
   not get the lock quits, a second launch restores, shows and focuses a minimised main window,
@@ -221,6 +232,13 @@ contents over CDP, and an AppKit key equivalent never sees it. So it asserts the
 ⌘C/⌘V actually reaching the composer — the role assertion proves the item is there, only a
 person proves the keystroke arrives.
 
+`drive:menu` checks the same allow-list for the same two rules through `scripts/allow-list.mjs`, and
+it is not run in CI: it needs Electron, and it reads a macOS bundle's `Info.plist`. It sends one
+prompt to a model service the script serves, so the transcript holds a prompt and a reply, and it
+right-clicks both: the reply's menu must offer copy alone, and the prompt's menu copy, fork and
+rewind. `drive:fork` asserts the reply's menu and a prompt's copy and fork on a real profile, and only
+when a stored session holds two prompts.
+
 Each driver launches the app, prints a line per assertion and leaves screenshots under
 `/tmp/bravebot-ui/` or a driver-specific path in `/tmp`. Eight of the checks cost real tokens:
 `drive:markdown`, `drive:run`, `drive:ask`, `drive:bot-turn`, `drive:bot-memory`, `drive-turn.mjs`,
@@ -255,7 +273,7 @@ running it, and do not run one you have not read on a machine whose bots or sess
 about. These launch without `--user-data-dir`. All but `drive`, `drive-packaged` and `drive-smoke`
 launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use the real profile:
 
-`drive`, `drive-ask`, `drive-columns`, `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`,
+`drive`, `drive-ask`, `drive-columns`, `drive-export`, `drive-fork`, `drive-markdown`,
 `drive-packaged`, `drive-panels`, `drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`,
 `drive-tree` and `drive-turn`.
 
@@ -303,18 +321,25 @@ the temporary directory, so remove a directory named `bravebot-drive-bot-turn-*`
 `bravebot-drive-bot-memory-*` after killing a driver that way. `drive-bots` spends no tokens and
 copies nothing.
 
+`drive-menu` runs in a temporary world from `scripts/drive-world.mjs`: a `HOME`, a profile and a
+project of its own, and a model service the script serves, which the scratch `settings.json` names
+as the provider. It needs no credentials. It opens the project with `openProject`, which starts a
+chat, and sends one prompt to the service, so the checks that need an open chat or a transcript
+entry run on that chat. The driver asks the app for its `userData`. When that is not the scratch
+profile, it prints the failed check, closes the app and exits non-zero before it clicks or types.
+
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
 `drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-background-sessions`, `drive-bot-history`, `drive-bot-memory`,
 `drive-bot-summon`, `drive-bot-turn`, `drive-bots`, `drive-close-chat`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
-`drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
+`drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
 `drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-spend-limit`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual`, `drive-window-lifecycle` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
-`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-note-changelog-awake`, `drive-paste`,
+`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-note-changelog-awake`, `drive-paste`,
 `drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
@@ -456,8 +481,9 @@ table above. Two jobs:
   Electron build and the walkthrough.
 
 The workflow does not run the other Electron drivers, packaged-app checks, or the
-upstream agent's full test suite. Run the applicable local checks above. The exception is the
-Windows installers, which `Install on Windows` installs and starts on a runner of each
+upstream agent's full test suite. `drive:menu` is one of those drivers, and the allow-list rules it
+checks run as `allow-list.test.mjs` among the Node tests. Run the applicable local checks above. The
+exception is the Windows installers, which `Install on Windows` installs and starts on a runner of each
 architecture; [releasing](../../docs/development/releasing.md#the-windows-installers) says what it
 checks.
 

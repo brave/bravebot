@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { buildSync } from 'esbuild'
 import { readFileSync } from 'node:fs'
+import { allowedMethods } from './allow-list.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -100,15 +101,10 @@ const TAKES_NO_DIRECTORY = [
   'background.list',
 ]
 
-function allowedMethods(index) {
-  const body = /const ALLOWED = new Set\(\[([^\]]*)\]\)/.exec(index)
-  assert.ok(body, 'the allow-list is a literal set the test can read')
-  return [...body[1].matchAll(/'([^']+)'/g)].map(each => each[1])
-}
-
 test('every method the window may send is classified by whether it carries a directory', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   const allowed = allowedMethods(index)
+  assert.ok(allowed, 'the allow-list is a literal set the test can read')
   assert.ok(allowed.length > 40, 'the list was read whole')
   const placed = [...GATED, ...Object.keys(NO_GATE), ...TAKES_NO_DIRECTORY]
   assert.deepEqual(allowed.filter(name => !placed.includes(name)), [], 'a method added to ALLOWED is placed here, and gated if it opens or deletes a session by directory')
