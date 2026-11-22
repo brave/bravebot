@@ -1231,7 +1231,10 @@ sends none.
 The desktop app writes this key from **Settings → General → Privacy**, under **Send crash reports to
 Brave**. It writes `true` or `false` into your own file and keeps every other key. The switch shows as
 off and cannot be changed while `BRAVEBOT_CRASH_REPORTS=0`, the managed file's `false` or an incognito
-session holds reports off, and says which one does. Nothing asks you before the first report. The
+session holds reports off, and says which one does. In the terminal,
+[`/crash-reports [on | off]`](../reference/commands.md#crash-reports-on--off) says the same and writes
+the same key, and refuses a change while one of those three holds reports off. Either way the choice
+applies from the next start. Nothing asks you before the first report. The
 terminal, the desktop app and the editor integration each say once that reports are sent, at the
 first launch that is reporting, and share one record in `~/.bravebot/crash-reports/notice`, so the
 first one you use tells you and the others do not repeat it. The editor integration says it as a

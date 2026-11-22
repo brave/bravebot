@@ -9,6 +9,7 @@ governs:
   - crates/backtrace/src/send.rs
   - crates/backtrace/src/store.rs
   - crates/tui/src/crash_notice.rs
+  - crates/tui/src/crash_reports_command.rs
   - crates/ui-bridge/src/crash_notice.rs
   - ui/src/renderer/components/CrashReportsNotice.tsx
   - crates/config/src/crash_reports.rs
@@ -16,6 +17,7 @@ governs:
   - crates/ui-bridge/src/acp.rs
 documented-by:
   - docs/website/docs/customize/configuration.md
+  - docs/website/docs/reference/commands.md
   - docs/website/docs/security/security.md
   - docs/website/docs/using/editors.md
 ---
@@ -238,7 +240,9 @@ somebody else edited is sent as it is, to the person who owns the project, and d
 
 The first launch of the terminal interface that is reporting says so on its startup screen, and the
 first desktop window whose `bravebot-rpc` is reporting shows it as a banner: what a report holds,
-that it goes to Brave, and how to turn it off in Settings or with the variable. The window asks `crash_reports.notice_due`
+that it goes to Brave, and how to turn it off. The terminal's line names `/crash-reports off`
+([CRASH-13](#CRASH-13)), the `crashReports` key and the variable, and the window's banner names
+Settings and the variable. The window asks `crash_reports.notice_due`
 and, when the answer is due, calls `crash_reports.mark_notice_shown` as it draws the banner. Both
 front ends record the notice in the one `crash-reports/notice` file in the state directory, so a
 person told by one is not told again by the other or by a later launch of either. A launch that is
@@ -360,7 +364,54 @@ security page and the changelog.
 `verified-by: bravebot_ui_bridge::acp::the_binary_writes_only_protocol_messages_to_stdout`
 `verified-by: by-construction (the bridge has no method that holds a report back or takes an answer to a question about sending one: the four methods of CRASH-11 are the whole of it, and ui/scripts/crash-reports-notice.test.mjs pins that the window draws the notice only after notice_due said it was due and marks it after drawing it)`
 
+<a id="CRASH-13"></a>
+### CRASH-13: the terminal's `/crash-reports` reads and writes the person's own key and says what holds it off
+
+`/crash-reports` with no word says whether crash reports are on and, when they are off, what holds
+them off, in the order [CRASH-11](#CRASH-11) gives: an incognito session, which is a session with no
+state directory, then the managed file's `false`, then `BRAVEBOT_CRASH_REPORTS=0`, named as the
+variable, then the person's own `false`. A second line says whether this session itself sends
+reports, since a build with no address ([CRASH-3](#CRASH-3)) or a session started while reports were
+off sends none whatever the key now says.
+
+`/crash-reports on` and `/crash-reports off` write `crashReports` in the person's own
+`~/.bravebot/settings.json` with the writer the desktop switch uses, so the file is written as
+CRASH-11 says: every other key is kept, `true` is written as `true`, a file that is not a settings
+document is left as it was and the answer says nothing was kept, and a checkout's settings files are
+neither read nor written. Where an incognito session, a managed `false` or the variable decides, the
+command refuses a change in either direction, names what decides, and writes nothing. A saved choice
+takes effect from the next start, and the answer says so. Only `on` and `off`, whole and in lower
+case, change anything. Any other word says what the command takes and changes nothing
+([CMD-2](commands.md#CMD-2)). The command touches nothing a running turn holds, so typed during one
+it is carried out as it is typed ([CMD-8](commands.md#CMD-8)).
+
+**Why.** A person in the terminal has no Settings window, and the notice ([CRASH-9](#CRASH-9)) tells
+them how to turn reports off. The command reads the state with the function the desktop switch
+reads it with and writes with the same writer, so the two front ends cannot rank the switches
+differently or write the file differently. A choice made in one is the other's answer at its next
+read. The hook and the sender are installed once when the process starts, so a change applies from
+the next start, the cost the desktop switch has too.
+
+`verified-by: bravebot_tui::crash_reports_command::the_bare_command_says_on_when_nothing_turned_reports_off`
+`verified-by: bravebot_tui::crash_reports_command::each_holding_layer_is_named_and_a_change_is_refused_without_writing`
+`verified-by: bravebot_tui::crash_reports_command::the_persons_own_off_is_shown_and_can_be_changed`
+`verified-by: bravebot_tui::crash_reports_command::a_file_that_is_not_a_document_is_reported_unsaved`
+`verified-by: bravebot_tui::crash_reports_command::a_word_that_is_not_on_or_off_changes_nothing`
+`verified-by: bravebot_tui::crash_reports_command::the_command_refuses_exactly_where_the_shared_rule_says_the_person_does_not_decide`
+`verified-by: bravebot_tui::crash_reports_command::the_command_writes_the_persons_key_and_refuses_where_the_environment_decides`
+`verified-by: bravebot_tui::app::the_crash_reports_command_carries_its_word`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_crash_reports_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_backtrace::lib::saving_writes_the_one_key_and_keeps_the_rest_of_the_file`
+`verified-by: bravebot_backtrace::lib::saving_leaves_a_file_that_is_not_a_document_and_makes_a_missing_one`
+`verified-by: by-construction (no test covers the line on whether this session sends: it reads bravebot_backtrace::notice_due and notice_recorded, and one of them is true only in a launch that bravebot_backtrace::start started reporting in, as bravebot_backtrace::lib::with_nothing_started_no_notice_is_recorded pins)`
+
 ## Known costs
+
+- **A choice saved mid-session applies from the next start.** The desktop switch and
+  `/crash-reports` write the key the launch reads, and the hook is installed once, so a process
+  that was reporting can still write a report until it exits after reports were turned off.
+
 
 - **A panic is all that is reported.** A fault the process dies of without one, a bad pointer in
   a library, a stack overflow, running out of memory or being killed, leaves nothing. A minidump

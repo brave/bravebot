@@ -22,6 +22,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/variant` | `[name \| off]` | Pick a named set of options the model offers, list them, or drop the pick |
 | `/config` | | Choose how the input box edits text |
 | `/language` | `[tag \| auto]` | Choose the interface language for the next start, or drop the choice |
+| `/crash-reports` | `[on \| off]` | Say whether crash reports are on and what holds them off, or turn them on or off from the next start |
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
@@ -417,6 +418,24 @@ The choice is written to `~/.bravebot/language`, so it applies in every director
 nothing, an incognito one for example, says the choice was not saved and keeps none. See
 [Choosing a language](../customize/language.md) for the order the sources are
 read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
+
+## `/crash-reports [on | off]`
+
+Says whether crash reports are on and, when they are off, what holds them off: an incognito session,
+your administrator's managed settings, `BRAVEBOT_CRASH_REPORTS=0` in the environment, or your own
+settings file. A second line says whether this session sends reports, since a build with no address
+to send them to sends none.
+
+`/crash-reports off` writes `"crashReports": false` into your own `~/.bravebot/settings.json`, and
+`/crash-reports on` writes `true`. Every other key in the file is kept, and a file that is not a
+settings document is left as it was and the answer says nothing was kept. The choice applies from the
+next start, so a session that was sending reports can still write one until it exits. While an
+incognito session, the managed file's `false` or the variable holds reports off, both words are
+refused, the answer names which one holds them off, and nothing is written. Any other word changes
+nothing and says what the command takes. Typed while a turn runs, it is carried out at once.
+
+The desktop app's **Send crash reports to Brave** switch reads and writes the same key. See
+[`crashReports`](../customize/configuration.md#crashreports) for what a report holds.
 
 ## `/add-dir <path>`
 
@@ -1770,7 +1789,7 @@ it and the picture or file goes with it.
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme`, `/config` and `/language` change only how the screen
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme`, `/config`, `/language` and `/crash-reports` change only how the screen
 is drawn, what the box edits in or what a later start reads, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` change what the session keeps, and are carried out as you
 type them unless a line waiting ahead of them could change what they act on. Behind such a line they wait too, so `/rename` typed after a
