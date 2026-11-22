@@ -474,6 +474,24 @@ export interface SessionLimit {
   spent: number
 }
 
+/**
+ * `session.variant`'s params (BACKEND-66). `model` is the composer's pick, which can differ from
+ * the session's model until the next `turn.send`. Without `variant` the call only reads. `null` or
+ * `"off"` drops the pick, and a name picks one the model offers.
+ */
+export interface SessionVariantParams {
+  session: string
+  model?: string
+  variant?: string | null
+}
+
+/** `session.variant`'s answer: the model in force, the variant names it offers, and the pick or `null`. */
+export interface SessionVariant {
+  model: string
+  offered: string[]
+  variant: string | null
+}
+
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
 }
