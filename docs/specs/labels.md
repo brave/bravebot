@@ -68,7 +68,7 @@ guards:
       - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 78
+      - crates/core/src/policy.rs: 79
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 6
       - crates/mcp/tests/openshell.rs: 1
