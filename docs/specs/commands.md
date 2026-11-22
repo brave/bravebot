@@ -670,7 +670,8 @@ does not read:
 
 - **`/mcp` and `/mcp list`.** They say which servers the session runs with how their tools stand and
   which requested servers are not running, as `/status` reads the same facts
-  ([SERVERS-19](mcp-servers.md#SERVERS-19)). They read the session and the settings, and start,
+  ([SERVERS-19](mcp-servers.md#SERVERS-19)). They read the session, the settings and the plugins installed
+  under the state directory, and start,
   stop and ask nothing, so the turn does not hold what they read. `reconnect` puts questions to the
   person and takes the terminal, and `disable` and `remove` change the tools the turn offers, so
   those and any other word after `/mcp` wait. The line says so under the turn, naming `/mcp`, as for
@@ -724,6 +725,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_command_that_would_start_a_loop_or_a_goal_waits_for_the_turn`
 `verified-by: bravebot_tui::app::a_command_typed_behind_a_waiting_one_of_its_own_waits_with_it`
 `verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::the_mcp_list_beside_a_turn_names_the_servers_an_installed_plugin_carries_and_writes_nothing`
 `verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
 `verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
 `verified-by: bravebot_tui::app::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`

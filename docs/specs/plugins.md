@@ -615,8 +615,17 @@ work lands, in the same commit as the code.
   a `file-changed` question waits while the person has a draft, and the desktop interface, an editor
   over ACP and the local host cannot approve a plugin hook, so none runs there
   ([HOOK-11](hooks.md#HOOK-11)).
-- A plugin's server is not shown by `bravebot mcp list`, `get`, `doctor` or `/mcp list`, and is not
-  moved when its host redirects ([SERVERS-27](mcp-servers.md#SERVERS-27)).
+- A plugin's server is not moved when its host redirects ([SERVERS-27](mcp-servers.md#SERVERS-27)).
+- `bravebot doctor` says whether OpenShell can start the servers declared for it from `mcp.json` alone,
+  so a server a plugin carries that declares the OpenShell backend is not reported there
+  ([SERVERS-24](mcp-servers.md#SERVERS-24), [SERVERS-27](mcp-servers.md#SERVERS-27)).
+- A plugin's server keeps its home directory under `~/.bravebot/mcp-home`, named by the digest of the
+  declaration as expanded and not by the plugin's name, so two plugin servers whose expanded declarations
+  are identical share one directory ([SERVERS-10](mcp-servers.md#SERVERS-10),
+  [SERVERS-27](mcp-servers.md#SERVERS-27)).
+- `bravebot mcp approve` reads `mcp.json` only and approves no server a plugin carries. A plugin's server
+  is approved by a yes at its first-use question in a session at a terminal, and `bravebot mcp get` says
+  so ([SERVERS-27](mcp-servers.md#SERVERS-27)).
 - A confined stage may write the system temporary directory ([SANDBOX-30](sandboxing.md#SANDBOX-30)),
   so a stage running at the same time as a clone can write in the clone's directory. The clone's own
   settings that matter for what runs are on its command line, which a file there does not outrank, and

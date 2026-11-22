@@ -20,6 +20,16 @@
 //! `b_c`. A name `:`, `/` or `.` would have been plainer to read, and none of them is an alias.
 //! Where the person's own `mcp.json` declares the same alias the person's declaration is the one
 //! that is read: a plugin cannot take the place of a server the person wrote.
+//!
+//! # Listing
+//!
+//! A listing reads a plugin's servers once with [`PluginServers::read`], names the plugins that are
+//! turned off with [`PluginServers::disabled`], takes the aliases a session requests from the same
+//! value with [`PluginServers::requested`], and asks what a session would decide about each server
+//! with [`crate::servers::held_by_plugins`], which hashes each plugin's directory once ([`may_start`]).
+//! Between them these read the records of the installed plugins, the manifest and the servers file
+//! of each enabled plugin, every file of a plugin's installed directory to hash it, and the
+//! approvals file. They start no server, ask no question and write nothing.
 
 use crate::plugins;
 use bravebot_config::mcp::{self, Declaration, Digest, Problem};
@@ -41,6 +51,19 @@ pub fn is_reachable(plugin: &str, alias: &str) -> bool {
     mcp::is_alias(&alias_of(plugin, alias))
 }
 
+/// Whether `<plugin>_<alias>` is not an alias only because it is longer than an alias may be.
+///
+/// It is false where the alias the plugin's file gave is not an alias on its own: it holds a
+/// character an alias lacks, or it is itself longer than an alias may be. That entry is unusable in
+/// its own right and is told as not an alias. It is also false where the plugin's name spoils the
+/// join another way, as a name starting with `-` does.
+pub fn is_too_long(plugin: &str, alias: &str) -> bool {
+    let joined = alias_of(plugin, alias);
+    mcp::is_alias(alias)
+        && !mcp::is_alias(&joined)
+        && joined.starts_with(|c: char| c.is_ascii_alphanumeric())
+}
+
 /// One server of an enabled plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Server {
@@ -59,6 +82,12 @@ pub struct Server {
 }
 
 impl Server {
+    /// Whether this entry cannot be used because `<plugin>_<alias>` is longer than an alias may be,
+    /// as against an alias the plugin's file wrote that is not one or a declaration that is wrong.
+    pub fn joined_too_long(&self) -> bool {
+        is_too_long(&self.plugin, &self.named)
+    }
+
     /// What the first-use question and the approval are about: the declaration as it now stands,
     /// with the plugin's name and the directory it is installed in (PLUGIN-13).
     pub fn digest(&self) -> Option<Digest> {
@@ -90,6 +119,10 @@ pub struct PluginServers {
 
 impl PluginServers {
     /// The servers of each enabled plugin under the state directory `home`, in plugin name order.
+    ///
+    /// It reads the records of the installed plugins, and for each enabled plugin its manifest and
+    /// the servers file the manifest names, in the plugin's installed directory. It hashes no
+    /// directory, reads no approvals file, starts no server, asks no question and writes nothing.
     ///
     /// None in a safe session, which reads no declaration, and for a plugin whose servers file
     /// cannot be read. A plugin that is turned off is named and nothing of it is read (PLUGIN-11).
@@ -132,12 +165,23 @@ impl PluginServers {
     /// A checkout cannot add to this: only the state directory is read. An alias a settings file
     /// also requests is requested once, under the settings file.
     pub fn requests(home: &Path, already: &[(PathBuf, String)]) -> Vec<(PathBuf, String)> {
-        Self::read(home)
-            .servers
-            .into_iter()
+        Self::read(home).requested(already)
+    }
+
+    /// [`Self::requests`] from a value already read, so a listing that also names the plugins that
+    /// are turned off reads the files once.
+    pub fn requested(&self, already: &[(PathBuf, String)]) -> Vec<(PathBuf, String)> {
+        self.servers
+            .iter()
             .filter(|server| already.iter().all(|(_, alias)| *alias != server.alias))
-            .map(|server| (server.install_dir.join(plugin::FILE), server.alias))
+            .map(|server| (server.install_dir.join(plugin::FILE), server.alias.clone()))
             .collect()
+    }
+
+    /// The installed plugins that are turned off, in name order. Nothing of them was read
+    /// (PLUGIN-11), so no server of theirs is among [`Self::servers`].
+    pub fn disabled(&self) -> &[String] {
+        &self.disabled
     }
 
     /// What `alias` is among the plugins' servers, if anything.
@@ -302,6 +346,60 @@ pub(crate) mod tests {
             Some(Listed::Disabled("demo"))
         ));
         assert!(read.find("other_weather").is_none());
+    }
+
+    /// A joined alias is too long only where the alias the plugin wrote is an alias on its own, the
+    /// plugin's name does not otherwise spoil the join, and the join is over the limit. The limit is
+    /// the longest alias [`mcp::is_alias`] accepts, found here and not written down, and a joined
+    /// alias of exactly that length is not too long.
+    ///
+    /// Rejects an `is_too_long` that is true for any alias problem, which would call an alias with a
+    /// `:` in it, an alias over the limit by itself, or a plugin name starting with `-` too long, and
+    /// one that is off by one at the limit, which would call a usable joined alias too long or a
+    /// joined alias one character over the limit usable.
+    #[test]
+    fn a_joined_alias_is_too_long_only_for_a_valid_alias_that_the_join_makes_too_long() {
+        let longest = (1..=1024)
+            .rev()
+            .find(|length| mcp::is_alias(&"x".repeat(*length)))
+            .expect("some length is an alias");
+        assert!(!mcp::is_alias(&"x".repeat(longest + 1)), "the limit found");
+        let room = longest - alias_of("demo", "").len();
+        let at_the_limit = "x".repeat(room);
+        let over_by_one = "x".repeat(room + 1);
+        assert_eq!(alias_of("demo", &at_the_limit).len(), longest);
+        assert!(is_reachable("demo", &at_the_limit));
+        assert!(!is_too_long("demo", &at_the_limit), "at the limit");
+        assert_eq!(alias_of("demo", &over_by_one).len(), longest + 1);
+        assert!(is_too_long("demo", &over_by_one), "one over the limit");
+        assert!(!is_too_long("demo", "weather"));
+        assert!(!is_too_long("demo", "a:b"), "not an alias at all");
+        assert!(
+            !is_too_long("demo", &"x".repeat(70)),
+            "an alias the plugin wrote that is over the limit by itself is not an alias"
+        );
+        assert!(!is_too_long("-a", "x"), "a name starting with - spoils it");
+    }
+
+    /// The plugins turned off are named beside the servers of the others, and the aliases a session
+    /// requests come from the same read.
+    ///
+    /// Rejects an accessor that lists an enabled plugin as turned off, and a request that differs
+    /// from what `requests` gives a session.
+    #[test]
+    fn the_turned_off_plugins_are_named_beside_the_requests_of_the_others() {
+        let root = fresh("plugin-servers-listing");
+        let home = install(&root, "home", "demo", SERVERS);
+        install(&root, "home", "other", SERVERS);
+        plugins::set_enabled(&home, "other", false).expect("disable");
+
+        let read = PluginServers::read(&home);
+
+        assert_eq!(read.disabled(), ["other".to_string()]);
+        let asked = read.requested(&[]);
+        assert_eq!(asked, PluginServers::requests(&home, &[]));
+        let aliases: Vec<&str> = asked.iter().map(|(_, alias)| alias.as_str()).collect();
+        assert_eq!(aliases, ["demo_b_c", "demo_weather"]);
     }
 
     /// An alias that would be longer than an alias may be is an entry that cannot be used.

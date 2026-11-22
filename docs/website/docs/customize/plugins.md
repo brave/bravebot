@@ -216,7 +216,31 @@ differences from a server you declared yourself:
 - A server you declared in `mcp.json` under the same alias wins over the plugin's, and a note says
   so.
 - A plugin server is not moved if its remote host redirects.
-- `bravebot mcp list`, `get` and `doctor` and `/mcp list` do not show plugin servers.
+- `bravebot mcp approve` does not approve it. That command reads `~/.bravebot/mcp.json` only. A plugin
+  server is approved by a yes the first time a session at a terminal asks about it.
+
+`bravebot mcp list` and `bravebot doctor` list the servers of every enabled plugin as a second block
+after the servers you declared, under the heading `carried by installed plugins`. Each row is the
+server's `<plugin>_<alias>`, its transport, whether it is approved and the digest a yes is recorded
+against. Under it a line names the plugin that carries it, and a line says what a session at a
+terminal does: asks first, starts it unasked after an earlier yes, or does not start it, with the
+reason. A server nobody has said yes to is listed as unapproved. A yes you gave about a server you
+declared yourself, or the answer "all future servers in this project", does not make a plugin server
+approved, so neither shows as approved.
+`bravebot mcp get demo_weather` shows the declaration in full, names the plugin and shows the whole
+digest and whether the server is approved. `/mcp list` names each plugin server that is not running by
+its name, with whether it was turned off in this session. `/mcp reconnect demo_weather` starts it,
+asking the first-use question where you have not said yes to that server, and
+`/mcp disable demo_weather` turns it off for the session. `/mcp remove`
+acts on declared servers only: remove a plugin with `/plugin remove demo`.
+
+A plugin you turned off with `/plugin disable` is named on one line, and its servers are not read or
+listed. A plugin whose folder no longer matches what was installed is listed with the sentence that
+says so under each of its servers, and that does not make `list` or `doctor` fail. A server whose name
+is too long once the plugin's name is put before it, or whose entry cannot be used, is listed with what
+is wrong and makes `list` and `doctor` fail. Where `mcp.json` declares the same name, only your server
+is listed, with a line saying the plugin's is not used. Listing starts no server, asks no question
+and writes no file.
 
 A yes is recorded as a `plugin` line in `~/.bravebot/mcp-approved`.
 

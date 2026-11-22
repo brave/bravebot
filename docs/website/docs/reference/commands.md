@@ -966,10 +966,14 @@ the chord in force, where the plan has room for it.
 ## `/mcp [list | reconnect [alias] | disable <alias> | remove <alias>]`
 
 Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
-tools stand, and each server your settings request that is not running, saying whether it was turned
-off. `reconnect` starts every requested server that is not running and was not turned off here, and
-`reconnect weather` starts that one, including one turned off. A start takes the road a session takes
-as it opens, so a server whose declaration changed, or that nobody approved, is put to you again.
+tools stand, and each server your settings request or an installed plugin carries that is not running,
+saying whether it was turned off. A plugin turned off with `/plugin disable` is named on one line, and
+none of its servers is listed. `reconnect` starts every requested server that is not running and was
+not turned off here, and
+`reconnect weather` starts that one, including one turned off. A plugin's server is named
+`<plugin>_<alias>` and `reconnect` and `disable` accept that name, which `remove` does not. A start
+asks what a session asks as it opens, so a server whose declaration changed, or that nobody approved,
+is put to you again.
 `disable weather` stops the server and drops its grant. It writes nothing, so the next session starts
 the server as before.
 

@@ -54,7 +54,9 @@ Declaring a server is built, and so are starting one, offering its tools and cal
 it was asked about, writes and takes out the request in the settings file `-s` names, lists what is
 declared, and forgets a project's standing answers ([SERVERS-1](#SERVERS-1),
 [SERVERS-2](#SERVERS-2), [SERVERS-3](#SERVERS-3), [SERVERS-5](#SERVERS-5), and the `list` half of
-[SERVERS-14](#SERVERS-14)). `doctor` names a settings layer that tries to declare one.
+[SERVERS-14](#SERVERS-14)). `doctor` names a settings layer that tries to declare one. `mcp list`,
+`mcp get`, `doctor` and `/mcp list` also show the servers that installed plugins carry
+([SERVERS-27](#SERVERS-27)).
 
 The machine's managed layer can keep a server from starting, by the host its url names or the
 command it runs, and can add none. An allow list starts only what it names, a deny entry wins over
@@ -204,7 +206,8 @@ there, and `user` is `~/.bravebot/settings.json`, which every session reads. `ge
 one declaration in full, including its digest and the variables it will receive. `list` says, per
 alias, the transport, whether it is approved and the digest, which file here requested it, whether a
 session started here holds a grant to call it, and what is answered about it here; `doctor` says
-the same ([SERVERS-14](#SERVERS-14)). `remove` deletes the declaration and its approval together,
+the same ([SERVERS-14](#SERVERS-14)). Both also list the servers an installed plugin carries, which
+`mcp.json` does not declare. `remove` deletes the declaration and its approval together,
 because an approval outliving its declaration is a digest nothing resolves. `forget` drops the
 standing answers recorded for a project, defaulting to this one.
 
@@ -1285,6 +1288,7 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_cli::mcp::a_value_where_an_alias_a_scope_or_a_directory_goes_is_refused_and_never_repeated`
 `verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
 `verified-by: bravebot_cli::mcp::a_file_a_value_or_an_argument_names_is_declared_as_a_read_and_nothing_broader_is`
+`verified-by: bravebot_cli::running::a_plugin_servers_stored_variable_is_named_by_get_and_its_value_is_printed_by_nothing`
 `verified-by: bravebot_agent::servers::a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it`
 `verified-by: bravebot_agent::servers::a_named_variable_the_process_does_not_hold_is_left_out_and_not_set_empty`
 `verified-by: bravebot_agent::servers::a_declared_read_grants_the_one_file_and_nothing_beside_it`
@@ -1698,8 +1702,28 @@ it covers ([SERVERS-5](#SERVERS-5)), and the tools answer 2 at a call covers. Wh
 the list says that nothing is answered. A server requested here and declared nowhere is a row of its
 own. A declaration that cannot be used is listed with its problem, and the list then fails.
 
+The servers an installed, enabled plugin carries are listed too, as a second block after the declared
+rows, under a heading that says installed plugins carry them ([SERVERS-27](#SERVERS-27)). Each is a row
+under its joined alias `<plugin>_<alias>`, with the transport, whether it is approved and the digest a
+yes to it is recorded against. Under the row is a line naming the plugin that carries it and, except for
+an entry that cannot be used, one line saying what a session at a terminal does with the server: it
+starts it unasked, it asks before starting it, or it does not start it, with the reason (the plugin's
+directory differs from the install record, or no session here can start it because its program is not
+found, the managed layer refuses it or this host cannot confine it). An entry that cannot be used has its
+problem in the row and no line about a start. A plugin's server that is present and unapproved is shown as
+present and unapproved rather than omitted. `bravebot mcp get <plugin>_<alias>` draws the declaration,
+names the plugin, shows the whole digest and says whether it is approved. The rows come from the
+decision a session makes for a plugin's server and answer for a session at a terminal, as the declared
+rows do. Listing them starts no server, asks no question and writes no file. What a row says about
+approval, a directory that changed, an entry that cannot be used and a declaration in `mcp.json` under
+the same alias is [SERVERS-27](#SERVERS-27)'s. Where `mcp.json` cannot be read, `list`, `doctor` and
+`get` stop with that reason and print no block of a plugin's servers. A session in that state starts no
+server, a plugin's included, and says that no requested server was started and why, since it reads
+`mcp.json` before it settles any request, so a listing that stops there does not disagree with it.
+
 `doctor` prints the same rows after the state directory, under a heading that names the declarations
-file and the directory. It fails where the list does, with the status for a failed check rather
+file and the directory, and then the block of a plugin's servers. It fails where the list does, with
+the status for a failed check rather
 than the one for a configuration nothing ran on, since a session here still opens without that
 server. A machine with no state directory says so and does not fail, since no session there starts
 a server. Neither prints the value of a variable a declaration names
@@ -1723,6 +1747,24 @@ network that confinement grants each server are listed at the end of the report
 `verified-by: bravebot_cli::mcp::list_says_a_requested_server_no_session_here_starts_holds_no_grant`
 `verified-by: bravebot_cli::mcp::doctor_reports_what_list_does_and_fails_where_it_does`
 `verified-by: bravebot_cli::running::list_and_doctor_in_a_checkout_say_what_requested_each_server_and_what_a_session_there_holds`
+`verified-by: bravebot_cli::mcp::list_shows_an_installed_plugins_server_unapproved_under_its_joined_alias_with_its_plugin`
+`verified-by: bravebot_cli::mcp::doctor_prints_the_rows_list_prints_and_fails_exactly_where_list_does`
+`verified-by: bravebot_cli::mcp::get_draws_a_plugins_server_names_its_plugin_and_says_where_it_is_approved`
+`verified-by: bravebot_cli::mcp::what_a_plugin_wrote_is_drawn_written_out_in_get_and_list`
+`verified-by: bravebot_cli::mcp::a_request_for_an_alias_a_plugin_carries_is_not_reported_as_declared_nowhere`
+`verified-by: bravebot_agent::servers::plugin_tests::a_session_and_a_listing_agree_on_every_state_of_a_plugins_server`
+`verified-by: bravebot_cli::running::a_plugin_servers_stored_variable_is_named_by_get_and_its_value_is_printed_by_nothing`
+`verified-by: bravebot_cli::running::listing_a_plugins_servers_starts_none_of_them_and_contacts_none_of_them`
+`verified-by: bravebot_cli::running::listing_a_plugins_servers_asks_no_question_whatever_standard_input_holds`
+`verified-by: bravebot_cli::running::listing_a_plugins_servers_writes_nothing_into_the_state_directory`
+`verified-by: bravebot_agent::servers::plugin_tests::a_session_words_an_unusable_plugin_entry_as_a_listing_does`
+`verified-by: bravebot_agent::servers::plugin_tests::the_hold_of_one_server_is_the_hold_the_listing_gives_that_server`
+`verified-by: bravebot_agent::servers::plugin_tests::a_held_server_printed_with_debug_leaves_out_the_bearer_token_its_plan_holds`
+`verified-by: bravebot_agent::servers::plugin_tests::a_session_and_a_listing_agree_on_the_states_that_keep_a_plugins_server_from_starting_here`
+`verified-by: bravebot_cli::mcp::a_plugin_alias_no_session_reaches_does_not_widen_the_rows_of_the_others`
+`verified-by: bravebot_cli::mcp::a_short_plugin_alias_no_session_reaches_does_not_widen_the_rows_of_the_others`
+`verified-by: bravebot_cli::mcp::a_plugins_server_no_session_here_starts_says_why_and_fails_nothing`
+`verified-by: bravebot_cli::mcp::list_get_and_examined_ask_a_present_person_nothing_and_leave_the_server_unapproved`
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::status::each_servers_note_says_how_its_tools_stand`
 `verified-by: bravebot_tui::status::the_servers_line_of_a_report_says_how_the_held_servers_tools_stand`
@@ -2215,14 +2257,20 @@ This spec cannot land without these. Each is named by what the clause says rathe
 
 The full-screen interface has `/mcp`. Bare or as `list`, it names each server the session runs with
 how its tools stand, as `/status` does ([SERVERS-14](#SERVERS-14)), and each server the settings
-request that is not running, saying whether it was turned off. `reconnect` starts every requested
-server that is not running and was not turned off here, and `reconnect <alias>` starts that one,
-including one turned off. Each start takes the road a session takes as it opens: the declaration is
+request or an enabled installed plugin carries that is not running, saying whether it was turned off.
+A plugin's server is named by its alias and that state alone ([SERVERS-27](#SERVERS-27)). A plugin
+turned off with `/plugin disable` is named on one line, with none of its servers, since none of its
+files is read. `reconnect` starts every requested server that is not running and was not turned off
+here, a plugin's among them, and `reconnect <alias>` starts that one, including one turned off. Each
+start does what a session does as it opens: the declaration is
 read again, a server approved before starts unasked, one whose digest changed or that nobody
 approved is put to the person with the same three answers, and the managed layer refuses what it
 refuses ([SERVERS-4](#SERVERS-4), [SERVERS-5](#SERVERS-5), [SERVERS-12](#SERVERS-12),
-[SERVERS-13](#SERVERS-13)). A server started this way has a list nobody has read, so it is put to
-the person before the next turn plans ([SERVERS-8](#SERVERS-8)). A server the session already runs
+[SERVERS-13](#SERVERS-13)). A plugin's server is started as a session starts it, under the rules of
+[SERVERS-27](#SERVERS-27): only a yes to that server approves it, so the first-use question names the
+plugin, and bypassing, a recorded project answer and nobody to ask start none. A server started this
+way has a list nobody has read, so it is put to the person before the next turn plans
+([SERVERS-8](#SERVERS-8)). A server the session already runs
 keeps its process and what was answered about its list. `disable <alias>` stops the server's
 process, drops the grant naming it ([SERVERS-9](#SERVERS-9)) and offers none of its tools. It writes
 nothing, so the next session starts the server as before. The list ends with a line naming
@@ -2232,8 +2280,9 @@ asked about it.
 Where `disable` or `remove` takes an alias, it also takes a pattern: a word of the characters an
 alias has and at least one `*`, which stands for any run of characters, including none, so
 `/mcp remove brave-tabs*` names `brave-tabs-manage` and `brave-tabs-read`. The pattern is matched
-against the aliases the session runs, the settings request and, for `remove`, the state directory
-declares, so it names no more than the person's own files and session hold. Each alias it names is
+against the aliases the session runs, the settings request and, for `disable`, the enabled plugins
+carry, and, for `remove`, the state directory declares, so it names no more than the person's own
+files and session hold. Each alias it names is
 taken as if it had been typed alone, in alphabetical order, and a failure for one is said and does
 not stop the others. A pattern that names no alias says so and changes nothing. A word with a `*`
 and any other character is not a pattern, and is refused as a word that is no alias is. The pattern
@@ -2249,12 +2298,14 @@ declared. When the second succeeds, the server is stopped in this session and it
 one (letters, digits, `-` and `_`, starting with a letter or digit), so a word such as `--help` is never an argument of the program, and
 nothing is run in an incognito session or where there is no state directory, because the program
 cannot know the session is incognito. The command line stays the one writer of a declaration and of
-the settings files that request one ([layering](layering.md)).
+the settings files that request one ([layering](layering.md)). A plugin's server is not declared in
+`mcp.json`, so the second program answers that no server is declared under its alias, and
+`/plugin remove` is how a plugin and its servers go.
 
-An alias the settings do not request is not started and not turned off by being named. Nothing a
-server sent decides what `/mcp` does: the person names the alias. Typed during a turn, the bare word
-and `list` are carried out as they are typed, since they only read the servers the session holds, and
-answer under the turn as `/status` does. Every other form waits for the turn to end, as the other
+An alias that neither the settings nor an enabled plugin request is not started and not turned off by
+being named. Nothing a server sent decides what `/mcp` does: the person names the alias. Typed during
+a turn, the bare word and `list` are carried out as they are typed, since they only read the servers
+the session holds and the plugins installed, and answer under the turn as `/status` does. Every other form waits for the turn to end, as the other
 commands that touch the network or the terminal do: `reconnect` puts questions to the person and
 takes the terminal, and `disable` and `remove` change the tools the turn offers. The words the person
 typed decide which form it is, and nothing a server sent does ([CMD-8](commands.md#CMD-8)).
@@ -2287,8 +2338,17 @@ callable that the person turned off.
 `verified-by: bravebot_config::mcp::a_pattern_has_a_star_and_only_the_characters_of_an_alias`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::the_mcp_list_is_carried_out_beside_a_turn_as_it_is_typed`
+`verified-by: bravebot_tui::app::the_mcp_list_beside_a_turn_names_the_servers_an_installed_plugin_carries_and_writes_nothing`
 `verified-by: bravebot_tui::app::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
 `verified-by: bravebot_tui::app::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
+`verified-by: bravebot_tui::mcp_command::the_list_names_a_plugins_server_that_is_not_running_by_its_alias_and_state_alone`
+`verified-by: bravebot_tui::mcp_command::a_plugins_server_turned_off_with_mcp_disable_is_accepted_and_listed_as_off`
+`verified-by: bravebot_tui::mcp_command::a_plugin_turned_off_is_named_on_one_line_and_its_servers_are_not_listed`
+`verified-by: bravebot_tui::mcp_command::disabling_a_plugins_server_whose_alias_has_a_control_character_writes_the_alias_out`
+`verified-by: bravebot_tui::mcp_command::reconnecting_an_alias_with_a_control_character_writes_the_alias_out`
+`verified-by: bravebot_tui::mcp_command::reconnecting_a_plugins_server_puts_the_first_use_question_naming_the_plugin`
+`verified-by: bravebot_tui::mcp_command::reconnecting_a_plugins_server_without_a_person_or_with_a_recorded_project_starts_it_unasked_never`
+`verified-by: bravebot_tui::mcp_command::a_plugin_authored_alias_with_a_control_character_is_written_out_in_the_list`
 
 <a id="SERVERS-20"></a>
 ### SERVERS-20: `/status` lists what the confinement of each started local server grants
@@ -2712,14 +2772,31 @@ install. A directory that differs, cannot be read or has lost its record, and a 
 start nothing and stop a running server: nothing is asked and the plugin is named once in the session,
 with a note, for a changed directory. A turned-off plugin's answers stay in `mcp-approved`, and turning
 it on again asks nothing for a directory that still matches. The alias a plugin's file chose is drawn in
-every note about it as a name a checkout wrote is, with a control character written out. Removing a plugin takes its `plugin` lines
+every note and listing about it as a name a checkout wrote is, with a control character written out.
+Removing a plugin takes its `plugin` lines
 out of `mcp-approved` before the directory is deleted, and a remove that cannot rewrite the file stops
 with the plugin still installed.
 
+**What the listing shows.** `bravebot mcp list`, `get` and `doctor` and `/mcp list` read a plugin's
+servers with the reader a session uses and take the decision a session takes about each, so a row
+answers for a session at a terminal ([SERVERS-14](#SERVERS-14), [SERVERS-19](#SERVERS-19)). A row says
+approved only for a yes recorded as a `plugin` line against that server's digest, and never for a home
+approval of the same declaration or a recorded project answer. A plugin turned off is named on one line
+and its servers are not read. Where the plugin's directory differs from the install record, its rows
+say so and neither `list` nor `doctor` fails for it. Otherwise an entry that cannot be used, a joined
+alias that is too long or a declaration that cannot be used, is listed with its problem and makes
+`list` and `doctor` fail, as a declaration of the person's own that cannot be used does. A
+declaration in `mcp.json` under the same joined alias is the only live row, and a line says the
+plugin's server is not used. Reading them starts no server, asks no question and writes no file.
+`bravebot mcp approve <alias>` reads `mcp.json` only, so it approves nothing for a plugin's alias and
+answers that no server is declared under it. A plugin's server is approved only by a yes at its
+first-use question, and `get` says so under an unapproved server. `/mcp reconnect` and `/mcp disable`
+accept a plugin's alias ([SERVERS-19](#SERVERS-19)), and a start puts the first-use question to the person as
+a session's start does.
+
 **Not built.** A server of a plugin is not moved ([SERVERS-11](#SERVERS-11)): a redirected handshake of
 one is left unstarted, because a move would write the plugin's alias into `mcp.json`, where the person's
-declaration would then shadow the plugin's. `bravebot mcp list`, `get` and `doctor` and `/mcp list` do
-not show a plugin's servers, and `/mcp reconnect` starts them on the road above.
+declaration would then shadow the plugin's.
 
 **Why.** An install is one yes to a list. Starting a program is a decision about that program, so the
 question stays, and the digest holds the plugin's directory because a server is usually an argv that
@@ -2747,4 +2824,27 @@ decide what runs under that name.
 `verified-by: bravebot_config::mcp::a_plugins_approval_is_its_own_line_and_a_home_rewrite_keeps_it`
 `verified-by: bravebot_config::mcp::withdrawing_a_plugins_answers_leaves_every_other_line_as_it_was`
 `verified-by: bravebot_config::plugin::the_argv_a_digest_is_taken_over_is_the_expanded_one_and_follows_the_install_directory`
+`verified-by: bravebot_agent::plugin_servers::a_joined_alias_is_too_long_only_for_a_valid_alias_that_the_join_makes_too_long`
+`verified-by: bravebot_agent::plugin_servers::the_turned_off_plugins_are_named_beside_the_requests_of_the_others`
+`verified-by: bravebot_agent::servers::plugin_tests::a_listing_calls_a_plugins_server_approved_only_for_a_yes_to_that_server`
+`verified-by: bravebot_agent::servers::plugin_tests::a_listing_holds_a_stop_for_a_changed_tree_and_names_a_plugin_turned_off`
+`verified-by: bravebot_agent::servers::plugin_tests::a_listing_tells_a_joined_alias_that_is_too_long_from_an_unusable_declaration`
+`verified-by: bravebot_agent::servers::plugin_tests::a_session_and_a_listing_agree_on_every_state_of_a_plugins_server`
+`verified-by: bravebot_cli::mcp::a_plugin_server_is_approved_only_after_a_yes_to_that_server_is_recorded`
+`verified-by: bravebot_cli::mcp::a_plugin_turned_off_is_named_once_and_its_servers_are_not_listed`
+`verified-by: bravebot_cli::mcp::a_plugin_whose_files_changed_says_so_under_its_server_and_fails_nothing`
+`verified-by: bravebot_cli::mcp::get_for_a_plugin_whose_files_changed_draws_the_server_and_says_its_files_changed`
+`verified-by: bravebot_cli::mcp::a_joined_alias_that_is_too_long_is_listed_as_such_and_fails_list_and_get`
+`verified-by: bravebot_cli::mcp::a_declaration_under_the_same_joined_alias_is_the_only_live_row`
+`verified-by: bravebot_tui::mcp_command::reconnecting_a_plugins_server_without_a_person_or_with_a_recorded_project_starts_it_unasked_never`
+`verified-by: bravebot_tui::mcp_command::a_plugin_authored_alias_with_a_control_character_is_written_out_in_the_list`
+`verified-by: bravebot_tui::mcp_command::disabling_a_plugins_server_whose_alias_has_a_control_character_writes_the_alias_out`
+`verified-by: bravebot_tui::mcp_command::reconnecting_an_alias_with_a_control_character_writes_the_alias_out`
+`verified-by: bravebot_agent::servers::plugin_tests::a_session_words_an_unusable_plugin_entry_as_a_listing_does`
+`verified-by: bravebot_agent::servers::plugin_tests::a_change_to_one_plugin_stops_the_servers_of_that_plugin_and_no_other`
+`verified-by: bravebot_agent::servers::plugin_tests::a_plugin_turned_off_stops_its_own_servers_and_not_those_of_a_plugin_named_with_its_name_first`
+`verified-by: bravebot_agent::servers::plugin_tests::a_session_and_a_listing_agree_on_the_states_that_keep_a_plugins_server_from_starting_here`
+`verified-by: bravebot_agent::servers::plugin_tests::a_plugins_local_server_is_unconfined_where_this_host_has_no_confinement_and_asked_about_where_it_has`
+`verified-by: bravebot_cli::mcp::a_joined_alias_at_the_longest_length_lists_as_usable_and_one_more_lists_as_too_long`
+`verified-by: bravebot_cli::mcp::a_plugins_server_no_session_here_starts_says_why_and_fails_nothing`
 `verified-by: by-construction (a session started with --safe reads no plugin server because the reader in crates/agent/src/plugin_servers.rs returns none while the safe flag is engaged, and a plugin server is moved by nothing because the move path in crates/agent/src/servers.rs declines a plugin's server)`

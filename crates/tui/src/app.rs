@@ -329,7 +329,7 @@ fn carry_out_while_working(
         // them, which the turn does not change, and none is started, stopped or asked about.
         Action::Mcp(argument) if crate::mcp_command::only_lists(&argument) => {
             session.answer_while_working(|session| {
-                crate::mcp_command::list(session, beside.settings);
+                crate::mcp_command::list(session, beside.settings, beside.home);
             });
         }
         Action::SetTheme(name) => {
@@ -33288,6 +33288,17 @@ mod tests {
     /// `docs`, with `docs` turned off for the session.
     fn mcp_typed_during_a_turn(session: &mut Session, line: &str) {
         let settings = settings_requesting_servers("bravebot-mcp-mid-turn", &["weather", "docs"]);
+        mcp_typed_during_a_turn_beside(session, line, &settings, None);
+    }
+
+    /// `line` typed and sent during a turn, carried out beside `settings` and the state directory
+    /// `home`, which is where the installed plugins are read from.
+    fn mcp_typed_during_a_turn_beside(
+        session: &mut Session,
+        line: &str,
+        settings: &bravebot_config::Settings,
+        home: Option<&std::path::Path>,
+    ) {
         let root = std::path::Path::new("/work");
         let mut stored = bravebot_session::sessions::Handle::begin(
             root,
@@ -33300,10 +33311,10 @@ mod tests {
             key(KeyCode::Enter),
             &mut Beside {
                 managed: &bravebot_config::Managed::default(),
-                settings: &settings,
+                settings,
                 stored: &mut stored,
                 root,
-                home: None,
+                home,
                 workspace: &a_workspace(),
                 scratch: None,
                 config: &mut a_config_needing_no_sign_in(),
@@ -33346,6 +33357,58 @@ mod tests {
                 session.history.len(),
                 remembered + 1,
                 "{line} was not remembered once"
+            );
+        }
+    }
+
+    /// `/mcp list` typed during a turn reads the plugins installed under the state directory the
+    /// session was started with, as the list typed between turns does, so it names the joined alias
+    /// of a server an installed plugin carries and no more. It starts nothing, asks nothing, queues
+    /// nothing and leaves the state directory as it was, every path and every byte (CMD-8,
+    /// SERVERS-19). The regression it rejects is a route that passes no state directory to the list,
+    /// which leaves a plugin's server out of the answer beside a turn and names it between turns.
+    #[test]
+    fn the_mcp_list_beside_a_turn_names_the_servers_an_installed_plugin_carries_and_writes_nothing()
+    {
+        let machine = crate::mcp_command::tests::carrying(
+            "bravebot-mcp-mid-turn-plugin",
+            crate::mcp_command::tests::WEATHER,
+        );
+        let home = crate::mcp_command::tests::state(&machine);
+        let before = crate::mcp_command::tests::tree(home);
+        assert!(!before.is_empty(), "the plugin was installed");
+        let settings = settings_requesting_servers("bravebot-mcp-mid-turn-plugin-settings", &[]);
+
+        for line in ["/mcp", "/mcp list"] {
+            let mut session = a_turn_running_on("first");
+            let remembered = session.history.len();
+
+            mcp_typed_during_a_turn_beside(&mut session, line, &settings, Some(home));
+
+            assert_eq!(
+                said_under_the_turn(&session),
+                vec![
+                    t!(mcp_command_not_running).to_string(),
+                    format!(
+                        "  {}",
+                        t!(mcp_command_not_connected, alias = "demo_weather")
+                    ),
+                    t!(mcp_command_remove_hint).to_string(),
+                ],
+                "{line} did not name the plugin's server under the turn"
+            );
+            assert!(session.queued.is_empty(), "{line} waited");
+            assert!(session.servers.session.is_none(), "{line} started a server");
+            assert_eq!(session.input(), "", "{line} was left in the box");
+            assert_eq!(
+                session.history.len(),
+                remembered + 1,
+                "{line} was not remembered once"
+            );
+            assert_eq!(
+                crate::mcp_command::tests::tree(home),
+                before,
+                "{line} wrote under the state directory"
             );
         }
     }

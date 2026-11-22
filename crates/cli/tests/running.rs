@@ -18,6 +18,7 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+use bravebot_i18n::t;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -18967,6 +18968,327 @@ fn a_one_shot_task_opening_with_slash_plugin_update_changes_nothing() {
         asked.iter().any(|body| body.contains("/plugin update")),
         "the line was not sent as words: {asked:?}"
     );
+}
+
+/// Installs the plugin `demo` into `scratch`'s state directory. It carries the servers the text
+/// `servers` declares as its `servers.json`, and each of `files` (a name and its contents) beside it.
+fn a_plugin_carrying_servers(scratch: &Scratch, servers: &str, files: &[(&str, &str)]) {
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("create the plugin source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nservers = \"servers.json\"\n",
+    )
+    .expect("write the manifest");
+    std::fs::write(source.join("servers.json"), servers).expect("write the servers");
+    for (name, contents) in files {
+        std::fs::write(source.join(name), contents).expect("write a file of the plugin");
+    }
+    bravebot_agent::plugins::install(&source, &scratch.path.join(".bravebot"))
+        .expect("install the plugin");
+}
+
+/// The commands that list a plugin's servers, each with its name and its arguments: `mcp list`, `mcp
+/// get` for the joined alias `alias`, and `doctor`.
+fn the_commands_that_list_servers(alias: &str) -> [(&'static str, Vec<&str>); 3] {
+    [
+        ("bravebot mcp list", vec!["mcp", "list"]),
+        ("bravebot mcp get", vec!["mcp", "get", alias]),
+        ("bravebot doctor", vec!["doctor"]),
+    ]
+}
+
+/// A run of `arguments` whose standard input is a pipe that is closed before the run reads it, so
+/// the run finds the end of the input and not the null device [`bravebot`] gives it.
+fn bravebot_with_a_closed_pipe(scratch: &Scratch, arguments: &[&str]) -> Output {
+    let mut command = prepared(&scratch.path, None, CONFIGURED, arguments);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("the built binary runs");
+    drop(child.stdin.take());
+    child.wait_with_output().expect("the run ends")
+}
+
+/// Every path under `directory`, relative to it, with the bytes of each file and `None` for each
+/// directory.
+fn the_tree_under(directory: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    fn walk(
+        root: &Path,
+        at: &Path,
+        found: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    ) {
+        for entry in std::fs::read_dir(at).expect("read a directory") {
+            let path = entry.expect("an entry").path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("under the root")
+                .to_path_buf();
+            if path.is_dir() {
+                found.insert(relative, None);
+                walk(root, &path, found);
+            } else {
+                found.insert(relative, Some(std::fs::read(&path).expect("read a file")));
+            }
+        }
+    }
+    let mut found = std::collections::BTreeMap::new();
+    walk(directory, directory, &mut found);
+    found
+}
+
+/// Asserts that no path was added, removed or changed between two trees, naming the paths and not
+/// printing their bytes.
+fn assert_the_same_tree(
+    before: &std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    after: &std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    what: &str,
+) {
+    let added: Vec<_> = after
+        .keys()
+        .filter(|path| !before.contains_key(*path))
+        .collect();
+    let removed: Vec<_> = before
+        .keys()
+        .filter(|path| !after.contains_key(*path))
+        .collect();
+    let changed: Vec<_> = before
+        .iter()
+        .filter(|(path, bytes)| after.get(*path).is_some_and(|now| now != *bytes))
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        added.is_empty() && removed.is_empty() && changed.is_empty(),
+        "{what} wrote to the state directory: added {added:?}, removed {removed:?}, changed {changed:?}"
+    );
+}
+
+/// SERVERS-10, SERVERS-14, PLUGIN-7: a stored variable a plugin's server declares is named and never
+/// printed. The plugin's server holds `TOKEN` with a value in its `env`, and `bravebot mcp list`,
+/// `bravebot mcp get demo_local` and `bravebot doctor` print neither that value on stdout nor on
+/// stderr. `get` names `TOKEN` as stored, so a `get` that drew nothing cannot pass, and `list` and
+/// `doctor` print the plugin's row, so a listing that failed before printing it cannot pass either.
+///
+/// Rejects: a plugin block that draws a server's stored values with their values (the plugin's
+/// declaration is untrusted text, and what it holds is a secret the person stored, SERVERS-10), and a
+/// `get` that leaves the variable out.
+#[test]
+fn a_plugin_servers_stored_variable_is_named_by_get_and_its_value_is_printed_by_nothing() {
+    let secret = "hunter2-plugin-secret";
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-secret-{}",
+        std::process::id()
+    ));
+    a_plugin_carrying_servers(
+        &scratch,
+        &format!(
+            r#"{{"servers":{{"local":{{"transport":"stdio","argv":["/opt/local-mcp"],"env":{{"TOKEN":"{secret}"}}}}}}}}"#
+        ),
+        &[],
+    );
+
+    for (command, arguments) in the_commands_that_list_servers("demo_local") {
+        let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{command}: {stdout}{stderr}");
+        assert!(
+            !stdout.contains(secret) && !stderr.contains(secret),
+            "{command} printed the stored value: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains("demo_local"),
+            "{command} did not list the plugin's server: {stdout}"
+        );
+        // Only `get` draws a declaration, so only its output names the stored variable. `list` and
+        // `doctor` print a row for the server and no `env`, so the check would fail for them.
+        if command == "bravebot mcp get" {
+            assert!(
+                stdout.contains(&t!(mcp_variable_stored, name = "TOKEN")),
+                "{command} did not name the stored variable: {stdout}"
+            );
+        }
+    }
+}
+
+/// SERVERS-14, SERVERS-27: listing is not starting. The plugin carries an http server at an address
+/// a listener this test owns takes connections on, and a stdio server whose script writes a file
+/// into the scratch directory if it is ever run. After `bravebot mcp list`, `bravebot mcp get` for
+/// each of the two and `bravebot doctor`, the listener has taken no connection and the file does
+/// not exist. The control is a connection the test makes itself, which the listener counts, so a
+/// counter that never counts cannot pass. Unix only, as the listener is.
+///
+/// Rejects: a plugin block that connects to the remote server to ask what it serves or whether it
+/// is up, and one that starts the stdio server to probe it. A stdio server may be unconfined on
+/// this host, which does not matter here: nothing may run it at all.
+#[cfg(unix)]
+#[test]
+fn listing_a_plugins_servers_starts_none_of_them_and_contacts_none_of_them() {
+    let remote = ConnectionCounter::start();
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-not-started-{}",
+        std::process::id()
+    ));
+    let marker = scratch.path.join("server-ran");
+    a_plugin_carrying_servers(
+        &scratch,
+        &format!(
+            r#"{{"servers":{{"remote":{{"transport":"http","url":"http://127.0.0.1:{}/mcp"}},"local":{{"transport":"stdio","argv":["/bin/sh","${{PLUGIN_ROOT}}/server.sh"]}}}}}}"#,
+            remote.port
+        ),
+        &[(
+            "server.sh",
+            &format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+        )],
+    );
+
+    for alias in ["demo_remote", "demo_local"] {
+        for (command, arguments) in the_commands_that_list_servers(alias) {
+            let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+
+            let (stdout, stderr) = said(&output);
+            assert_eq!(output.status.code(), Some(0), "{command}: {stdout}{stderr}");
+            assert!(
+                stdout.contains(alias),
+                "{command} did not list {alias}: {stdout}"
+            );
+        }
+    }
+
+    // The listener counts a connection in a thread of its own after it accepts it, so the sleep
+    // gives that thread time to count one a listing made before the count is read. The control
+    // connection after the count is what makes a zero mean something: it shows that this listener
+    // counts a connection made to it.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        remote.connections(),
+        0,
+        "a listing connected to the plugin's remote server"
+    );
+    assert!(!marker.exists(), "a listing ran the plugin's stdio server");
+    std::net::TcpStream::connect(("127.0.0.1", remote.port)).expect("the control connects");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while remote.connections() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(remote.connections(), 1, "control: the counter counts");
+}
+
+/// SERVERS-14, SERVERS-27: listing asks nothing. A plugin's server nobody has approved is the one a
+/// session at a terminal asks about at its first use, and `bravebot mcp list`, `bravebot mcp get` and
+/// `bravebot doctor` say it is unapproved without asking. Each is run with the null device as its
+/// standard input and again with a pipe closed before the run reads it: neither prints the question
+/// or the answer prompt, read from the catalog, and each exits with 0.
+///
+/// What this pins and what it does not: neither standard input it uses is a terminal, and a
+/// command asks only where a person is present (standard input and standard output both
+/// terminals), so this test cannot fail on a listing that asks only when a person is present. The
+/// unit test `list_get_and_examined_ask_a_present_person_nothing_and_leave_the_server_unapproved`
+/// in crates/cli/src/mcp.rs pins a present person. That a listing cannot ask is also true by
+/// construction: `held_by_plugins` and `hold_plugin_server` take no `Asker`.
+///
+/// Rejects: a plugin block that puts the first-use question to the person while it lists, which
+/// would print the question and wait on a standard input that holds nothing.
+#[test]
+fn listing_a_plugins_servers_asks_no_question_whatever_standard_input_holds() {
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-no-question-{}",
+        std::process::id()
+    ));
+    a_plugin_carrying_servers(
+        &scratch,
+        r#"{"servers":{"remote":{"transport":"http","url":"http://127.0.0.1:1/mcp"},"local":{"transport":"stdio","argv":["/opt/local-mcp"]}}}"#,
+        &[],
+    );
+    let question = t!(mcp_question).to_string();
+    let answers = t!(servers_answer).to_string();
+    assert!(!question.is_empty() && !answers.is_empty());
+
+    for closed_pipe in [false, true] {
+        let input = match closed_pipe {
+            true => "a pipe closed at once",
+            false => "the null device",
+        };
+        for (command, arguments) in the_commands_that_list_servers("demo_local") {
+            let output = match closed_pipe {
+                true => bravebot_with_a_closed_pipe(&scratch, &arguments),
+                false => bravebot(&scratch.path, CONFIGURED, &arguments),
+            };
+
+            let (stdout, stderr) = said(&output);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{command} with {input}: {stdout}{stderr}"
+            );
+            assert!(
+                stdout.contains("demo_local"),
+                "{command} with {input} did not list the plugin's server: {stdout}"
+            );
+            for text in [&question, &answers] {
+                assert!(
+                    !stdout.contains(text.as_str()) && !stderr.contains(text.as_str()),
+                    "{command} with {input} asked {text:?}: {stdout}{stderr}"
+                );
+            }
+        }
+    }
+}
+
+/// SERVERS-14, SERVERS-27: listing writes nothing. A state directory holds a declared server, an
+/// installed plugin that carries two, and no approval. The tree under it, every path and the bytes
+/// of every file, is the same after `bravebot mcp list`, after `bravebot mcp get` for each of the
+/// plugin's servers and after `bravebot doctor`, and no `mcp-home` directory exists, which a session
+/// that starts a plugin's server creates for it.
+///
+/// Rejects: a plugin block that records an answer, an approval or a digest as it lists, one that
+/// creates the directory a started server runs in, and one that rewrites `mcp.json` or the plugin's
+/// record.
+#[test]
+fn listing_a_plugins_servers_writes_nothing_into_the_state_directory() {
+    let scratch = Scratch::new(&format!(
+        "cli-running-plugin-server-writes-nothing-{}",
+        std::process::id()
+    ))
+    .with_state(
+        "mcp.json",
+        r#"{"servers":{"docs":{"transport":"http","url":"http://127.0.0.1:1/docs"}}}"#,
+    );
+    a_plugin_carrying_servers(
+        &scratch,
+        r#"{"servers":{"remote":{"transport":"http","url":"http://127.0.0.1:1/mcp"},"local":{"transport":"stdio","argv":["/opt/local-mcp"]}}}"#,
+        &[],
+    );
+    let state = scratch.path.join(".bravebot");
+    let before = the_tree_under(&state);
+    assert!(
+        before.contains_key(Path::new("mcp.json"))
+            && before.contains_key(Path::new("plugins").join("demo").as_path()),
+        "the state directory holds the declaration and the plugin: {:?}",
+        before.keys().collect::<Vec<_>>()
+    );
+
+    for (command, arguments) in [
+        ("bravebot mcp list", vec!["mcp", "list"]),
+        ("bravebot mcp get", vec!["mcp", "get", "demo_remote"]),
+        ("bravebot mcp get", vec!["mcp", "get", "demo_local"]),
+        ("bravebot doctor", vec!["doctor"]),
+    ] {
+        let output = bravebot(&scratch.path, CONFIGURED, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{command}: {stdout}{stderr}");
+        assert_the_same_tree(&before, &the_tree_under(&state), command);
+        assert!(
+            !state.join("mcp-home").exists(),
+            "{command} created the directory a started server runs in"
+        );
+        assert!(
+            !state.join("mcp-approved").exists(),
+            "{command} recorded an approval"
+        );
+    }
 }
 
 /// A one-shot run answering `reply` at `gateway`, with `arguments` after the flags that ask for

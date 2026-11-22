@@ -930,11 +930,11 @@ struct PluginWays<'a> {
 }
 
 /// The note for a plugin's server that is not started because its plugin is turned off or no longer
-/// matches its record.
+/// matches its record. A session's notes and a listing both use it, so they say it in the same words.
 ///
 /// The alias is the key the plugin's own file chose and nothing has checked it where this is made,
 /// so it is drawn as a name a checkout wrote is.
-fn stopped_note(stop: Stop, alias: &str, plugin: &str) -> String {
+pub fn stopped_note(stop: Stop, alias: &str, plugin: &str) -> String {
     match stop {
         Stop::Disabled => t!(
             servers_plugin_disabled,
@@ -948,6 +948,211 @@ fn stopped_note(stop: Stop, alias: &str, plugin: &str) -> String {
             plugin = plugin
         )
         .to_string(),
+    }
+}
+
+/// What is wrong with a server a plugin carries whose entry cannot be used, as a person reads it.
+///
+/// A joined alias, `<plugin>_<alias>`, that is an alias in every way but its length says so, because
+/// [`problem`] would say the alias is not one, which is untrue of the name the plugin gave. Every
+/// other problem is worded by [`problem`]. A session's note and a listing both call this, so they
+/// word one state the same way.
+pub fn plugin_problem(server: &plugin_servers::Server, found: &Problem) -> String {
+    match server.joined_too_long() {
+        true => t!(mcp_plugin_too_long).to_string(),
+        false => problem(found),
+    }
+}
+
+/// What a session decides about one server a plugin carries before it asks anybody anything.
+///
+/// The one place that is decided, so a session (`settle_plugin`) and a listing
+/// ([`held_by_plugins`]) cannot disagree. Approval is [`Approvals::approves_plugin`] on the digest
+/// that names the plugin and its directory, and never [`grant`] or `assess`, which count a home
+/// approval of the declaration and a recorded project, and neither approves a plugin's server
+/// (SERVERS-27). Fields after the first thing found are left empty.
+pub struct PluginHeld {
+    /// The plugin is turned off or its directory no longer matches the install.
+    pub stop: Option<Stop>,
+    /// The entry cannot be used, and why. [`plugin_problem`] words it.
+    pub unusable: Option<Problem>,
+    /// Why it would not start here, found before anybody is asked.
+    pub unstarted: Option<Unstarted>,
+    /// What a yes to this server is recorded against, where the entry can be used.
+    pub digest: Option<Digest>,
+    /// The person's yes to this server by name is recorded.
+    pub approved: bool,
+    /// A session would put the question: it would start, nothing approves it and somebody can be asked.
+    pub asks: bool,
+    plan: Option<Plan>,
+}
+
+/// Written by hand because `plan` can hold a bearer token read from the environment, in the headers
+/// of an HTTP server. It is printed as present or absent and its contents are left out.
+impl std::fmt::Debug for PluginHeld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginHeld")
+            .field("stop", &self.stop)
+            .field("unusable", &self.unusable)
+            .field("unstarted", &self.unstarted)
+            .field("digest", &self.digest)
+            .field("approved", &self.approved)
+            .field("asks", &self.asks)
+            .field(
+                "plan",
+                &format_args!(
+                    "{}",
+                    if self.plan.is_some() {
+                        "Some(..)"
+                    } else {
+                        "None"
+                    }
+                ),
+            )
+            .finish()
+    }
+}
+
+/// [`PluginHeld`] for `server`, given what [`plugin_servers::may_start`] said of its plugin.
+///
+/// `can_ask` says whether a question could be put: a person is asking and somebody is there. It is
+/// called only for a server nothing approves, as a session asks nobody about one that is. `stop` is
+/// taken as an argument so a caller that holds several servers of one plugin hashes its directory
+/// once, and `approvals` is taken so the approvals file is read once.
+///
+/// This reads the environment through `environment`, and looks on disk for the program of a local
+/// server and for a repository holding the directory it would run in. It reads no file of the
+/// plugin, because its servers file is already read into `server`, and no approvals file, because
+/// `approvals` is given. It starts no server, asks no question and writes nothing.
+pub fn hold_plugin_server(
+    server: &plugin_servers::Server,
+    stop: Result<(), Stop>,
+    approvals: &Approvals,
+    managed: &Managed,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+    prelude: Option<Prelude>,
+    can_ask: &dyn Fn() -> bool,
+) -> PluginHeld {
+    let digest = server.digest();
+    let approved = digest
+        .as_ref()
+        .is_some_and(|digest| approvals.approves_plugin(digest));
+    let mut held = PluginHeld {
+        stop: stop.err(),
+        unusable: None,
+        unstarted: None,
+        digest,
+        approved,
+        asks: false,
+        plan: None,
+    };
+    if held.stop.is_some() {
+        return held;
+    }
+    let declaration = match &server.declaration {
+        Ok(declaration) => declaration,
+        Err(found) => {
+            held.unusable = Some(found.clone());
+            return held;
+        }
+    };
+    match plan_of(declaration, managed, environment, prelude) {
+        Ok(plan) => held.plan = Some(plan),
+        Err(unstarted) => {
+            held.unstarted = Some(unstarted);
+            return held;
+        }
+    }
+    held.asks = !held.approved && can_ask();
+    held
+}
+
+/// [`PluginHeld`] for each server `carried` holds, as a session would hold it where `asking` says who
+/// answers, for the state directory `directory`.
+///
+/// It reads the approvals file in `directory` once and hashes the installed directory of each
+/// plugin once for all of its servers ([`plugin_servers::may_start`]). It starts no server, asks no
+/// question and writes nothing. [`held_by_plugin_server`] is the same decision for one server.
+pub fn held_by_plugins<'a>(
+    carried: &'a PluginServers,
+    directory: &Path,
+    asking: Asking,
+    managed: &Managed,
+) -> Vec<(&'a plugin_servers::Server, PluginHeld)> {
+    let approvals = Approvals::read(directory);
+    let mut stops: Vec<(&str, Result<(), Stop>)> = Vec::new();
+    carried
+        .servers()
+        .iter()
+        .map(|server| {
+            let stop = match stops.iter().find(|(plugin, _)| *plugin == server.plugin) {
+                Some((_, stop)) => *stop,
+                None => {
+                    let stop = plugin_servers::may_start(directory, &server.plugin);
+                    stops.push((&server.plugin, stop));
+                    stop
+                }
+            };
+            (server, hold_here(server, stop, &approvals, asking, managed))
+        })
+        .collect()
+}
+
+/// [`PluginHeld`] for the one server `server`, as [`held_by_plugins`] holds it, for a caller that
+/// answers for a single alias and so has no use for the other servers.
+///
+/// It hashes only the installed directory of the plugin that carries `server`, once, and reads the
+/// approvals file in `directory` once. It starts no server, asks no question and writes nothing.
+pub fn held_by_plugin_server(
+    server: &plugin_servers::Server,
+    directory: &Path,
+    asking: Asking,
+    managed: &Managed,
+) -> PluginHeld {
+    hold_here(
+        server,
+        plugin_servers::may_start(directory, &server.plugin),
+        &Approvals::read(directory),
+        asking,
+        managed,
+    )
+}
+
+/// [`hold_plugin_server`] with what this process gives it: its environment, the confinement this
+/// platform has, and a person asked only where `asking` is [`Asking::Person`]. The one body behind
+/// [`held_by_plugins`] and [`held_by_plugin_server`], so the two cannot decide differently.
+fn hold_here(
+    server: &plugin_servers::Server,
+    stop: Result<(), Stop>,
+    approvals: &Approvals,
+    asking: Asking,
+    managed: &Managed,
+) -> PluginHeld {
+    hold_plugin_server(
+        server,
+        stop,
+        approvals,
+        managed,
+        &|name| std::env::var_os(name),
+        Prelude::current(),
+        &|| asking == Asking::Person,
+    )
+}
+
+/// The note for a plugin's server that does not start here: its plan could not be made, the managed
+/// layer refuses it, or this platform has no confinement for it.
+fn unstarted_note(alias: &str, unstarted: Unstarted) -> String {
+    match unstarted {
+        Unstarted::Unplanned(reason) => {
+            t!(servers_not_reached, alias = alias, reason = reason).to_string()
+        }
+        Unstarted::Refused(reason) => t!(
+            servers_refused_by_managed,
+            alias = shown(alias),
+            reason = reason
+        )
+        .to_string(),
+        Unstarted::Unconfined => t!(servers_no_confinement_here, alias = alias).to_string(),
     }
 }
 
@@ -970,47 +1175,48 @@ fn settle_plugin<A: Asker + ?Sized>(
 ) -> Option<Plan> {
     let alias = server.alias.as_str();
     let plugin = server.plugin.as_str();
-    if let Err(stop) = plugin_servers::may_start(ways.directory, plugin) {
+    let mut held = hold_plugin_server(
+        server,
+        plugin_servers::may_start(ways.directory, plugin),
+        approvals,
+        ways.managed,
+        ways.environment,
+        ways.prelude,
+        &|| ways.asking == Asking::Person && asker.anybody_there(),
+    );
+    if let Some(stop) = held.stop {
         notes.push(stopped_note(stop, alias, plugin));
         return None;
     }
-    let declaration = match &server.declaration {
-        Ok(declaration) => declaration,
-        Err(found) => {
-            notes
-                .push(t!(mcp_unusable, alias = shown(alias), problem = problem(found)).to_string());
-            return None;
-        }
+    if let Some(found) = &held.unusable {
+        notes.push(
+            t!(
+                mcp_unusable,
+                alias = shown(alias),
+                problem = plugin_problem(server, found)
+            )
+            .to_string(),
+        );
+        return None;
+    }
+    if let Some(unstarted) = held.unstarted.take() {
+        notes.push(unstarted_note(alias, unstarted));
+        return None;
+    }
+    // Reached only where `hold_plugin_server` returned neither a stop, an unusable declaration nor
+    // an unstarted reason, and then the declaration is usable, which is also when it has a digest
+    // and a plan, so the else below cannot be taken and drops no server.
+    let (Ok(declaration), Some(plan), Some(digest)) =
+        (&server.declaration, held.plan.take(), held.digest)
+    else {
+        return None;
     };
-    let plan = match plan_of(declaration, ways.managed, ways.environment, ways.prelude) {
-        Ok(plan) => plan,
-        Err(Unstarted::Unplanned(reason)) => {
-            notes.push(t!(servers_not_reached, alias = alias, reason = reason).to_string());
-            return None;
-        }
-        Err(Unstarted::Refused(reason)) => {
-            notes.push(
-                t!(
-                    servers_refused_by_managed,
-                    alias = shown(alias),
-                    reason = reason
-                )
-                .to_string(),
-            );
-            return None;
-        }
-        Err(Unstarted::Unconfined) => {
-            notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
-            return None;
-        }
-    };
-    let digest = server.digest()?;
-    if approvals.approves_plugin(&digest) {
+    if held.approved {
         return Some(plan);
     }
     // Neither a mode that answers every question nor a project's standing answer approves a
     // server a plugin carries: a person says yes to this one, here.
-    if ways.asking != Asking::Person || !asker.anybody_there() {
+    if !held.asks {
         notes.push(t!(servers_plugin_nobody, alias = alias, plugin = plugin).to_string());
         return None;
     }

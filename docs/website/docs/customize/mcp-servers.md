@@ -27,7 +27,9 @@ differences:
   started and a notice names the plugin once per session.
 - It is not moved if its remote host redirects.
 - A server in `mcp.json` with the same alias wins over the plugin's, and a note says so.
-- `bravebot mcp list`, `get` and `doctor` and `/mcp list` do not show it.
+- `bravebot mcp approve` does not approve it. That command reads `mcp.json` only.
+- `bravebot mcp list`, `get` and `doctor` and `/mcp list` show it, as
+  [Seeing what is declared](#seeing-what-is-declared) describes.
 
 A yes is recorded as a `plugin` line in `~/.bravebot/mcp-approved`. See
 [Plugins](plugins.md#a-plugins-servers).
@@ -228,14 +230,19 @@ either piped, `add` writes the declaration and tells you to run `enable` at a te
 ## Starting or stopping one during a session
 
 A server that failed to start is left out until the session ends. In the full-screen interface,
-`/mcp` lists the servers the session runs and those it asked for that are not running. `/mcp
-reconnect` starts every one that is not running, and `/mcp reconnect weather` starts that one. A
-start reads the declaration again and asks what a session asks as it opens: a server you approved
-starts without a question, and one whose declaration changed is put to you again. `/mcp disable
-weather` stops the server and drops its grant for this session. Nothing is written, so the next
+`/mcp` lists the servers the session runs and those it asked for that are not running, which include
+the servers an installed plugin carries, named `<plugin>_<alias>`. A plugin turned off with
+`/plugin disable` is named on one line and none of its servers is listed. `/mcp
+reconnect` starts every one that is not running, and `/mcp reconnect weather` starts that one. A start
+reads the declaration again and asks what a session asks as it opens: a server you approved
+starts without a question, and one whose declaration changed is put to you again. A plugin's server
+starts only after a yes to that server. `/mcp disable
+weather` stops the server and drops its grant for this session, and takes a plugin's name
+(`/mcp disable demo_weather`) the same way. Nothing is written, so the next
 session starts it as before. `/mcp remove weather` is the permanent version: it runs `bravebot mcp
 disable weather` and then `bravebot mcp remove weather` for you, so no later session starts the
-server or asks about it, and stops it in this session. A `*` in the name stands for any run of
+server or asks about it, and stops it in this session. A plugin's server is not in `mcp.json`, so
+`/mcp remove` does not take it: remove the plugin with `/plugin remove`. A `*` in the name stands for any run of
 characters, so `/mcp remove brave-tabs*` does that for `brave-tabs-manage` and `brave-tabs-read`,
 and `/mcp disable brave-*` stops every server whose name starts with `brave-`. A pattern that fits
 no server changes nothing and says so. The list `/mcp` prints, which is also what a
@@ -829,6 +836,26 @@ file is the way to fix it.
 
 `bravebot doctor` prints the same rows and fails where `list` does.
 
+The servers an installed, enabled [plugin](plugins.md#a-plugins-servers) carries are not in `mcp.json`,
+so they are listed after the servers you declared, under the heading `carried by installed plugins`.
+Each has the same columns under its `<plugin>_<alias>` name: the transport, `approved` or
+`unapproved`, and the digest a yes is recorded against. Under it a line says `carried by the plugin`
+and the plugin's name, and another says what a session at a terminal does: `a session starts it
+unasked`, `a session at a terminal asks before starting it`, or `no session starts it` with the reason.
+A plugin server shows as approved only after a yes to that server. A yes to a server you declared with
+the same contents, and the answer "all future servers in this project", leave it unapproved. An
+unapproved plugin server is listed, not left out. Nothing here starts a server, asks a question or
+writes a file.
+
+A plugin you turned off with `/plugin disable` is named on one line, `the plugin <name> is turned off,
+so none of its servers is started`, and its servers are not read. A plugin whose folder no longer
+matches what was installed has the sentence that says so under each of its servers, and neither `list`
+nor `doctor` fails for it. A server whose `<plugin>_<alias>` is too long, or whose entry cannot be used,
+is listed with what is wrong, and `list` and `doctor` then fail. Where `mcp.json` declares the same
+name, only your server is a row, and a line says the plugin's server is not used.
+`bravebot mcp approve` reads `mcp.json` only, so it does not approve a plugin's server. Its first-use
+question does.
+
 `bravebot mcp get weather` shows one declaration in full, with the whole digest:
 
 ```
@@ -854,6 +881,11 @@ own directory is not made: where it is kept under your state directory its path 
 the session may write nothing there it is a new directory in the temporary directory and the line
 says so. A server a session would not start has the sentence the session says for it, and a server
 reached over HTTP has no such lines.
+
+`bravebot mcp get demo_weather` does the same for a server a plugin carries: it names the plugin,
+shows the declaration and the whole digest, and says `approved`, or `unapproved: a session at a
+terminal asks before starting it`, since `bravebot mcp approve` does not reach it. A plugin turned off or
+whose folder changed is said in the words a session uses.
 
 ## Removing one
 
