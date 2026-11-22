@@ -173,6 +173,10 @@ mutation: RunReason::asks treats an ask rule as no prompt
 file: crates/core/src/policy.rs
 replace: let allowed = ruling == crate::permissions::Ruling::Allow; => let allowed = ruling != crate::permissions::Ruling::Deny;
 
+mutation: output_label keeps the integrity of the opaque label it is passed
+file: crates/core/src/policy.rs
+replace: let opaque = Label::new(Integrity::Untrusted, opaque.confidentiality); => let opaque = Label::new(opaque.integrity, opaque.confidentiality);
+
 mutation: output_label gives a trusted proof's label to a line that asked for a scope
 file: crates/core/src/policy.rs
 replace: if facts.requesting { => if false {

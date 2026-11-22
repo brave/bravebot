@@ -1196,14 +1196,16 @@ pub(crate) enum OutputRoad {
 ///
 /// A request gets `opaque` whatever covers the line. Otherwise a proof from the audited table
 /// gives the label it proved, a vouch for every step with no assignment gives `(T,priv)` unless
-/// the line is fed untrusted content, and everything else gets `opaque`.
+/// the line is fed untrusted content, and everything else gets `opaque`, read as untrusted whatever
+/// integrity it was passed with.
 #[cfg_attr(verus_keep_ghost, verus_spec(r =>
-    requires
-        opaque.integrity == Integrity::Untrusted,
     ensures
-        crate::spec::output_label_is_sound(facts, opaque, r.0),
+        crate::spec::output_label_is_sound(facts, crate::spec::untrusted(opaque), r.0),
 ))]
 pub(crate) fn output_label(facts: OutputFacts, opaque: Label) -> (Label, OutputRoad) {
+    // [`Policy::measure_a_run`] passes the shell's untrusted label, but Verus does not read that
+    // caller, so the integrity is set here rather than required of it.
+    let opaque = Label::new(Integrity::Untrusted, opaque.confidentiality);
     if facts.requesting {
         return (opaque, OutputRoad::Requested);
     }
@@ -14675,6 +14677,40 @@ five
             policy.plan_needs_approval(&line),
             "a line running in another directory was answered by the wrong rule"
         );
+    }
+
+    /// `output_label` reads the opaque label it is handed as untrusted, whatever integrity it was
+    /// passed with, so a caller that handed it a trusted label could not make output trusted on a
+    /// road that gives the opaque label.
+    #[test]
+    fn the_opaque_road_is_untrusted_whatever_label_it_is_handed() {
+        let facts = OutputFacts {
+            requesting: true,
+            proven: None,
+            vouched: false,
+            assignment: false,
+            fed: None,
+        };
+
+        for (requesting, vouched, fed) in [
+            (true, false, None),
+            (false, false, None),
+            (false, true, Some(Integrity::Untrusted)),
+        ] {
+            let facts = OutputFacts {
+                requesting,
+                vouched,
+                fed,
+                ..facts
+            };
+            let (label, _) = output_label(facts, Label::trusted_public());
+
+            assert_eq!(
+                label,
+                Label::untrusted_public(),
+                "{requesting} {vouched} {fed:?}"
+            );
+        }
     }
 
     /// The output label of a line run outside the root. A line whose reads are all vouched for is
