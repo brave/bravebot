@@ -148,6 +148,10 @@ struct Open {
     /// The state's token total when its current turn began, which `session.limit` reports while
     /// that turn holds the state.
     tokens_at_turn: u64,
+    /// The variant of the model's options the window picked, or `None` for the model's own
+    /// options (BACKEND-66). A person's act that is never recorded, so a session opens, resumes,
+    /// forks and starts new with none.
+    variant: Option<String>,
 }
 
 impl Open {
@@ -188,6 +192,7 @@ impl Open {
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
             refused_folders: Vec::new(),
+            variant: None,
         }
     }
 
@@ -425,6 +430,7 @@ impl Bridge {
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.limit" => self.session_limit(request),
+            "session.variant" => self.session_variant(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
             "session.folders.list" | "session.folders.add" | "session.folders.close" => {
@@ -1985,6 +1991,31 @@ impl Bridge {
             }),
             None => json!({"limit": null, "spent": tokens}),
         })
+    }
+
+    /// List, pick or drop the session's variant of the model's options: the desktop window's
+    /// `/variant` (BACKEND-66).
+    ///
+    /// `model` is the window's pick, which reaches the session only with the next `turn.send`, and
+    /// is resolved as `turn.send` resolves it. Answered while a turn runs, since the pick is not
+    /// in the state the turn holds.
+    fn session_variant(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+        let asked = crate::variant::asked(request)?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let model = model.unwrap_or_else(|| config.default_model.clone());
+        let offered = config.variants_offered(&model);
+        crate::variant::apply(asked, &mut open.variant, &model, &offered)
     }
 
     /// Choose the sandbox mode the session's next turn runs its programs under.
