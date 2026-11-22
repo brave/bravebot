@@ -117,6 +117,7 @@ pub mod turn;
 pub mod usability;
 pub mod vet;
 pub mod watch;
+pub mod web_search;
 pub mod workspace;
 pub mod xai;
 

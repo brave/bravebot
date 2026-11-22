@@ -40,7 +40,9 @@ that is merely carried.
 | [`propose_rule`](#propose_rule) | `scope` | `text`, `reason` | **yes, that is what it is for** |
 | [`set_link`](#set_link) | `kind`, `url` | none | no |
 
-Five more are offered only where they mean something.
+Six more are offered only where they mean something.
+[`web_search`](#web_search) goes to a session whose settings name a Brave Search API key file, so not
+to one without it and not to a delegate.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
@@ -880,6 +882,41 @@ Markdown is the only type ranked. A site holding no Markdown answers with whatev
 answered without the header, so a page that is only ever HTML arrives as it did before. Ranking HTML
 above the wildcard would cost more than sending no header at all, since an endpoint that serves both
 a compact form and a full page reads that as a request for the page.
+
+## `web_search`
+
+Searches the web through the [Brave Search API](https://api-dashboard.search.brave.com/documentation).
+It is offered only where `webSearch.keyFile` names a key file ([setting it
+up](../customize/configuration.md#websearchkeyfile)). **You approve every search, unless a `WebSearch`
+rule allows it.**
+
+| Parameter | |
+|---|---|
+| `service` | `web`, `news`, `videos`, `images`, `llm_context` (page text prepared for a model), `suggest`, `spellcheck` or `places` |
+| `q` | the query, at most 600 characters and 75 words for `web` and `llm_context`, and 400 and 50 for the others. `places` may go without one |
+| the vendor's own | `country`, `search_lang`, `ui_lang`, `count`, `offset`, `safesearch`, `spellcheck`, `freshness`, `text_decorations`, `result_filter`, `units`, `extra_snippets`, `operators`, `operators_fallback`, `include_fetch_metadata`, `maximum_number_of_urls`, `maximum_number_of_tokens`, `context_threshold_mode`, `maximum_number_of_tokens_per_url`, and for `places` `latitude`, `longitude`, `location` and `radius`. Each service takes the ones the vendor documents for it, with the vendor's ranges |
+| `read` | `true` to ask for the results in the result of this call, which is given only where the session is offered `vet_content`, as for [`fetch_url`](#fetch_url) |
+
+A value outside the documented type, range or set is refused before you are asked and before anything
+is sent, and the refusal names the argument. Goggles, answers, rich results and local points of
+interest are not offered, and no argument takes a URL or a host.
+
+**What comes back is quarantined.** The results are a reference, untrusted and public, as a fetched
+page is: the planner may hand it to [`spawn_processor`](#spawn_processor) or write it to a file with
+[`write_file`](#write_file), and cannot read it or be told what it says.
+
+**You are shown the query.** The prompt draws the search URL, with the query in it, and the host it
+will reach, which is always `api.search.brave.com`. In the terminal it is drawn as a fetch is, under
+the words of a fetch. Your answer is for that one search and nothing is remembered. A `WebSearch` rule in
+`allow` answers the prompt, and `deny` refuses without asking. The rule takes no specifier, and a
+`WebFetch` rule does not cover a search. An `allow` rule stops answering once the planner has been
+shown content of yours that is private, since a query may carry some, and the search asks then.
+
+**The key goes in one header to one host.** It is read from the file when a search is made and sent as
+`X-Subscription-Token` to `api.search.brave.com`. A redirect to another host is refused without
+asking, and the key does not go there. A failure is reported in bravebot's own words, by its kind
+(a refused key, a plan that does not cover the request, a rejected request, a rate limit, no answer);
+nothing of what the service wrote is shown to the planner.
 
 ## `download_url`
 

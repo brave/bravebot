@@ -1894,9 +1894,10 @@ the startup notice already follows by saying nothing to such a copy
 this directory loads them, and prints which of deny, ask or allow decides the call, the rule that
 decides it as its file spelled it, with each control character drawn as its picture
 ([LAYER-3](layering.md#LAYER-3)), and the file that wrote it. The family is `Read`, `Edit`, `Bash`,
-`WebFetch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
+`WebFetch`, `WebSearch` or `Mcp`. `Read` and `Edit` take one path, `Bash` takes a program and its arguments as
 separate words, as a stage is matched ([PERM-5](permissions.md#PERM-5)), `WebFetch` takes a host or a
-URL and is decided on the host alone, and `Mcp` takes `server:tool`. The rule named is the one
+URL and is decided on the host alone, `WebSearch` takes nothing more and is decided by the family's own
+rule, and `Mcp` takes `server:tool`. The rule named is the one
 [PERM-2](permissions.md#PERM-2)'s order picks: the first match in deny, then ask, then allow. Where
 no rule matches, the line says so and no rule is named, since the ordinary gates decide. A `Bash`
 call whose program, or whose program under a leading wrapper, is an 8.3 short name while a `deny` or
@@ -1933,6 +1934,7 @@ that is written down is still asking.
 `verified-by: bravebot_cli::running::permissions_check_reads_a_respelled_program_as_a_session_does`
 `verified-by: bravebot_cli::running::permissions_check_reports_an_8_3_short_name_as_a_session_refuses_it`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_url_on_its_host_and_a_tool_on_its_names`
+`verified-by: bravebot_cli::running::permissions_check_decides_a_web_search_by_its_own_family`
 `verified-by: bravebot_cli::running::permissions_check_decides_a_host_in_any_spelling_as_a_session_does`
 `verified-by: bravebot_cli::running::permissions_check_does_not_count_a_checkouts_allow_rule_as_in_force`
 `verified-by: bravebot_cli::running::permissions_check_refuses_a_command_line_that_names_no_call`

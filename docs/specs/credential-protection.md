@@ -284,7 +284,13 @@ would end the credential. The tier is the one entry on that record every credent
 whatever its tier, which is why the record reaches past the two tiers CRED-25 asks an account of.
 
 **What stands where.** Every credential the record holds stands at Held: the signing key, the AWS
-credentials, a gateway's token, the premium key and the ChatGPT and xAI sign-ins. The premium key's
+credentials, a gateway's token, the premium key, the search key and the ChatGPT and xAI sign-ins. The
+search key is the file `webSearch.keyFile` names, which a person got from the Brave Search API
+dashboard: its walk drops at all three gates as the premium key's does, each recorded as one nobody
+attempted, since the dashboard issues one key, this program presents it itself with nothing deciding a
+use, and nothing here has asked the dashboard for a narrower or shorter one. Revoking it in the
+dashboard is the only thing that ends it, and removing the setting or the file ends this machine's
+custody and leaves the key working. The premium key's
 walk drops at all three gates, each recorded as one nobody attempted, as a gateway token's does: the
 premium host issues one key, this program presents it itself with nothing deciding a use, and nothing
 here has asked that host for a narrower or a shorter one. It has no figure for how quickly a leak
@@ -299,6 +305,7 @@ tiers a credential can stand at, and none does.
 `verified-by: bravebot_cli::doctor::each_tier_a_credential_can_stand_at_is_reported_in_its_own_words`
 `verified-by: bravebot_cli::running::doctor_names_the_tier_of_every_credential_it_accounts_for`
 `verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
+`verified-by: bravebot_config::lib::a_search_key_is_held_exactly_when_web_search_is_offered`
 
 <a id="CRED-3"></a>
 ### CRED-3: a gate fails only for a stated reason, and dropping pays what the gate says it costs
@@ -1146,6 +1153,7 @@ approving it prevents nothing, because the disclosure is to every other account 
 rather than to the program. It needs no attacker and no mistake by the model.
 
 `verified-by: bravebot_cli::credential_arguments::no_file_that_starts_a_process_reads_a_credential`
+`verified-by: bravebot_agent::web_search::a_search_returns_a_reference_sends_the_key_in_one_header_and_asks_about_the_query`
 `verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
 `verified-by: bravebot_ui_bridge::accounts::no_client_of_the_host_is_offered_the_accounts_methods`
 `verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
@@ -1173,7 +1181,7 @@ credential would have landed in a file is not thereby told what would end the on
 hold. CRED-15's scan of what a turn reads reports the same way and reaches this record no more
 than the other one does. What exists is the record and one surface that reads it, `doctor`, which
 reports
-what would end each credential this configuration holds, a gateway's bearer token and the premium key
+what would end each credential this configuration holds, a gateway's bearer token, the premium key and the search key
 included, and the ChatGPT sign-in and the xAI sign-in of a machine that made
 one ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6), [XAI-12](xai-sign-in.md#XAI-12)), each reported from its file
 rather than from the configuration, since the file is held on every machine that made a sign-in. A gateway key stored with `bravebot auth login gateway`
@@ -1198,6 +1206,7 @@ writing a second one.
 `verified-by: bravebot_cli::xai_sign_in::doctor_names_an_xai_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_cli::running::doctor_names_a_stored_gateway_key_without_printing_it`
 `verified-by: bravebot_cli::running::doctor_fails_on_a_file_of_gateway_keys_it_cannot_read`
+`verified-by: bravebot_cli::doctor::the_web_search_key_is_reported_by_its_setting_and_never_by_its_value`
 
 ## Why the gate safehouse builds is not available here
 

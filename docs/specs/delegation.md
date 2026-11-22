@@ -151,7 +151,9 @@ A delegate naming a tool that reaches the network anyway is answered the way any
 name is. The capability is held, so no gate refuses that call, which is why the absence from the
 tool list is written out a second time as a refusal. The planner is told in the `spawn_agent`
 description that a delegate cannot call `fetch_url` or `download_url`
-([AGENT-1](tools/spawn-agent.md#AGENT-1)).
+([AGENT-1](tools/spawn-agent.md#AGENT-1)). The description does not name `web_search`, which a
+planner is offered only where a key file is configured; a delegate that is told to call it is answered
+as for any unknown name ([WEBSEARCH-8](tools/web-search.md#WEBSEARCH-8)).
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
@@ -161,6 +163,7 @@ description that a delegate cannot call `fetch_url` or `download_url`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
+`verified-by: bravebot_agent::web_search::a_delegate_naming_web_search_is_answered_as_an_unknown_name_and_sends_nothing`
 `verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 `verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`

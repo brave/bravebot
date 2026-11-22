@@ -76,9 +76,9 @@ therefore holds in every mode, including the mode that asks about nothing.
 <a id="PERM-1"></a>
 ### PERM-1: a rule names a family of tools, and matches on routing only
 
-A rule is `Tool` or `Tool(specifier)`. Five families exist: `Read` covers every tool that reads or
+A rule is `Tool` or `Tool(specifier)`. Six families exist: `Read` covers every tool that reads or
 enumerates a file, `Edit` covers every tool that changes one, `Bash` covers running a program,
-`WebFetch` covers fetching a URL, and `Mcp` covers calling a tool of a server a person declared
+`WebFetch` covers fetching a URL, `WebSearch` covers `web_search`, and `Mcp` covers calling a tool of a server a person declared
 ([mcp-servers.md](mcp-servers.md)). They are categories rather than tool names, and `Bash` names no
 shell: there is none, and a specifier is matched against one stage's program and arguments.
 
@@ -106,6 +106,12 @@ name as written after ASCII lowercasing, and the name with each label outside AS
 such as a no-break space, `。` (U+3002), `：` (U+FF1A) or a zero-width space, makes the domain
 unreadable ([PERM-11](#PERM-11)) as a port or a path does. What a matching
 rule decides for a fetch, and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
+
+`WebSearch` takes no specifier. A search has no routing a rule could name, since its host is fixed in
+source and its query is the planner's own words, so `WebSearch` alone covers every search and
+`WebSearch(weather)` is unreadable ([PERM-11](#PERM-11)). A `WebFetch` rule does not cover a search and
+a `WebSearch` rule does not cover a fetch. What a rule decides for a search is
+[web-search.md](tools/web-search.md#WEBSEARCH-2).
 
 `Mcp(weather)` and `Mcp(weather:*)` cover every tool of the server declared as `weather`, and
 `Mcp(weather:get_forecast)` covers one of them. Both names are matched whole, so `Mcp(weather)` does

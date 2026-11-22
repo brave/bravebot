@@ -45,6 +45,9 @@ fr:command-sessions
 fr:command-unfinished
 fr:configured-start-heading
 fr:desktop-model-retrieves
+fr:doctor-dropped-search-key-no-bound-fixed-before-issue
+fr:doctor-dropped-search-key-not-minted-for-one-step
+fr:doctor-dropped-search-key-nothing-decides-each-use
 fr:doctor-embeddings
 fr:doctor-embeddings-answered
 fr:doctor-embeddings-brave
@@ -56,6 +59,7 @@ fr:doctor-embeddings-openai
 fr:doctor-embeddings-openrouter
 fr:doctor-embeddings-skipped
 fr:doctor-embeddings-unconfigured
+fr:doctor-ends-search-key
 fr:doctor-openshell
 fr:doctor-openshell-gateway
 fr:doctor-openshell-gateway-down
@@ -72,7 +76,12 @@ fr:doctor-retrieval-on
 fr:doctor-settings-repeated
 fr:doctor-settings-repeated-key
 fr:doctor-settings-shared-skill-directories-ignored
+fr:doctor-settings-web-search-key-file-ignored
 fr:doctor-skills-shared-not-read
+fr:doctor-web-search
+fr:doctor-web-search-absent
+fr:doctor-web-search-keyed
+fr:doctor-web-search-missing
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
 fr:hover-panel-close-peek
@@ -133,6 +142,7 @@ fr:peek-heading
 fr:peek-keys
 fr:peek-lines
 fr:peek-too-narrow
+fr:permission-rule-not-a-search-rule
 fr:plugin-add-refused
 fr:plugin-added
 fr:plugin-command-needs-an-argument
@@ -555,5 +565,6 @@ fr:unfinished-nothing
 fr:unfinished-todos
 fr:unfinished-unbuilt
 fr:unfinished-uncommitted
+fr:verb-web-search
 fr:watching-back
 fr:watching-outputs-title

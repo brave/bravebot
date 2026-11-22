@@ -1174,6 +1174,7 @@ servers and tools are asked about again. `add`, `approve`, `enable`, `disable`, 
 bravebot permissions check Bash git push origin main
 bravebot permissions check Read src/secret.env
 bravebot permissions check WebFetch https://api.example.com/v1
+bravebot permissions check WebSearch
 bravebot permissions check Mcp weather:get_forecast
 ```
 
@@ -1181,7 +1182,8 @@ Loads the [`permissions` rules](../customize/configuration.md#permissions) as a 
 this directory would and says which of deny, ask or allow decides the call, which rule, and which
 settings file wrote it. The first of deny, then ask, then allow that matches decides, however
 specific a later rule is. `Read` and `Edit` take one path, `Bash` a program and its arguments as
-separate words, `WebFetch` a host or a URL (only the host is matched) and `Mcp` a `server:tool`.
+separate words, `WebFetch` a host or a URL (only the host is matched), `WebSearch` nothing more, since
+a rule for it takes no specifier, and `Mcp` a `server:tool`.
 
 ```text
 decision: ask

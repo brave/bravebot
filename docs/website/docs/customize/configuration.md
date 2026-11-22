@@ -322,7 +322,7 @@ one thing leaves everything else in force:
 | `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `run.scrubEnv` | your own file and the file `--settings` names, whose entries are kept together; a project or local file's list is ignored and reported, and the rest of its `run` block is read as before |
 | `permissions.allow` | your own file's entries, the file `--settings` names, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution`, `webSearch.keyFile` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and the file `--settings` names; a project or local file's block is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -383,6 +383,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
+| `webSearch.keyFile` | the file holding a Brave Search API key, which turns on the `web_search` tool. Your own file and the file `--settings` names only ([below](#websearchkeyfile)) |
 | `planModel` | the model a turn that begins in plan mode runs on ([below](#planmodel)) |
 | `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
 | `commitMessage.instructions` | the format `/commit-message` follows when none is typed ([below](#commitmessageinstructions)) |
@@ -607,6 +608,38 @@ other.** The model is sent the files a processor reads, so a `.bravebot/settings
 `.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`.
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
+
+### `webSearch.keyFile`
+
+```json
+{ "webSearch": { "keyFile": "/Users/you/.config/brave-search-key.txt" } }
+```
+
+The file that holds your Brave Search API key. Naming a file that exists is what offers the
+[`web_search`](../reference/tools.md#web_search) tool, and with no setting, or a name that is not a
+file, the tool is not offered.
+
+To set it up:
+
+1. Get a key from the [Brave Search API dashboard](https://api-dashboard.search.brave.com/).
+2. Save the key alone in a file only you can read, for example with `chmod 600`. The file holds the key
+   and nothing else: at most 4,096 bytes of ASCII with no space inside it, and a final newline is fine.
+3. Write the absolute path of that file as `webSearch.keyFile` in `~/.bravebot/settings.json`.
+
+There is no command that takes the key and no environment variable that carries it, since a key typed
+on a command line is readable by every account on the machine. The key is read from the file when a
+search is made and goes in one request header to `api.search.brave.com`. It is not in the query, in a
+result, in the trail or in anything the model is sent.
+
+`bravebot doctor` has a `web search` line that says whether a key file is configured and whether it
+exists, and prints the path you wrote and never the key. Its list of credentials names the key at
+tier Held, with the dashboard as the place that revokes it: removing the setting or the file stops this
+machine using the key and leaves it working at Brave until you revoke it there.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that names one is ignored and
+reported by `bravebot doctor`, so a repository you cloned cannot choose which file on your machine is
+sent to a host. The value must be an absolute path.
 
 ### `summaryModel`
 
@@ -1398,7 +1431,7 @@ a path no rule covers; these two state a standing refusal instead, and are descr
 the file `--settings` names; a project's own entries are proposed to you in a box when
 the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
-A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
+A rule is `Tool` or `Tool(specifier)`, and names one of six **families**:
 
 | Family | Covers |
 |---|---|
@@ -1406,6 +1439,7 @@ A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
 | `Edit` | every tool that changes one |
 | `Bash` | running a program |
 | `WebFetch` | fetching a URL |
+| `WebSearch` | `web_search`. Takes no specifier: the bare family covers every search, and a rule with something in brackets is reported as unreadable |
 | `Mcp` | calling a tool of an [MCP server](mcp-servers.md#rules): `Mcp(weather)` or `Mcp(weather:get_alerts)` |
 
 These are categories rather than tool names, as they are in Claude Code, so there is no rule spelled

@@ -8,7 +8,8 @@ use crate::command::{Asked, Expansion, Plan, Route, Step, Steps, ValuePart};
 use crate::label::{Confidentiality, Integrity, Label};
 use crate::permissions::{Decision, Ruling};
 use crate::policy::{
-    FetchReason, McpReason, McpStanding, OutputFacts, RunFacts, RunReason, WriteFacts, WriteReason,
+    FetchReason, McpReason, McpStanding, OutputFacts, RunFacts, RunReason, SearchReason,
+    WriteFacts, WriteReason,
 };
 use crate::programs::Command;
 use crate::remembered::{Remembered, RememberedArg, RememberedLine, RememberedStep, Shape};
@@ -748,6 +749,31 @@ pub(crate) open spec fn mcp_reason_is_sound(
                 && standing == McpStanding::StoppedAsking,
             _ => false,
         })
+}
+
+pub(crate) open spec fn search_reason_asks(reason: SearchReason) -> bool {
+    match reason {
+        SearchReason::Ruled(ruling) => ruling != Ruling::Allow,
+        SearchReason::Private | SearchReason::Unanswered => true,
+    }
+}
+
+/// What deciding whether to ask about a web search has to hold.
+///
+/// A search goes unasked only on an `allow` rule while the planner's context is public. A context
+/// that holds private content is asked about whatever a rule says, since a query is the planner's
+/// own words and a rule about searching is not consent to send the person's data (WEBSEARCH-2).
+pub(crate) open spec fn search_reason_is_sound(
+    public_context: bool,
+    rule: Decision,
+    reason: SearchReason,
+) -> bool {
+    (!search_reason_asks(reason) <==> rule == Decision::Ruled(Ruling::Allow) && public_context)
+        && match reason {
+        SearchReason::Private => !public_context,
+        SearchReason::Ruled(ruling) => public_context && rule == Decision::Ruled(ruling),
+        SearchReason::Unanswered => public_context && rule == Decision::Unmatched,
+    }
 }
 
 } // verus!

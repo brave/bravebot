@@ -54,6 +54,7 @@ mod settings;
 mod testutil;
 pub mod time;
 pub mod usage_ping;
+pub mod web_search_key;
 
 pub use managed::{Managed, ModelRefusal, Models, Refusal, Rule, Server, managed_file};
 pub use named_reach::{
@@ -679,6 +680,17 @@ pub enum Held<'a> {
     /// No parameter. The host is Brave's premium deployment, which [`Config::premium_endpoint`]
     /// names, and the key is one value whatever the person.
     PremiumKey,
+    /// The key the `web_search` tool sends to the Brave Search API, read from the file the setting
+    /// `webSearch.keyFile` names and sent only to `api.search.brave.com` in one request header.
+    ///
+    /// Held, on the same walk as [`Held::PremiumKey`] and for the same reasons: this program
+    /// presents the key itself with nothing deciding a use, and nothing here asks the search
+    /// service for a narrower or shorter form. The Brave Search API dashboard is the issuer and the
+    /// only surface that revokes it. Removing the setting or the file ends this machine's custody
+    /// and leaves the key working until it is revoked there.
+    ///
+    /// No parameter. The host is fixed and the key is one value whatever the person.
+    SearchKey,
     /// The sign-in a person made to OpenAI with a ChatGPT account, kept in
     /// `~/.bravebot/chatgpt-account.json` as an access token and the refresh token that replaces it.
     ///
@@ -720,13 +732,14 @@ impl<'a> Held<'a> {
     /// The gateway arrangement is a credential plus the host that would end it, so a list of the
     /// kinds has to be given one: a caller walking this is asking which arrangements exist rather
     /// than which are configured, and the host it passes is what the gateway entry will name.
-    pub const fn all(gateway_host: &'a str) -> [Self; 7] {
+    pub const fn all(gateway_host: &'a str) -> [Self; 8] {
         [
             Self::SigningKey,
             Self::AwsAccessKey,
             Self::AwsSession,
             Self::GatewayToken { host: gateway_host },
             Self::PremiumKey,
+            Self::SearchKey,
             Self::ChatgptAccount,
             Self::XaiAccount,
         ]
@@ -818,8 +831,9 @@ impl<'a> Held<'a> {
             // than refused: what the gateway at the other end offers is not something this
             // program has been told. The premium key is the same arrangement: one bearer value the
             // premium host issued, presented by this program, with nothing asked of that host for
-            // something narrower or shorter.
-            Self::GatewayToken { .. } | Self::PremiumKey => &[
+            // something narrower or shorter. The search key is the same again, issued by the Brave
+            // Search API dashboard.
+            Self::GatewayToken { .. } | Self::PremiumKey | Self::SearchKey => &[
                 GateDrop {
                     condition: Condition::NothingDecidesEachUse,
                     attempt: Attempt::NotAttempted,
@@ -871,6 +885,7 @@ impl<'a> Held<'a> {
             | Self::AwsSession
             | Self::GatewayToken { .. }
             | Self::PremiumKey
+            | Self::SearchKey
             | Self::ChatgptAccount
             | Self::XaiAccount => Tier::Held,
         }
@@ -907,6 +922,7 @@ impl<'a> Held<'a> {
             | Self::AwsAccessKey
             | Self::GatewayToken { .. }
             | Self::PremiumKey
+            | Self::SearchKey
             | Self::ChatgptAccount
             | Self::XaiAccount => None,
         }
@@ -924,7 +940,8 @@ impl<'a> Held<'a> {
     /// profile is that credential rather than something derived from it, so revoking reaches it.
     ///
     /// False for the premium key on the same footing: the premium host that revokes it is the only
-    /// place it is presented, and nothing here mints anything from it.
+    /// place it is presented, and nothing here mints anything from it. The search key is the same:
+    /// the search service that revokes it is the only place it is presented.
     ///
     /// True for the ChatGPT sign-in, because the surfaces the record names for ending it are
     /// signing out of the account and removing this program's access in the account's settings,
@@ -970,7 +987,8 @@ impl<'a> Held<'a> {
             Self::SigningKey
             | Self::AwsAccessKey
             | Self::GatewayToken { .. }
-            | Self::PremiumKey => None,
+            | Self::PremiumKey
+            | Self::SearchKey => None,
         }
     }
 }
@@ -1336,7 +1354,23 @@ pub struct Config {
     /// Held here so a test of a turn that ends on a failed request can say that a count decides how
     /// many requests it takes, as it can for a gateway through the block.
     patience: provider::Patience,
+    /// The file the setting `webSearch.keyFile` names as holding the key the `web_search` tool
+    /// sends, if the settings in force name one.
+    ///
+    /// A path and not a secret. Nothing in this crate opens the file when the configuration is
+    /// built: [`web_search_key::read`] does, where the tool is used.
+    pub web_search_key_file: Option<std::path::PathBuf>,
+    /// Where the `web_search` tool sends its requests in place of [`WEB_SEARCH_BASE`].
+    ///
+    /// Set only by [`Config::with_web_search_base`], which a test calls to point the tool at a server
+    /// of its own. No setting, variable or flag reaches it, so the key goes to the compiled-in host
+    /// in every run a person starts.
+    web_search_base: Option<String>,
 }
+
+/// The base of every request the `web_search` tool makes. A host fixed in source: no argument, setting
+/// or variable names another.
+pub const WEB_SEARCH_BASE: &str = "https://api.search.brave.com/res";
 
 /// The Bedrock regions refused in the layers in force, each with where it was written.
 ///
@@ -1617,6 +1651,7 @@ impl Config {
             .collect();
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
         config.refused_regions = refused_regions;
+        config.web_search_key_file = settings.web_search_key_file().map(std::path::PathBuf::from);
         // Held only with a host to send it to, so a key stored on a machine whose build reaches no
         // Brave backend is carried by nothing.
         config.premium_key = premium_key.filter(|_| config.premium_endpoint.is_some());
@@ -1797,8 +1832,40 @@ impl Config {
             budget_was_advertised,
             listed_inputs: None,
             refused_regions: Vec::new(),
+            web_search_key_file: None,
+            web_search_base: None,
             patience: provider::Patience::default(),
         })
+    }
+
+    /// The same configuration with the file the web search key is read from, as the setting
+    /// `webSearch.keyFile` would name it.
+    pub fn with_web_search_key_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.web_search_key_file = Some(path.into());
+        self
+    }
+
+    /// The same configuration with `web_search` pointed at `base`, which is how a test stands in
+    /// for the Brave Search API. Nothing a person can set calls this.
+    pub fn with_web_search_base(mut self, base: impl Into<String>) -> Self {
+        self.web_search_base = Some(base.into());
+        self
+    }
+
+    /// The base URL of a `web_search` request: [`WEB_SEARCH_BASE`] unless a test replaced it.
+    pub fn web_search_base(&self) -> &str {
+        self.web_search_base.as_deref().unwrap_or(WEB_SEARCH_BASE)
+    }
+
+    /// Whether a web search key file is named and is there, which is what makes the `web_search`
+    /// tool offered.
+    ///
+    /// Looks at the file's metadata and reads nothing from it, so the key is not held until a search
+    /// is made.
+    pub fn offers_web_search(&self) -> bool {
+        self.web_search_key_file
+            .as_deref()
+            .is_some_and(web_search_key::offered)
     }
 
     /// The same configuration with the retry count and window its requests to Brave's endpoint are
@@ -2156,6 +2223,9 @@ impl Config {
     /// backend's roster and nothing else reads it, and CRED-2 gives a credential nothing reads no
     /// tier.
     ///
+    /// The search key is listed where a key file is named and is there, whatever backend this
+    /// configuration reaches, since the tool that reads it calls a service of its own.
+    ///
     /// [`Held::ChatgptAccount`] and [`Held::XaiAccount`] are not in it, for the opposite reason: a
     /// sign-in is held on every machine that made one, whatever backend this configuration reaches,
     /// so a caller that reads the file adds it.
@@ -2178,6 +2248,9 @@ impl Config {
         );
         if self.premium_key.is_some() && self.serves_aichat() {
             held.push(Held::PremiumKey);
+        }
+        if self.offers_web_search() {
+            held.push(Held::SearchKey);
         }
         held
     }
@@ -3060,6 +3133,7 @@ mod tests {
         assert_eq!(Held::AwsAccessKey.tier(), Tier::Held);
         assert_eq!(Held::AwsSession.tier(), Tier::Held);
         assert_eq!(Held::PremiumKey.tier(), Tier::Held);
+        assert_eq!(Held::SearchKey.tier(), Tier::Held);
 
         // CRED-4: the tier is a claim about the arrangement, and a gateway's address is not part of
         // one. Two hosts answered differently would be a tier that moved without the arrangement
@@ -3202,6 +3276,100 @@ mod tests {
             [Held::AwsAccessKey, Held::AwsSession],
             "a build that cannot reach the Brave backend is accounted for a key nothing there presents"
         );
+    }
+
+    /// A scratch directory holding a file with the placeholder search key, for the tests of the
+    /// web search key file. The key is a placeholder and no real key is read.
+    fn a_search_key_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-config-search-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, "placeholder-search-key\n").expect("a file");
+        (directory, file)
+    }
+
+    /// The web search tool is offered only where the setting names a file that is there. An
+    /// implementation that answered from the setting alone would offer the tool, and list a
+    /// credential, on a machine where the file was deleted, and one that answered true by default
+    /// would offer it on every machine.
+    #[test]
+    fn web_search_is_offered_only_for_a_key_file_that_exists() {
+        let none = Config::from_lookup(complete_env).expect("configured");
+        assert_eq!(none.web_search_key_file, None);
+        assert!(!none.offers_web_search());
+
+        let (directory, file) = a_search_key_file("offered");
+        let missing = directory.join("absent.txt");
+        let absent = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&missing);
+        assert!(!absent.offers_web_search());
+
+        let not_a_file = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&directory);
+        assert!(!not_a_file.offers_web_search());
+
+        let present = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&file);
+        assert!(present.offers_web_search());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The setting reaches the configuration as a path and nothing is read from the file. An
+    /// implementation that dropped the setting in `from_sources` would offer no tool whatever the
+    /// person wrote.
+    #[test]
+    fn the_web_search_setting_reaches_the_configuration() {
+        let settings =
+            Settings::parse(r#"{"webSearch": {"keyFile": "/somewhere/search-key.txt"}}"#);
+        let config = Config::from_sources(
+            &settings,
+            &Managed::default(),
+            &keys::Keys::default(),
+            None,
+            |_| None,
+            complete_env,
+        )
+        .expect("configured");
+        assert_eq!(
+            config.web_search_key_file.as_deref(),
+            Some(std::path::Path::new("/somewhere/search-key.txt"))
+        );
+    }
+
+    /// CRED-2: the search key is in the record exactly when the tool is offered, at the tier its
+    /// walk stopped at. An implementation that pushed it unconditionally would account for a key
+    /// on every machine that has none, and one that left it out would leave a bearer key read from
+    /// a file with no recorded tier.
+    #[test]
+    fn a_search_key_is_held_exactly_when_web_search_is_offered() {
+        let without = Config::from_lookup(complete_env).expect("configured");
+        assert_eq!(without.held(), [Held::SigningKey]);
+
+        let (directory, file) = a_search_key_file("held");
+        let named_but_absent = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(directory.join("absent.txt"));
+        assert_eq!(named_but_absent.held(), [Held::SigningKey]);
+
+        let offered = Config::from_lookup(complete_env)
+            .expect("configured")
+            .with_web_search_key_file(&file);
+        assert_eq!(offered.held(), [Held::SigningKey, Held::SearchKey]);
+        assert_eq!(Held::SearchKey.tier(), Tier::Held);
+        assert_eq!(Held::SearchKey.walk().len(), 3);
+        assert!(!Held::SearchKey.outlives_revocation());
+        assert_eq!(Held::SearchKey.noticed_within(), None);
+        assert_eq!(Held::SearchKey.binding(), None);
+        assert!(Held::all("gateway.invalid").contains(&Held::SearchKey));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// CRED-10: a credential the record stands at Held briefly is owed a figure for how quickly a

@@ -245,6 +245,10 @@ else wrote, so only a person's `y` approves either, and where nobody can be aske
 and no plugin server starts ([HOOK-11](hooks.md#HOOK-11),
 [SERVERS-27](mcp-servers.md#SERVERS-27)).
 
+**A web search is answered as a fetch is.** A search the planner proposed is approved without
+being put to anybody, and in auto it is not put to the classifier, so the question goes to the person
+([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2), [AUTO-3](auto-mode.md#AUTO-3)).
+
 **A program's write is answered in advance.** Under the sandbox mode `workspace-write` on macOS and Linux,
 in a workspace the person has trusted, the stages of a `run`, a delegate's included, are given at the start
 every path a `request_path` for writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so
@@ -338,6 +342,7 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
+`verified-by: bravebot_agent::web_search::bypass_answers_a_search_and_auto_leaves_it_to_the_person_without_a_classifier_word`
 `verified-by: bravebot_agent::permission_mode::no_mode_answers_the_question_about_a_plugins_hook`
 `verified-by: bravebot_agent::servers::plugin_tests::nothing_but_a_yes_to_that_server_approves_it`
 `verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`

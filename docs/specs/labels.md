@@ -174,6 +174,7 @@ guards:
       - crates/agent/src/skills.rs: 2
       - crates/agent/src/tools.rs: 42
       - crates/agent/src/tools/recall.rs: 4
+      - crates/agent/src/tools/web_search.rs: 1
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -240,6 +241,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 18
       - crates/agent/src/tools/link.rs: 1
+      - crates/agent/src/tools/web_search.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::promote_confined_read

@@ -305,6 +305,7 @@ fn home_only_line(key: &str, path: String) -> String {
         "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
         "permissions.startInAuto" => t!(doctor_settings_start_in_auto_ignored, path = path),
         "run.scrubEnv" => t!(doctor_settings_scrub_env_ignored, path = path),
+        "webSearch.keyFile" => t!(doctor_settings_web_search_key_file_ignored, path = path),
         "limit" => t!(doctor_settings_limit_ignored, path = path),
         "updateCheck" => t!(doctor_settings_update_check_ignored, path = path),
         "deepLinks" => t!(doctor_settings_deep_links_ignored, path = path),
@@ -1016,6 +1017,7 @@ fn report_backends(config: &Config, ending: &mut Ending) {
     for held in config.held() {
         report_held(held);
     }
+    report_web_search(config);
     report_chatgpt_sign_in(ending);
     report_xai_sign_in(ending);
 }
@@ -1041,6 +1043,30 @@ fn report_held(held: bravebot_config::Held<'_>) {
         if let Some(dropped) = why_it_dropped(held, *drop) {
             fact(t!(doctor_dropped), dropped);
         }
+    }
+}
+
+/// What `doctor` says of the web search key file: whether the setting names one and whether it is
+/// there.
+///
+/// Looks at the file's metadata through [`Config::offers_web_search`] and reads nothing from it, so
+/// the report cannot hold the key. The path is the person's own setting and is not a secret.
+fn report_web_search(config: &Config) {
+    fact(t!(doctor_web_search), web_search_line(config));
+}
+
+/// The words of [`report_web_search`], separate from the printing so a test can hold them.
+pub(crate) fn web_search_line(config: &Config) -> String {
+    match config.web_search_key_file.as_deref() {
+        None => t!(doctor_web_search_absent).to_string(),
+        Some(path) if config.offers_web_search() => t!(
+            doctor_web_search_keyed,
+            path = progress::printable_path(path)
+        ),
+        Some(path) => t!(
+            doctor_web_search_missing,
+            path = progress::printable_path(path)
+        ),
     }
 }
 
@@ -1835,6 +1861,7 @@ pub(crate) fn what_would_end(held: bravebot_config::Held<'_>) -> String {
             t!(doctor_ends_gateway_token, gateway = host)
         }
         bravebot_config::Held::PremiumKey => t!(doctor_ends_premium_key).to_string(),
+        bravebot_config::Held::SearchKey => t!(doctor_ends_search_key).to_string(),
         bravebot_config::Held::ChatgptAccount => t!(doctor_ends_chatgpt_account).to_string(),
         bravebot_config::Held::XaiAccount => t!(doctor_ends_xai_account).to_string(),
     }
@@ -1885,6 +1912,7 @@ pub(crate) fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Opt
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. }
         | bravebot_config::Held::PremiumKey
+        | bravebot_config::Held::SearchKey
         | bravebot_config::Held::ChatgptAccount
         | bravebot_config::Held::XaiAccount => None,
     }
@@ -2012,6 +2040,21 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
+        (Held::SearchKey, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_search_key_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::SearchKey, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_search_key_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::SearchKey, Condition::NotMintedForOneStep) => t!(
+            doctor_dropped_search_key_not_minted_for_one_step,
+            gate = gate,
+            answer = answer
+        ),
         (Held::ChatgptAccount, Condition::NothingDecidesEachUse) => t!(
             doctor_dropped_chatgpt_account_nothing_decides_each_use,
             gate = gate,
@@ -2046,7 +2089,11 @@ pub(crate) fn why_it_dropped(
         // each credential does drop at, and a drop recorded on one of them is an account nobody
         // has written.
         (
-            Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. } | Held::PremiumKey,
+            Held::SigningKey
+            | Held::AwsAccessKey
+            | Held::GatewayToken { .. }
+            | Held::PremiumKey
+            | Held::SearchKey,
             Condition::NothingCanRefuseAUse
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
@@ -2105,7 +2152,8 @@ pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::PremiumKey => None,
+        | bravebot_config::Held::PremiumKey
+        | bravebot_config::Held::SearchKey => None,
     }
 }
 
@@ -4407,6 +4455,61 @@ mod tests {
             .first()
             .expect("one provider")
             .clone()
+    }
+
+    /// A configuration over a placeholder signing key, for the web search `doctor` tests.
+    fn a_configuration() -> Config {
+        Config::from_lookup(|name| match name {
+            bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key".to_string()),
+            bravebot_config::env_var::KEY_ID => Some("test-key-id".to_string()),
+            bravebot_config::env_var::ENDPOINT => Some("https://free.invalid".to_string()),
+            _ => None,
+        })
+        .expect("complete")
+    }
+
+    /// The `doctor` account of the Brave Search key names the setting, says where the key goes and
+    /// how custody ends, and the line for a configured key file names the setting and the path and
+    /// never the key, which is a placeholder in a scratch file here. A report that read the file to
+    /// say it was there would print the key into a paste; one that said nothing of the setting
+    /// would leave somebody without the name of what to remove.
+    #[test]
+    fn the_web_search_key_is_reported_by_its_setting_and_never_by_its_value() {
+        const PLACEHOLDER: &str = "placeholder-search-key";
+        let account = what_would_end(bravebot_config::Held::SearchKey);
+        for named in [
+            "webSearch.keyFile",
+            "api.search.brave.com",
+            "Brave Search API dashboard",
+        ] {
+            assert!(account.contains(named), "{named} is not in: {account}");
+        }
+        assert!(!account.contains(PLACEHOLDER));
+
+        let directory =
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
+            std::env::temp_dir().join(format!("bravebot-doctor-web-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        std::fs::write(&file, PLACEHOLDER).expect("a file");
+
+        let absent = web_search_line(&a_configuration());
+        assert!(absent.contains("webSearch.keyFile"), "{absent}");
+
+        let missing = web_search_line(
+            &a_configuration().with_web_search_key_file(directory.join("absent.txt")),
+        );
+        assert!(missing.contains("webSearch.keyFile"), "{missing}");
+        assert_ne!(missing, absent);
+
+        let configured = web_search_line(&a_configuration().with_web_search_key_file(&file));
+        assert!(configured.contains("webSearch.keyFile"), "{configured}");
+        assert!(configured.contains("configured"), "{configured}");
+        assert!(!configured.contains(PLACEHOLDER), "{configured}");
+        assert_ne!(configured, missing);
+        assert_ne!(configured, absent);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// BACKEND-62: a gateway dropped for a `baseURL` port that cannot be read is named by its id
