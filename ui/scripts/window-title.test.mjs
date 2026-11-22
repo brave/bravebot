@@ -91,3 +91,17 @@ test('a question waiting outranks a running turn', () => {
   assert.equal(sessionStatus(both), 'answer')
   assert.equal(titleState(both), 'waiting')
 })
+
+const { writeTitle } = loadSync(fileURLToPath(new URL('../src/renderer/window-title.ts', import.meta.url)))
+
+test('an unchanged title is not written twice', () => {
+  const writes = []
+  const page = { get title() { return writes.at(-1) ?? '' }, set title(text) { writes.push(text) } }
+  const last = { current: null }
+  writeTitle(page, last, 'Bravebot · fix')
+  writeTitle(page, last, 'Bravebot · fix')
+  writeTitle(page, last, '✦ Bravebot · fix')
+  writeTitle(page, last, '✦ Bravebot · fix')
+  writeTitle(page, last, 'Bravebot')
+  assert.deepEqual(writes, ['Bravebot · fix', '✦ Bravebot · fix', 'Bravebot'])
+})
