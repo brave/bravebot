@@ -79,7 +79,7 @@ const NO_GATE = {
   'session.folders.close': 'names a folder only to take it away from the session, which the agent refuses unless it is open there',
 }
 const TAKES_NO_DIRECTORY = [
-  'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.rewind',
+  'agent.info', 'session.fork', 'session.close', 'session.mode', 'session.sandbox', 'session.limit', 'session.rewind',
   'session.note', 'session.folders.list',
   'session.report.cost', 'session.report.context', 'session.report.request', 'session.report.status',
   'turn.send', 'turn.cancel', 'turn.interject', 'session.enhance', 'session.enhance.cancel', 'session.compact', 'session.compact.cancel', 'session.handoff', 'session.handoff.cancel', 'session.background','mentions.offer', 'mentions.named', 'confirm.reply', 'run.reply',

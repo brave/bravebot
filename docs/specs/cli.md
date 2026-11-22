@@ -2668,8 +2668,9 @@ Each value is a whole number written in digits, 1 or more. A value that is not, 
 value, a `--max-rounds` of 200 or more, which is the bound a one-shot run carries
 ([TURN-2](turns.md#TURN-2)), and either flag given with `--mode manifest` or `--goal` are refused
 with status 2 before anything is sent, and the refusal names the flag. A flag given twice takes the
-last value. A session's own limit is the `limit` setting and `/limit`
-([TURN-8](turns.md#TURN-8)).
+last value. A session's own limit is the `limit` setting, changed with `/limit` in the terminal
+session and with `session.limit` in the desktop window. It applies in those two, which ask the
+person when it is reached ([TURN-8](turns.md#TURN-8)), and not in a one-shot run.
 
 **Why.** A CI job that runs the agent cannot say how much it is willing to spend. The only bound is
 a constant of 200 rounds, and the run that reaches it answers with what it has and exits 0

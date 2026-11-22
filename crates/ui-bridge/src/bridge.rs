@@ -135,6 +135,12 @@ struct Open {
     /// What `/cost`, `/context` and `/request` are answered from, which the session's turns write
     /// into as they run, so a report asked while a turn holds the state is answered (CMD-8).
     reports: crate::reports::Shared,
+    /// The state's spend limit, the same shared handle, so `session.limit` sets it while a turn
+    /// holds the state and that turn's next request is held to it (TURN-8).
+    spend_limit: bravebot_agent::SpendLimit,
+    /// The state's token total when its current turn began, which `session.limit` reports while
+    /// that turn holds the state.
+    tokens_at_turn: u64,
 }
 
 impl Open {
@@ -152,6 +158,8 @@ impl Open {
             folders: state.directories.clone(),
             // Measured against no budget until a turn starts, which reads it from the settings.
             reports: Arc::new(Mutex::new(crate::reports::Held::of(&state, 0))),
+            spend_limit: state.spend_limit.clone(),
+            tokens_at_turn: state.tokens,
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -381,6 +389,7 @@ impl Bridge {
             "session.close" => self.close_session(request),
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
+            "session.limit" => self.session_limit(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
             "session.folders.list" | "session.folders.add" | "session.folders.close" => {
@@ -724,6 +733,7 @@ impl Bridge {
             Err(held) => return Ok(Stored::Refused(held)),
         };
         state.account = self.account_session(&directory);
+        state.spend_limit = self.spend_limit(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(
@@ -1053,6 +1063,14 @@ impl Bridge {
         bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
+    /// The spend limit a session opened in `project` starts with: the `limit` setting, where a
+    /// project's file may only narrow the person's (TURN-8). The terminal seeds its session the
+    /// same way in `Session::adopt_limit`.
+    fn spend_limit(&self, project: &std::path::Path) -> bravebot_agent::SpendLimit {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_agent::SpendLimit::new(settings.limit())
+    }
+
     /// The mode a session opened in `project` starts in: auto where the person's own settings say
     /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1), and asking always for a
     /// bridge built with [`Bridge::opening_in_ask`]. A checkout's file and the managed file are not
@@ -1227,6 +1245,7 @@ impl Bridge {
         let reported = opening.json(&directory);
         let mut state = State::fresh(opening.trust);
         state.account = self.account_session(&directory);
+        state.spend_limit = self.spend_limit(&directory);
         state.directories = additional;
         state.handed_off_from = handed_off_from;
         let handle = self.mint(
@@ -1463,6 +1482,7 @@ impl Bridge {
                     // The map is the parent's, so what the mode answered in it is still the mode's.
                     forked.answered_by_mode = by_mode;
                     forked.account = self.account_session(&project);
+                    forked.spend_limit = self.spend_limit(&project);
                     forked
                 },
                 // Inherited along with the map itself: the same person, in the same directory, in
@@ -1879,6 +1899,45 @@ impl Bridge {
         Ok(json!({ "permissionMode": wire::permission_mode_name(mode) }))
     }
 
+    /// Set, clear or read the session's spend limit: the desktop window's `/limit` (TURN-8).
+    ///
+    /// `limit` a string is read as the `limit` setting is, `null` is no limit, and absent reads the
+    /// limit without changing it. The handle is the one each turn holds, so a limit set while a
+    /// turn runs applies to that turn's next request.
+    fn session_limit(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let asked = match request.params.get("limit") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(Value::String(text)) => Some(Some(
+                bravebot_config::limit::parse(text, bravebot_config::limit::Unit::Tokens)
+                    .ok_or_else(|| {
+                        Failure::bad_request(format!("`{text}` is not a spend limit"))
+                    })?,
+            )),
+            Some(_) => return Err(Failure::bad_request("`limit` must be a string or null")),
+        };
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(limit) = asked {
+            open.spend_limit.set(limit);
+        }
+        // A turn holds the state while it runs, and adds what it spent when it ends.
+        let tokens = match open.state.try_lock() {
+            Ok(state) => state.tokens,
+            Err(_) => open.tokens_at_turn,
+        };
+        Ok(match open.spend_limit.limit() {
+            Some(limit) => json!({
+                "limit": {"unit": limit.unit.word(), "count": limit.figure},
+                "spent": bravebot_agent::spend_limit::spent_in(limit.unit, &open.spend_limit, tokens),
+            }),
+            None => json!({"limit": null, "spent": tokens}),
+        })
+    }
+
     /// Choose the sandbox mode the session's next turn runs its programs under.
     ///
     /// `strict` or `workspace-write`: a window has no way to show that nothing confines a program, so
@@ -2074,7 +2133,10 @@ impl Bridge {
         let state = Arc::clone(&open.state);
         let reports = Arc::clone(&open.reports);
         let watches = Arc::clone(&open.watches);
-        let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
+        let (turn_number, tokens_at_turn) = state
+            .lock()
+            .map(|s| (s.turns + 1, s.tokens))
+            .unwrap_or((1, open.tokens_at_turn));
 
         let crate::running::Started {
             running,
@@ -2130,6 +2192,7 @@ impl Bridge {
             open.running = Some(running);
             open.model = model;
             open.definition = standing;
+            open.tokens_at_turn = tokens_at_turn;
         }
         self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {
@@ -4431,6 +4494,10 @@ fn work(work: Work) {
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
         // number would only interrupt work that was going fine (TURN-2).
         .with_rounds(None)
+        // The session's spend limit, which asks the person before a request past it (TURN-8). It
+        // is the only budget a turn here carries: the run limits of TURN-14 end a run without
+        // asking, and a person is in front of this window.
+        .with_spend_limit(state.spend_limit.clone(), state.tokens)
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
         .in_front_end(front_end)
@@ -4861,8 +4928,10 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         _ => diagnosis.and_then(|d| d.attempts),
     };
     let kind = match error {
-        // Only a one-shot run gives a turn a limit of its own (TURN-14), so the bridge never sees
-        // this one, and a stop is what it would be: the ending says `Stopped`.
+        // A person who answers stop at the spend-limit question (TURN-8) ends the turn as
+        // `Cancelled`, the way any stop does. `LimitReached` comes only from the run limits a
+        // one-shot run sets (TURN-14), which the bridge never sets, and a stop is what it would be:
+        // the ending says `Stopped`.
         TurnError::Cancelled { .. } | TurnError::LimitReached(_) => "cancelled",
         TurnError::Precommit(_) => "precommit",
         TurnError::Workspace(_) | TurnError::Named { .. } => "workspace",
