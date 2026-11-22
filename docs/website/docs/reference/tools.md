@@ -1281,7 +1281,8 @@ request: every tool that names a path (`read_file`, `write_file`, `edit_file`, `
 outside the workspace wherever your account can, under every sandbox mode, with no directory opened or trusted,
 and it ends when you leave bypass. The paths this page lists as refused here are refused to them too, so are
 your `denyRead` and `denyWrite` paths, `permissions.readsStayInWorkspace`, writes under `read-only` and a workspace you
-have not trusted. `/status` lists the directories reached. On macOS and Linux with the sandbox mode `workspace-write`, in a workspace you have trusted, the programs
+have not trusted, and so, unlike a request through this tool, is `~/.bravebot/sessions`: the session
+records stay closed to these tools whatever the mode, though a program a `run` starts still reads them. `/status` lists the directories reached. On macOS and Linux with the sandbox mode `workspace-write`, in a workspace you have trusted, the programs
 every `run` starts, a delegate's included, are also given those paths, minus your home directory as a whole, the credential
 locations and your `denyRead` and `denyWrite` paths, so a sibling of the working directory does not
 fail with `Operation not permitted`. A

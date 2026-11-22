@@ -8861,9 +8861,11 @@ mod tests {
             destination_remedy(&workspace, &project.join("out/notes.txt")),
             Remedy::Nothing
         );
+        // The stores offer no directory either, worded as RECALL-8 describes them rather than
+        // as a plain escape.
         assert_eq!(
             destination_remedy(&workspace, &state.join("facts/x.md")),
-            Remedy::Nothing
+            Remedy::StateDirectory
         );
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }

@@ -231,7 +231,7 @@ impl Workspace {
         };
         let resolved = destination(path).ok_or_else(|| escapes(Remedy::Nothing))?;
         if self.in_the_stores(&resolved) {
-            return Err(escapes(Remedy::Nothing));
+            return Err(escapes(self.state_directory_remedy(&resolved)));
         }
         if self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write) {
             return Ok(());
@@ -365,28 +365,57 @@ impl Workspace {
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
         let resolved = self.resolve_with_home(relative, self.home.as_deref())?;
-        if self.in_the_stores(&resolved) || self.spelled_in_the_stores(relative) {
+        let store_path = match self.in_the_stores(&resolved) {
+            true => Some(resolved.clone()),
+            false => self.spelled_in_the_stores(relative),
+        };
+        if let Some(store_path) = store_path {
             return Err(WorkspaceError::Escapes {
                 path: relative.to_string(),
-                remedy: Remedy::Nothing,
+                remedy: self.state_directory_remedy(&store_path),
             });
         }
         Ok(resolved)
     }
 
-    /// Whether `relative`, as it is spelled and before any link in it is followed, is in a store or
-    /// is the home rules file under some spelling of its name (RECALL-8).
+    /// The remedy for a path in the person's facts, rules or home rules file, or in the session
+    /// records specifically, which get their own wording since a program a `run` starts still
+    /// reads them (RECALL-8, SANDBOX-12). Chosen only to word a refusal [`Workspace::in_the_stores`]
+    /// already decided; it never widens or narrows what is refused.
+    pub(super) fn state_directory_remedy(&self, resolved: &Path) -> Remedy {
+        match self.in_the_sessions_store(resolved) {
+            true => Remedy::StateDirectorySessions,
+            false => Remedy::StateDirectory,
+        }
+    }
+
+    /// Whether a resolved path is in the session records specifically, as opposed to the facts,
+    /// rules or home rules file [`Workspace::in_the_stores`] also refuses. Asked only to choose the
+    /// wording of a refusal already decided.
+    fn in_the_sessions_store(&self, resolved: &Path) -> bool {
+        self.state
+            .as_deref()
+            .is_some_and(|state| within_stores(&[Self::sessions_store(state)], resolved))
+    }
+
+    /// The directory under `state` that holds session records, as a path lands on it (SANDBOX-12).
+    fn sessions_store(state: &Path) -> PathBuf {
+        destination(&state.join("sessions")).unwrap_or_else(|| state.join("sessions"))
+    }
+
+    /// `relative`, as it is spelled and before any link in it is followed, joined to the root,
+    /// where that is in a store or is the home rules file under some spelling of its name
+    /// (RECALL-8). `None` otherwise.
     ///
     /// [`Workspace::in_the_stores`] is asked of where a name lands, so a link named `agents.md`
     /// that leads elsewhere lands outside the stores on a volume that tells `agents.md` and
     /// `AGENTS.md` apart. The spec refuses the link by its name, and this is that test. Only the
     /// typed name is compared with the store names, so nothing a file holds is read.
-    fn spelled_in_the_stores(&self, relative: &str) -> bool {
-        let Ok(expanded) = self.spelled(relative, self.home.as_deref()) else {
-            return false;
-        };
+    fn spelled_in_the_stores(&self, relative: &str) -> Option<PathBuf> {
+        let expanded = self.spelled(relative, self.home.as_deref()).ok()?;
         let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
-        self.in_the_stores(&self.root.join(candidate))
+        let joined = self.root.join(candidate);
+        self.in_the_stores(&joined).then_some(joined)
     }
 
     /// The directories under `state` that hold the person's facts and rules, as a path lands on
