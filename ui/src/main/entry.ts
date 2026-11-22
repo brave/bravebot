@@ -1,8 +1,8 @@
 /**
  * What starts first. A desktop started by `bravebot-host` as one of its clients is the prototype
  * window and nothing else (HOSTCLIENT-1), so none of the ordinary app's top-level work runs: it
- * would start an agent process of its own beside the host's. Everything else is the app as it
- * always was.
+ * would start an agent process of its own beside the host's. Without the flag it loads the
+ * ordinary app from `./index`.
  */
 
 import { hostClientOptions } from './prototype/options'

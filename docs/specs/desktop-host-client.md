@@ -18,7 +18,7 @@ documented-by: none (internal: the desktop is started as a host client by a pers
 
 ## Scope
 
-The desktop application started by `bravebot-host` as one of its clients ([HOST-1](local-host.md#HOST-1)), so it and another client attach to the same session ([HOST-7](local-host.md#HOST-7)). In that mode the app is one window drawn from the shared view of [RPCVIEW-1](session-view.md#RPCVIEW-1), and it offers what the host offers a client and nothing else. The ordinary desktop, with its own agent process, its sessions, bots, settings and files, is the app as it always was and is not changed by this.
+The desktop application started by `bravebot-host` as one of its clients ([HOST-1](local-host.md#HOST-1)), so it and another client attach to the same session ([HOST-7](local-host.md#HOST-7)). In that mode the app is one window drawn from the shared view of [RPCVIEW-1](session-view.md#RPCVIEW-1), and it offers what the host offers a client and nothing else. The ordinary desktop, with its own agent process, its sessions, bots, settings and files, is started without `--bravebot-host-client` and runs none of this mode.
 
 Not here: the desktop attaching to a host that was already running when it started, which needs a decision of its own ([U4](../design/mobile/open-questions.md#u4-attaching-a-client-the-host-did-not-launch)), a session list of the person's saved sessions, attachments, bots, forks, watches, manifests, settings, file browsing, export and any other control the host does not offer ([the capability matrix](../design/mobile/desktop-prototype.md#capability-matrix)).
 
