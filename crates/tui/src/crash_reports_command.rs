@@ -9,15 +9,11 @@
 //! takes from outside is the word typed after the command.
 
 use crate::Session;
+use crate::command_table::{CRASH_REPORTS_OFF as OFF, CRASH_REPORTS_ON as ON};
 use bravebot_backtrace::NotSaved;
 use bravebot_config::Managed;
 use bravebot_config::crash_reports::CrashReports;
 use bravebot_i18n::t;
-
-/// The word that turns reports on. Matched whole and in lower case.
-const ON: &str = "on";
-/// The word that turns reports off. Matched whole and in lower case.
-const OFF: &str = "off";
 
 /// Answer `/crash-reports` with `word` after it, saying each line in the transcript.
 ///

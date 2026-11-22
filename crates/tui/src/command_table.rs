@@ -56,6 +56,16 @@ pub(crate) const CONFIG_COMMAND: &str = "/config";
 /// gives the choice back to the settings file and the environment (LOCALE-8).
 pub(crate) const LANGUAGE_COMMAND: &str = "/language";
 
+/// The line that says whether crash reports are on and what holds them off, or saves the person's
+/// own choice for the next start (CRASH-11).
+pub(crate) const CRASH_REPORTS_COMMAND: &str = "/crash-reports";
+
+/// The word after `/crash-reports` that turns reports on. Matched whole and in lower case.
+pub(crate) const CRASH_REPORTS_ON: &str = "on";
+
+/// The word after `/crash-reports` that turns reports off. Matched whole and in lower case.
+pub(crate) const CRASH_REPORTS_OFF: &str = "off";
+
 /// The line that opens another directory, taking the path to open as its argument.
 pub(crate) const ADD_DIR_COMMAND: &str = "/add-dir";
 
@@ -590,6 +600,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: CRASH_REPORTS_COMMAND,
+            argument: "[on | off]",
+            description: t!(command_crash_reports),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: VARIANT_COMMAND,
             argument: "[name | off]",
             description: t!(command_variant),
@@ -991,6 +1007,13 @@ pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
         return complete_effort(typed);
+    }
+    if let Some(typed) = line.strip_prefix(CRASH_REPORTS_COMMAND) {
+        return complete_exact_word(
+            CRASH_REPORTS_COMMAND,
+            typed,
+            &[CRASH_REPORTS_ON, CRASH_REPORTS_OFF],
+        );
     }
     if let Some(typed) = line.strip_prefix(SCHEDULE_COMMAND) {
         return complete_word(
