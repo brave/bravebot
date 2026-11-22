@@ -422,6 +422,7 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'settings.inspect': return ok({
       build: '0.19.0 (playground)', configured: playground.configured, problem: playground.configured ? null : 'No model service is configured.', model: 'sample/fast', brave: false, bedrock: false,
       providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] },
+      logs: { directory: '/Users/example/.bravebot/logs', writing: true },
       network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null },
     })
     case 'hooks.inspect': return ok({ path: '~/.bravebot/hooks.json', text: null, entire: true, timeoutSeconds: { min: 1, max: 600, defaultFor: {} }, hooks: [] })

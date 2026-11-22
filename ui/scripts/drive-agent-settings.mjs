@@ -18,7 +18,7 @@ try {
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
-    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
+    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], logs: { directory: '/test/.bravebot/logs', writing: true }, managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
     // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
     const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
     const accounts = [
@@ -94,6 +94,26 @@ try {
   await dialog.getByText('Locked by your administrator: provider', { exact: true }).waitFor()
   await dialog.getByText('proxy.example:8080 · authenticated', { exact: true }).waitFor()
   await snap('01-connection')
+  // The diagnostic log directory is named before any log exists. The window shows the bridge's
+  // string, and says why there is none when this process writes no log.
+  const diagnostics = dialog.locator('.settings-block').filter({ has: page.getByRole('heading', { name: 'Diagnostics', exact: true }) })
+  assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').textContent(), '/test/.bravebot/logs')
+  await diagnostics.getByText('Logs are written here when something fails. The folder may be empty until then.', { exact: true }).waitFor()
+  await diagnostics.scrollIntoViewIfNeeded()
+  for (const theme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
+    await page.waitForTimeout(300)
+    await diagnostics.screenshot({ path: join(output, `01-log-directory-${theme}.png`) })
+  }
+  await page.emulateMedia({ colorScheme: null, reducedMotion: 'reduce' })
+  await app.evaluate(() => { globalThis.agentSettingsFixture.state.report.logs.writing = false })
+  await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
+  await diagnostics.getByText('This session keeps nothing, so no log is written.', { exact: true }).waitFor()
+  assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').count(), 0, 'a process that writes no log names no folder')
+  await diagnostics.screenshot({ path: join(output, '01-log-not-written.png') })
+  await app.evaluate(() => { globalThis.agentSettingsFixture.state.report.logs.writing = true })
+  await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
+  await diagnostics.locator('[data-test="settings-log-directory"]').waitFor()
   // The model service and the accounts are the Providers page, the second in the list.
   assert.deepEqual(await dialog.locator('[data-test^="settings-page-"]').evaluateAll((items) => items.map((item) => item.dataset.test)),
     ['settings-page-general', 'settings-page-providers', 'settings-page-connectors', 'settings-page-agent'])

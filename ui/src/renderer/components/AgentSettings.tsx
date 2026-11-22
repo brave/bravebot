@@ -130,6 +130,12 @@ export function AgentSettings({ session, onChanged, onDirty }: {
         </section>
         <section className="settings-block"><h3>Diagnostics</h3>
           <p>Read the agent’s configuration again, after changing a file or the environment.</p>
+          {/* The window only shows the string the bridge sent; nothing here reads the folder. */}
+          {report.logs && <dl><dt>Diagnostic log</dt><dd>{report.logs.directory === null
+            ? <p data-test="settings-log-none">No state directory is set, so no log is kept.</p>
+            : !report.logs.writing
+              ? <p data-test="settings-log-none">This session keeps nothing, so no log is written.</p>
+              : <><p className="settings-path" data-test="settings-log-directory">{report.logs.directory}</p><p>Logs are written here when something fails. The folder may be empty until then.</p></>}</dd></dl>}
           <div className="settings-actions"><Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
         </section>
         <section className="settings-block"><h3>Managed configuration</h3>{report.managed.path ? <><p className="settings-path">{report.managed.path}</p><p>{report.managed.keys.length ? `Locked by your administrator: ${report.managed.keys.join(', ')}` : 'File found; no recognized values are pinned.'}</p></> : <p>No administrator-managed configuration found.</p>}<p>Administrator-pinned destinations take precedence over your settings and environment.</p></section>
