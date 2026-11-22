@@ -20,6 +20,8 @@ fr:agent-rule-other-spelling-unnamed
 fr:ask-key-scroll
 fr:ask-more-question
 fr:ask-question-end
+fr:auth-status-gateway-key-file-unusable
+fr:backend-no-gateway-key-file
 fr:btw-no-files-beside-a-turn
 fr:btw-nothing-sent-yet
 fr:btw-one-at-a-time
@@ -44,6 +46,7 @@ fr:command-plugin
 fr:command-sessions
 fr:command-unfinished
 fr:configured-start-heading
+fr:desktop-accounts-gateway-key-file-unusable
 fr:desktop-model-retrieves
 fr:doctor-dropped-search-key-no-bound-fixed-before-issue
 fr:doctor-dropped-search-key-not-minted-for-one-step
@@ -60,6 +63,8 @@ fr:doctor-embeddings-openrouter
 fr:doctor-embeddings-skipped
 fr:doctor-embeddings-unconfigured
 fr:doctor-ends-search-key
+fr:doctor-gateway-token-key-file
+fr:doctor-gateway-token-key-file-unusable
 fr:doctor-openshell
 fr:doctor-openshell-gateway
 fr:doctor-openshell-gateway-down
@@ -89,6 +94,11 @@ fr:doctor-web-search-variable
 fr:doctor-web-search-variables-empty
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
+fr:gateway-key-file-empty
+fr:gateway-key-file-not-a-key
+fr:gateway-key-file-not-absolute
+fr:gateway-key-file-too-large
+fr:gateway-key-file-unreadable
 fr:hover-panel-close-peek
 fr:keybindings-undeliverable
 fr:keybindings-undeliverable-more
@@ -519,6 +529,7 @@ fr:trigger-stopped-at-question
 fr:trigger-store-failed
 fr:trigger-usage
 fr:trust-question-keys-together
+fr:ui-accounts-key-from-file
 fr:ui-context-out-of-request
 fr:ui-recall-fix-key
 fr:ui-recall-heading

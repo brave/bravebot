@@ -1561,7 +1561,11 @@ no block names is asked about where it is named, and where no id is named, where
 it. It is not signed in, since a session sends it nothing: the line says that no key is stored for
 it, or that a key is stored and no block names it, and names the command that signs in, which
 records the block ([CLI-18](#CLI-18)). With no id and nothing to ask about, the one line says that
-no gateway key is stored. A configuration
+no gateway key is stored. A gateway whose block names an `options.keyFile` that gives no key, where
+no variable and no stored key gives one, is not signed in, since a session refuses the request: the
+line says that the file the setting names gives no key and that storing a key with
+`bravebot auth login gateway <id>` makes the stored key win over the file, and it names no path and
+nothing the file holds. A configuration
 that cannot be read is reported as unusable on the lines it blocks.
 
 With no way named, brave, bedrock, gateway, chatgpt and xai are asked about. The command exits 0 if any sign-in is usable, since
@@ -1594,6 +1598,7 @@ particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_brave_reports_a_stored_key_without_the_key`
 `verified-by: bravebot_agent::accounts::the_brave_key_stands_as_its_file_does`
 `verified-by: bravebot_cli::running::auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is`
+`verified-by: bravebot_agent::accounts::a_key_file_that_gives_no_key_is_not_signed_in_and_one_that_does_is`
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
 `verified-by: bravebot_cli::running::auth_status_gateway_asks_about_a_known_service_no_block_names`

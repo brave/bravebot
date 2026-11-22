@@ -565,7 +565,7 @@ doctor-ends-premium-key =
 doctor-ends-search-key =
     the Brave Search key: read from the first variable the setting `webSearch.env` names that holds text, or else from the file the setting `webSearch.keyFile` names, and sent only to api.search.brave.com in one request header; issued by the Brave Search API dashboard, which is also the only surface that revokes it; unsetting the variable, removing the setting or removing the file ends this machine's custody, and the key keeps working at Brave until it is revoked in the Brave Search API dashboard
 doctor-ends-gateway-token =
-    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
+    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, removing the file the setting `options.keyFile` names, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-chatgpt-account =
     a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
 doctor-ends-xai-account =
@@ -692,6 +692,24 @@ doctor-gateway-token-stored = stored by bravebot auth login gateway (never print
 doctor-gateway-token-absent =
     none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+# The file the block's `options.keyFile` names, which holds the token. The path is not said and the
+# file is not quoted: the setting is a string the person wrote, and one pasted into the wrong field
+# is the key itself, which a report people paste would then carry.
+doctor-gateway-token-key-file = found in the file options.keyFile names (never printed)
+doctor-gateway-token-key-file-unusable =
+    none usable: the file options.keyFile names { $reason } (set a variable its `env` names, fix that file, or run bravebot auth login gateway)
+# Why the file a block's `options.keyFile` names gives no key, completing "the file ... names". One
+# sentence per fault, said the same way by a refused request, `doctor`, `auth status` and the window.
+# None holds the path or any text of the file.
+gateway-key-file-not-absolute = is not an absolute path
+gateway-key-file-unreadable = is missing, is not a regular file, or cannot be read as text
+gateway-key-file-too-large = holds more than 4,096 bytes
+gateway-key-file-empty = holds nothing but whitespace
+gateway-key-file-not-a-key = holds whitespace, a control character or a character outside ASCII inside the key
+# The refusal of a request whose block names a key file that gives no key, with no variable and no
+# stored key before it. `options.apiKey` is not sent in the file's place.
+backend-no-gateway-key-file =
+    no credential for the { $provider } gateway: the file its `options.keyFile` names { $reason }, so nothing was sent; fix the path, or put the key alone in that file
 # A header a gateway block named and this build does not send, with the name the file wrote and the
 # reason. The name only: a header a gateway routes on is often a second credential.
 doctor-header-reserved = { $name } in the provider block is not sent: this program sets that header itself
@@ -1448,6 +1466,10 @@ auth-status-brave-nowhere = this machine has nowhere to keep a key, so none is s
 auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name brave, bedrock, gateway, chatgpt or xai
 # Said of a gateway when no key is stored for any service and no provider block names a gateway.
 auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
+# The file the block's `options.keyFile` names gives no key. A stored key is read before the file, so
+# storing one makes the gateway usable. The path is not said.
+auth-status-gateway-key-file-unusable =
+    the file options.keyFile names { $reason }; fix it, or run bravebot auth login gateway { $id }, since a stored key is read before the file
 # The id is a service bravebot knows that no provider block names, so no session sends a key to it.
 auth-status-gateway-none-stored = no key is stored for { $id }; run bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
@@ -4614,6 +4636,7 @@ desktop-accounts-bedrock-timed-out = The AWS CLI did not answer in time, so refr
 desktop-accounts-gateway-none-configured = This computer's managed settings allow no gateway.
 desktop-accounts-gateway-unrecorded = A key is stored for this service, but no settings name it, so no session sends it.
 desktop-accounts-gateway-absent = No key is set for this gateway.
+desktop-accounts-gateway-key-file-unusable = The file this gateway's key file setting names { $reason }. A key stored here is used before the file.
 desktop-accounts-keys-unreadable = The file of gateway keys could not be read, so it was left as it is.
 desktop-accounts-not-checked = Not checked.
 desktop-accounts-not-removed = The sign-in could not be removed from this computer.
@@ -6145,6 +6168,7 @@ ui-accounts-heading = Accounts
 ui-accounts-signed-in = Signed in
 ui-accounts-key-stored = Key stored
 ui-accounts-key-from-environment = Key from the environment
+ui-accounts-key-from-file = Key from a file
 ui-accounts-no-key-needed = No key needed
 ui-accounts-not-signed-in = Not signed in
 ui-accounts-unusable = Can't be used

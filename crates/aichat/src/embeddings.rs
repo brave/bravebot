@@ -245,7 +245,10 @@ pub fn gateway_key(
     match gateway.credential(lookup) {
         bravebot_config::provider::Credential::Token(token) => Ok(Some(token)),
         bravebot_config::provider::Credential::NotNeeded => Ok(None),
-        bravebot_config::provider::Credential::Absent => Err(Unresolved::NoKey(service)),
+        bravebot_config::provider::Credential::Absent
+        | bravebot_config::provider::Credential::KeyFileUnusable(_) => {
+            Err(Unresolved::NoKey(service))
+        }
     }
 }
 
@@ -1426,6 +1429,87 @@ mod tests {
             resolve(&tested, &sources, |_| None).err(),
             Some(Unresolved::NoKey(Service::OpenRouter))
         );
+    }
+
+    /// RETRIEVE-34, BACKEND-16: a gateway whose block names a key file that gives no key has no key
+    /// for retrieval, whether the file is missing, holds nothing or holds the wrong thing, so
+    /// resolving it is refused, which leaves no endpoint configuration and so no request to send
+    /// with no credential. A variable that the block does not name is not read in its place, and
+    /// neither the path nor any text of the file is in the refusal. A block naming no credential
+    /// sends none, which tells a refusal for a file apart from a gateway that wants no key. The
+    /// regressions it rejects are an unusable key file read as a gateway needing no credential,
+    /// which sends the embeddings request with none, and a refusal that quotes the path or the file.
+    #[test]
+    fn a_key_file_that_gives_no_key_is_refused_for_embeddings_and_names_nothing_of_it() {
+        use bravebot_config::embeddings::Kept;
+        let directory = tempfile::Builder::new()
+            .prefix("marker-6d20-")
+            .tempdir()
+            .expect("a scratch directory");
+        let file = directory.path().join("key.txt");
+        let gateways = providers(
+            &serde_json::json!({"provider": {"openai": {
+                "options": {"keyFile": file.to_str().expect("a path")}
+            }}})
+            .to_string(),
+        );
+        let sources = Sources {
+            providers: &gateways,
+            brave: false,
+            custom_key: None,
+        };
+        let choice = selecting(Service::OpenAi, Kept::default());
+
+        for contents in [None, Some("  \n"), Some("marker-text-4b7e two words")] {
+            match contents {
+                Some(text) => std::fs::write(&file, text).expect("a file"),
+                None => {
+                    let _ = std::fs::remove_file(&file);
+                }
+            }
+            let refusal = Some(Unresolved::NoKey(Service::OpenAi));
+            assert_eq!(
+                resolve(&choice, &sources, keyed).err(),
+                refusal,
+                "{contents:?}"
+            );
+            assert_eq!(
+                candidate(Service::OpenAi, &choice, &sources, keyed).err(),
+                refusal,
+                "{contents:?}"
+            );
+            assert_eq!(
+                gateway_key(Service::OpenAi, &sources, keyed).err(),
+                refusal,
+                "{contents:?}"
+            );
+            let said = format!(
+                "{} {:?}",
+                Unresolved::NoKey(Service::OpenAi),
+                resolve(&choice, &sources, keyed).err()
+            );
+            for held in ["marker-6d20", "marker-text-4b7e", "two words"] {
+                assert!(!said.contains(held), "{held} is in: {said}");
+            }
+        }
+
+        // A file that holds a key is the key, and a block naming no credential sends none.
+        std::fs::write(&file, "placeholder-embeddings-key\n").expect("a file");
+        let resolved = resolve(&choice, &sources, keyed).expect("a key file that holds a key");
+        assert_eq!(
+            resolved.token.as_ref().map(Secret::expose),
+            Some("placeholder-embeddings-key")
+        );
+        let keyless = providers(
+            r#"{"provider": {"openai": {"options": {"baseURL": "http://127.0.0.1:1/v1"}}}}"#,
+        );
+        let sources = Sources {
+            providers: &keyless,
+            brave: false,
+            custom_key: None,
+        };
+        let sent_none = resolve(&choice, &sources, keyed).expect("a gateway that wants no key");
+        assert!(sent_none.token.is_none());
     }
 
     /// RETRIEVE-34: a published OpenAI length is used over a kept one, an unpublished model needs

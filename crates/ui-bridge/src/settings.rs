@@ -164,7 +164,8 @@ pub fn report(project: Option<&Path>, selected: Option<&Path>) -> Value {
             c.providers.iter().map(|p| json!({
         "name": p.display_name(), "key": format!("gateway:{}", p.id), "credential": match p.credential(|key| std::env::var(key).ok()) {
             bravebot_config::provider::Credential::Token(_) => "configured",
-            bravebot_config::provider::Credential::Absent => "missing",
+            bravebot_config::provider::Credential::Absent
+            | bravebot_config::provider::Credential::KeyFileUnusable(_) => "missing",
             bravebot_config::provider::Credential::NotNeeded => "not required",
         }
     })).collect::<Vec<_>>()

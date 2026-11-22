@@ -8023,6 +8023,56 @@ mod tests {
         assert_eq!(named.not_obeyed(PROVIDER_BLOCK).count(), 0);
     }
 
+    /// BACKEND-24: a file a block names holds the token a gateway is sent, so a layer able to name
+    /// one would choose which file's content goes to a host. A checkout's layers arrive with the
+    /// checkout, so the file is the person's own file's to name, and the file `--settings` names is
+    /// the person's own act. The regression it rejects is reading `keyFile` from a project or local
+    /// layer's block, which this holds by the block being ignored whole.
+    #[test]
+    fn a_project_layer_cannot_name_a_key_file_for_a_gateway() {
+        let named_by = |file: &str| {
+            format!(
+                r#"{{"provider": {{"gw": {{"options": {{
+                    "baseURL": "https://personal.invalid/v1", "keyFile": "{file}"
+                }}}}}}}}"#
+            )
+        };
+        let settings = Layers::new("provider-key-file")
+            .global(
+                r#"{"provider": {"gw": {"options": {"baseURL": "https://personal.invalid/v1"}}}}"#,
+            )
+            .project(&named_by("/this/checkout/chose"))
+            .local(&named_by("/this/machine/chose"))
+            .read();
+        assert_eq!(settings.providers().len(), 1);
+        assert!(
+            settings
+                .providers()
+                .iter()
+                .all(|provider| provider.key_file.is_none() && !provider.names_a_credential()),
+            "a checkout's key file was read"
+        );
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 2);
+
+        let only_project = Layers::new("provider-key-file-only-project")
+            .project(&named_by("/this/checkout/chose"))
+            .read();
+        assert!(
+            only_project
+                .providers()
+                .iter()
+                .all(|provider| provider.key_file.is_none()),
+            "a checkout with no home layer above it named a key file"
+        );
+        assert_eq!(only_project.not_obeyed(PROVIDER_BLOCK).count(), 1);
+
+        let named = Layers::new("provider-key-file-named")
+            .named(&named_by("/the/person/named"))
+            .read();
+        assert!(named.providers()[0].key_file.is_some());
+        assert_eq!(named.not_obeyed(PROVIDER_BLOCK).count(), 0);
+    }
+
     /// A mistake in a checkout must not decide that somebody's own profile no longer applies, which
     /// is what refusing the whole stack over one bad layer would do.
     #[test]

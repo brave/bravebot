@@ -3070,6 +3070,29 @@ mod tests {
         );
     }
 
+    /// CRED-25: a block that names only a key file holds a gateway token this configuration is
+    /// accountable for, as one that names a variable or an `apiKey` does. The regression it rejects
+    /// is a record that leaves out a block whose only source is a file, which `doctor` would then
+    /// not give an account of what would end its token.
+    #[test]
+    fn a_gateway_key_file_is_a_credential_this_configuration_holds() {
+        let settings = Settings::parse(
+            r#"{"provider": {"in-a-file": {
+                "options": {"baseURL": "https://in-a-file.invalid/v1", "keyFile": "/a/key.txt"}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+        assert!(
+            config.held().contains(&Held::GatewayToken {
+                host: "in-a-file.invalid"
+            }),
+            "{:?}",
+            config.held()
+        );
+    }
+
     /// CRED-3: a credential's walk holds one drop per gate it failed, asked in order from the top,
     /// and stops where its tier says it stopped. A walk that skipped a gate, repeated one or ran
     /// past the tier would be a record of a different credential than the one standing there, and
@@ -5056,7 +5079,9 @@ mod tests {
             .map(|provider| {
                 let token = match provider.credential(|_| None) {
                     provider::Credential::Token(token) => Some(token.expose().to_string()),
-                    provider::Credential::Absent | provider::Credential::NotNeeded => None,
+                    provider::Credential::Absent
+                    | provider::Credential::KeyFileUnusable(_)
+                    | provider::Credential::NotNeeded => None,
                 };
                 (provider.id.clone(), token)
             })
@@ -5132,7 +5157,9 @@ mod tests {
             provider::Credential::Token(token) => {
                 assert_eq!(token.expose(), "placeholder-stored-key");
             }
-            provider::Credential::Absent | provider::Credential::NotNeeded => {
+            provider::Credential::Absent
+            | provider::Credential::KeyFileUnusable(_)
+            | provider::Credential::NotNeeded => {
                 panic!("the stored key was not the credential")
             }
         }
@@ -5265,6 +5292,9 @@ mod tests {
                 assert_eq!(token.expose(), "placeholder-stored-key");
             }
             provider::Credential::Absent => panic!("the stored key was read as absent"),
+            provider::Credential::KeyFileUnusable(_) => {
+                panic!("the stored key was read as a key file that gives none")
+            }
             provider::Credential::NotNeeded => panic!("the stored key was read as not needed"),
         }
         assert_eq!(source, Some(provider::Source::Stored));

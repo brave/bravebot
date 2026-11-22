@@ -400,7 +400,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)); `permissions.startInAuto` opens sessions in the auto mode ([below](#permissionsstartinauto)) |
-| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
+| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)). A gateway's token can be named in `env`, stored with `bravebot auth login gateway`, held in a file `options.keyFile` names, or written as `options.apiKey` ([the credential](providers/openai-compatible.md#the-credential)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([details](../security/sandbox.md#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([details](../security/sandbox.md#runnetwork)) |
 | `sandbox.network.allowedHosts`, `deniedHosts`, `onUnlisted` | the hosts a program the agent runs may reach ([details](../security/sandbox.md#sandboxnetwork)) |
@@ -1817,10 +1817,10 @@ has the variables, the signing in, and the assumed context window.
 ## Reaching an OpenAI-compatible gateway
 
 A `provider` block in a settings file names a gateway, the models it offers, the variable that
-holds its credential and any extra headers its requests carry. It is opencode's block, so one copied
+holds its credential or the file `options.keyFile` names, and any extra headers its requests carry. It is opencode's block, so one copied
 from `opencode.json` works unedited, and a local Ollama needs no key.
 [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
-has the fields, the credential, the headers, which models are offered, and how to name one.
+has the fields, [the credential](providers/openai-compatible.md#the-credential), the headers, which models are offered, and how to name one.
 
 OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
 needs no `baseURL`. [OpenAI](providers/openai.md) has the details, including which

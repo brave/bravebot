@@ -1826,7 +1826,10 @@ pub(crate) fn gateway_models(provider: &bravebot_config::provider::Provider) -> 
 /// that is working.
 ///
 /// A key `bravebot auth login gateway` stored is named as that, because it is the one place a token
-/// can come from that neither the environment nor the settings file shows (CRED-25).
+/// can come from that neither the environment nor the settings file shows (CRED-25). A key read from
+/// the file `options.keyFile` names is named as that, and a file that gives no key is said with the
+/// reason and without the path: the value is a string the person wrote, and one pasted into the
+/// wrong field is the key itself, so neither it nor any text of the file reaches the report.
 pub(crate) fn gateway_credential(
     provider: &bravebot_config::provider::Provider,
     lookup: impl Fn(&str) -> Option<String>,
@@ -1837,7 +1840,14 @@ pub(crate) fn gateway_credential(
     }
     match provider.credential_and_source(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
+        (Credential::Token(_), Some(Source::KeyFile)) => {
+            t!(doctor_gateway_token_key_file).to_string()
+        }
         (Credential::Token(_), _) => t!(doctor_gateway_token).to_string(),
+        (Credential::KeyFileUnusable(fault), _) => t!(
+            doctor_gateway_token_key_file_unusable,
+            reason = bravebot_agent::backend::key_file_fault_said(fault)
+        ),
         (Credential::Absent, _) => t!(
             doctor_gateway_token_absent,
             id = progress::printable(&provider.id)
@@ -4676,7 +4686,91 @@ mod tests {
         assert_eq!(from_variable, from_file);
     }
 
-    /// A gateway nothing holds a credential for says so. Reporting one as found would answer the
+    /// BACKEND-16, CRED-25: `doctor` says whether the file `options.keyFile` names was found and
+    /// usable, and why it is not, and never what the file holds or the path the setting names: the
+    /// setting is a string the person wrote, and one pasted into the wrong field is the key itself.
+    /// A variable is said before the file, as a request reads them. The regressions it rejects are
+    /// printing the key, printing the path, saying a file that gives no key is found, and saying
+    /// nothing of the file where the block names no other source.
+    #[test]
+    fn a_gateway_key_file_is_reported_as_found_or_unusable_and_never_printed() {
+        const KEY: &str = "placeholder-gateway-file-key";
+        // The name carries the process id, and this test removes the directory it makes.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let directory = std::env::temp_dir().join(format!(
+            "bravebot-doctor-gateway-key-file-marker-4c2d-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+        let file = directory.join("key.txt");
+        let block = |env: &str| {
+            format!(
+                r#"{{"provider": {{"gw": {{{env} "options": {{"baseURL": "https://example.invalid/v1",
+                    "keyFile": {}}}}}}}}}"#,
+                serde_json::json!(file.to_str().expect("a path"))
+            )
+        };
+        let provider = configured_gateway(&block(""));
+
+        std::fs::write(&file, format!("{KEY}\n")).expect("a file");
+        let found = gateway_credential(&provider, |_| None);
+        assert_eq!(found, t!(doctor_gateway_token_key_file));
+
+        let mut said = vec![found];
+        for (contents, reason) in [
+            (None, "is missing"),
+            (Some("\n"), "holds nothing but whitespace"),
+            (Some("two words"), "holds whitespace"),
+        ] {
+            match contents {
+                Some(text) => std::fs::write(&file, text).expect("a file"),
+                None => std::fs::remove_file(&file).expect("a file to remove"),
+            }
+            let line = gateway_credential(&provider, |_| None);
+            assert!(line.contains("options.keyFile"), "{line}");
+            assert!(line.contains(reason), "{line}");
+            assert_ne!(line, t!(doctor_gateway_token_key_file), "{line}");
+            said.push(line);
+        }
+        // The block also names a variable that holds text: that is said, not the file.
+        std::fs::write(&file, format!("{KEY}\n")).expect("a file");
+        let with_variable = configured_gateway(&block(r#""env": ["A_TOKEN_VARIABLE"],"#));
+        let from_variable = gateway_credential(&with_variable, |name| {
+            (name == "A_TOKEN_VARIABLE").then(|| "placeholder-variable-text".to_string())
+        });
+        assert_eq!(from_variable, t!(doctor_gateway_token));
+        said.push(from_variable);
+
+        for line in &said {
+            for held in [KEY, "marker-4c2d", "placeholder-variable-text", "key.txt"] {
+                assert!(!line.contains(held), "{held} is in: {line}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// CRED-25: the account of what would end a gateway token names the file `options.keyFile`
+    /// names beside the other ways custody ends, so somebody who keeps the key in a file is not told
+    /// only to delete a value from the settings or unset a variable. The regression it rejects is an
+    /// account written before the file was a source.
+    #[test]
+    fn the_account_of_a_gateway_token_names_a_key_file_as_a_source_that_ends_custody() {
+        let account = what_would_end(bravebot_config::Held::GatewayToken {
+            host: "gateway.invalid",
+        });
+        for named in [
+            "gateway.invalid",
+            "options.keyFile",
+            "unsetting the variable",
+            "bravebot auth logout gateway",
+            "leaves the token live there",
+        ] {
+            assert!(account.contains(named), "{named} is not in: {account}");
+        }
+    }
+
+    /// BACKEND-16: a gateway nothing holds a credential for says so. Reporting one as found would answer the
     /// question `doctor` exists to answer wrongly, and the request then fails somewhere further away.
     #[test]
     fn a_gateway_with_no_credential_is_reported_as_having_none() {

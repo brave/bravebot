@@ -1194,7 +1194,11 @@ one ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6), [XAI-12](xai-sign-in.md#XAI-12))
 rather than from the configuration, since the file is held on every machine that made a sign-in. A gateway key stored with `bravebot auth login gateway`
 is named as stored, since neither the environment nor a settings file shows where it came from, and
 the account of ending it names `bravebot auth logout gateway` beside revoking it at the gateway. A
-file of those keys it cannot read is named, and the report ends on the failure status, since every
+gateway token read from the file `options.keyFile` names is accounted for like the others: the key is
+named as found in that file and never printed, and the account says that removing the file, as well
+as deleting the value from the settings file, unsetting the variable or running `bravebot auth logout
+gateway`, ends this machine's custody and leaves the token live at the gateway until it is revoked
+there. A file of those keys it cannot read is named, and the report ends on the failure status, since every
 key in the file has stopped being sent. The
 search key is named by the source it came from: the variable `webSearch.env` names or the file
 `webSearch.keyFile` names, and the account says that unsetting the variable or removing the setting or
@@ -1212,6 +1216,8 @@ that record rather than writing a second one.
 `verified-by: bravebot_cli::doctor::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
 `verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_cli::doctor::a_stored_gateway_key_is_named_as_stored_and_never_printed`
+`verified-by: bravebot_cli::doctor::the_account_of_a_gateway_token_names_a_key_file_as_a_source_that_ends_custody`
+`verified-by: bravebot_config::lib::a_gateway_key_file_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_cli::running::doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_config::lib::an_xai_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_cli::xai_sign_in::doctor_names_an_xai_sign_in_by_its_expiry_and_prints_none_of_it`

@@ -2,7 +2,8 @@
 //!
 //! Every caller that takes a credential from such a file reads it here, so what counts as a key is
 //! stated once. The `web_search` tool reads the file `webSearch.keyFile` names, and the key goes to
-//! `api.search.brave.com` in one request header.
+//! `api.search.brave.com` in one request header. A `provider` block reads the file its
+//! `options.keyFile` names, and the token goes to the gateway the block names.
 //!
 //! The file holds the key as plain text and nothing else, and the whole file, trimmed, is the key.
 //! It is refused when it is not a regular file, is over 4,096 bytes, is not UTF-8, is empty after
