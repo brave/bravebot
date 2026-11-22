@@ -123,8 +123,12 @@ with the byte is carry it: as a `Labelled<u8>` in the slot store, as an opaque `
 `Policy::choice_for_display`. A comparison of the number, a branch on it, a different sentence to
 the planner for any value of it, or a reader whose failure depends on what the answer said is a
 violation of shape 1. A second function that releases an answer's text to another crate's function
-is one of shape 3 and moves a pinned count. A `Carried` turned into a number in `bravebot-core` or
-`bravebot-agent` is one of shape 3 as well, and moves the count of `Carried::into_wire`.
+is one of shape 3 and moves a pinned count. A copy of an answer's text kept for a later call in a
+`static`, a `thread_local!`, interior mutability, a lock or an atomic in that crate fails
+`the_reader_of_a_number_keeps_nothing_between_calls`; a lazy cell from another crate or a leaked
+box does not, and is found by reading the diff. A `Carried` turned into a number in
+`bravebot-core` or `bravebot-agent` is one of shape 3 as well, and moves the count of
+`Carried::into_wire`.
 The crate reads an `apply` step's lists and rows the same way, through two more pinned gates:
 `Policy::number_a_list` hands it a read's reply to number the entries that hold the fields the plan
 takes, and `Policy::resolve_proposal` hands it the processor's answer, which it resolves against the

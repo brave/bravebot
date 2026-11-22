@@ -1096,6 +1096,78 @@ fn use_roots(source: &str) -> Vec<(String, bool)> {
     found
 }
 
+/// Whole words that let a crate keep a value between calls: the macro that declares a per-thread
+/// static, and the standard types that hold a value every call can reach.
+///
+/// The item keyword `static` is not in this list because [`keeping_state`] tells it from the
+/// lifetime of the same name.
+const KEEPS_STATE: [&str; 5] = ["thread_local", "Mutex", "RwLock", "OnceLock", "LazyLock"];
+
+/// Parts of a camel-case name that let a crate keep a value between calls. A part is matched and a
+/// substring is not, so `RefCell`, `OnceCell`, `UnsafeCell`, `AtomicU8` and `AtomicBool` are found
+/// and `Cellar` and `Atomically` are not.
+const KEEPS_STATE_PARTS: [&str; 2] = ["Cell", "Atomic"];
+
+/// The parts of a name written in camel case or with underscores: `RefCell` is `Ref` and `Cell`,
+/// and `AtomicU8` is `Atomic` and `U8`.
+fn name_parts(word: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    for piece in word.split('_') {
+        let mut start = 0;
+        let mut before: Option<char> = None;
+        for (at, c) in piece.char_indices() {
+            if c.is_uppercase() && before.is_some_and(|b| b.is_lowercase() || b.is_ascii_digit()) {
+                parts.push(&piece[start..at]);
+                start = at;
+            }
+            before = Some(c);
+        }
+        parts.push(&piece[start..]);
+    }
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// The words of a source file's non-test code that let it keep a value between calls, each once and
+/// as written.
+///
+/// What is refused is the item keyword `static` (the body of a `thread_local!` or a `lazy_static!`
+/// declares one as well), `thread_local` with or without the `!`, `Mutex`, `RwLock`, `OnceLock`,
+/// `LazyLock`, and any name with a `Cell` or an `Atomic` part. The lifetime `'static`, as in
+/// `&'static str`, is allowed: it is the same word after a quote, a table of constants may use it,
+/// and a reference with that lifetime holds nothing a call can change.
+///
+/// The scan reads text, and a word is a run of letters, digits and underscores. A refused word in a
+/// string literal, in a comment that follows code on its line or inside a `/* */` comment is
+/// reported, and rewording it is the fix. Test modules and whole lines that start with `//` are
+/// skipped, as [`reaching_out`] skips them.
+fn keeping_state(source: &str) -> Vec<String> {
+    let code = shipped::code_of(source).without_test_modules;
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut found: Vec<String> = Vec::new();
+    let mut rest = code.as_str();
+    while let Some(start) = rest.find(is_word) {
+        let from_word = &rest[start..];
+        let end = from_word
+            .find(|c: char| !is_word(c))
+            .unwrap_or(from_word.len());
+        let word = &from_word[..end];
+        // A word is maximal, so the character before every word but the first is not part of one,
+        // and the quote of a lifetime is that character.
+        let is_a_lifetime = rest[..start].ends_with('\'');
+        let refused = (word == "static" && !is_a_lifetime)
+            || KEEPS_STATE.contains(&word)
+            || name_parts(word)
+                .iter()
+                .any(|part| KEEPS_STATE_PARTS.contains(part));
+        if refused && !found.iter().any(|seen| seen == word) {
+            found.push(word.to_string());
+        }
+        rest = &from_word[end..];
+    }
+    found
+}
+
 /// The names a source file's non-test code declares as a module, type or trait. A path may start
 /// from one of these: `use Integrity::*;` names an enum of the crate, and `pub use ask::Answer;`
 /// a module of it.
@@ -1223,6 +1295,35 @@ fn the_import_scan_sees_a_handle_the_path_scan_cannot() {
         assert!(
             imports_outside(quiet, &declared, &granted).is_empty(),
             "an import that reaches nowhere was reported: {quiet}"
+        );
+    }
+}
+
+/// PROC-16 says one byte is all of an answer that leaves the policy layer, and LAYER-1 says the crate
+/// that reads an answer for a number does no I/O. The reader that crate hands the policy layer is a
+/// `fn` pointer, which captures nothing of the caller's, so the type does not stop that function
+/// from copying the text into a `static` and returning it from another function later. What stops
+/// it is the crate's code never naming a way to keep a value: no `static`, no `thread_local!`, no
+/// interior mutability (`Cell`, `RefCell`, `OnceCell`), no lock or lazily initialised cell
+/// (`Mutex`, `RwLock`, `OnceLock`, `LazyLock`) and no atomic (`AtomicU8`, `AtomicBool`), read off the
+/// source with the tests left out. The lifetime `'static` is allowed, because `&'static str` holds
+/// nothing between calls and a table of constants may need one.
+#[test]
+fn the_reader_of_a_number_keeps_nothing_between_calls() {
+    let files = rust_files(&workspace().join("crates").join("choice").join("src"));
+    assert!(
+        files.len() > 1,
+        "choice has {} source files, so this test would pass by scanning almost nothing",
+        files.len()
+    );
+    for file in files {
+        let source = std::fs::read_to_string(&file).expect("a source file");
+        let found = keeping_state(&source);
+        assert!(
+            found.is_empty(),
+            "PROC-16 says the reader of a number keeps nothing between calls, and {} names \
+             {found:?}, which can keep a value from one call to the next",
+            shipped::relative(&file)
         );
     }
 }
@@ -1634,6 +1735,87 @@ fn the_io_scan_sees_a_grouped_import_a_macro_and_skips_tests_and_comments() {
             "a use that reaches nowhere was reported: {quiet}"
         );
     }
+}
+
+/// The scan that holds the crate reading an answer to keeping nothing has to see each way of keeping
+/// a value, or the test of that crate passes on a source that has found one it does not look for.
+/// It also has to leave alone what keeps nothing: a lifetime named `'static`, a name that only
+/// contains a refused word, comment lines and test modules. A scan that refused those would make
+/// the crate's author reword code that is right, and the test would be switched off to pass.
+#[test]
+fn the_state_scan_sees_each_refused_word_and_skips_the_lifetime_tests_and_comments() {
+    let kept: &[(&str, &[&str])] = &[
+        ("static KEPT: u8 = 0;", &["static"]),
+        ("static mut N: u8 = 0;", &["static"]),
+        ("pub static N: u8 = 0;", &["static"]),
+        ("static\nKEPT: u8 = 0;", &["static"]),
+        (
+            "static KEPT: Mutex<String> = Mutex::new(String::new());",
+            &["static", "Mutex"],
+        ),
+        ("thread_local!(N);", &["thread_local"]),
+        (
+            "thread_local! {\n    static N: u8 = 0;\n}",
+            &["thread_local", "static"],
+        ),
+        ("let c: Cell<u8>;", &["Cell"]),
+        ("let c: RefCell<u8>;", &["RefCell"]),
+        ("let c: std::cell::OnceCell<u8>;", &["OnceCell"]),
+        ("let c: UnsafeCell<u8>;", &["UnsafeCell"]),
+        ("let a = AtomicU8::new(0);", &["AtomicU8"]),
+        ("let a: std::sync::atomic::AtomicBool;", &["AtomicBool"]),
+        ("let a: AtomicUsize;", &["AtomicUsize"]),
+        ("let l: RwLock<u8>;", &["RwLock"]),
+        ("let o: OnceLock<u8>;", &["OnceLock"]),
+        ("let l: LazyLock<u8>;", &["LazyLock"]),
+        ("use std::sync::{Arc, Mutex};", &["Mutex"]),
+        (
+            "let s: &'static str = \"a\"; static N: u8 = 0;",
+            &["static"],
+        ),
+        (
+            "static A: u8 = 0; static B: u8 = 0; RefCell RefCell AtomicU8",
+            &["static", "RefCell", "AtomicU8"],
+        ),
+        (
+            "fn f() {}\n#[cfg(test)]\nmod tests {\n    static N: u8 = 0;\n}\nstatic KEPT: u8 = 0;",
+            &["static"],
+        ),
+    ];
+    for &(source, expected) in kept {
+        assert_eq!(
+            keeping_state(source),
+            expected,
+            "the words that keep a value were not the ones in: {source}"
+        );
+    }
+
+    for quiet in [
+        "fn f(s: &'static str) -> &'static str { s }",
+        "const T: [&'static str; 1] = [\"a\"];",
+        "impl<T: 'static> X for T {}",
+        "struct Cellar;\nstruct Atomically;",
+        "let (head, tail) = value.split_once(':')?;",
+        "let statics = 1;\nlet static_table = 2;",
+        "// static KEPT: Mutex<u8>; thread_local! RefCell AtomicU8 OnceLock\nfn f() {}",
+        "/// A static table, a Mutex, a Cell and a LazyLock.\nfn f() {}",
+        "struct S {\n    /// A Cell of an AtomicBool.\n    a: u8,\n}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    static N: u8 = 0;\n    use std::cell::Cell;\n    use std::sync::Mutex;\n}\nfn h() {}",
+    ] {
+        assert_eq!(
+            keeping_state(quiet),
+            Vec::<String>::new(),
+            "a source that keeps nothing was reported: {quiet}"
+        );
+    }
+
+    assert_eq!(name_parts("RefCell"), ["Ref", "Cell"]);
+    assert_eq!(name_parts("OnceCell"), ["Once", "Cell"]);
+    assert_eq!(name_parts("AtomicU8"), ["Atomic", "U8"]);
+    assert_eq!(name_parts("AtomicBool"), ["Atomic", "Bool"]);
+    assert_eq!(name_parts("Cellar"), ["Cellar"]);
+    assert_eq!(name_parts("Atomically"), ["Atomically"]);
+    assert_eq!(name_parts("split_once"), ["split", "once"]);
 }
 
 /// A reader that accepts the wrong shapes enforces nothing, and the wrong shapes here are the ones

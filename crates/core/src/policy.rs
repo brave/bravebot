@@ -6614,10 +6614,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Which number an answer names is a decision taken from untrusted bytes, so it is not taken
     /// here, and not anywhere in the driver. `reader` is a function pointer from a crate that is
     /// not the driver. It captures nothing of the caller's, is handed the text for the width of one
-    /// call and the limit the planner wrote, and gives back one byte. This gate compares neither
-    /// the text nor the byte, and nothing else of the answer is kept. The ninth entry of the Known
-    /// costs in `docs/specs/labels.md` is that reader, and the uses of this gate are pinned there,
-    /// so a second reader of an answer is a moved count.
+    /// call and the limit the planner wrote, and gives back one byte. The type does not stop that
+    /// function from keeping a copy of the text for a later call, so a test in
+    /// `crates/cli/tests/layering.rs` refuses a `static`, a `thread_local!` and interior mutability
+    /// in the crate it comes from. This gate compares neither the text nor the byte, and nothing
+    /// else of the answer is kept. The ninth entry of the Known costs in `docs/specs/labels.md` is
+    /// that reader, and the uses of this gate are pinned there, so a second reader of an answer is a
+    /// moved count.
     ///
     /// **Not a relabel.** The byte is labelled as [`Policy::label_processor_output`] labels a
     /// document: the spec's label met with the label the transport put on the reply, so a number
