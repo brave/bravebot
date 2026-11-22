@@ -22,7 +22,7 @@ checks is a bug against this directory rather than an entry in it.
 | [best-practices/comparisons.md](best-practices/comparisons.md) | a host, socket or path that decides a rule, grant, label or destination being read with its helper before it is compared, and no substring test on the whole string |
 | [best-practices/compatibility.md](best-practices/compatibility.md) | persisted data that earlier versions wrote still reading, or being migrated |
 | [best-practices/carried-grants.md](best-practices/carried-grants.md) | a trust answer, vouch or permission kept for a resume or a later session being restored only for the checkout it was given for, with identity recorded or the cost named in the sessions spec |
-| [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands, and where its logic lives |
+| [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands, where its logic lives, and an effect ignoring a late result after its dependencies change |
 | [best-practices/portability.md](best-practices/portability.md) | a fix or addition making sense for other people on other computers, with no workaround for one setup |
 | [best-practices/usability.md](best-practices/usability.md) | a change asking the person for no command, answer or setup that the feature does not need and no spec clause requires |
 | [best-practices/gaps.md](best-practices/gaps.md) | a pull request or issue that says a defect is left unfixed naming the issue that tracks it, or the spec clause that records it as an accepted cost, and a description edited when a later commit changes what it states |
