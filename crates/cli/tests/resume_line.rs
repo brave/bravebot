@@ -18,6 +18,8 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[allow(
     dead_code,
@@ -132,6 +134,15 @@ fn streamed(reply: &str) -> String {
 /// A model service on loopback with one model, which answers every chat request "all done". The
 /// port it listens on.
 fn a_model_service() -> u16 {
+    a_counted_model_service().0
+}
+
+/// As [`a_model_service`], with the count of the chat requests the service has answered. A chat
+/// request is a POST, and is counted before its reply is written, so a run that showed the reply
+/// has been counted by the time the driver has ended.
+fn a_counted_model_service() -> (u16, Arc<AtomicUsize>) {
+    let chats = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&chats);
     let listing = r#"{"data": [{"id": "reasons-only", "context_length": 262144, "supported_parameters": ["tools"]}]}"#;
     let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("an address").port();
@@ -156,13 +167,18 @@ fn a_model_service() -> u16 {
             let _ = reader.read_exact(&mut body);
             let reply = match request.starts_with("GET") {
                 true => http(200, listing),
-                false => streamed("all done"),
+                false => {
+                    if request.starts_with("POST") {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    streamed("all done")
+                }
             };
             let _ = stream.write_all(reply.as_bytes());
             let _ = stream.flush();
         }
     });
-    port
+    (port, chats)
 }
 
 /// What the terminal showed while the binary ran with `arguments` and was sent `script`, one step
@@ -597,10 +613,12 @@ fn a_continued_or_forked_session_prints_its_own_id_once_and_not_the_way_it_was_s
 /// `--incognito` writes no record, so a session started with it prints no line, and one that
 /// resumes a record an ordinary session left does print one, with `--incognito` on it, because the
 /// session is the one the record came from and running the line should not write what this one did
-/// not.
+/// not. That the incognito session ran a turn is read from the requests the model service took,
+/// since the text of a status line on the terminal can be overwritten by a redraw.
 #[test]
 fn an_incognito_session_prints_no_line_unless_it_resumed_a_record_and_then_carries_the_flag() {
-    let scratch = Scratch::new("incognito", a_model_service());
+    let (port, chats) = a_counted_model_service();
+    let scratch = Scratch::new("incognito", port);
     let ordinary = driven(
         &scratch,
         &["-i", "say hi"],
@@ -615,6 +633,7 @@ fn an_incognito_session_prints_no_line_unless_it_resumed_a_record_and_then_carri
         "{resumed}"
     );
 
+    let before = chats.load(Ordering::SeqCst);
     let fresh = driven(
         &scratch,
         &[
@@ -625,13 +644,15 @@ fn an_incognito_session_prints_no_line_unless_it_resumed_a_record_and_then_carri
         ],
         THE_TURN_THEN_LEAVING,
     );
+    let after = chats.load(Ordering::SeqCst);
     assert!(
         !fresh.contains("Resume this session with:"),
         "an incognito session that wrote no record named one: {fresh}"
     );
     assert!(
-        fresh.contains("turn 1 done"),
-        "the turn did not run, so the absence of a line says nothing: {fresh}"
+        after > before,
+        "the model service took no chat request during the run ({before} before, {after} after), \
+         so the turn did not run and the absence of a line says nothing: {fresh}"
     );
 }
 
