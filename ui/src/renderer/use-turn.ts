@@ -12,6 +12,7 @@ import { conversationPreferences, setConversation } from './experience'
 import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
 import { scheduleArgument, type ScheduleAnswer } from '../shared/schedule'
+import { btwQuestion, isRecap, type AsideStarted } from '../shared/aside'
 import { grantsOf, named, sent, summonOf, type Staged } from './staging'
 import * as t from './transcript'
 
@@ -233,6 +234,59 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
   }, [])
 
+  /**
+   * Ask a typed `/btw <question>` or `/recap` of the bridge (CMD-1, CMD-8, CMD-16). The line is never
+   * sent as a prompt, and its answer arrives as `aside.done`, drawn as a row and never part of the
+   * conversation.
+   *
+   * A `/btw` goes out at once, while a turn runs and lines wait in the queue too (CMD-8): the bridge
+   * asks it over the exchange the turn sent. A `/recap` the bridge refuses while a turn runs
+   * (`turn_in_flight`, the bridge's decision) waits in the queue and is asked again when the turn
+   * ends (CMD-16). A `/btw` carries the pictures and files staged on its line (CMD-5). One the
+   * bridge refuses with staged items, such as a dropped file while a turn runs, goes back in the
+   * composer with them, so it can be asked again. A file chosen with the paperclip is a grant a
+   * question cannot be handed, so a `/btw` with one is refused here.
+   */
+  const askAside = useCallback(async (handle: string, kind: 'btw' | 'recap', question: string, line: string, queuedAlready = false) => {
+    const asking = openedLives.current.get(handle)
+    if (kind === 'btw' && (asking?.attachments?.length ?? 0) > 0) {
+      if (handleRef.current === handle) setDraft(line)
+      setProblem('A /btw question cannot carry files chosen with the paperclip. Take them off and ask again.')
+      return
+    }
+    const model = asking?.model ?? null
+    // What was pasted or dropped on the line goes with the question (CMD-5): pictures and PDFs as
+    // the ids the main process resolves, as it does for a prompt's, and a text file as its name
+    // (DROP-4). The bridge refuses a dropped file while a turn runs, in the terminal's words.
+    const staged = kind === 'btw' ? named(asking?.staging, line) : []
+    const carried = {
+      pastes: grantsOf(staged).pastes,
+      drops: staged.flatMap((item) => item.via === 'drop' && item.file.kind !== 'text' ? [item.file.id] : []),
+      files: markersOf(staged.filter((item) => item.via === 'drop' && item.file.kind === 'text')).files,
+    }
+    try {
+      const started = kind === 'btw'
+        ? await call<AsideStarted>('session.btw', { session: handle, question, model, ...carried })
+        : await call<AsideStarted>('session.recap', { session: handle, model })
+      if (staged.length > 0) updateSession(handle, (old) => old ? { ...old, staging: sent(old.staging) } : old)
+      if (started.besideTurn) updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.asideOut(question)] } : old)
+    } catch (error) {
+      if (kind === 'recap' && error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
+        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], aside: 'recap' }] } : old)
+        return
+      }
+      if (staged.length > 0 && handleRef.current === handle) setDraft(line)
+      updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error))] } : old)
+    }
+  }, [])
+
+  /** The command a typed line asks for, if it is `/btw` or `/recap`, or null for a prompt. */
+  const typedAside = (line: string): { kind: 'btw' | 'recap'; question: string } | null => {
+    const question = btwQuestion(line)
+    if (question !== null) return { kind: 'btw', question }
+    return isRecap(line) ? { kind: 'recap', question: '' } : null
+  }
+
   // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
   // bridge's check of the message's `@` names before it marks the chat running, and without this the
   // queue would take the next message in that gap and send both.
@@ -246,16 +300,18 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       if (!message) continue
       const handle = item.handle
       dequeuing.current.add(handle)
-      // A waiting `/schedule` line is asked again and starts no turn.
-      const settled = message.schedule !== undefined
-        ? schedule(handle, message.schedule, message.prompt, message.staged, true)
-        : send(message.prompt, handle, message.attachments, message.staged)
+      // A waiting `/schedule` or `/recap` line is asked again and starts no turn.
+      const settled = message.aside === 'recap'
+        ? askAside(handle, 'recap', '', message.prompt, true)
+        : message.schedule !== undefined
+          ? schedule(handle, message.schedule, message.prompt, message.staged, true)
+          : send(message.prompt, handle, message.attachments, message.staged)
       void settled.finally(() => {
         dequeuing.current.delete(handle)
         refreshLives((revision) => revision + 1)
       })
     }
-  }, [live, livesRevision, send, updateSession])
+  }, [live, livesRevision, send, askAside, updateSession])
 
   /**
    * Send a line into the turn that is running (INPUT-10), or say it was not taken.
@@ -341,6 +397,12 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void schedule(handle, typed, draft.trim(), staged)
       return
     }
+    const aside = typedAside(draft)
+    if (aside && handleRef.current) {
+      setDraft('')
+      void askAside(handleRef.current, aside.kind, aside.question, draft.trim())
+      return
+    }
     setLive((old) => old ? {
       ...old,
       queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
@@ -362,9 +424,15 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void schedule(handleRef.current, typed, prompt, staged)
       return
     }
+    const aside = typedAside(prompt)
+    if (aside) {
+      setDraft('')
+      void askAside(handleRef.current, aside.kind, aside.question, prompt)
+      return
+    }
     setDraft('')
     void send(prompt)
-  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, backendReady])
+  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, backendReady])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
@@ -377,6 +445,12 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       setDraft('')
       setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
       void schedule(handle, typed, text, staged)
+      return
+    }
+    const aside = typedAside(text)
+    if (aside) {
+      setDraft('')
+      void askAside(handle, aside.kind, aside.question, text)
       return
     }
     if (route(live, named(live.staging, draft)) === 'queue') { queueDraft(); return }

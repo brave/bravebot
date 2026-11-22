@@ -86,6 +86,7 @@ fn take_a_turn_at(
         finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         interjections: Default::default(),
         actors: Default::default(),
+        published: Default::default(),
     });
 }
 

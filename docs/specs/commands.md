@@ -319,6 +319,11 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::tests::dropping::a_picture_dropped_onto_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::tests::dropping::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
 `verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_picture_pasted_on_a_btw_at_rest_goes_with_the_question_and_not_into_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_picture_dropped_on_a_btw_at_rest_goes_with_the_question`
+`verified-by: bravebot_ui_bridge::asking_aside::a_text_file_dropped_on_a_btw_is_its_name_in_the_question`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that a /btw sends the pictures pasted and the pictures or PDFs dropped on its line as grant ids and a dropped text file as its marker and name, and ui/scripts/drops.test.mjs asserts that the main process forwards a session.btw with only the paths its grants name and no picture or path the window named; make check-ui runs both)`
 
 
 <a id="CMD-6"></a>
@@ -524,6 +529,18 @@ the queue does not hold a `/btw` back: it is asked at once and the waiting lines
 were. Only a `/btw` already waiting holds a later one back, as a waiting line of the same command
 does for any command. A click on a row of the info panel that
 stands for one of these commands is carried out by the same rule ([MOUSE-29](mouse.md#MOUSE-29)).
+
+**`/btw` in the desktop app.** The desktop composer takes `/btw <question>` typed on Enter, on the
+key that queues a line and on the key that interjects one, and sends it to the bridge as
+`session.btw`, never as a prompt or an interjection. At rest it is asked over the session's exchange
+as the terminal asks it. While a turn runs it is asked at once, beside the turn, over the exchange
+the turn published with its latest request and the turn's own file authority, and lines already
+queued stay where they were. The bridge refuses it in the terminal's cases: an empty question, a
+second question while one is out, a file dropped on it beside a turn, and a turn that has not sent a
+request yet. The window draws each refusal as an error note in the bridge's words and puts the line
+back in the composer. Stopping the turn stops the question. A turn that ends any other way leaves it
+out, and its answer is kept and the record written again once the turn has released the session.
+Where the answer is read in the window is [WATCH-19](watching.md#WATCH-19)'s.
 
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
 `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` are not carried out while the turn runs, and do
@@ -825,6 +842,20 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
 `verified-by: bravebot_ui_bridge::reports_tests::the_status_report_leaves_out_the_rules_a_running_turn_holds`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles, so ui/scripts/commands.test.mjs asserts that Chat › Session Status… is offered on an open chat during a turn and after it and is routed to its own action, and ui/scripts/reports.test.mjs that the status says the rules are held by the running turn when the bridge sets rulesHeldByTurn and lists them otherwise; make check-ui runs both)`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_at_rest_is_answered_over_the_exchange_with_no_tools`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_is_in_the_record_when_the_session_is_opened_again`
+`verified-by: bravebot_ui_bridge::asking_aside::an_empty_btw_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_while_one_is_out_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_before_the_turn_has_sent_anything_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_beside_a_turn_is_asked_over_the_turns_exchange_and_answered_while_it_runs`
+`verified-by: bravebot_ui_bridge::asking_aside::a_second_btw_beside_a_turn_is_refused`
+`verified-by: bravebot_ui_bridge::asking_aside::stopping_the_turn_stops_the_btw_beside_it`
+`verified-by: bravebot_ui_bridge::asking_aside::a_btw_still_out_when_the_turn_ends_is_answered_and_recorded`
+`verified-by: bravebot_ui_bridge::aside::an_empty_question_is_refused`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that only /btw and /btw <question> are the command, that the composer asks it from the typed line in submit, the queue key and the interject key before anything is sent or queued, that it goes to session.btw while a turn runs without reading the queue, and that its aside.done answer becomes a narration row and never a prompt; make check-ui runs it)`
+`verified-by: by-construction (ui/scripts/aside-command.test.mjs asserts that a /btw the bridge answers besideTurn:true draws one line saying it is out and naming the Asides panel, that the bridge's refusals are drawn as error notes in its own words, and that an aside.done arriving while a turn runs adds one line and leaves running, the queue and awaitingOrdinal unchanged; make check-ui runs it)`
+`verified-by: by-construction (ui/scripts/aside-command.test.mjs asserts that an answered aside.done is added to the window's asides, that a session opened or resumed seeds them from the asides the bridge returns, and that the Asides panel draws each question and answer as plain text; make check-ui runs it)`
 
 ## What a slash word is offered
 
@@ -1244,6 +1275,13 @@ for cannot exceed it. It is answered and recorded as an aside is: a row in the m
 written down only where the exchange had met nothing untrusted ([SESSION-20](sessions.md#SESSION-20)). It is
 not a turn. Typed during a turn it waits for the turn to end (CMD-8).
 
+The desktop composer takes the bare `/recap` and sends it to the bridge as `session.recap`, never as
+a prompt. The bridge asks the same fixed question with the same limit and keeps the answer as an
+aside labelled `/recap`. While a turn runs the bridge refuses it as `turn_in_flight`, and the window
+puts the line in the queue as a recap, asked again when the turn ends rather than sent. Its answer is
+read where a `/btw` answer is ([WATCH-19](watching.md#WATCH-19)). The recap the terminal makes on its
+own for a person who has been away is the terminal's alone (CMD-20).
+
 **Why.** A person returning to a long session needs to know where it stands, and reading the
 transcript back to find out is the cost the command removes. Sending it as a prompt would put the
 question and the account into the conversation the planner reads for the rest of the session.
@@ -1256,6 +1294,13 @@ question and the account into the conversation the planner reads for the rest of
 `verified-by: bravebot_agent::aside::a_recap_within_the_limit_is_not_cut`
 `verified-by: bravebot_agent::aside::the_recap_limit_counts_characters_rather_than_bytes`
 `verified-by: bravebot_agent::aside::a_recap_asks_its_own_question_with_a_limit_and_leaves_the_exchange_alone`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_at_rest_asks_the_recap_question_with_no_tools`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_cut_to_its_limit`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_is_in_the_record_when_the_session_is_opened_again`
+`verified-by: bravebot_ui_bridge::asking_aside::a_recap_while_a_turn_runs_is_refused_as_turn_in_flight`
+`verified-by: bravebot_ui_bridge::aside::an_answer_is_shown_kept_and_charged`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/aside-command.test.mjs asserts that only the bare /recap is the command, that a /recap the bridge refuses with turn_in_flight waits in the queue as a recap and is asked again when the turn ends rather than sent as a prompt, and that its aside.done answer becomes a narration row and never a prompt; make check-ui runs it)`
 
 <a id="CMD-17"></a>
 ### CMD-17: a line starting with the name of a prompt file is replaced by the file's text, and sends nothing

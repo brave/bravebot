@@ -645,6 +645,7 @@ fn a_turn(
         finished: Arc::new(AtomicBool::new(false)),
         interjections: Default::default(),
         actors: Default::default(),
+        published: Default::default(),
     }
 }
 

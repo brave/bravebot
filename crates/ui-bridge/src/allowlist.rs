@@ -345,6 +345,12 @@ pub const DENIED: &[&str] = &[
     // Handing a chat to a background session on this machine, which a person asks for from the
     // window's Chat menu (BG-2, CMD-34). The only client of the host today has no menu to ask from.
     "session.background",
+    // A question asked beside the work, for the `/btw` or `/recap` line a person typed into the
+    // window's own composer (CMD-1, CMD-8, CMD-16). A client of the host is a program, and a
+    // program never types it.
+    "session.btw",
+    "session.recap",
+    "session.aside.cancel",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",
@@ -535,6 +541,20 @@ mod tests {
         .err()
         .expect("refused");
         assert_eq!(failure.code, ErrorCode::NotAllowed);
+    }
+
+    /// Rejects `session.btw`, `session.recap` and `session.aside.cancel` for a client of the host:
+    /// a program never types the `/btw` or `/recap` line (CMD-1), so the methods are the window's
+    /// alone.
+    #[test]
+    fn asking_beside_the_work_is_denied_to_a_client_of_the_host() {
+        for method in ["session.btw", "session.recap", "session.aside.cancel"] {
+            assert!(DENIED.contains(&method), "{method}");
+            let failure = check(&request(method, json!({"session": "s1"})))
+                .err()
+                .expect("refused");
+            assert_eq!(failure.code, ErrorCode::NotAllowed, "{method}");
+        }
     }
 
     #[test]

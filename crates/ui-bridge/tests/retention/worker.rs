@@ -94,6 +94,7 @@ fn take_turn_in(
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             interjections: Default::default(),
             actors: Default::default(),
+            published: Default::default(),
         })
     });
     let mut seen = Vec::new();
