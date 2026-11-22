@@ -23,8 +23,8 @@ if (options instanceof Error) {
       process.exit(1)
     })
 } else {
-  // A module that fails as the app loads is reported as it was when this file was the app itself:
-  // thrown from here, where Electron shows its own error.
+  // A module that fails as the app loads is thrown again from here, where Electron shows its own
+  // error.
   void import('./index').catch((error: unknown) => {
     setImmediate(() => {
       throw error
