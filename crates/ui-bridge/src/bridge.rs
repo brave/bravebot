@@ -294,6 +294,9 @@ pub struct Bridge {
     /// The name of the host client whose request is being dispatched, for the view to credit
     /// (RPCVIEW-14). Set only for the duration of [`Bridge::dispatch_as`].
     acting: Option<String>,
+    /// Reads the background roster for `background.list`, kept so a list read every second reuses
+    /// the records it has already read (BG-17).
+    background_reader: bravebot_session::listing::Reader,
 }
 
 impl Bridge {
@@ -314,6 +317,7 @@ impl Bridge {
             putting_project_questions: true,
             project_questions: 0,
             acting: None,
+            background_reader: bravebot_session::listing::Reader::new(),
         }
     }
 
@@ -403,6 +407,11 @@ impl Bridge {
                 Ok(crate::models::list(&config))
             }
             "session.list" => self.list(request),
+            "background.list" => Ok(crate::background::list(
+                &mut self.background_reader,
+                &bravebot_session::sessions::sessions_root().unwrap_or_default(),
+                bravebot_session::jobs::Roster::readable().as_ref(),
+            )),
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
             "session.view.start" => self.start_view(request),

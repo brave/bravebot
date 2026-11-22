@@ -631,6 +631,7 @@ const ALLOWED = new Set([
   'agent.info',
   'models.list',
   'session.list',
+  'background.list',
   'session.open',
   'session.new',
   'session.fork',

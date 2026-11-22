@@ -16,6 +16,7 @@ use crate::jobs::{Held, Mode, Roster, State};
 use crate::sessions::{self, Listed};
 use bravebot_agent::Work;
 use bravebot_aichat::protocol::{Cached, Effort};
+use bravebot_i18n::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -163,6 +164,29 @@ impl Status {
             .unwrap_or(Self::ORDER.len())
     }
 
+    /// The word for this status, as the Sessions screen, the list `bravebot sessions` opens and
+    /// the desktop app's list of background sessions all say it (SCREEN-16, BG-17).
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::NeedsInput => t!(sessions_screen_status_needs_input),
+            Self::Interrupted => t!(sessions_screen_status_interrupted),
+            Self::Working => t!(sessions_screen_status_working),
+            Self::Ready => t!(sessions_screen_status_ready),
+            Self::OpenElsewhere => t!(sessions_screen_status_open_elsewhere),
+            Self::Stopped => t!(sessions_screen_status_stopped),
+            Self::Saved => t!(sessions_screen_status_saved),
+        }
+    }
+
+    /// This status as a row says it: its word, and for a session holding a prompt the one word
+    /// for the kind of prompt held, in brackets (BG-5, SCREEN-16).
+    pub fn in_words(self, held: Option<Held>) -> String {
+        match (self, held) {
+            (Self::NeedsInput, Some(held)) => format!("{} ({})", self.word(), held.label()),
+            _ => self.word().to_string(),
+        }
+    }
+
     /// The set this status belongs to.
     pub fn group(self) -> Group {
         match self {
@@ -173,6 +197,16 @@ impl Status {
         }
     }
 }
+
+/// The order a list of roster sessions puts its headings in: the order of [`Status::ORDER`] for
+/// the statuses a roster entry can have (BG-16, SCREEN-16).
+pub const ROSTER_ORDER: [State; 5] = [
+    State::NeedsInput,
+    State::Interrupted,
+    State::Working,
+    State::Idle,
+    State::Stopped,
+];
 
 /// One session, as the Sessions screen draws it.
 #[expect(
@@ -590,6 +624,53 @@ pub fn task_of_entry(entry: &crate::jobs::Seen) -> Task {
         pull_request: None,
         handed_off_from: None,
     }
+}
+
+/// How many characters of a session's id a roster row shows.
+const ID_SHOWN: usize = 8;
+
+/// One roster session as a list of background sessions shows it, before a front end adds its own
+/// words for the state and the time (BG-5, BG-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RosterRow {
+    /// The whole id, which `attach` takes.
+    pub id: String,
+    /// The start of the id that is drawn.
+    pub short: String,
+    /// The first line of the session's name.
+    pub name: String,
+    pub state: State,
+    /// The kind of prompt held, while `state` is [`State::NeedsInput`].
+    pub held: Option<Held>,
+    /// When the session was last written, in seconds since the epoch.
+    pub updated: u64,
+    pub directory: String,
+    /// The last prompt the person typed, cut as a title is.
+    pub prompt: String,
+}
+
+/// Text the person typed, as it can be drawn: control characters pictured, and a tab a space, so
+/// nothing typed can move the cursor, recolour the line or start another one.
+fn shown(typed: &str) -> String {
+    bravebot_agent::confirm::printable_spelled(typed).replace('\t', " ")
+}
+
+/// One row for each task, in the order given. A task with no roster state is stopped. Every text
+/// field is drawn with its control characters pictured (BG-5, SCREEN-16).
+pub fn roster_rows(tasks: &[Task]) -> Vec<RosterRow> {
+    tasks
+        .iter()
+        .map(|task| RosterRow {
+            id: task.id.clone(),
+            short: shown(&task.id.chars().take(ID_SHOWN).collect::<String>()),
+            name: shown(task.title.lines().next().unwrap_or("")),
+            state: task.status.process_state().unwrap_or(State::Stopped),
+            held: task.held,
+            updated: task.updated,
+            directory: shown(&task.directory),
+            prompt: shown(&sessions::title_from(task.prompt.as_deref().unwrap_or(""))),
+        })
+        .collect()
 }
 
 /// Why the Sessions screen could not rename a task.
@@ -1331,5 +1412,94 @@ mod tests {
             groups.is_sorted(),
             "a status that waits on a person is listed after one that does not: {groups:?}"
         );
+    }
+
+    fn entry(prompt: &str, state: State, held: Option<Held>) -> Task {
+        let mut job = Job::starting(ONE.to_string(), Path::new("/work/a"), prompt, Mode::Ask);
+        job.is(state, held);
+        task_of_entry(&crate::jobs::Seen { job, live: true })
+    }
+
+    /// BG-16, SCREEN-16. A row's state is the roster state of the task's status, and a status no
+    /// roster entry has is drawn as stopped.
+    #[test]
+    fn a_roster_row_has_the_state_of_its_status_and_stopped_where_there_is_none() {
+        for status in Status::ORDER {
+            let mut task = entry("go", State::Idle, None);
+            task.status = status;
+            let row = &roster_rows(&[task])[0];
+            assert_eq!(
+                row.state,
+                status.process_state().unwrap_or(State::Stopped),
+                "{status:?}"
+            );
+        }
+        let mut saved = entry("go", State::Idle, None);
+        saved.status = Status::Saved;
+        assert_eq!(roster_rows(&[saved])[0].state, State::Stopped);
+        let held = &roster_rows(&[entry("go", State::NeedsInput, Some(Held::Run))])[0];
+        assert_eq!(held.state, State::NeedsInput);
+        assert_eq!(held.held, Some(Held::Run));
+    }
+
+    /// BG-5. A control character in a name, a directory or a prompt is pictured, and a tab is a
+    /// space, so nothing typed can move the cursor or start another line.
+    #[test]
+    fn a_control_character_in_a_roster_row_is_pictured() {
+        let mut task = entry("ask\u{1b}[2J\tthis", State::Working, None);
+        task.title = "name\u{7}\there\nsecond line".to_string();
+        task.directory = "/work/\u{1b}]0;x\u{7}".to_string();
+        let row = &roster_rows(&[task])[0];
+        for text in [&row.name, &row.directory, &row.prompt] {
+            assert!(
+                !text.chars().any(char::is_control),
+                "a control character was left in {text:?}"
+            );
+        }
+        assert_eq!(
+            row.name, "name\u{2407} here",
+            "only the first line is the name"
+        );
+        assert_eq!(row.prompt, "ask\u{241b}[2J this");
+    }
+
+    /// BG-5. The prompt is cut as a title is, and the id shown is its first 8 characters, while
+    /// the whole id is kept for `attach`.
+    #[test]
+    fn a_roster_row_cuts_the_prompt_as_a_title_and_shows_eight_characters_of_the_id() {
+        let long = "word ".repeat(40);
+        let row = &roster_rows(&[entry(&long, State::Idle, None)])[0];
+        assert_eq!(row.prompt, sessions::title_from(&long));
+        assert!(row.prompt.chars().count() < long.chars().count());
+        assert_eq!(row.short, "0a1b2c3d");
+        assert_eq!(row.id, ONE);
+        let mut task = entry("", State::Idle, None);
+        task.prompt = None;
+        assert_eq!(roster_rows(&[task])[0].prompt, sessions::title_from(""));
+    }
+
+    /// BG-16. Rows come in the order of the tasks, which the roster reader lists most recent first,
+    /// and the headings come in the order of the statuses a roster entry can have.
+    #[test]
+    fn roster_rows_keep_the_order_of_the_tasks_and_the_headings_follow_the_statuses() {
+        let root = scratch("roster-rows");
+        let roster = Roster::at(scratch("roster-rows-jobs"));
+        for id in [ONE, TWO] {
+            let job = Job::starting(id.to_string(), Path::new("/work/a"), "go", Mode::Ask);
+            roster.publish(&job).expect("publish");
+        }
+        let tasks = Reader::new().roster(&root, &roster);
+        let rows = roster_rows(&tasks);
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        let listed: Vec<&str> = tasks.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(ids, listed);
+
+        let drawn: Vec<Status> = ROSTER_ORDER.iter().map(|s| Status::of_state(*s)).collect();
+        let statuses: Vec<Status> = Status::ORDER
+            .iter()
+            .copied()
+            .filter(|status| status.process_state().is_some())
+            .collect();
+        assert_eq!(drawn, statuses);
     }
 }

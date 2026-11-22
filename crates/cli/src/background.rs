@@ -639,19 +639,18 @@ fn short_id(id: &str) -> String {
 /// shows as needing input and the one word for its kind, and nothing of what it asks (BG-5,
 /// SCREEN-16). The list (BG-16) is drawn from these.
 fn rows_of(tasks: &[Task]) -> Vec<Row> {
-    tasks
-        .iter()
-        .map(|task| Row {
-            id: task.id.clone(),
-            short: short_id(&task.id),
-            name: shown(task.title.lines().next().unwrap_or("")),
-            state: task.status.process_state().unwrap_or(State::Stopped),
+    bravebot_session::listing::roster_rows(tasks)
+        .into_iter()
+        .zip(tasks)
+        .map(|(row, task)| Row {
+            id: row.id,
+            short: row.short,
+            name: row.name,
+            state: row.state,
             state_words: bravebot_tui::sessions_screen::status_in_words(task.status, task.held),
-            since: bravebot_session::sessions::how_long_ago(task.updated),
-            directory: shown(&task.directory),
-            prompt: shown(&bravebot_session::sessions::title_from(
-                task.prompt.as_deref().unwrap_or(""),
-            )),
+            since: bravebot_session::sessions::how_long_ago(row.updated),
+            directory: row.directory,
+            prompt: row.prompt,
         })
         .collect()
 }

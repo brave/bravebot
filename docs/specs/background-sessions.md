@@ -32,7 +32,8 @@ clause that is built whole names its tests. A clause with a part still to build 
 The supervisor and the restart of a process that ends between turns ([BG-11](#BG-11),
 [BG-12](#BG-12)) are built. `/bg` is built. The idle stop ([BG-13](#BG-13)) is built, and the session in lines has
 no loop and no watch yet, so those two conditions of it hold of every session; `/detach` is built.
-`bravebot sessions` on a terminal is a list grouped by state that attaches ([BG-16](#BG-16)). A question from an
+`bravebot sessions` on a terminal is a list grouped by state that attaches ([BG-16](#BG-16)). The
+desktop app's list of the same sessions ([BG-17](#BG-17)) is built. A question from an
 MCP server that has to be started is held like any other, and is drawn as a foreground session
 draws it. A `stopped` or `interrupted` session is started again from `attach` or `reply` by a terminal,
 resuming the record the process wrote after each turn (for `interrupted`, the terminal says first
@@ -612,6 +613,46 @@ in, so the mode ([BG-8](#BG-8)) and a held prompt ([BG-7](#BG-7)) are as they ar
 `verified-by: bravebot_cli::background::a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row`
 `verified-by: bravebot_cli::running::sessions_lists_an_entry_with_no_process_as_interrupted`
 
+<a id="BG-17"></a>
+### BG-17: the desktop app lists the roster grouped by state, and a row only copies the attach command
+
+The desktop app shows the roster, across every project, in a section of its sidebar headed
+"Background sessions". The section is not shown while the roster is empty. Its rows, their order
+and their headings are those of [BG-16](#BG-16): rows made from the tasks of the Sessions screen's
+listing, under a heading for each state in the words and the order of BG-16, with the number of
+sessions under each heading, no heading for a state no session is in, and the most recently written
+session first within a state. A row shows the start of the session's id, its name, how long since
+it was last written, and its state with the word for the kind of prompt held where one is. A name
+of more than 28 columns is cut with an ellipsis. Below the list, the working directory and the last
+prompt the person typed are shown for the selected session.
+
+These are fields of a [BG-5](#BG-5) line, and the section draws no others: no reply, tool result,
+file content, command output or question text. Control characters are pictured as they are in a
+line. The app takes the rows from the bridge, which builds them from the roster as the terminal
+list does, and draws no field the bridge did not send.
+
+The section reads the roster again once a second while it is shown. A session whose state changed
+moves under the heading for its new state, and stays selected if it was selected.
+
+A row does not attach, reply, stop or start a process, and answers no held prompt ([BG-7](#BG-7),
+[BG-9](#BG-9), [BG-10](#BG-10), [BG-11](#BG-11)). Its one action copies the line
+`bravebot attach <id>`, with the start of the id that the row shows, so the person can attach from
+a terminal.
+
+**Why.** Attaching is done in a terminal ([BG-9](#BG-9)), and a `stopped` or `interrupted` session
+is started again only by a terminal's `attach` or `reply` ([BG-2](#BG-2)). The desktop app finds a
+session and gives the person the command that opens it. With the rows and the words of BG-16, a
+session is named and placed the same way in both front ends.
+
+`verified-by: bravebot_ui_bridge::background::background_sessions_are_listed_in_state_order_and_most_recent_first_within_a_state`
+`verified-by: bravebot_ui_bridge::background::background_groups_carry_the_terminal_heading_and_a_count`
+`verified-by: bravebot_ui_bridge::background::background_state_words_are_the_terminal_row_words`
+`verified-by: bravebot_ui_bridge::background::background_state_is_the_word_the_roster_json_uses`
+`verified-by: bravebot_ui_bridge::background::a_background_row_carries_only_the_listed_fields`
+`verified-by: bravebot_ui_bridge::background::an_empty_or_absent_background_roster_lists_no_sessions`
+`verified-by: bravebot_session::listing::a_control_character_in_a_roster_row_is_pictured`
+`verified-by: by-construction (the bridge sends the groups with their headings, order, counts and state words, which the tests above hold, and the desktop renderer is not a crate this workspace compiles, so ui/scripts/background-list.test.mjs holds that it reads the sessions in the order sent and the copied line; ui/scripts/drive-background-sessions.mjs drives the section in a real window against a mocked background.list: the headings and counts, a row's id, name, time and state, the 28-column cut, the selected row's directory and prompt, the selected row moving under its new heading, the copy button as its only action writing bravebot attach and the short id, every row and the copy button sending the bridge nothing but background.list so no row control starts, replies to or stops a session, no reads while the list is hidden, and no section while the roster is empty)`
+
 ## What this changes in other specs
 
 None of the following is true of a build that has no background sessions, and each is marked where
@@ -649,6 +690,8 @@ it is stated.
   start is made for sessions that never edit. One at the first edit moves the working directory
   during a session.
 - **Whether a row can reply, stop or show more.** [BG-16](#BG-16) attaches and does nothing else.
+  A row of the desktop app's list ([BG-17](#BG-17)) only copies the attach command, because the
+  desktop app has no terminal to attach in.
   Replying from a row is not specified. Stopping from a row, and a list of more than the background
   sessions, are in [sessions-screen.md](sessions-screen.md), which opens from a terminal with Left over an
   empty box. Showing what a session last wrote would put bytes a session produced in the list, which
