@@ -552,7 +552,11 @@ nothing and says that a manifest run needs a task to plan. A line with files on 
 items staged on it is refused and put back in the composer, since the bridge takes no files on a
 run, so the file has to be named in the task. Any other refusal from the bridge takes the task row
 back off and is drawn as an error note in the bridge's words. The run itself is
-[manifest.md](manifest.md#MANIFEST-9)'s.
+[manifest.md](manifest.md#MANIFEST-9)'s. Chat › Plan and Run…, which has no shortcut, stands in
+for typing the word: it is offered while a chat is open, no turn runs and no trust question waits,
+with the composer empty or not. It writes `/manifest ` into an empty composer, or turns the draft
+already typed into `/manifest <draft>`, puts the caret in the composer and sends nothing, so the
+line starts a run only once the person sends it.
 
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
 `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` are not carried out while the turn runs, and do
@@ -875,6 +879,7 @@ carried out or queued as above.
 `verified-by: by-construction (ui/scripts/aside-command.test.mjs asserts that a /btw the bridge answers besideTurn:true draws one line saying it is out and naming the Asides panel, that the bridge's refusals are drawn as error notes in its own words, and that an aside.done arriving while a turn runs adds one line and leaves running, the queue and awaitingOrdinal unchanged; make check-ui runs it)`
 `verified-by: by-construction (ui/scripts/aside-command.test.mjs asserts that an answered aside.done is added to the window's asides, that a session opened or resumed seeds them from the asides the bridge returns, and that the Asides panel draws each question and answer as plain text; make check-ui runs it)`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/manifest-command.test.mjs asserts that only /manifest and /manifest <task> are the command, that submit, the queue key, the interject key and the queue start it as one manifest.run with the session, task and model and never a turn.send, that the task row is drawn before the call and no user row is added, that a turn_in_flight refusal takes the row off and queues the line, that any other refusal takes the row off and shows the bridge's words, that an empty task sends nothing and adds the note, and that files on the line put the draft back and send nothing; make check-ui runs it)`
+`verified-by: by-construction (the desktop menu is not a crate this workspace compiles, so ui/scripts/manifest-command.test.mjs asserts that Plan and Run… is a Chat item with no shortcut, enabled by canStart and grey with no session, a turn running or a trust question waiting, that planPrefill gives /manifest for an empty draft and /manifest <draft> for a typed one, and that its handler writes the draft and focuses the composer and calls nothing on the bridge; ui/scripts/drive-menu.mjs checks in the built app that it leaves /manifest in the composer with the caret there and sends nothing; make check-ui runs the first)`
 
 ## What a slash word is offered
 
