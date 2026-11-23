@@ -4,6 +4,7 @@ import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
 import { botHistory, homeConversation } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PanelName } from '../shared/state'
 import type {
   BridgeEvent,
   ForkedSession,
@@ -140,6 +141,11 @@ export function App(): React.JSX.Element {
     try { setUpdateStatus(parseUpdateStatus(await call('update.status'))) } catch { setUpdateStatus(null) }
   }, [])
   useEffect(() => { void readUpdateStatus() }, [readUpdateStatus])
+  /** The context-column panels turned off in `bravebot-ui.json` (PANEL-20), read once at start. */
+  const [hiddenPanels, setHiddenPanels] = useState<PanelName[]>([])
+  useEffect(() => {
+    window.bravebot.readHiddenPanels().then(setHiddenPanels, () => setHiddenPanels([]))
+  }, [])
   const dismissedUpdate = preferences.dismissedUpdate
   const download = useCallback(() => { void window.bravebot.openPage('releases') }, [])
   const updateNotice = useMemo(() => {
@@ -1326,7 +1332,7 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote}
+      <Context live={live} audit={auditPanel} details={details} hidden={hiddenPanels} onAddNote={askNote}
         onAddFolder={addFolderFromPanel} onCloseFolder={closeFolderFromPanel} />
       </div>
       </div>

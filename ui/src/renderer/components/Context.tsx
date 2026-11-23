@@ -1,6 +1,7 @@
 import { memo, useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
+import { HIDEABLE } from '../../shared/panels'
 import { isConfined, type Activity, type SessionNote, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
 import { Alert, Button, Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
@@ -43,6 +44,8 @@ interface Live {
  * all talking about the same five things.
  */
 
+/** Every panel on: one shared value, so the memoised column is not redrawn for a fresh `[]`. */
+const NONE_HIDDEN: readonly PanelName[] = []
 
 /**
  * The right-hand column: what this session has touched, and the folder it is touching it in.
@@ -53,8 +56,13 @@ interface Live {
  * in there, and what does this file look like in a real editor — is not one the transcript can be
  * asked.
  */
-export const Context = memo(function Context({ live, audit, details, onAddNote, onAddFolder, onCloseFolder }: {
+export const Context = memo(function Context({ live, audit, details, hidden = NONE_HIDDEN, onAddNote, onAddFolder, onCloseFolder }: {
   live: Live | null
+  /**
+   * The Overview panels a person has turned off, as kept in `bravebot-ui.json` (PANEL-20). Each
+   * takes the same `.off` path the Files tab does, so it keeps its fold.
+   */
+  hidden?: readonly PanelName[]
   /** Open the dialog that adds a note to this session's record. */
   onAddNote?: () => void
   /** Ask for a folder to open beside the project, through the main process's picker. */
@@ -66,7 +74,8 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
   details?: React.ReactNode
 }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
-  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined', 'notes', 'asides'])
+  const off = new Set<PanelName>(tab === 'overview' ? ['files', ...hidden] : HIDEABLE)
+  const allOff = tab === 'overview' && HIDEABLE.every((name) => off.has(name))
   const reveal = (path: string) => {
     const entry = [...(live?.entries ?? [])].reverse().find((entry) =>
       entry.kind === 'tool' ? fileTarget(entry.activity.target) === path : entry.kind === 'confirm' ? entry.request.path === path : false)
@@ -124,6 +133,10 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
           <TabItem value="files">Files</TabItem>
         </Tabs>
       </div>
+
+      {/* The column stays drawn with its head when every section is off: turning sections off
+          never folds it (PANEL-20). */}
+      {allOff && <div className="context-all-off" id="context-all-off"><Empty icon="eye-off">{t.uiContextAllOff()}</Empty></div>}
 
       <Section id="plan" title="Plan"count={live.todos.length} off={off.has('plan')}
         about="The steps the agent has set itself, and which it has done.">

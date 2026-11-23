@@ -68,6 +68,8 @@
   --leo-icon-size: var(--icon-control);
 }
 .panel-empty leo-icon { flex: none; }
+/* Every Overview section turned off: the one line sits where the first panel's heading would. */
+.context-all-off { padding: var(--leo-spacing-l) var(--leo-spacing-xl); }
 
 /* ------------------------------------------------------------------ rows */
 

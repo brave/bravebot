@@ -102,6 +102,50 @@ test('the state inherited on a first launch lists hidden, as it lists every othe
   assert.deepEqual(Object.keys(first).sort(), Object.keys(parseState({})).sort())
 })
 
+// The column itself, rendered through `react-dom/server`, with the list App.tsx passes it.
+const React = require('react')
+const { renderToStaticMarkup } = require('react-dom/server')
+const { Context } = (() => {
+  const source = buildSync({
+    entryPoints: ['src/renderer/components/Context.tsx'],
+    bundle: true,
+    write: false,
+    platform: 'node',
+    format: 'cjs',
+    jsx: 'automatic',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+  }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  return module.exports
+})()
+
+const live = { handle: 'h', summary: { directory: '/work' }, entries: [], todos: [], quarantine: [], phase: null, tokens: 0, running: false }
+const render = (props) => renderToStaticMarkup(React.createElement(Context, { live, ...props }))
+const panelClass = (markup, name) => markup.match(new RegExp(`<section class="([^"]*)" id="panel-${name}"`))?.[1]
+
+test('a hidden panel takes the off class and the others do not', () => {
+  const markup = render({ hidden: ['writes'] })
+  assert.equal(panelClass(markup, 'writes'), 'panel off', markup)
+  assert.equal(panelClass(markup, 'plan'), 'panel ', markup)
+  assert.ok(!markup.includes('id="context-all-off"'), markup)
+})
+
+test('with no list every Overview panel shows', () => {
+  const markup = render({})
+  for (const name of HIDEABLE) assert.equal(panelClass(markup, name), 'panel ', name)
+  assert.ok(!markup.includes('id="context-all-off"'), markup)
+})
+
+test('every panel hidden leaves the column, its head and one line saying so', () => {
+  const markup = render({ hidden: [...HIDEABLE] })
+  for (const name of HIDEABLE) assert.equal(panelClass(markup, name), 'panel off', name)
+  assert.ok(markup.includes('id="context-column"'), markup)
+  assert.ok(markup.includes('class="context-head"'), markup)
+  assert.ok(markup.includes('id="context-all-off"'), markup)
+  assert.ok(markup.includes('Every section is turned off.'), markup)
+})
+
 test('a fresh file has every panel on', () => {
   const userData = mkdtempSync(join(tmpdir(), 'bravebot-panels-'))
   const store = load('src/main/state.ts', { electron: { app: { getPath: () => userData } } })

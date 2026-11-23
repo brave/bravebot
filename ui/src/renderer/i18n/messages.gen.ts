@@ -48,6 +48,7 @@ const catalogEnUs = {
   uiAppearanceDark: (): string => 'Dark',
   uiAppearanceLight: (): string => 'Light',
   uiAppearanceSystem: (): string => 'System',
+  uiContextAllOff: (): string => 'Every section is turned off.',
   uiContextOutOfRequest: ({ count }: { count: number }): string => {
     const category = plural.en.select(count)
     if (category === 'one') return String(count) + ' earlier message kept out of the request, recalled when relevant'
@@ -250,6 +251,7 @@ const catalogFr: Messages = {
   uiAppearanceDark: (): string => 'Sombre',
   uiAppearanceLight: (): string => 'Clair',
   uiAppearanceSystem: (): string => 'Système',
+  uiContextAllOff: (): string => 'Toutes les sections sont désactivées.',
   uiContextOutOfRequest: catalogEnUs.uiContextOutOfRequest,
   uiCrashReportsNotice: (): string => 'Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Le rapport contient la version, votre système d\'exploitation et la ligne du code source de BraveBot qui a échoué. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général, ou en définissant BRAVEBOT_CRASH_REPORTS=0 dans l\'environnement.',
   uiCrashReportsNoticeDismiss: (): string => 'Fermer l\'avis sur les rapports de plantage',
