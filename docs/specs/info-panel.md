@@ -859,7 +859,10 @@ one checkable row for each panel of the Overview tab in the order the column dra
 read, Changes, Confined content, Notes and Asides. A row says what its panel's heading says, so it
 reads Calls made where the heading does for a session that holds only replayed calls. The Files tab
 is not a row, since turning it off would leave that tab blank. A row is checked while its panel is
-drawn, and it is there whether or not the panel has anything to show.
+drawn, and it is there whether or not the panel has anything to show. The View menu's Choose
+Sections… opens the same checklist from the keyboard: it unfolds the column if it is folded, moves
+it to the Overview tab and opens the checklist with focus on its first row, where the arrow keys
+move between rows and Enter turns one on or off. It is enabled only while a chat is open.
 
 Choosing a row turns its panel on or off at once, with no reload, and the checklist stays open.
 Escape closes it and keeps every change already made, so there is no cancel that undoes them. A
@@ -874,17 +877,15 @@ each change, so closing the window loses nothing. The key holds the names of the
 the start. A value that is not a list, or a list that holds any other name, leaves every panel on,
 and a panel the list does not name is on, so a panel a later version adds is on with no migration.
 A name read from the file is compared with the fixed list and never drawn ([PANEL-11](#PANEL-11)).
-The column's width and whether it is folded are kept in the same file, as they already are. The
-choice is separate from `~/.bravebot/sidebar` ([PANEL-17](#PANEL-17)): the desktop neither reads
+The column's width and whether it is folded are kept in the same file. The choice is separate from `~/.bravebot/sidebar` ([PANEL-17](#PANEL-17)): the desktop neither reads
 nor writes that file, and the terminal does not read `hidden`.
 
-**Why.** The context column is the desktop's info panel, and it already keeps its width and its fold
-across launches, as [PANEL-5](#PANEL-5) keeps the terminal's. The section choice is the part it
-lacked. The desktop's panels are not the terminal's sections, so one file for both would let each
+**Why.** The context column is the desktop's info panel, and it keeps its width, its fold and its
+section choice across launches, as [PANEL-5](#PANEL-5) keeps the terminal's. The desktop's panels are not the terminal's sections, so one file for both would let each
 erase the other's choice under [PANEL-17](#PANEL-17)'s rule that a name it does not know turns every
 section on.
 
-`verified-by: by-construction (the desktop renderer and main process are not crates this workspace compiles, so ui/scripts/panels-hidden.test.mjs holds that parseHidden keeps the six Overview names in column order with no repeats and turns any other name or a value that is not a list into every panel on, that parseState defaults hidden and keeps it through a write of another key, that the state a first launch inherits lists hidden, that a hidden panel takes the off class, that every panel hidden leaves the column, its head, the checklist and the line saying so, that toggling a row keeps column order, and that the menu lists the six panels by their headings, Calls made included, each row leaving the menu open; ui/scripts/drive-panels.mjs drives a real window on a profile of its own: it unticks Notes and finds #panel-notes hidden at once with the checklist still open, closes it with Escape, finds hidden in bravebot-ui.json, relaunches and finds Notes still hidden, Plan shown and the column's width and fold as they were, turns every panel off and finds the head, the checklist's button and the line, then turns every panel back on and puts the width back; make check-ui runs the tests)`
+`verified-by: by-construction (the desktop renderer and main process are not crates this workspace compiles, so ui/scripts/panels-hidden.test.mjs holds that parseHidden keeps the six Overview names in column order with no repeats and turns any other name or a value that is not a list into every panel on, that parseState defaults hidden and keeps it through a write of another key, that the state a first launch inherits lists hidden, that a hidden panel takes the off class, that every panel hidden leaves the column, its head, the checklist and the line saying so, that toggling a row keeps column order, and that the menu lists the six panels by their headings, Calls made included, each row leaving the menu open; ui/scripts/drive-panels.mjs drives a real window on a profile of its own: it unticks Notes and finds #panel-notes hidden at once with the checklist still open, closes it with Escape, finds hidden in bravebot-ui.json, relaunches and finds Notes still hidden, Plan shown and the column's width and fold as they were, turns every panel off and finds the head, the checklist's button and the line, and on a folded column showing the Files tab picks View > Choose Sections and finds the column unfolded, the Overview tab selected and the checklist open with focus on Plan, moves to Files read with ArrowDown, turns it on and off again with Enter with the checklist still open, and closes it with Escape, then turns every panel back on and puts the width back; make check-ui runs the tests)`
 
 ## Known costs
 
