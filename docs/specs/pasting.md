@@ -14,6 +14,7 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
+  - crates/core/src/invisible.rs
   - crates/tui/src/peek_mode.rs
   - crates/tui/src/state/peek.rs
   - crates/ui-bridge/src/attached.rs
@@ -339,18 +340,18 @@ the person's screen.
 and a run of selectors behind one symbol, are how a message is hidden in text that looks plain.
 Persian, Indic and emoji text needs only the first of each, after a character that is not ASCII.
 
-`verified-by: bravebot_tui::invisible::a_message_written_in_tag_characters_is_removed_and_counted`
-`verified-by: bravebot_tui::invisible::bidirectional_controls_and_zero_width_characters_are_removed`
-`verified-by: bravebot_tui::invisible::a_paste_with_nothing_hidden_is_returned_as_it_came`
-`verified-by: bravebot_tui::invisible::the_joiners_persian_and_indic_scripts_are_written_with_are_kept`
-`verified-by: bravebot_tui::invisible::joiners_between_ascii_letters_are_removed`
-`verified-by: bravebot_tui::invisible::a_run_of_joiners_after_a_letter_keeps_only_the_first`
-`verified-by: bravebot_tui::invisible::emoji_sequences_are_kept_whole`
-`verified-by: bravebot_tui::invisible::the_flags_of_england_scotland_and_wales_are_kept_whole`
-`verified-by: bravebot_tui::invisible::tags_behind_a_black_flag_that_are_not_one_of_the_three_flags_are_removed`
-`verified-by: bravebot_tui::invisible::a_run_of_selectors_after_an_emoji_keeps_only_the_first`
-`verified-by: bravebot_tui::invisible::a_selector_that_follows_nothing_it_modifies_is_removed`
-`verified-by: bravebot_tui::invisible::a_selector_after_a_digit_is_kept_only_for_a_keycap`
+`verified-by: bravebot_core::invisible::a_message_written_in_tag_characters_is_removed_and_counted`
+`verified-by: bravebot_core::invisible::bidirectional_controls_and_zero_width_characters_are_removed`
+`verified-by: bravebot_core::invisible::a_paste_with_nothing_hidden_is_returned_as_it_came`
+`verified-by: bravebot_core::invisible::the_joiners_persian_and_indic_scripts_are_written_with_are_kept`
+`verified-by: bravebot_core::invisible::joiners_between_ascii_letters_are_removed`
+`verified-by: bravebot_core::invisible::a_run_of_joiners_after_a_letter_keeps_only_the_first`
+`verified-by: bravebot_core::invisible::emoji_sequences_are_kept_whole`
+`verified-by: bravebot_core::invisible::the_flags_of_england_scotland_and_wales_are_kept_whole`
+`verified-by: bravebot_core::invisible::tags_behind_a_black_flag_that_are_not_one_of_the_three_flags_are_removed`
+`verified-by: bravebot_core::invisible::a_run_of_selectors_after_an_emoji_keeps_only_the_first`
+`verified-by: bravebot_core::invisible::a_selector_that_follows_nothing_it_modifies_is_removed`
+`verified-by: bravebot_core::invisible::a_selector_after_a_digit_is_kept_only_for_a_keycap`
 `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many`
 `verified-by: bravebot_tui::state::one_removed_character_is_said_in_the_singular`
 `verified-by: bravebot_tui::state::a_paste_with_nothing_hidden_arrives_whole_and_says_nothing`
