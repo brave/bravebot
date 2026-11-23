@@ -64,19 +64,19 @@ export async function planRun(on: PlanRunning, handle: string, task: string, lin
     on.setProblem(refused)
     return
   }
-  // In the order their markers stand in the task, which is the order the bridge names the files in
-  // when it titles the run's record.
+  // Each goes with its marker, which the bridge titles the run by: the plan card and the record
+  // name the file where that marker stands.
   const pictures = staged
     .flatMap((item) => item.via === 'drop' && item.file.kind !== 'text' ? [{ marker: item.marker, file: item.file }] : [])
-    .sort((a, b) => task.indexOf(a.marker) - task.indexOf(b.marker))
   const drops = pictures.map((item) => item.file.id)
+  const markers = pictures.map((item) => item.marker)
   const files = markersOf(staged.filter((item) => item.via === 'drop' && item.file.kind === 'text')).files
   const row = t.planAsked(task)
   const without = (old: Live) => old.entries.filter((entry) => entry.id !== row.id)
   // Set before the call, since the plan card can arrive before the call's answer does.
   on.update(handle, (old) => ({ ...old, planDropped: pictures, entries: [...old.entries, row] }))
   try {
-    await on.call('manifest.run', { session: handle, task, model: asking?.model ?? null, drops, files })
+    await on.call('manifest.run', { session: handle, task, model: asking?.model ?? null, drops, markers, files })
     // What was sent leaves the composer.
     if (!queuedAlready) on.update(handle, (old) => ({ ...old, staging: sent(old.staging) }))
   } catch (error) {

@@ -84,7 +84,7 @@ const withStaged = (...staged) => ({ ...live(), staging: { made: staged.length, 
 test('a typed /manifest t sends one manifest.run with the session, task and model, and no turn.send', async () => {
   const seen = windowWith(live())
   await running.planRun(seen.on, 's', 't', '/manifest t')
-  assert.deepEqual(seen.calls, [{ method: 'manifest.run', params: { session: 's', task: 't', model: 'm1', drops: [], files: [] } }])
+  assert.deepEqual(seen.calls, [{ method: 'manifest.run', params: { session: 's', task: 't', model: 'm1', drops: [], markers: [], files: [] } }])
 })
 
 test('a dropped picture goes as its grant id and a dropped text file as its marker and name, never a path (DROP-4)', async () => {
@@ -92,7 +92,7 @@ test('a dropped picture goes as its grant id and a dropped text file as its mark
   await running.planRun(seen.on, 's', 'build [Image #1] from [File #2]', '/manifest build [Image #1] from [File #2]')
   assert.deepEqual(seen.calls, [{
     method: 'manifest.run',
-    params: { session: 's', task: 'build [Image #1] from [File #2]', model: 'm1', drops: ['g1'], files: [{ marker: '[File #2]', name: 'a.txt' }] },
+    params: { session: 's', task: 'build [Image #1] from [File #2]', model: 'm1', drops: ['g1'], markers: ['[Image #1]'], files: [{ marker: '[File #2]', name: 'a.txt' }] },
   }])
   assert.deepEqual(seen.problems, [])
   assert.deepEqual(seen.state.staging.staged, [], 'what was sent leaves the composer')
@@ -232,13 +232,15 @@ test('every composer path and the queue start a /manifest line as a run, never a
   assert.match(turn, /message\.manifest !== undefined\s*\?\s*planRun\(handle, message\.manifest, message\.prompt, true, message\.staged\)/)
 })
 
-test('the plan card and the queued row show the pictures dropped on the task, in the order the task names them (DROP-4)', async () => {
+test('each dropped picture goes with its own marker, and the plan card and the queued row show them (DROP-4)', async () => {
   const second = { marker: '[Image #4]', via: 'drop', file: { kind: 'pdf', name: 'spec.pdf', id: 'g4' } }
   const seen = windowWith(withStaged(second, picture))
   await running.planRun(seen.on, 's', 'compare [Image #1] with [Image #4]', '/manifest compare [Image #1] with [Image #4]')
-  assert.deepEqual(seen.calls[0].params.drops, ['g1', 'g4'])
+  // Paired by position, so the bridge names each file where its own marker stands.
+  assert.deepEqual(seen.calls[0].params.drops, ['g4', 'g1'])
+  assert.deepEqual(seen.calls[0].params.markers, ['[Image #4]', '[Image #1]'])
   const card = heard(seen.state, { event: 'manifest.request', session: 's', data: { request: 1, task: 'compare', steps: [] } }).entries.at(-1)
-  assert.deepEqual(card.dropped.map((item) => item.marker), ['[Image #1]', '[Image #4]'])
+  assert.deepEqual(card.dropped.map((item) => item.marker), ['[Image #4]', '[Image #1]'])
   const done = heard(seen.state, { event: 'manifest.done', session: 's', data: { reply: 'ok', record: 'r1' } })
   assert.equal(done.planDropped, undefined, 'the next run starts with none')
   const row = composer.queuedRow({ prompt: '/manifest t [Image #1]', attachments: [], staged: [picture], manifest: 't [Image #1]' })
