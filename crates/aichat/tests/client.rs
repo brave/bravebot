@@ -455,11 +455,16 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                     let _ = stream.flush();
                 }
                 Attempt::QuietBody(content_type) => {
-                    let _ = stream.write_all(
-                        format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: 1000\r\n\r\n")
-                            .as_bytes(),
-                    );
-                    let _ = stream.flush();
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "a client that has gone away leaves nothing to be quiet to, and the test fails on the missing second request"
+                    )]
+                    let _ = stream
+                        .write_all(
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: 1000\r\n\r\n")
+                                .as_bytes(),
+                        )
+                        .and_then(|()| stream.flush());
                     // Held rather than dropped: a connection that closed would be a socket that
                     // went away, and this one is open and says nothing.
                     thread::spawn(move || {
@@ -4725,9 +4730,11 @@ fn a_reply_that_went_quiet_before_its_body_arrived_is_sent_again() {
 
         let (result, attempts) = asked_of(&gateway, &config, &egress, model, streaming);
 
-        let completion = result.unwrap_or_else(|error| {
-            panic!("streaming {streaming}: a quiet reply was not sent again: {error:?}")
-        });
+        assert!(
+            result.is_ok(),
+            "streaming {streaming}: a quiet reply was not sent again: {result:?}"
+        );
+        let completion = result.unwrap();
         assert_eq!(completion.model, "served-model", "streaming {streaming}");
         assert_eq!(attempts, 2, "streaming {streaming}");
         assert_eq!(

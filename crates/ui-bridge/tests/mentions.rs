@@ -234,6 +234,10 @@ fn an_entry_holding_a_no_break_space_is_written_so_the_prompt_names_it() {
 /// The composed prompt is accepted and starts a turn, so the test runs in an isolated profile
 /// against a stand-in model endpoint and waits for that turn to end. No other request leaves the
 /// test.
+#[expect(
+    clippy::expect_used,
+    reason = "a test that stops at the call that failed, with the message saying which"
+)]
 #[test]
 fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
     if !test_profile::in_isolated_profile() {
@@ -288,6 +292,10 @@ fn a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn() {
 
 /// The name and data of the first event that ends a turn, once one has arrived. The wait is
 /// bounded, so a turn that never ends fails the test.
+#[expect(
+    clippy::expect_used,
+    reason = "a poisoned lock means another thread of the test already failed"
+)]
 fn wait_for_turn_end(events: &Mutex<Vec<Event>>) -> (&'static str, Value) {
     let until = std::time::Instant::now() + endpoint::LIMIT;
     loop {
@@ -337,6 +345,10 @@ fn send_when_idle(bridge: &mut Bridge, params: &Value) -> Result<Value, String> 
 ///
 /// The faults this rejects: the names read out of the prompt when `shown` is given, which refuses
 /// the pasted name, and a name read out of `shown` alone, which `turn.send` then refuses.
+#[expect(
+    clippy::expect_used,
+    reason = "a test that stops at the call that failed, with the message saying which"
+)]
 #[test]
 fn a_send_reads_names_in_the_shown_line_and_never_adds_one() {
     if !test_profile::in_isolated_profile() {

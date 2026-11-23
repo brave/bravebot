@@ -2777,7 +2777,7 @@ mod tests {
         responses: Vec<Vec<u8>>,
     ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
         complete_against_with(
-            Egress::new(),
+            &Egress::new(),
             config,
             request,
             responses.into_iter().map(|r| (r, false)).collect(),
@@ -2786,7 +2786,7 @@ mod tests {
 
     /// As [`complete_against`], through `egress`, against [`scripted_with_silences`].
     fn complete_against_with(
-        egress: Egress,
+        egress: &Egress,
         config: &Bedrock,
         request: &ChatRequest,
         responses: Vec<(Vec<u8>, bool)>,
@@ -2797,7 +2797,7 @@ mod tests {
             policy::{ReleasePlan, Routing},
         };
         let (http, received) = scripted_with_silences(responses);
-        let mut client = BedrockClient::new(config, &egress);
+        let mut client = BedrockClient::new(config, egress);
         client.test_request = Some(http);
         let mut sink = RecordingSink::new();
         let mut routing = Routing::new();
@@ -3111,7 +3111,7 @@ mod tests {
     fn a_whole_reply_that_never_began_is_not_sent_again() {
         let model = "a-model-whose-whole-reply-never-began";
         let (result, sent) = complete_against_with(
-            impatient(),
+            &impatient(),
             &config_for(model),
             &writing_a_file(model),
             vec![silent_from_the_start(), (whole_reply(), false)],
