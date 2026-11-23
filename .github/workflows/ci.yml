@@ -628,7 +628,8 @@ jobs:
           if-no-files-found: ignore
 
   # The Verus contracts (docs/development/verification.md). `make check-verus` verifies the crates
-  # that carry contracts, requires Verus to refuse every mutation in verify/mutations.txt, and checks
+  # that carry contracts, requires Verus to refuse every mutation in verify/mutations.txt and every
+  # one-token change the sweep makes that verify/survivors.txt does not list, and checks
   # verify/history.rs the same way. Verus runs on a toolchain of its own through rustup, newer than
   # the one the workspace builds on, and the release is checked against its digest before it runs.
   # On a pull request, only where crates/core, verify/ or the scripts that run them changed.
