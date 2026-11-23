@@ -702,7 +702,7 @@ pub fn look_now() -> Look {
 /// The seed this process draws and how many seconds it has been drawing it, which is what its
 /// schedule is read from. A test samples the live path at seconds of its own choosing.
 fn clock() -> (&'static str, f64) {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     if let Some(sampled) = sampled::get() {
         return sampled;
     }
@@ -866,8 +866,9 @@ mod pinned {
 pub(crate) use pinned::holding as with_face_held;
 
 /// A seed and a second held fixed for the calling thread, so a test can read the live path of
-/// [`look_now`] at any second of a process's life without waiting for it.
-#[cfg(test)]
+/// [`look_now`] at any second of a process's life without waiting for it. Unix only, like the one
+/// test that reads it, which starts a child process.
+#[cfg(all(test, unix))]
 mod sampled {
     use super::Look;
     use std::cell::Cell;
@@ -898,7 +899,7 @@ mod sampled {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use sampled::look_at as look_now_at;
 
 /// [`look_at`], or the face at rest where no motion was asked for. Taken as an argument so the rule
