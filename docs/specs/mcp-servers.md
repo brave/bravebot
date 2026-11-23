@@ -2871,8 +2871,8 @@ accept a plugin's alias ([SERVERS-19](#SERVERS-19)), and a start puts the first-
 a session's start does.
 
 **Not built.** A server of a plugin is not moved ([SERVERS-11](#SERVERS-11)): a redirected handshake of
-one is left unstarted, because a move would write the plugin's alias into `mcp.json`, where the person's
-declaration would then shadow the plugin's.
+one is left unstarted and a call's redirect to another address is refused, because a move would write
+the plugin's alias into `mcp.json`, where the person's declaration would then shadow the plugin's.
 
 **Why.** An install is one yes to a list. Starting a program is a decision about that program, so the
 question stays, and the digest holds the plugin's directory because a server is usually an argv that
@@ -2923,4 +2923,4 @@ decide what runs under that name.
 `verified-by: bravebot_agent::servers::plugin_tests::a_plugins_local_server_is_unconfined_where_this_host_has_no_confinement_and_asked_about_where_it_has`
 `verified-by: bravebot_cli::mcp::a_joined_alias_at_the_longest_length_lists_as_usable_and_one_more_lists_as_too_long`
 `verified-by: bravebot_cli::mcp::a_plugins_server_no_session_here_starts_says_why_and_fails_nothing`
-`verified-by: by-construction (a session started with --safe reads no plugin server because the reader in crates/agent/src/plugin_servers.rs returns none while the safe flag is engaged, and a plugin server is moved by nothing because the move path in crates/agent/src/servers.rs declines a plugin's server)`
+`verified-by: by-construction (a session started with --safe reads no plugin server because the reader in crates/agent/src/plugin_servers.rs returns none while the safe flag is engaged, and a plugin server is moved by nothing because the move paths in crates/agent/src/servers.rs and crates/agent/src/mcp.rs decline a plugin's server)`

@@ -448,10 +448,10 @@ text.
 Each import is read through the same `workspace.read` and trust gate as [INSTR-8](#INSTR-8)'s
 pointer, after a `deny` rule is asked ([PERM-7](permissions.md#PERM-7)), so confinement and the
 trust map decide. An import that cannot be expanded stays as written and the person is told which
-file and why: a `deny` rule covers it, it is outside the workspace or not trusted, a file above it
-is already importing it, or the nesting or the count (64 for one instructions file) is past the
-limit. An absolute path, or one reaching above the workspace, is never read and is not reported, because
-it names no file the project holds. The same refusal is reported once, however many times the
+file and why: a `deny` rule covers it, it is outside the workspace, it exists but cannot be read or
+it is not trusted, a file above it is already importing it, or the nesting or the count (64 for one
+instructions file) is past the limit. An absolute path, or one reaching above the workspace, is
+never read and is not reported, because it names no file the project holds. The same refusal is reported once, however many times the
 file is named. An untrusted
 directory's instructions never reach this rule ([INSTR-5](#INSTR-5)).
 

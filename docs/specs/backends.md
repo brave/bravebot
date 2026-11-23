@@ -3696,8 +3696,8 @@ name a request would carry. It may not add a model to any roster, make one reach
 model is the default.
 
 A model it refuses is not requested by any route: the `model` key, an exported
-`BRAVEBOT_DEFAULT_MODEL`, the baked-in default, a recorded `/model` pick, `--model`, and a
-delegate definition alike. The name is matched after a tier word is resolved
+`BRAVEBOT_DEFAULT_MODEL`, the baked-in default, a recorded `/model` pick, `--model`, a delegate
+definition, and the summary, advisor, plan and processor models and the goal judge's alike. The name is matched after a tier word is resolved
 ([BACKEND-12](#BACKEND-12)), so `opus` is checked as the model that tier names. `/model` does not
 offer a refused model, and neither does the desktop window's roster, the configured model included; a
 turn that window is asked to start on one is refused with the file that refused it. A refused delegate
@@ -3788,6 +3788,12 @@ models, and the goal judge.
 `verified-by: bravebot_agent::compact::a_summary_model_that_searches_the_web_is_refused_over_chat_completions_only`
 `verified-by: bravebot_cli::plain::a_start_on_a_model_that_searches_the_web_is_ended_without_a_file`
 `verified-by: bravebot_config::lib::a_model_that_searches_the_web_is_refused_over_chat_completions_only`
+`verified-by: bravebot_agent::compact::a_summary_model_the_machine_refuses_is_not_the_one_a_side_request_runs_on`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_conversation_whole`
+`verified-by: bravebot_agent::turn::a_summary_model_the_machine_excludes_sends_no_check`
+`verified-by: bravebot_agent::turn::an_advisor_model_the_machine_refuses_is_not_asked`
+`verified-by: bravebot_agent::turn::a_plan_model_the_machine_refuses_falls_back_to_the_sessions_and_says_so`
+`verified-by: bravebot_cli::main::a_processor_model_the_managed_settings_refuse_is_refused_before_the_run`
 
 <a id="BACKEND-49"></a>
 ### BACKEND-49: a `google-vertex` entry is reached at a host built from its project and location

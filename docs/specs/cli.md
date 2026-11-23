@@ -969,6 +969,7 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::running::a_one_shot_run_given_the_vet_flag_lets_a_check_that_finds_nothing_release_the_bytes`
 `verified-by: bravebot_cli::plain_retention_tests::a_session_in_lines_that_asks_releases_a_vetted_file_only_with_the_vet_flag_and_a_safe_check`
 `verified-by: bravebot_cli::plain_retention_tests::a_session_in_lines_given_the_vet_flag_under_bypass_is_screened_by_the_check`
+`verified-by: bravebot_cli::plain_retention_tests::a_session_in_lines_given_the_vet_flag_keeps_back_a_read_output_an_objecting_check_flagged_under_bypass`
 
 <a id="CLI-16"></a>
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would
