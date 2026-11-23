@@ -33,6 +33,13 @@ to ([SANDBOX-20](sandboxing.md#SANDBOX-20), [SANDBOX-25](sandboxing.md#SANDBOX-2
 [SANDBOX-24](sandboxing.md#SANDBOX-24)), so a session an editor hosts is confined as one in a
 window is.
 
+The usage ping is the one thing the two launchers do differently before `acp_loop::serve`.
+`bravebot acp` writes the usage-ping notice to standard error and sends the ping as `cli`
+([PING-6](usage-ping.md#PING-6), [PING-7](usage-ping.md#PING-7)). `bravebot-acp` does neither.
+It ships with the desktop app and an editor starts it, so nobody reads its standard error. If it
+took the notice, the shared marker would record it as shown and the desktop window would never say
+it, so the notice stays due for the window.
+
 The agent advertises `loadSession: false`, no authentication methods, and prompt capabilities for
 text, links and images. It does not call the editor's file or terminal methods, so bytes an editor
 holds reach the agent only as a prompt or an attachment.

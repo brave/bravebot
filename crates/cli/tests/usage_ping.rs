@@ -201,3 +201,45 @@ fn the_agent_client_protocol_sends_one_ping_as_cli() {
     assert!(pinged, "no ping");
     the_one_ping(&service, "cli");
 }
+
+/// `bravebot acp` says the usage-ping notice once on stderr and never on stdout, which carries
+/// only the protocol. It records the notice as shown, so a second run says nothing.
+#[test]
+fn the_agent_client_protocol_says_the_notice_once_on_stderr_and_never_on_stdout() {
+    let home = Home::new("acp-notice");
+    let marker = home.path.join(".bravebot/usage-ping-notice");
+    std::fs::remove_file(&marker).expect("the notice is due");
+    let service = PingService::start();
+    let notice = "BRAVEBOT_USAGE_PING=0";
+    for run in 0..2 {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+        environment(&mut command, &home, &service);
+        let mut child = command
+            .arg("acp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the built binary runs");
+        drop(child.stdin.take());
+        let ran = child.wait_with_output().expect("the run ends");
+        let stdout = String::from_utf8_lossy(&ran.stdout);
+        let stderr = String::from_utf8_lossy(&ran.stderr);
+        assert!(
+            !stdout.contains(notice),
+            "stdout carried the notice: {stdout}"
+        );
+        if run == 0 {
+            assert_eq!(stderr.matches(notice).count(), 1, "{stderr}");
+            assert!(
+                marker.exists(),
+                "nothing was left to stop the next run saying it"
+            );
+        } else {
+            assert!(
+                !stderr.contains(notice),
+                "the notice was said twice: {stderr}"
+            );
+        }
+    }
+}

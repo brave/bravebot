@@ -3,8 +3,12 @@
 //!
 //! The loop is the one `bravebot-acp` runs, [`bravebot_ui_bridge::acp_loop::serve`], so what each
 //! message means is decided in one place. What is left here is what a command of this binary does
-//! before it: the process-wide answers were settled by the entry point, the retention sweep is
-//! started, and the settings file the command line named is handed to the sessions the editor opens.
+//! before it: the process-wide answers were settled by the entry point, the usage-ping notice is
+//! written to stderr when it is due, the retention sweep is started, the usage ping is sent as `cli`,
+//! and the settings file the command line named is handed to the sessions the editor opens.
+//!
+//! `bravebot-acp` skips the notice and the ping on purpose (PING-6, PING-7). Nobody reads its
+//! stderr, so taking the notice there would keep the desktop window from saying it.
 
 use std::io::BufReader;
 
