@@ -247,6 +247,13 @@ test('each dropped picture goes with its own marker, and the plan card and the q
   assert.deepEqual(row.dropped, [{ marker: '[Image #1]', file: picture.file }])
 })
 
+test("a folded plan card names the task by the bridge's title, and works out none of its own (SHARE-001)", () => {
+  const transcript = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
+  assert.match(transcript, /subject=\{request\.title \?\? request\.task\}/)
+  assert.doesNotMatch(transcript, /split\(item\.marker\)/)
+  assert.doesNotMatch(readFileSync('src/renderer/plan-run.ts', 'utf8'), /indexOf\(a\.marker\)/)
+})
+
 test('the bridge method is one the window may send', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
   assert.match(index, /'manifest\.run',/)
