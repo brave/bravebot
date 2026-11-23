@@ -10574,6 +10574,22 @@ mod tests {
         );
     }
 
+    /// `/watch` lists a watch the person armed as theirs, since no turn armed it and "armed by
+    /// turn 0" names a turn that never ran (FSWATCH-10).
+    #[test]
+    fn a_watch_the_person_armed_is_listed_as_armed_by_them() {
+        let mut s = session();
+        s.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
+        s.report_watches();
+        let listed = s
+            .transcript
+            .iter()
+            .find(|entry| entry.text.starts_with("watch 1: notes.md"))
+            .expect("the watch is listed");
+        assert!(listed.text.contains("armed by you"), "{:?}", listed.text);
+        assert!(!listed.text.contains("turn"), "{:?}", listed.text);
+    }
+
     /// `/init`'s prompt is the driver's, said once for the turn that sends it and not for the next.
     #[test]
     fn the_init_prompt_is_the_drivers_for_one_turn_only() {

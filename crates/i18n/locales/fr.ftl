@@ -2557,6 +2557,7 @@ status-goal-paused = suspendu, /goal resume le réarme
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
 status-watch = Veille { $number }
 status-watch-armed-by = posée au tour { $turn } · il reste { $left }
+status-watch-armed-by-you = posée par vous · il reste { $left }
 # Une ligne par tâche en arrière-plan du dernier tour. Le nom est celui du pilote.
 status-job = Tâche en arrière-plan { $name }
 status-job-of-delegate = Tâche en arrière-plan { $name } du délégué { $number }
@@ -3733,6 +3734,8 @@ watch-fired-removed = veille { $number } : { $path } n'existe plus
 watch-fired-appeared = veille { $number } : { $path } existe maintenant
 watch-listed =
     veille { $number } : { $path }, posée au tour { $turn }, il reste { $left }
+watch-listed-by-you =
+    veille { $number } : { $path }, posée par vous, il reste { $left }
 watch-none =
     rien n'est sous veille. Un tour en pose une quand vous demandez à être averti au sujet d'un
     fichier, et /watch stop <n> en arrête une

@@ -461,13 +461,23 @@ impl Session {
             .live()
             .iter()
             .map(|watch| {
-                t!(
-                    watch_listed,
-                    number = watch.number(),
-                    path = watch.path(),
-                    turn = watch.armed_by(),
-                    left = crate::loops::spell(watch.left(now))
-                )
+                let left = crate::loops::spell(watch.left(now));
+                if watch.armed_by_the_person() {
+                    t!(
+                        watch_listed_by_you,
+                        number = watch.number(),
+                        path = watch.path(),
+                        left = left
+                    )
+                } else {
+                    t!(
+                        watch_listed,
+                        number = watch.number(),
+                        path = watch.path(),
+                        turn = watch.armed_by(),
+                        left = left
+                    )
+                }
             })
             .collect();
         if lines.is_empty() {

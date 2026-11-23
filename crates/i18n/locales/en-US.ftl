@@ -3213,6 +3213,7 @@ status-goal-paused = paused, /goal resume arms it
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
 status-watch = Watch { $number }
 status-watch-armed-by = armed by turn { $turn } · { $left } left
+status-watch-armed-by-you = armed by you · { $left } left
 # One line per background job of the last turn. The name is the driver's.
 status-job = Background { $name }
 status-job-of-delegate = Background { $name } of delegate { $number }
@@ -4887,6 +4888,7 @@ watch-fired =watch { $number }: { $path } looks written to
 watch-fired-removed = watch { $number }: { $path } no longer exists
 watch-fired-appeared = watch { $number }: { $path } now exists
 watch-listed = watch { $number }: { $path }, armed by turn { $turn }, { $left } left
+watch-listed-by-you = watch { $number }: { $path }, armed by you, { $left } left
 watch-none =
     nothing is being watched. A turn arms a watch when you ask to be told about a file, and
     /watch stop <n> ends one
