@@ -270,6 +270,9 @@ pub const DENIED: &[&str] = &[
     "crash_reports.set",
     "crash_reports.notice_due",
     "crash_reports.mark_notice_shown",
+    // The level of this process's diagnostic log (DIAG-11). The log is written for the person at
+    // the host to read and attach to a bug report, so only that person chooses how much it holds.
+    "diagnostic_log.set",
     // The machine's recorded effort level, which the terminal shares.
     "effort.get",
     "effort.set",

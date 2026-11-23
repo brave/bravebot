@@ -303,6 +303,82 @@ fn the_reports_state_the_level_the_desktop_agent_was_started_with() {
     assert!(text.contains("\"level\": \"info\""), "{text}");
 }
 
+/// Started at the default level, the window raises the level of the running agent and the lines
+/// above `error` go into the file the earlier failure went into, not a second one. A word that is
+/// not a level is refused and changes nothing (DIAG-2, DIAG-11).
+#[test]
+fn raising_the_level_from_the_window_reaches_the_same_log() {
+    let scratch = Scratch::new("bridge-diagnostic-log-raised");
+    let endpoint = format!("http://127.0.0.1:{}", an_unavailable_service());
+    let mut child = front_end(&scratch, &endpoint);
+    let said = listen(&mut child);
+    until(&said, |message| message["event"] == "agent.ready");
+
+    send(
+        &mut child,
+        10,
+        "window.fault",
+        json!({"kind": "renderer_gone", "reason": "crashed", "exit": 11}),
+    );
+    until(&said, |message| message["id"] == 10);
+    let logs = scratch.logs();
+    assert_eq!(
+        logs.len(),
+        1,
+        "expected one log after the failure: {logs:?}"
+    );
+
+    send(
+        &mut child,
+        11,
+        "diagnostic_log.set",
+        json!({"level": "loud"}),
+    );
+    let refused = until(&said, |message| message["id"] == 11);
+    assert_eq!(refused["error"]["code"], "bad_request", "{refused}");
+
+    send(&mut child, 12, "settings.inspect", json!({}));
+    let unchanged = until(&said, |message| message["id"] == 12);
+    assert_eq!(unchanged["ok"]["logs"]["level"], "error", "{unchanged}");
+
+    send(
+        &mut child,
+        13,
+        "diagnostic_log.set",
+        json!({"level": "debug"}),
+    );
+    let raised = until(&said, |message| message["id"] == 13);
+    assert_eq!(raised["ok"]["level"], "debug", "{raised}");
+    assert_eq!(raised["ok"]["writing"], true, "{raised}");
+
+    send(&mut child, 14, "settings.inspect", json!({}));
+    let inspected = until(&said, |message| message["id"] == 14);
+    assert_eq!(inspected["ok"]["logs"]["level"], "debug", "{inspected}");
+
+    a_turn(&mut child, &said, &scratch, "say done");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(scratch.logs(), logs, "the raised level opened another log");
+    let text = std::fs::read_to_string(&logs[0]).unwrap();
+    assert!(
+        text.lines()
+            .next()
+            .is_some_and(|line| line.contains(" ERROR window.fault ")),
+        "the earlier failure is not first: {text}"
+    );
+    assert!(
+        lines_above_error(&text)
+            .iter()
+            .any(|line| line.contains(" INFO aichat.retry ")),
+        "no retry line after raising the level: {text}"
+    );
+    assert!(
+        !text.contains("say done"),
+        "the prompt reached the log: {text}"
+    );
+}
+
 /// A word that is not a level is refused, the process ends with status 2 before it serves, and
 /// no log directory is made (DIAG-3).
 #[test]
