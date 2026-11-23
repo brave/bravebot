@@ -214,7 +214,23 @@ test('a bot’s briefing stays first in dropped, with what the person dropped af
   assert.deepEqual(carried.attachments, [png])
 })
 
-test('a manifest run takes no drop', async () => {
-  const forwarded = main.sanitised('manifest.run', { session: 's1', task: 't', model: 'm', drops: [await grant('s1', png)] })
-  assert.deepEqual(forwarded, { session: 's1', task: 't', model: 'm' })
+// DROP-4: a `/manifest` line carries the pictures and PDFs dropped on it as the paths this process
+// granted, and a text file only as the marker and name the bridge puts back into the task.
+test('a manifest run carries its granted drops, and no picture, path or paste the window named', async () => {
+  const ids = [await grant('s1', png), await grant('s1', pdf)]
+  const forwarded = main.sanitised('manifest.run', {
+    session: 's1', task: 'build [Image #1] [PDF #2] from [File #3]', model: 'm', drops: ids,
+    files: [{ marker: '[File #3]', name: 'notes.md', path: '/etc/hosts' }, 'secret.md'],
+    dropped: ['/etc/hosts'], attachments: ['/Users/me/x.png'], images: [{ media: 'image/png', data: 'iVBORw0KGgo=' }], pastes: ['p1'],
+  })
+  assert.deepEqual(forwarded, {
+    session: 's1', task: 'build [Image #1] [PDF #2] from [File #3]', model: 'm',
+    files: [{ marker: '[File #3]', name: 'notes.md' }], attachments: [png, pdf],
+  })
+})
+
+test('a manifest run with a path where a grant id goes, or another session’s grant, is refused', async () => {
+  assert.throws(() => main.sanitised('manifest.run', { session: 's1', task: 't', drops: [png] }), main.SendRefused)
+  const theirs = await grant('s2', png)
+  assert.throws(() => main.sanitised('manifest.run', { session: 's1', task: 't', drops: [theirs] }), main.SendRefused)
 })

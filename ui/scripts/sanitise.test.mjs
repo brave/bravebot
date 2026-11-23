@@ -52,18 +52,18 @@ test('a window naming a path where an attachment id goes sends nothing', () => {
   assert.throws(() => sanitised('turn.send', { session: 's1', prompt: 'look', attachments: ['/Users/me/Pictures/private.png'] }))
 })
 
-test('a manifest run forwards a task and a model, and no file or picture under any key', () => {
+test('a manifest run forwards a task, a model and text-file markers, and no file or picture the window named', () => {
   const forwarded = sanitised('manifest.run', {
     session: 's1',
-    task: 'plan',
+    task: 'plan [File #1]',
     model: 'm',
     images: [picture],
     attachments: ['/Users/me/Pictures/private.png'],
     dropped: ['/etc/hosts'],
-    files: ['secret.md'],
+    files: ['secret.md', { marker: '[File #1]', name: 'notes.md', path: '/etc/hosts' }],
   })
 
-  assert.deepEqual(forwarded, { session: 's1', task: 'plan', model: 'm' })
+  assert.deepEqual(forwarded, { session: 's1', task: 'plan [File #1]', model: 'm', files: [{ marker: '[File #1]', name: 'notes.md' }] })
 })
 
 test('a session list is always the whole one, whatever directory the window put in it', () => {
