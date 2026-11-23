@@ -79,6 +79,9 @@ pub enum Action {
     /// Say which language the interface is in, choose one for the next start, or give the choice
     /// back. Empty says.
     Language(String),
+    /// Say whether crash reports are on and what holds them off, or save the person's own choice
+    /// for the next start. Empty says.
+    CrashReports(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.

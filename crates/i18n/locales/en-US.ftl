@@ -3954,6 +3954,7 @@ session-mode-resumed = this session was in the { $skill } mode, which is in forc
 input-skill-mode = mode: { $skill }
 command-config = Choose how the input box edits text
 command-language = Choose the interface language for the next start, or drop the choice
+command-crash-reports = Say whether crash reports are on and why, or switch them for the next start
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
 command-sandbox = Show the sandbox mode, or change it
@@ -4343,6 +4344,24 @@ session-language-set = the interface will be in { $language } from the next star
 session-language-auto = the interface will follow the settings file and the environment from the next start
 session-language-not-saved = this session cannot keep a choice, so the language is unchanged
 session-no-such-language = no catalog for { $language }; the catalogs are { $available }
+# Said by /crash-reports. The command, its two words and the crashReports key are not a translator's
+# to reword. $variable is the name of the variable that turned reports off, and $word is the word
+# typed after the command.
+session-crash-reports-on = crash reports are on: if bravebot crashes, a report is sent to Brave on the next launch; /crash-reports off turns them off from the next start
+session-crash-reports-off-by-person = crash reports are off, turned off in your settings file; /crash-reports on turns them on from the next start
+session-crash-reports-off-by-environment = crash reports are off, held off by { $variable } in the environment, which answers before your settings file
+session-crash-reports-off-by-admin = crash reports are off, held off by your administrator's managed settings, which answer before your settings file
+session-crash-reports-incognito = crash reports are off: this session has no state directory (incognito) to keep a report in
+session-crash-reports-refused-environment = nothing was saved: { $variable } in the environment holds crash reports off, and it answers before your settings file
+session-crash-reports-refused-admin = nothing was saved: your administrator's managed settings hold crash reports off, and they answer before your settings file
+session-crash-reports-refused-incognito = nothing was saved: this session has no state directory (incognito) to keep a choice in
+session-crash-reports-saved-on = saved: crash reports are on from the next start
+session-crash-reports-saved-off = saved: crash reports are off from the next start; this session can still write a report until it exits
+session-crash-reports-unsaved = nothing was kept: your settings file is not a settings document, so crashReports was not written
+session-crash-reports-no-directory = nothing was kept: there is no directory to keep your settings file in
+session-crash-reports-usage = /crash-reports takes on or off, or nothing to say whether reports are on; { $word } changes nothing
+session-crash-reports-sending = this session sends crash reports
+session-crash-reports-not-sending = this session sends no crash reports: this build has no address to send them to, or they were off when it started
 session-variant-set = requests to this model carry the { $variant } variant from the next turn
 session-variant-dropped = no variant; requests carry the model's own options alone
 session-variant-in-force = the { $variant } variant is in force; this model offers { $names }
@@ -4434,13 +4453,14 @@ update-not-installed-by-us =
     there is no update command for this copy: it was not installed by the npm package, the install
     script, Homebrew, WinGet, apt or dnf. A build from source is updated by pulling and building
     again.
-# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The key
-# and the variable are the two ways of turning it off, and are not a translator's to reword.
+# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The
+# command, the key and the variable are the ways of turning it off, and are not a translator's to
+# reword.
 crash-reports-notice =
     if bravebot crashes, a report is sent to Brave on the next launch. It holds the version, your
     operating system and the line of bravebot's source that failed, and never your prompts, files
-    or keys. To turn this off, set crashReports to false in your settings file, or set
-    BRAVEBOT_CRASH_REPORTS=0.
+    or keys. To turn this off, run /crash-reports off, set crashReports to false in your settings
+    file, or set BRAVEBOT_CRASH_REPORTS=0.
 # Said once, before the first usage ping is sent: on the startup screen, or on standard error for a
 # run without one. The command, the key and the variable are the ways of turning it off, and are not a
 # translator's to reword.

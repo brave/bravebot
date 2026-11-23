@@ -8075,6 +8075,7 @@ mod tests {
             "/prs",
             "/config",
             "/language",
+            "/crash-reports",
             "/watch",
             "/jobs",
             "/outputs",

@@ -306,11 +306,9 @@ fn carry_out_while_working(
         Action::Note(text) => {
             session.answer_while_working(|session| note_session(session, beside.stored, &text));
         }
-        Action::Link(kind, argument) => {
-            session.answer_while_working(|session| {
-                link_session(session, beside.stored, kind, &argument);
-            });
-        }
+        Action::Link(kind, argument) => session.answer_while_working(|session| {
+            link_session(session, beside.stored, kind, &argument);
+        }),
         Action::ForgetTrust => session.answer_while_working(|session| {
             session.note(forget_trust(beside.home, beside.root));
         }),
@@ -357,6 +355,9 @@ fn carry_out_while_working(
         Action::Language(word) => {
             session.answer_while_working(|session| set_language(session, &word));
         }
+        Action::CrashReports(word) => session.answer_while_working(|session| {
+            crate::crash_reports_command::run(session, &word, beside.managed);
+        }),
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
         }),
@@ -366,10 +367,9 @@ fn carry_out_while_working(
         Action::Export(path) => session.answer_while_working(|session| {
             export_session(session, beside.stored, beside.root, path.as_deref());
         }),
-        Action::ChooseModel(scope) => {
-            session
-                .answer_while_working(|session| open_model_picker(session, beside.config, scope));
-        }
+        Action::ChooseModel(scope) => session.answer_while_working(|session| {
+            open_model_picker(session, beside.config, scope);
+        }),
         // The sessions beside this one can be looked at, stopped, named, archived and deleted while
         // a turn runs. Opening one ends this session, which a turn in flight does not allow
         // without being stopped, and that is asked once (SCREEN-15).
@@ -542,6 +542,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if let Some(word) = argument_to(line, LANGUAGE_COMMAND) {
         return Action::Language(word.to_string());
+    }
+    if let Some(word) = argument_to(line, CRASH_REPORTS_COMMAND) {
+        return Action::CrashReports(word.to_string());
     }
     if line.trim() == CONFIG_COMMAND {
         return Action::ChooseEditing;
@@ -3293,6 +3296,11 @@ fn event_loop(
                 &word,
             ),
             Action::Language(word) => set_language(held.session, &word),
+            Action::CrashReports(word) => crate::crash_reports_command::run(
+                held.session,
+                &word,
+                &bravebot_config::Managed::load(),
+            ),
             Action::ChooseEditing => choose_editing(terminal, held.session),
             Action::AddDirectory(directory) => held.add_directory_command(&directory),
             Action::CloseDirectory(directory) => held.close_directory_command(&directory),
@@ -29533,6 +29541,7 @@ mod tests {
                 CONTEXT_COMMAND,
                 COPY_COMMAND,
                 COST_COMMAND,
+                CRASH_REPORTS_COMMAND,
                 DIFF_COMMAND,
                 EFFORT_COMMAND,
                 EXPORT_COMMAND,
@@ -32325,6 +32334,43 @@ mod tests {
             assert_eq!(
                 dispatch_command(&mut session, commanded(line)),
                 Action::Language(word.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// The word after `/crash-reports` reaches the action whole, and the bare word asks for the
+    /// report. A word the command does not take is carried too, so the command can say what it
+    /// takes and change nothing (CMD-2).
+    #[test]
+    fn the_crash_reports_command_carries_its_word() {
+        for (line, word) in [
+            ("/crash-reports off", "off"),
+            ("/crash-reports on", "on"),
+            ("/crash-reports false", "false"),
+            ("/crash-reports", ""),
+        ] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::CrashReports(word.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    /// CMD-2: `/crash-reports` is a command only as the first word, whole, so a longer word and a
+    /// question about it are prompts.
+    #[test]
+    fn a_prompt_containing_the_crash_reports_command_is_still_a_prompt() {
+        for line in ["/crash-reportsx", "what does /crash-reports do"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string()),
                 "{line}"
             );
         }

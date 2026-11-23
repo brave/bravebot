@@ -403,11 +403,11 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model` and `/model session`, `/theme`, `/effort` and `/effort session`, and `/variant` in every form; `/config`; `/language` in every form; `/crash-reports` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/redraw`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
-box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
+box edits in or what a later start reads (`/theme`, `/config`, `/language` and `/crash-reports`), goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
@@ -596,6 +596,10 @@ does not read:
 - **`/language`.** It saves the language the interface is read in from the next start, and the
   catalog is chosen once, so nothing the turn holds or the screen draws changes
   ([LOCALE-8](localization.md#LOCALE-8)).
+- **`/crash-reports`.** It reads whether crash reports are on, and `on` or `off` writes
+  `crashReports` in the person's own settings file, which only a later start reads. The turn holds
+  nothing that reads the key, and the crash hook is installed once at start, so nothing the turn
+  holds changes ([CRASH-13](crash-reports.md#CRASH-13)).
 - **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
   the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
   it ([INPUT-24](terminal-input.md#INPUT-24)).
