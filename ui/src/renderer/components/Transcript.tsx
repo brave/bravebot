@@ -2671,7 +2671,8 @@ function Card({
         <DecisionCard
           className="confirm manifest"
           answerable={answerable}
-          subject={request.task}
+          // Folded, the task names each dropped file as the run's record title does.
+          subject={(entry.dropped ?? []).reduce((task, item) => task.split(item.marker).join(item.file.name), request.task)}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this plan' : 'You declined this plan' }}
           head={<CardHead icon="list" intent="Run plan" deciding
             counts={<span className="counts">{request.steps.length} step{request.steps.length === 1 ? '' : 's'}</span>} />}

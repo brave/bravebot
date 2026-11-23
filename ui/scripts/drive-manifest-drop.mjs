@@ -124,8 +124,14 @@ try {
   await page.locator('.queued-messages').waitFor()
   assert.equal(await chips.count(), 0, 'queuing takes the drop with the line')
   assert.equal(planned('build the second notes from'), undefined, 'the run waits for the turn')
-  assert.equal(await page.locator('.queued-messages [data-test="sent-dropped-chip"]').innerText(), 'sketch.png',
-    'the queued line shows the picture that waits with it')
+  const queuedChip = page.locator('.queued-messages [data-test="sent-dropped-chip"]')
+  assert.match(await queuedChip.innerText(), /^sketch\.png\s*\[Image #\d+\]$/, 'the queued line shows the picture that waits with it')
+  const textBox = await page.locator('.queued-messages .tray-text').boundingBox()
+  const chipBox = await queuedChip.boundingBox()
+  assert.ok(chipBox.x - (textBox.x + textBox.width) < 12, 'the chip follows the queued text, not the remove button')
+  // Folded, the approved plan names the file as the record title does.
+  assert.match(await card.first().innerText(), /build the first notes from sketch\.png/)
+  assert.doesNotMatch(await card.first().innerText(), /\[Image #1\]/)
   // The first run's record is titled with the file's name, not its marker.
   await page.locator('.session', { hasText: 'build the first notes from sketch.png' }).waitFor()
   await shoot('manifest-drop-queued')

@@ -354,8 +354,10 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             {queued.map(({ text, plan, dropped = [] }, index) => (
               <div className="tray-row" key={index}>
                 {plan && <span className="tray-mark plan-task-mark">Plan</span>}
-                <span className="tray-text" data-tooltip={text}>{text}</span>
-                {dropped.map((item) => <DroppedChip key={item.marker} file={item.file} />)}
+                <span className="tray-line">
+                  <span className="tray-text" data-tooltip={text}>{text}</span>
+                  {dropped.map((item) => <DroppedChip key={item.marker} marker={item.marker} file={item.file} />)}
+                </span>
                 <IconButton icon="close" size="tiny" label={`Remove queued message ${index + 1}`} tooltip="Remove"
                   onClick={() => onRemoveQueued(index)} />
               </div>
