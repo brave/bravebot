@@ -1935,11 +1935,13 @@ for one that does not.
 `verified-by: bravebot_aichat::anthropic::protocol::the_system_prompt_and_the_end_of_the_conversation_carry_a_breakpoint`
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_tool_result_is_marked_on_the_result`
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_call_is_marked_nowhere_but_the_prompt`
+`verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_picture_or_a_document_is_marked_nowhere_but_the_prompt`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
 `verified-by: bravebot_aichat::anthropic::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint_and_none_is_added`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobody_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_service`
+`verified-by: bravebot_aichat::client::an_anthropic_request_giving_up_its_conversation_is_sent_without_the_breakpoint_on_it`
 `verified-by: bravebot_aichat::client::an_anthropic_refused_lifetime_is_given_up_before_the_breakpoints`
 `verified-by: bravebot_aichat::client::a_probe_that_failed_as_well_leaves_what_was_known_alone`
 

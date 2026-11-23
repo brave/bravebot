@@ -1822,11 +1822,21 @@ impl Servers {
     /// A directory the platform will not give this session is reported as a server that did not
     /// start, which is LSP-6 and the same answer the directories below it already give.
     fn index_dir(&mut self, language: &Served) -> LspResult<PathBuf> {
+        self.index_dir_using(language, SessionIndex::create)
+    }
+
+    /// [`Servers::index_dir`] with the creation of the session's own directory passed in, so a
+    /// platform that will not give one can be stood in for.
+    fn index_dir_using(
+        &mut self,
+        language: &Served,
+        create: impl FnOnce() -> std::io::Result<SessionIndex>,
+    ) -> LspResult<PathBuf> {
         if let Some(kept) = cache_for(self.state.as_deref(), &self.root, self.incognito) {
             return Ok(kept);
         }
         if self.session.is_none() {
-            self.session = Some(SessionIndex::create().map_err(|e| LspError::Start {
+            self.session = Some(create().map_err(|e| LspError::Start {
                 language: language.clone(),
                 detail: format!("an index directory for this session could not be created: {e}"),
             })?);
@@ -4002,6 +4012,296 @@ done
         // And it is still there when the session is not, which is the whole point of keeping it.
         drop(servers);
         assert!(index.is_dir(), "{} did not survive", index.display());
+    }
+
+    /// A language server that records the variables LSP-10 points at an index directory, and then
+    /// answers like [`REPORTING_SERVER`] so the start completes.
+    #[cfg(unix)]
+    const ENVIRONMENT_SERVER: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+{
+  printf 'GOCACHE=%s\n' "${GOCACHE-unset}"
+  printf 'TMPDIR=%s\n' "${TMPDIR-unset}"
+  printf 'CARGO_TARGET_DIR=%s\n' "${CARGO_TARGET_DIR-unset}"
+} >> "$here/environment"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+    *'"exit"'*)
+      exit 0
+      ;;
+  esac
+done
+"#;
+
+    /// Start a server written by [`ENVIRONMENT_SERVER`] for `served` and return the index directory
+    /// it was handed and what the server saw in its environment as
+    /// `(GOCACHE, TMPDIR, CARGO_TARGET_DIR)`, both passed to `after` while the scratch directory
+    /// still exists.
+    ///
+    /// `before` runs on the index directory before the server starts, for a test that needs
+    /// something already there.
+    #[cfg(unix)]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn what_a_started_server_saw(
+        name: &str,
+        served: Served,
+        before: impl FnOnce(&Path),
+        after: impl FnOnce(&Path, (String, String, String)),
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let scratch = crate::testutil::Scratch::new(name);
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create the workspace");
+        let program = scratch.join("server");
+        std::fs::write(&program, ENVIRONMENT_SERVER).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let state = scratch.join("state");
+        let cache = cache_for(Some(&state), &workspace, false).expect("a cache is given");
+        before(&cache);
+
+        let server = match served {
+            Served::Builtin(language) => {
+                Server::launch(language, &program, &workspace, &cache, &[])
+            }
+            Served::Declared(name) => Server::launch_declared(
+                &Declared {
+                    name: name.to_string(),
+                    command: "server".into(),
+                    args: Vec::new(),
+                    extensions: BTreeMap::new(),
+                    env: Vec::new(),
+                    initialization_options: None,
+                    digest: "one".into(),
+                },
+                &program,
+                &workspace,
+                &cache,
+                &[],
+            ),
+        }
+        .expect("the server starts");
+        drop(server);
+
+        let written = std::fs::read_to_string(scratch.join("environment"))
+            .expect("the server records its environment before it answers");
+        let seen = |prefix: &str| {
+            written
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix))
+                .unwrap_or_else(|| panic!("no {prefix} line in {written}"))
+                .to_string()
+        };
+        // Run before the scratch directory goes, so a test can look at what the start made.
+        after(
+            &cache,
+            (seen("GOCACHE="), seen("TMPDIR="), seen("CARGO_TARGET_DIR=")),
+        );
+    }
+
+    /// LSP-10: a Go server's build cache is a directory of its own inside the index directory, made
+    /// by this process at mode 0700 and narrowed where an earlier run left it open.
+    ///
+    /// It rejects a Go branch that sets `GOCACHE` without making the directory (a server handed one
+    /// that is not there makes it at the umask), and one that makes it with a call that leaves an
+    /// existing directory at the mode it had.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_go_servers_build_cache_is_made_inside_the_index_directory_at_mode_0700() {
+        use std::os::unix::fs::PermissionsExt;
+
+        what_a_started_server_saw(
+            "bravebot-lsp-go-build-cache",
+            Served::Builtin(Language::Go),
+            |cache| {
+                let open = cache.join("go-build");
+                std::fs::create_dir_all(&open).expect("a build cache an earlier run left");
+                std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod");
+            },
+            |cache, (go_cache, _, _)| {
+                let build = cache.join("go-build");
+                assert_eq!(go_cache, build.to_str().expect("a utf-8 path"));
+                let mode = std::fs::metadata(&build)
+                    .expect("the build cache was made by this process")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o700, "STATE-1's mode, for the Go build cache too");
+            },
+        );
+    }
+
+    /// LSP-10: a Go server's build cache is made when nothing was there.
+    ///
+    /// The first test leaves a directory in place, so it cannot tell a branch that makes the
+    /// directory from one that relies on the server to. This one starts with nothing.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_go_servers_build_cache_is_made_when_nothing_was_there() {
+        use std::os::unix::fs::PermissionsExt;
+
+        what_a_started_server_saw(
+            "bravebot-lsp-go-build-cache-new",
+            Served::Builtin(Language::Go),
+            |_| {},
+            |cache, (go_cache, _, _)| {
+                let build = cache.join("go-build");
+                assert_eq!(go_cache, build.to_str().expect("a utf-8 path"));
+                let mode = std::fs::metadata(&build)
+                    .expect("the server was pointed at a directory this process never made")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o700);
+            },
+        );
+    }
+
+    /// LSP-10: TypeScript, Python and a declared server are given the index directory as their
+    /// temporary directory, because none of them reads a variable that names an index.
+    ///
+    /// It rejects a launch that drops `TMPDIR`, which leaves them the system temporary directory
+    /// and an index outside the one this process owns and removes.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_server_that_has_no_index_variable_is_given_the_index_directory_as_its_temporary_one() {
+        for (name, served) in [
+            (
+                "bravebot-lsp-tmpdir-typescript",
+                Served::Builtin(Language::TypeScript),
+            ),
+            (
+                "bravebot-lsp-tmpdir-python",
+                Served::Builtin(Language::Python),
+            ),
+            (
+                "bravebot-lsp-tmpdir-declared",
+                Served::Declared("mine".into()),
+            ),
+        ] {
+            let label = format!("{served:?}");
+            what_a_started_server_saw(
+                name,
+                served,
+                |_| {},
+                |cache, (_, tmpdir, _)| {
+                    assert_eq!(
+                        tmpdir,
+                        cache.to_str().expect("a utf-8 path"),
+                        "{label} was not given the index directory as TMPDIR"
+                    );
+                },
+            );
+        }
+    }
+
+    /// LSP-10: where this session keeps nothing, the directory it indexes into is named for the
+    /// process and not for the workspace.
+    ///
+    /// The directory is listable by anybody on the machine, so a name that carried the workspace's
+    /// name or the digest of its path would say which projects somebody is working on. It rejects a
+    /// name derived from the workspace.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_directory_a_session_indexes_into_has_no_workspace_in_its_name() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-nothing-of-this-workspace-");
+        let workspace = scratch.join("a-workspace-nobody-else-names");
+        std::fs::create_dir_all(&workspace).expect("create the workspace");
+        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new);
+
+        let index = servers
+            .index_dir(&Language::Rust.into())
+            .expect("a directory for this session");
+
+        // session / lsp / digest of the workspace: the first two are named by this process, and the
+        // last is a digest the session directory holds.
+        let digest = index
+            .file_name()
+            .expect("a digest")
+            .to_string_lossy()
+            .to_string();
+        let session = index
+            .parent()
+            .and_then(Path::parent)
+            .expect("the session's own directory")
+            .to_path_buf();
+        let named = session
+            .file_name()
+            .expect("a name")
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            !named.contains("a-workspace-nobody-else-names")
+                && !named.contains(&digest)
+                && !named.contains("nothing-of-this-workspace"),
+            "the session's directory is named for the workspace: {named}"
+        );
+        assert!(
+            !session.starts_with(workspace.canonicalize().expect("the workspace")),
+            "{} is inside the workspace",
+            session.display()
+        );
+    }
+
+    /// LSP-10 and LSP-6: where the directory for a session that keeps nothing cannot be created, the
+    /// server does not start, and nothing is made in the workspace instead.
+    ///
+    /// It rejects a fallback to the workspace (or to any other directory) when the platform refuses,
+    /// which would run the server with an index location that writes into the tree.
+    #[cfg(unix)]
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn a_session_that_cannot_have_an_index_directory_does_not_start_a_server() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-no-session-directory");
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create the workspace");
+        let mut servers = Servers::new(workspace.clone(), None, |_| None, false, Vec::new);
+
+        let refused = servers.index_dir_using(&Language::Rust.into(), || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the platform keeps no temporary directory for this account",
+            ))
+        });
+
+        match refused {
+            Err(LspError::Start { detail, .. }) => {
+                assert!(detail.contains("index directory"), "{detail}");
+                assert!(detail.contains("no temporary directory"), "{detail}");
+            }
+            other => panic!("a refused directory must be a server that did not start: {other:?}"),
+        }
+        assert!(
+            std::fs::read_dir(&workspace)
+                .expect("read")
+                .next()
+                .is_none(),
+            "something was made in the workspace instead"
+        );
     }
 
     #[test]

@@ -18049,6 +18049,89 @@ fn a_reply_from_a_terminal_starts_a_stopped_session_with_it() {
     assert!(!listed.contains("stopped"), "{listed}");
 }
 
+/// BG-13: a reply that a session refused as stopping is not remembered against it. Asked again once
+/// the session is `stopped`, the terminal starts it with the reply as its prompt.
+///
+/// The first reply meets a process that says `stopping` (a socket the test answers on, with the
+/// session's lock held, as a session that has run out its idle time and not yet ended looks). The
+/// refusal is a failure that says to reply again. The lock and the socket are then released, which
+/// is the session having ended, and the same command from a terminal starts it. It rejects a
+/// terminal that keeps the refusal (a mark left by the first attempt, or the refusal read from the
+/// entry again) and goes on refusing the second attempt.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_reply_refused_as_stopping_starts_the_session_when_it_is_asked_again_once_stopped() {
+    use std::os::unix::net::UnixListener;
+
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    a_stopped_session_with_one_turn(&home, &gateway);
+
+    let roster = bravebot_session::jobs::Roster::at(home.0.join(".bravebot/jobs"));
+    let lease = roster
+        .claim(SESSION_ID)
+        .expect("claim the entry")
+        .expect("the host that stopped has let it go");
+    let token = roster.issue_attach_token(SESSION_ID).expect("a secret");
+    let socket = roster.socket_of(SESSION_ID).expect("a socket path");
+    std::fs::remove_file(&socket).ok();
+    let listener = UnixListener::bind(&socket).expect("a socket the stopping session answers on");
+    let (heard, asked) = mpsc::channel();
+    let answering = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the reply arrives");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut lines = Vec::new();
+        for _ in 0..3 {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("a line");
+            lines.push(line.trim().to_string());
+        }
+        writeln!(stream, "stopping").expect("the answer");
+        heard.send(lines).ok();
+    });
+
+    let refused = bravebot(&home.0, &[], &["reply", "3f2a9c1e", "and the tests"]);
+    answering.join().expect("the answering thread ended");
+    let (out, err) = said(&refused);
+    assert!(!refused.status.success(), "{out}{err}");
+    assert!(
+        err.contains("is stopping after an hour idle. Reply again to start it."),
+        "{err}"
+    );
+    assert!(
+        !out.contains("Sent to"),
+        "a reply to a stopping session was reported as sent: {out}"
+    );
+    assert_eq!(
+        asked.recv().expect("what the socket heard"),
+        [token, "reply".to_string(), "and the tests".to_string()]
+    );
+
+    // The session has ended: nothing holds its lock and nothing listens.
+    drop(lease);
+    std::fs::remove_file(&socket).ok();
+    roster.withdraw_attach_token(SESSION_ID);
+
+    let output = in_a_terminal(
+        &home.0,
+        AT_A_GATEWAY,
+        &["reply", "3f2a9c1e", "and the tests"],
+    );
+    let (out, err) = said(&output);
+    assert!(output.status.success(), "{out}{err}");
+    assert!(out.contains("Sent to"), "{out}{err}");
+    let second = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the reply reached the gateway");
+    assert!(second.contains("and the tests"), "{second}");
+    assert!(second.contains("fix the build"), "{second}");
+}
+
 /// BG-10, BG-12: `reply` from a terminal starts an interrupted session, after saying that the turn it
 /// was in is not repeated. The earlier conversation and the reply are in the request, with the
 /// driver's note that the last turn never finished, and that note is not written to the record.

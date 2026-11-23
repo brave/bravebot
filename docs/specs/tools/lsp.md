@@ -586,6 +586,11 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::an_index_an_earlier_build_left_too_deep_is_removed`
 `verified-by: bravebot_lsp::server::a_nested_directory_that_holds_no_index_is_left_where_it_is`
 `verified-by: bravebot_lsp::server::the_cache_is_keyed_by_the_workspace`
+`verified-by: bravebot_lsp::server::a_go_servers_build_cache_is_made_inside_the_index_directory_at_mode_0700`
+`verified-by: bravebot_lsp::server::a_go_servers_build_cache_is_made_when_nothing_was_there`
+`verified-by: bravebot_lsp::server::a_server_that_has_no_index_variable_is_given_the_index_directory_as_its_temporary_one`
+`verified-by: bravebot_lsp::server::the_directory_a_session_indexes_into_has_no_workspace_in_its_name`
+`verified-by: bravebot_lsp::server::a_session_that_cannot_have_an_index_directory_does_not_start_a_server`
 `verified-by: bravebot_lsp::server::an_incognito_session_keeps_nothing_under_the_state_directory`
 `verified-by: bravebot_lsp::server::a_session_that_keeps_nothing_still_indexes_outside_the_workspace`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`

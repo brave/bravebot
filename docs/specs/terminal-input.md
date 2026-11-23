@@ -2588,6 +2588,7 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::tests::handover::every_handover_goes_through_the_one_that_gives_back_and_takes_again`
 `verified-by: bravebot_tui::app::tests::handover::every_handover_takes_the_terminal_again_with_the_mouse_choice_the_session_holds`
 `verified-by: bravebot_cli::terminal_modes::the_editor_a_prompt_is_written_in_is_started_on_a_terminal_that_is_out_of_raw_mode`
+`verified-by: bravebot_cli::terminal_modes::the_interface_that_draws_has_the_terminal_in_raw_mode_so_a_key_is_not_echoed`
 `verified-by: bravebot_cli::terminal_modes::a_session_in_lines_takes_none_of_what_the_interface_that_draws_takes`
 
 <a id="INPUT-34"></a>

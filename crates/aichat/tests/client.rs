@@ -5902,6 +5902,54 @@ fn an_anthropic_listing_is_asked_for_once_as_a_whole_page_with_the_key_in_its_he
     );
 }
 
+/// BACKEND-27: a request to an `anthropic` entry whose conversation no later request sends goes out
+/// with the prompt's breakpoint and none on the end of the conversation, and a request that is sent
+/// again keeps both. The reply is read whole.
+///
+/// It rejects a client that keeps the conversation breakpoint whatever the request says, and one that
+/// drops it for every request.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_anthropic_request_giving_up_its_conversation_is_sent_without_the_breakpoint_on_it() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Json(MESSAGES_REPLY.into()),
+        Attempt::Json(MESSAGES_REPLY.into()),
+    ]);
+    let config = config_for(&endpoint);
+    let provider = anthropic_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let kept = ChatRequest::new(
+        "anthropic/claude-test",
+        vec![Message::system("be brief"), Message::user("hello")],
+    );
+    let given_up = kept.clone().giving_up_its_conversation();
+
+    for request in [&given_up, &kept] {
+        AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+            .complete(&mut policy, request)
+            .expect("the reply was read");
+    }
+
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(bodies.len(), 2);
+    let ephemeral = serde_json::json!({"type": "ephemeral"});
+    for body in &bodies {
+        assert_eq!(body["system"][0]["cache_control"], ephemeral, "{body}");
+    }
+    assert!(
+        !carries_a_breakpoint(&serde_json::json!(bodies[0]["messages"])),
+        "a conversation nothing sends again was marked: {}",
+        bodies[0]
+    );
+    assert_eq!(
+        bodies[1]["messages"][0]["content"][0]["cache_control"], ephemeral,
+        "a conversation sent again lost its breakpoint: {}",
+        bodies[1]
+    );
+}
+
 /// A model that reads a breakpoint and refuses a lifetime on it keeps its caching at its own default,
 /// where the other order would give up the caching for the sake of a lifetime. The lifetime goes
 /// first, and what that found is remembered.
