@@ -774,3 +774,45 @@ fn a_session_opened_again_waits_for_what_is_still_writing_its_record() {
         "the session was opened before what held its record had ended"
     );
 }
+
+/// DROP-1 and DROP-10. The bridge gives a path the unconfined, trusted read of a drop only when
+/// the caller put it in `dropped` or `attachments`. A turn whose prompt names the absolute path
+/// of a real file outside the project reads nothing from it, and the same path in `dropped` is
+/// carried into the request, so the first half is not a turn that carries nothing at all.
+///
+/// Rejects a front end that takes paths from the prompt (or from anything else the turn holds)
+/// and mints the grant for them, which is what a model-proposed path would need.
+#[test]
+fn a_path_the_prompt_only_names_is_not_read_as_a_drop_and_one_in_the_dropped_list_is() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("named-in-the-prompt");
+    let outside = elsewhere("named-in-the-prompt");
+    let notes = outside.join("notes.md");
+    std::fs::write(&notes, "OUTSIDE-NOTES-BODY").unwrap();
+    let (config, requests, server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    let named = window.turn(
+        &session,
+        &format!("summarise {}", notes.display()),
+        json!({}),
+    );
+    assert_eq!(named.name, "turn.done", "{:?}", named.data);
+    let first = requests.recv().unwrap();
+    assert!(
+        !first.contains("OUTSIDE-NOTES-BODY"),
+        "a path only named in the prompt was read as a drop: {first}"
+    );
+
+    let dropped = window.turn(&session, "summarise it", json!({"dropped": [notes]}));
+    server.join().unwrap();
+    assert_eq!(dropped.name, "turn.done", "{:?}", dropped.data);
+    let second = requests.recv().unwrap();
+    assert!(
+        second.contains("OUTSIDE-NOTES-BODY"),
+        "the dropped file did not reach the model, so the half above proves nothing: {second}"
+    );
+}

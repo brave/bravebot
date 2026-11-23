@@ -358,3 +358,58 @@ fn dispatching_a_command_clears_what_was_dropped_on_its_line() {
 
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// DROP-1. A task is given the files the person dropped on the line and nothing else: the paths
+/// it carries come from what the drop staged, so a path the line only names in words, or a marker
+/// typed by hand, reaches neither list. The line here drops a picture and a text file, then types
+/// the path of a real picture and a marker nothing staged. The control half is the pair that was
+/// dropped, which a supplier that carried nothing would also fail.
+///
+/// Rejects a supplier that reads paths out of the prompt (or out of any text a model or a file
+/// supplied) and gives them the unconfined, trusted read a drop gets, and one that carries every
+/// marker the line shows.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_task_carries_the_files_dropped_on_its_line_and_no_path_the_line_only_names() {
+    let (mut session, directory, shot) = a_session_with("supplier", "shot.png");
+    let notes = directory.join("notes.md");
+    std::fs::write(&notes, "the notes").expect("write");
+    let typed = directory.join("typed.png");
+    std::fs::write(&typed, [0x89u8, 0x50]).expect("write");
+    let typed = typed.to_string_lossy().to_string();
+
+    type_line(&mut session, "compare ");
+    assert!(session.drop_files(&shot), "the picture was not a drop");
+    assert!(
+        session.drop_files(&notes.to_string_lossy()),
+        "the text file was not a drop"
+    );
+    type_line(&mut session, &format!("with {typed} and [Image #9]"));
+    let action = handle_key(&mut session, key(KeyCode::Enter));
+    let Action::Submit(prompt) = action else {
+        panic!("the line was not sent: {action:?}");
+    };
+
+    let task = crate::app::with_submitted_attachments(bravebot_agent::Task::new(prompt), &session);
+    let attached: Vec<&str> = task.attachments.iter().map(|a| a.path.as_str()).collect();
+    assert_eq!(attached, ["shot.png"], "carried more or less than the drop");
+    assert_eq!(task.dropped_text, ["notes.md"]);
+
+    let (mut session, directory_aside, shot) = a_session_with("supplier-aside", "shot.png");
+    type_line(&mut session, &format!("/btw what is {typed} next to "));
+    assert!(session.drop_files(&shot), "the picture was not a drop");
+    let action = handle_key(&mut session, key(KeyCode::Enter));
+    let Action::Aside(_, _, attached) = action else {
+        panic!("a question was not asked: {action:?}");
+    };
+    let names: Vec<&str> = attached.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["shot.png"],
+        "a question carried a path it only named"
+    );
+
+    std::fs::remove_dir_all(&directory).ok();
+    std::fs::remove_dir_all(&directory_aside).ok();
+}

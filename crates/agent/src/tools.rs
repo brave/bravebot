@@ -3465,10 +3465,14 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         "schedule_next" if !tools.delegated && tools.scheduling.offered() => {
             schedule_next(policy, tools.scheduling, &arguments)
         }
-        // A surface that keeps no watches is offered no way to arm one, and a call from a turn on
-        // it is answered as an unknown name. Refused here as well as absent from the list, for
-        // the reason the two above are.
-        "watch_file" if !tools.delegated && tools.arming.offered() => watch_file(
+        // A delegate is refused here. A surface that keeps no watches is offered no way to arm
+        // one and is refused by `watch_file` itself: the function takes the arming state as an
+        // argument, and its `Arming::Unavailable` arm answers with the words of the catch-all
+        // below and arms nothing, so a guard on `Arming::offered()` here would give the same
+        // answer and no test could tell the two apart. `schedule_next` above keeps its guard
+        // because that function takes no state that says it was not offered, so the dispatch arm
+        // is the only place that refuses it.
+        "watch_file" if !tools.delegated => watch_file(
             policy,
             tools.workspace,
             tools.slots,

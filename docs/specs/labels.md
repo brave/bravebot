@@ -24,7 +24,7 @@ guards:
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 19
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 45
+      - crates/agent/tests/workspace.rs: 47
       - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 5
@@ -97,7 +97,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 308
+      - crates/agent/tests/workspace.rs: 312
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -286,6 +286,7 @@ guards:
       - crates/agent/src/manifest.rs: 1
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/tools.rs: 1
+      - crates/agent/tests/workspace.rs: 1
       - crates/choice/src/lib.rs: 2
       - crates/core/src/policy.rs: 28
   - symbol: Policy::before_chooser

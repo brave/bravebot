@@ -59,6 +59,12 @@ files on the clipboard reaches by the same route ([PASTE-12](pasting.md#PASTE-12
 `verified-by: bravebot_tui::app::tests::pasting::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_read_as_a_drop`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_attached_as_a_drop`
+`verified-by: bravebot_agent::workspace::a_path_under_any_label_but_trusted_public_is_not_read_as_a_drop`
+`verified-by: bravebot_agent::workspace::a_path_a_processor_produced_is_not_read_as_a_drop`
+`verified-by: bravebot_tui::app::tests::dropping::a_task_carries_the_files_dropped_on_its_line_and_no_path_the_line_only_names`
+`verified-by: bravebot_ui_bridge::attaching::a_path_the_prompt_only_names_is_not_read_as_a_drop_and_one_in_the_dropped_list_is`
+`verified-by: bravebot_ui_bridge::dispatch::a_dropped_path_that_names_no_file_is_refused`
+`verified-by: bravebot_ui_bridge::dispatch::a_relative_dropped_path_is_refused`
 `verified-by: bravebot_cli::layering::a_dropped_file_reaches_a_turn_from_the_terminal_and_the_bridge_and_nothing_else`
 `verified-by: bravebot_cli::layering::the_scan_for_the_drop_grant_finds_each_way_to_name_it_and_not_a_comment_or_a_test_module`
 
@@ -334,6 +340,7 @@ what the path was for and can say so; the turn cannot.
 `verified-by: bravebot_ui_bridge::attaching::a_dropped_picture_and_pdf_reach_the_model_before_a_pasted_picture`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_the_bridge_cannot_carry_refuses_the_send`
 `verified-by: bravebot_ui_bridge::attaching::a_picture_named_in_the_text_list_fails_the_turn_and_is_not_sent`
+`verified-by: bravebot_ui_bridge::attaching::a_path_the_prompt_only_names_is_not_read_as_a_drop_and_one_in_the_dropped_list_is`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/sanitise.test.mjs and ui/scripts/drops.test.mjs pin its half: a window's turn.send reaches the agent with no dropped, attachments or images list of its own, its dropped and attachments are composed only from grants the main process minted, a path where an attachment id or a drop id goes sends nothing, and a manifest run forwards a task and a model and nothing else; make check-ui runs both)`
 
 <a id="DROP-11"></a>
