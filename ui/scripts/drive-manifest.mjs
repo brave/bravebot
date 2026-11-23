@@ -113,10 +113,11 @@ try {
   assert.ok((await transcript()).includes('Goal, as understood'), 'the goal stays')
   // At 1200×800 the card's yes sits above the composer once the transcript is at its end.
   await page.locator('.entries').evaluate((entries) => entries.scrollTo({ top: entries.scrollHeight, behavior: 'instant' }))
-  await page.waitForTimeout(200)
-  const yes = await card.locator(APPROVE_BUTTON).boundingBox()
-  const box = await page.locator('footer.composer').boundingBox()
-  assert.ok(yes && box && yes.y + yes.height <= box.y, `Run this plan is above the composer: ${JSON.stringify({ yes, box })}`)
+  await until(async () => {
+    const yes = await card.locator(APPROVE_BUTTON).boundingBox()
+    const box = await page.locator('footer.composer').boundingBox()
+    return Boolean(yes && box && yes.y + yes.height <= box.y)
+  }, 'Run this plan is above the composer')
   await page.screenshot({ path: join(output, `manifest-plan-${theme}.png`) })
   await approve(card)
   await approveWrites(async () => (await rows('plan-reply')) === 1)
