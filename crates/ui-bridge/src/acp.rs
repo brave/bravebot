@@ -770,6 +770,8 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
                 .into_iter()
                 .flatten()
                 .map(|row| {
+                    // ACP has pending, in_progress and completed. Any other status, a waiting task
+                    // among them, is sent as pending: it is not being worked on and not finished.
                     let status = match row["status"].as_str() {
                         Some("active") => "in_progress",
                         Some("done") => "completed",
@@ -2274,6 +2276,40 @@ mod tests {
             ),
         );
         assert_eq!(shared.lock().unwrap().unasked.get("t"), Some(&None));
+    }
+
+    /// ACP plan entries have three statuses. A task that waits is open work, so it is sent as
+    /// `pending` and never as `in_progress` or `completed`.
+    ///
+    /// Rejects a mapping that sends a waiting task as `in_progress`, which tells the editor work is
+    /// going on, or as `completed`.
+    #[test]
+    fn a_waiting_task_is_sent_to_the_editor_as_pending() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let rows = json!({ "rows": [
+            { "content": "a", "status": "active" },
+            { "content": "b", "status": "waiting" },
+            { "content": "c", "status": "done" },
+        ] });
+        on_event(&shared, Event::new("todos", "s", rows));
+        let written = written.lock().unwrap();
+        let statuses: Vec<&str> = written[0]["params"]["update"]["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .map(|entry| entry["status"].as_str().expect("status"))
+            .collect();
+        assert_eq!(statuses, ["in_progress", "pending", "completed"]);
     }
 
     /// PROMPT-1: the title of a call in the editor is the bridge's spelling of the file it names,

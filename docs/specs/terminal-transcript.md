@@ -1298,13 +1298,14 @@ The accelerator that focuses the composer is not changed by this entry.
 that says how many of its tasks are done, and how many are cancelled where any are. Every task is
 there, in the plan's order, whatever room the info panel has for rows
 ([PANEL-10](info-panel.md#PANEL-10)). A task takes the rows its text needs. The first begins with
-the task's mark and its status in words (`pending`, `in progress`, `completed` or `cancelled`), both
+the task's mark and its status in words (`pending`, `in progress`, `waiting`, `completed` or `cancelled`), both
 read from the status the task carries, and the text follows, wrapped to the width. Every row after
 the first has the same margin, blank where the mark and the status stood. A task no longer
 outstanding is struck through, in the colours the plan has under a turn. A task that is neither
-completed nor cancelled is drawn as work being done where a turn is running as it is printed, with
+completed, cancelled nor waiting is drawn as work being done where a turn is running as it is printed, with
 the mark and ink the panel gives it ([PANEL-10](info-panel.md#PANEL-10)), and left open, with the
-hollow mark and the dim text the panel gives it then, where none is. Its status in words is the one
+hollow mark and the dim text the panel gives it then, where none is. A waiting task is drawn the
+same whether or not a turn is running, with the mark of its own and the ink the panel gives it. Its status in words is the one
 the planner wrote either way.
 
 No row is wider than the transcript, so none is wrapped again outside its margin. The margin is
@@ -1330,6 +1331,8 @@ taken for the interface's own, as a forged margin would be.
 
 `verified-by: bravebot_tui::panel::the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut`
 `verified-by: bravebot_tui::panel::a_printed_plan_holds_at_every_width_from_one_column_up`
+`verified-by: bravebot_tui::render::a_waiting_task_is_drawn_with_its_own_mark_whether_or_not_a_turn_runs`
+`verified-by: bravebot_tui::render::transcript::a_finished_entrys_waiting_task_keeps_its_own_mark_at_its_call_site`
 `verified-by: bravebot_tui::panel::a_printed_plan_is_drawn_on_the_screen_as_it_is_laid_out`
 `verified-by: bravebot_tui::panel::a_printed_task_cannot_draw_a_margin_a_mark_or_a_status_of_its_own`
 `verified-by: bravebot_tui::panel::a_printed_plan_stays_as_it_was_when_the_plan_changes`

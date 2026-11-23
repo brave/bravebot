@@ -686,21 +686,28 @@ used, so nothing untrusted a tool returned reaches the decision ([LABEL-8](label
 <a id="TURN-12"></a>
 ### TURN-12: a turn that answers with tasks still open asks about the list
 
-Where `todo_write` is offered, the latest accepted list leaves at least one task pending or in
-progress, and the planner answers without calling a tool, the driver puts that answer into the
-conversation and says how many tasks are open. It asks for the whole list again, with a task marked
-completed where it is done and cancelled where it was dropped, and says that where work remains the
-tasks stay open and the answer says what is left. The turn carries on with its tools and ends on
-the planner's next answer, whatever the list says then. The line is a count and nothing about the
-tasks.
+Where `todo_write` is offered, the latest accepted list leaves at least one task open that is not
+marked waiting, and the planner answers without calling a tool, the driver puts that answer into the
+conversation and says how many tasks are open and how many of those are marked waiting. It asks for
+the whole list again, with a task marked completed where it is done and cancelled where it was
+dropped, says that a task open because it waits on a person or an outside event is marked waiting,
+and says that where work remains the tasks stay open and the answer says what is left. The turn
+carries on with its tools and ends on the planner's next answer, whatever the list says then. The
+line is two counts and nothing about the tasks.
+
+**A list whose open tasks all wait is not asked about.** A task marked `waiting` is open on
+purpose, which the planner said by marking it ([TODO-4](tools/todo-write.md#TODO-4)). Where every
+open task in the list is marked waiting, the turn ends on the answer. The driver compares the two
+counts with each other and with nothing else, and reads each through `Policy::read_trusted_content`.
+A waiting count the gate refuses reads as none waiting, so the question is put.
 
 **The list is the one the panel keeps.** The plan stays after the turn that wrote it
 ([PANEL-10](info-panel.md#PANEL-10)), so the question is about the session's last accepted list
 whichever turn wrote it, and a turn that wrote none is asked about the one before. A list the
 planner was not shown, as in a session that has met something untrusted, ends the question about
 the list before it, because the count of that one no longer describes the panel's. The count is
-kept for a list whichever way its result went back to the planner. Pending and in progress are open,
-finished and dropped are not, and a status the driver does not recognise reads as pending
+kept for a list whichever way its result went back to the planner. Pending, in progress and waiting
+are open, finished and dropped are not, and a status the driver does not recognise reads as pending
 ([TODO-2](tools/todo-write.md#TODO-2)).
 
 **Asked once for each list, and again after work.** A list the planner writes after the question,
@@ -725,7 +732,8 @@ the first is drawn between the calls.
 **Read only where the list is trusted.** Whether to ask is a decision. The kernel counts the open
 tasks where it can read the statuses and labels the count as the list is labelled, and the driver
 reads it through `Policy::read_trusted_content` ([LABEL-6](labels.md#LABEL-6)), which refuses a
-count that is not trusted. In a session that has met something untrusted the list is labelled
+count that is not trusted. The kernel counts the waiting tasks the same way, and the driver reads
+that count through the same gate. In a session that has met something untrusted the list is labelled
 untrusted and the planner is shown none of it, so no count is kept and the turn ends on the answer.
 No task's text reaches the planner through this line.
 
@@ -761,6 +769,10 @@ carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::turn::a_planner_that_rewrote_its_list_when_reminded_is_not_asked_at_the_end`
 `verified-by: bravebot_agent::turn::an_untrusted_count_of_open_tasks_is_refused_by_the_gate`
 `verified-by: bravebot_agent::turn::a_trusted_count_of_open_tasks_is_acted_on`
+`verified-by: bravebot_agent::turn::the_question_about_open_tasks_says_how_many_are_waiting`
+`verified-by: bravebot_agent::turn::a_list_whose_open_tasks_are_all_waiting_is_not_asked_about`
+`verified-by: bravebot_agent::turn::trusted_counts_saying_every_open_task_is_waiting_are_acted_on`
+`verified-by: bravebot_agent::turn::an_untrusted_count_of_waiting_tasks_is_refused_by_the_gate`
 `verified-by: bravebot_agent::turn::a_list_the_planner_was_not_shown_ends_the_question_about_the_list_before_it`
 `verified-by: bravebot_agent::turn::a_list_written_in_a_round_with_no_call_ids_is_asked_about`
 `verified-by: bravebot_agent::turn::a_line_typed_as_the_planner_answers_reaches_it_with_the_question_about_the_list`
@@ -895,12 +907,13 @@ usage never reaches a limit in tokens. A run that ends on a limit writes no sess
 <a id="TURN-15"></a>
 ### TURN-15: a turn whose task list has gone unwritten for a long run of rounds says it may be behind
 
-Where `todo_write` is offered, the latest accepted list leaves at least one task pending or in
-progress, and the turn has made [`ROUNDS_BEFORE_LIST_REMINDER`](../../crates/agent/src/turn.rs)
+Where `todo_write` is offered, the latest accepted list leaves at least one open task that is not
+marked waiting, and the turn has made [`ROUNDS_BEFORE_LIST_REMINDER`](../../crates/agent/src/turn.rs)
 rounds since that list was accepted, the driver adds a line to the next request. The line gives the
-number of rounds and the number of open tasks, says the list may be behind the work, asks for the
-whole list again with a task marked completed where it is done and cancelled where it was dropped,
-and says to carry on if the list is accurate. The planner decides whether it is.
+number of rounds, the number of open tasks and how many of them are marked waiting, says the list
+may be behind the work, asks for the whole list again with a task marked completed where it is done
+and cancelled where it was dropped, and says to carry on if the list is accurate. The planner
+decides whether it is.
 
 **Counted from the list.** The rounds are counted from the round that accepted the latest list, so
 a list written part way through the turn restarts the count. A list an earlier turn wrote is counted
@@ -915,6 +928,11 @@ untrusted keeps no count and is not reminded. The line carries the count and the
 the tasks said. Reading the count does not take it, so the question of [TURN-12](#TURN-12) is still
 put when the planner answers.
 
+**Not where every open task waits.** A list whose open tasks are all marked waiting gets no line,
+the rule [TURN-12](#TURN-12) applies to its question. Each of those tasks is open on purpose, so the
+list is not behind. The waiting count is read through `Policy::read_trusted_content` as the open
+count is, and is compared with nothing but the open count.
+
 **Not where it cannot be acted on.** A turn not offered `todo_write`, and a request that carries no
 tools ([TURN-1](#TURN-1)), get no line.
 
@@ -925,6 +943,8 @@ cannot read, and the line is then a request spent on a list that was right.
 `verified-by: bravebot_agent::turn::the_list_reminder_counts_from_the_last_accepted_list`
 `verified-by: bravebot_agent::turn::a_list_with_nothing_open_is_not_reminded_about`
 `verified-by: bravebot_agent::turn::the_list_reminder_names_no_task`
+`verified-by: bravebot_agent::turn::a_list_whose_open_tasks_are_all_waiting_is_not_reminded_about`
+`verified-by: bravebot_agent::turn::the_list_reminder_says_how_many_open_tasks_are_waiting`
 `verified-by: bravebot_agent::turn::a_session_that_has_met_something_untrusted_is_not_reminded_about_the_list`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_the_task_list_tool_is_not_reminded_about_the_list`
 `verified-by: bravebot_agent::turn::a_turn_with_no_tools_left_is_not_reminded_about_the_list`

@@ -105,12 +105,22 @@ fn task_inks(row: &bravebot_core::todo::Row) -> (Style, Style) {
             Style::default().fg(theme::ok()),
             dim().add_modifier(Modifier::CROSSED_OUT),
         )
+    } else if row.status == bravebot_core::todo::Status::Waiting {
+        // Open on purpose: neither the ink and bold of work being done nor the dim of work nobody
+        // is doing. Its own mark keeps it apart from both under `NO_COLOR`.
+        (Style::default(), Style::default())
     } else {
         (
             Style::default().fg(theme::running()),
             Style::default().add_modifier(Modifier::BOLD),
         )
     }
+}
+
+/// Whether `row` is drawn hollow and dim: it is outstanding, no turn is running, and it is not
+/// waiting, which is open on purpose and keeps its own mark whether or not a turn runs (PANEL-10).
+fn drawn_left_open(row: &bravebot_core::todo::Row, left_open: bool) -> bool {
+    left_open && !row.struck() && row.status != bravebot_core::todo::Status::Waiting
 }
 
 /// Draw a task list beneath whatever it belongs to.
@@ -131,7 +141,7 @@ fn todo_lines(todos: &[bravebot_core::todo::Row], left_open: bool) -> Vec<Line<'
             } else {
                 "    ".to_string()
             };
-            let (glyph, marker, text) = if left_open && !row.struck() {
+            let (glyph, marker, text) = if drawn_left_open(row, left_open) {
                 (crate::panel::LEFT_OPEN_MARKER, dim(), dim())
             } else {
                 let (marker, text) = task_inks(row);
@@ -151,6 +161,7 @@ fn status_word(status: bravebot_core::todo::Status) -> &'static str {
     match status {
         Status::Pending => t!(todos_status_pending),
         Status::Active => t!(todos_status_active),
+        Status::Waiting => t!(todos_status_waiting),
         Status::Done => t!(todos_status_done),
         Status::Cancelled => t!(todos_status_cancelled),
     }
@@ -181,6 +192,7 @@ fn status_column() -> usize {
     [
         Status::Pending,
         Status::Active,
+        Status::Waiting,
         Status::Done,
         Status::Cancelled,
     ]
@@ -273,7 +285,7 @@ pub(crate) fn plan_lines(
     let room = width.saturating_sub(margin);
     plan.iter()
         .flat_map(|row| {
-            let (glyph, mark_ink, text_ink) = if left_open && !row.struck() {
+            let (glyph, mark_ink, text_ink) = if drawn_left_open(row, left_open) {
                 (crate::panel::LEFT_OPEN_MARKER, dim(), dim())
             } else {
                 let (mark_ink, text_ink) = task_inks(row);
@@ -12063,6 +12075,77 @@ mod tests {
                 assert_eq!(
                     ended[index], running[index],
                     "row {index} was drawn differently once the turn ended"
+                );
+            }
+        }
+
+        /// A task marked waiting is open on purpose, so neither the transcript's list nor the plan
+        /// `/todos` prints draws it as work being done, and neither dims it as work nobody is doing
+        /// once the turn has ended. Its mark is a glyph of its own, so it differs from the others
+        /// under `NO_COLOR` too, and it is the same whether or not a turn runs.
+        ///
+        /// Rejects: a waiting row drawn with the filled running mark and ink and bold text, one
+        /// that turns hollow and dim when the turn ends, one that shares the mark of a left-open
+        /// row, and either list drawing it unlike the other.
+        #[test]
+        fn a_waiting_task_is_drawn_with_its_own_mark_whether_or_not_a_turn_runs() {
+            let _held = crate::theme::exclusive();
+            let tasks = list(&[
+                ("working on it", Status::Active),
+                ("needs a person", Status::Waiting),
+            ]);
+
+            let running = todo_lines(&tasks, false);
+            let ended = todo_lines(&tasks, true);
+            assert_eq!(
+                ended[1], running[1],
+                "a waiting row was drawn differently once its turn ended"
+            );
+            let waiting = &running[1];
+            let active = &running[0];
+            assert_ne!(waiting.spans[1].content, active.spans[1].content);
+            assert_ne!(
+                waiting.spans[1].content,
+                format!("{} ", crate::panel::LEFT_OPEN_MARKER),
+                "a waiting row carries the mark of a row left open"
+            );
+            assert_ne!(
+                waiting.spans[1].style.fg, active.spans[1].style.fg,
+                "a waiting row has the ink of work being done"
+            );
+            assert!(
+                !waiting.spans[2].style.add_modifier.contains(Modifier::BOLD),
+                "a waiting row is bold, as work being done is"
+            );
+            assert_ne!(
+                ended[1].spans[2].style, ended[0].spans[2].style,
+                "a waiting row is dimmed as a row left open is"
+            );
+            assert!(
+                !waiting.spans[2]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "a waiting row is struck through, so it reads as no longer open"
+            );
+
+            // The plan `/todos` prints marks it the same way, and says what it is in words.
+            for left_open in [false, true] {
+                let printed = plan_lines(&tasks, left_open, 60);
+                assert_eq!(
+                    printed[1].spans[1].content.as_ref(),
+                    tasks[1].marker,
+                    "the printed plan marks a waiting row differently from the list under a turn"
+                );
+                assert_eq!(
+                    printed[1].spans[1].content.as_ref(),
+                    waiting.spans[1].content.trim(),
+                );
+                assert_eq!(printed[1].spans[1].style, waiting.spans[1].style);
+                assert!(
+                    printed[1].to_string().contains(t!(todos_status_waiting)),
+                    "the printed plan does not say waiting: {:?}",
+                    printed[1]
                 );
             }
         }

@@ -635,11 +635,11 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
         // a reply the ceiling stopped, which is the turn's answer as it stands.
         if completion.cut_off.is_none()
             && !cancel.is_cancelled()
-            && let Some(open) = open_tasks_to_ask_about(policy, conversation, state)
+            && let Some((open, waiting)) = open_tasks_to_ask_about(policy, conversation, state)
         {
             narrate_between_calls(policy, reporter, &completion.content);
             record_answer(policy, conversation, &completion.content)?;
-            ask_about_open_tasks(conversation, &mut state.reminded, open);
+            ask_about_open_tasks(conversation, &mut state.reminded, open, waiting);
             // The line a person typed as the answer arrived is meant for the turn they are
             // watching, and the request this goes on to make is its next round.
             take_interjections(task, confirmer, policy, conversation, reporter);
@@ -840,6 +840,9 @@ pub(super) fn nudges<S: Sink>(
     // the planner knows whether the list is behind. The count is left in place, so the question put
     // when the planner answers is still asked.
     //
+    // Not where every open task is marked waiting, which is the rule the question at the end of the
+    // turn applies (TURN-12): each of those tasks is open on purpose, so the list is not behind.
+    //
     // Not where the planner cannot send a list: a turn not offered `todo_write`, or one whose next
     // request carries no tools.
     if may_call_tools
@@ -849,6 +852,8 @@ pub(super) fn nudges<S: Sink>(
             .iter()
             .any(|tool| tool.function.name == "todo_write")
         && let Some(open) = open_count(policy, conversation)
+        && let waiting = waiting_count(policy, conversation, open)
+        && waiting < open
     {
         reminded.list_reminded = true;
         let rounds = steps - reminded.list_round;
@@ -856,10 +861,10 @@ pub(super) fn nudges<S: Sink>(
         conversation.push_composed_from(
             Message::user(format!(
                 "{TOOL_BUDGET_SPENT} It has been {rounds} rounds since you last wrote your task \
-                 list, which has {open} {tasks} not marked completed or cancelled, so the list \
-                 may be behind the work. Send the whole list again with todo_write, marking a \
-                 task completed where it is done and cancelled where it was dropped. If the list \
-                 is accurate, carry on."
+                 list, which has {open} {tasks} not marked completed or cancelled ({waiting} of \
+                 them marked waiting), so the list may be behind the work. Send the whole list \
+                 again with todo_write, marking a task completed where it is done and cancelled \
+                 where it was dropped. If the list is accurate, carry on."
             )),
             Composed::Notice,
             Provenance::Driver,
@@ -886,10 +891,31 @@ pub(super) fn open_count<S: Sink>(
     })
 }
 
+/// How many of the open tasks in the conversation's latest list are waiting, read through
+/// `Policy::read_trusted_content` as [`open_count`] is, and never more than `open`. Zero where there
+/// is no count or the gate refused it.
+///
+/// Carried into the question as a number and compared with nothing but `open`, which bounds it.
+pub(super) fn waiting_count<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    conversation: &Conversation,
+    open: usize,
+) -> usize {
+    conversation
+        .waiting_tasks()
+        .and_then(|count| policy.read_trusted_content("todo_write", count).ok())
+        .map_or(0, |waiting| waiting.min(open))
+}
+
 /// How many tasks the planner's latest list leaves open, where the planner is to be asked about
-/// them before the turn ends with its answer (TURN-12). `None` where it is not: no list, none
-/// open, the planner already asked this turn, no way to send a list this turn, or a list the
-/// planner was asked about that this turn did no work after.
+/// them before the turn ends with its answer (TURN-12), and how many of those are marked waiting.
+/// `None` where it is not: no list, none open, every open task marked waiting, the planner already
+/// asked this turn, no way to send a list this turn, or a list the planner was asked about that
+/// this turn did no work after.
+///
+/// A list whose open tasks are all waiting is left alone: each of them is open on purpose, and the
+/// planner has said so. The only comparison is the waiting count against the open count, both read
+/// through `Policy::read_trusted_content`.
 ///
 /// A list the planner was asked about is asked about again only by a turn that did work after it
 /// ([`Reminded::work_since_list`]), and at most once in that turn. A turn that cannot send a list
@@ -898,7 +924,7 @@ pub(super) fn open_tasks_to_ask_about<S: Sink>(
     policy: &mut Policy<'_, S>,
     conversation: &Conversation,
     state: &State,
-) -> Option<usize> {
+) -> Option<(usize, usize)> {
     if state.reminded.open_tasks
         || !state
             .offered
@@ -909,20 +935,24 @@ pub(super) fn open_tasks_to_ask_about<S: Sink>(
     {
         return None;
     }
-    open_count(policy, conversation)
+    let open = open_count(policy, conversation)?;
+    let waiting = waiting_count(policy, conversation, open);
+    (waiting < open).then_some((open, waiting))
 }
 
-/// Ask the planner to bring its task list up to date, saying how many tasks it leaves open and
-/// nothing about them.
+/// Ask the planner to bring its task list up to date, saying how many tasks it leaves open, how
+/// many of those are marked waiting, and nothing about any of them.
 ///
 /// Conditional in its wording rather than in its firing, as the reminders above are. The driver
 /// cannot tell a list the planner finished from one it left open for a reason, such as a question
 /// it put to the person, and must not try: it knows only how many tasks are open, and the planner
-/// knows whether that is wrong.
+/// knows whether that is wrong. The line names `waiting` as the way to keep a task open that waits
+/// on a person or an outside event.
 pub(super) fn ask_about_open_tasks(
     conversation: &mut Conversation,
     reminded: &mut Reminded,
     open: usize,
+    waiting: usize,
 ) {
     reminded.open_tasks = true;
     conversation.open_tasks_were_asked_about();
@@ -930,10 +960,12 @@ pub(super) fn ask_about_open_tasks(
     conversation.push_composed_from(
         Message::user(format!(
             "{TOOL_BUDGET_SPENT} Your task list still has {open} {tasks} not marked completed \
-             or cancelled. Send the whole list again with todo_write, marking a task completed \
-             where it is done and cancelled where it was dropped. If work remains, leave those \
-             tasks open and say in your answer what is left. Then give your answer again in \
-             full, since the person is shown the last one as your reply."
+             or cancelled ({waiting} of them marked waiting). Send the whole list again with \
+             todo_write, marking a task completed where it is done and cancelled where it was \
+             dropped. A task that is open because it waits on a person or an outside event is \
+             marked waiting. If work remains, leave those tasks open and say in your answer what \
+             is left. Then give your answer again in full, since the person is shown the last \
+             one as your reply."
         )),
         Composed::Notice,
         Provenance::Driver,

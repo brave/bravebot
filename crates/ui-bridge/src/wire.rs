@@ -105,6 +105,7 @@ pub fn status(status: Status) -> &'static str {
     match status {
         Status::Pending => "pending",
         Status::Active => "active",
+        Status::Waiting => "waiting",
         Status::Done => "done",
         Status::Cancelled => "cancelled",
     }

@@ -1101,7 +1101,7 @@ fn choose_rows(
         } else {
             cut_to(plan, opened, room - 2)
         };
-        if beside_the_key.to_do == 0 {
+        if beside_the_key.to_do + beside_the_key.waiting == 0 {
             return (beside_the_key, true);
         }
     }
@@ -1145,6 +1145,8 @@ struct Cut {
     shown: Vec<(usize, usize)>,
     /// Rows still to do or in progress that were left out.
     to_do: usize,
+    /// Rows marked waiting that were left out, counted apart from those still to do.
+    waiting: usize,
     done: usize,
     cancelled: usize,
 }
@@ -1207,6 +1209,7 @@ fn cut_to(
         }
         match row.status {
             Status::Pending | Status::Active => cut.to_do += 1,
+            Status::Waiting => cut.waiting += 1,
             Status::Done => cut.done += 1,
             Status::Cancelled => cut.cancelled += 1,
         }
@@ -1234,6 +1237,9 @@ fn left_out_row(cut: &Cut, width: usize) -> Option<Line<'static>> {
     let mut counts = Vec::new();
     if cut.to_do > 0 {
         counts.push(t!(panel_hidden_to_do, count = cut.to_do));
+    }
+    if cut.waiting > 0 {
+        counts.push(t!(panel_hidden_waiting, count = cut.waiting));
     }
     if cut.done > 0 {
         counts.push(t!(panel_hidden_done, count = cut.done));
@@ -1275,6 +1281,11 @@ fn plan_rows(
                 Style::default().fg(theme::ok()),
                 dim().add_modifier(Modifier::CROSSED_OUT),
             )
+        } else if row.status == Status::Waiting {
+            // Open on purpose, so neither the ink of work being done nor the dim of work nobody is
+            // doing. Its own mark, whether or not a turn runs, keeps it apart from both under
+            // `NO_COLOR`, where only the glyph differs.
+            (row.marker, Style::default(), Style::default())
         } else if left_open {
             (LEFT_OPEN_MARKER, dim(), dim())
         } else {
@@ -4478,6 +4489,56 @@ mod tests {
         );
     }
 
+    /// A row a turn left waiting is still open on purpose, so the panel gives it a mark of its own,
+    /// a different glyph from the mark of every other row and not only a different ink, since
+    /// `NO_COLOR` leaves the ink the terminal's own. The mark is the same whether or not a turn
+    /// runs, so a waiting row is not drawn as work being done and is not dimmed as work nobody is
+    /// doing once the turn ends.
+    ///
+    /// Rejects a waiting row drawn with the mark of work being done, of a row left open, or of a
+    /// finished or dropped one, and a waiting row that is dimmed or filled in once its turn ends.
+    #[test]
+    fn a_waiting_row_has_a_mark_of_its_own_whether_or_not_a_turn_runs() {
+        let _held = crate::theme::exclusive();
+        let mut rows = MIXED.to_vec();
+        rows.push(("needs a person", Status::Waiting));
+        let mut session = working_on(plan(&rows));
+        let live = plan_part(&session, 5);
+        session.complete("done", Vec::new(), 0);
+        let left = plan_part(&session, 5);
+
+        let mark = |part: &[Line<'static>], needle: &str| {
+            plan_row(part, needle).spans[0].content.trim().to_string()
+        };
+        let waiting = mark(&live, "needs a person");
+        let others = [
+            mark(&live, "working on it"),
+            mark(&live, "still to do"),
+            mark(&live, "finished it"),
+            mark(&live, "dropped it"),
+            LEFT_OPEN_MARKER.to_string(),
+            mark(&left, "working on it"),
+        ];
+        for other in &others {
+            assert_ne!(&waiting, other, "the waiting mark is also {other}");
+        }
+        assert_eq!(
+            plan_row(&left, "needs a person"),
+            plan_row(&live, "needs a person"),
+            "a waiting row was drawn differently once its turn ended"
+        );
+        let text = &plan_row(&left, "needs a person").spans[1].style;
+        assert!(
+            !text.add_modifier.contains(Modifier::CROSSED_OUT),
+            "a waiting row is struck through, so it reads as no longer open"
+        );
+        assert_ne!(
+            *text,
+            plan_row(&left, "working on it").spans[1].style,
+            "a waiting row is drawn as a row left open after its turn"
+        );
+    }
+
     /// A compaction or an aside shares the working status with a turn and does no work on the
     /// plan, so the rows it leaves outstanding stay left open while it runs.
     #[test]
@@ -4803,6 +4864,44 @@ mod tests {
         );
     }
 
+    /// Rows marked waiting are open, so a plan with some below the cut says so in words of their
+    /// own and apart from the rows still to do, and the key row does not take the place of one.
+    ///
+    /// Rejects: waiting rows left out and not counted, waiting rows counted as still to do, and a
+    /// key row drawn in the place of a waiting row because only the rows still to do were counted.
+    #[test]
+    fn the_row_that_counts_what_was_left_out_counts_waiting_rows_apart() {
+        let key = t!(panel_todos, chord = "alt-a").to_string();
+
+        let rows = plan_of(&[
+            (Status::Active, 1),
+            (Status::Pending, 9),
+            (Status::Waiting, 2),
+        ]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), (1..=9).collect::<Vec<_>>(), "{drawn:#?}");
+        let said = format!(
+            "{}, {}",
+            t!(panel_hidden_to_do, count = 1),
+            t!(panel_hidden_waiting, count = 2)
+        );
+        assert_eq!(left_out_in(&drawn), Some(said.as_str()), "{drawn:#?}");
+
+        // Only waiting rows are left out: the key row still does not take the place of one.
+        let rows = plan_of(&[(Status::Pending, 8), (Status::Waiting, 3)]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), (1..=9).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(t!(panel_hidden_waiting, count = 2).to_string().as_str()),
+            "{drawn:#?}"
+        );
+        assert!(
+            drawn.iter().all(|row| !row.contains(&key)),
+            "the key row took the place of a waiting row: {drawn:#?}"
+        );
+    }
+
     /// Rows left over after the rows still to do go to the finished rows nearest the first of
     /// them, drawn in the plan's order, so what was last done is beside what comes next. Of two
     /// rows as near, the earlier is taken first. A plan with nothing left to do shows its last
@@ -5092,6 +5191,7 @@ mod tests {
         match status {
             Status::Done => t!(todos_status_done),
             Status::Active => t!(todos_status_active),
+            Status::Waiting => t!(todos_status_waiting),
             Status::Pending => t!(todos_status_pending),
             Status::Cancelled => t!(todos_status_cancelled),
         }
@@ -5736,6 +5836,7 @@ mod tests {
                 let word = match status {
                     Status::Done => t!(todos_status_done),
                     Status::Active => t!(todos_status_active),
+                    Status::Waiting => t!(todos_status_waiting),
                     Status::Pending => t!(todos_status_pending),
                     Status::Cancelled => t!(todos_status_cancelled),
                 };

@@ -117,6 +117,10 @@
    row, but its hollow mark (the marker's own default ink) keeps it apart from `done` and
    `cancelled`, since nobody struck it. */
 .todos li.left-open { color: var(--ink-tertiary); }
+/* A row waiting on a person or an outside event: open on purpose, so it is neither struck nor
+   dimmed as abandoned, and not the running row's accent. Its icon and warning ink set it apart from
+   `done` (success) and `active` (accent). */
+.todos li.waiting .marker { color: var(--status-warning); }
 
 /* A note is the person's own words, so it keeps its line breaks and wraps rather than truncating. */
 .notes li {

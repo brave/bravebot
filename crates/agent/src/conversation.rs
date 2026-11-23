@@ -481,6 +481,10 @@ pub struct Conversation {
     /// since written is asked about afresh. Not part of a [`Snapshot`], for the reason `task_list`
     /// is not.
     open_tasks: Option<Labelled<usize>>,
+    /// How many of the tasks `open_tasks` counts are waiting on something outside the planner's
+    /// hands (TURN-12). Counted and labelled as `open_tasks` is, replaced with it, and read only
+    /// through `Policy::read_trusted_content`.
+    waiting_tasks: Option<Labelled<usize>>,
     /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in answer
     /// to being asked or reminded. A list asked about is asked about again only by a turn that did
     /// work since it (TURN-12).
@@ -633,6 +637,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            waiting_tasks: None,
             open_tasks_asked: false,
             carried_task_list: None,
             task_at: None,
@@ -929,6 +934,19 @@ impl Conversation {
     pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, in_answer: bool) {
         self.open_tasks = open;
         self.open_tasks_asked = in_answer;
+    }
+
+    /// Record how many of the open tasks the list counted by [`Conversation::open_tasks_counted`]
+    /// are waiting, as the kernel counted them and labelled as the list is. Called with that call,
+    /// and with `None` where it was.
+    pub fn waiting_tasks_counted(&mut self, waiting: Option<Labelled<usize>>) {
+        self.waiting_tasks = waiting;
+    }
+
+    /// The count of waiting tasks in the planner's latest list, left in place. Labelled as the list
+    /// is: the caller reads it with `Policy::read_trusted_content`.
+    pub fn waiting_tasks(&self) -> Option<&Labelled<usize>> {
+        self.waiting_tasks.as_ref()
     }
 
     /// The count of open tasks in the planner's latest list, left in place.
@@ -2195,6 +2213,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            waiting_tasks: None,
             open_tasks_asked: false,
             carried_task_list: None,
             task_at: None,

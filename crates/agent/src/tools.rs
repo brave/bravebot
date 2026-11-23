@@ -227,6 +227,9 @@ pub struct Output {
     /// Counted inside the kernel and labelled as the list is, so the turn holds a number it may
     /// read only through [`Policy::read_trusted_content`].
     pub task_list: Option<Labelled<usize>>,
+    /// How many of the open tasks in `task_list` are waiting, counted and labelled as it is, and
+    /// read only through [`Policy::read_trusted_content`]. `Some` exactly where `task_list` is.
+    pub waiting_tasks: Option<Labelled<usize>>,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -1927,6 +1930,9 @@ struct Produced {
     /// about the call rather than anything the turn reads out of `text`, so it can record where
     /// the list sits, and how much of it is open, without reading it.
     task_list: Option<Labelled<usize>>,
+    /// How many of the open tasks in `task_list` wait on something outside the planner's hands,
+    /// counted and labelled as `task_list` is. `Some` exactly where `task_list` is.
+    waiting_tasks: Option<Labelled<usize>>,
     /// Whether `text` is workspace content rather than the driver's own words about the call.
     ///
     /// What the kernel does with a result is worth reporting only where the result is content:
@@ -2044,6 +2050,7 @@ impl Produced {
             glimpsed: None,
             window: None,
             task_list: None,
+            waiting_tasks: None,
             content: false,
             usage: Usage::default(),
             usage_is_unbudgeted: false,
@@ -3613,6 +3620,7 @@ fn output_of(
         glimpsed: produced.glimpsed,
         window: produced.window,
         task_list: produced.task_list,
+        waiting_tasks: produced.waiting_tasks,
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
@@ -8335,9 +8343,13 @@ fn todo_write<S: Sink, R: Reporter>(
     // trusted: whether to say something to the planner is a decision, and a decision may not come
     // from content that is not.
     let open = policy.render_in_place("todo_write", &list, |list| list.open());
+    // And how many of those wait on something outside the planner's hands, counted and labelled the
+    // same way, so the question can say so without saying what any task was.
+    let waiting = policy.render_in_place("todo_write", &list, |list| list.waiting());
 
     let mut produced = Produced::new(summary, "", note);
     produced.task_list = Some(open);
+    produced.waiting_tasks = Some(waiting);
     produced
 }
 
@@ -23411,6 +23423,35 @@ mod tests {
                 "'{name}' is advertised but does not round-trip"
             );
         }
+    }
+
+    /// The planner can only choose `waiting` if the schema enumerates it and says what it means:
+    /// open, with the next step not the planner's.
+    #[test]
+    fn the_todo_schema_offers_waiting_and_says_what_it_means() {
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "todo_write")
+        .expect("todo_write is offered");
+        let status =
+            &tool.function.parameters["properties"]["todos"]["items"]["properties"]["status"];
+        let advertised: Vec<&str> = status["enum"]
+            .as_array()
+            .expect("the statuses are enumerated")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        assert!(advertised.contains(&"waiting"), "{advertised:?}");
+        let description = status["description"].as_str().expect("a description");
+        assert!(
+            description.contains("waiting") && description.contains("still open"),
+            "{description}"
+        );
     }
 
     /// Nothing is touched, so there is no field for a person to approve: the list is the whole of

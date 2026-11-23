@@ -86,7 +86,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 10 | a file of hosts, statuses, counts and fixed words, never content, for a person to attach to a bug report, and the bug report that names it, from the terminal or the desktop app, and a failure of the desktop window's page |
 | [trace.md](trace.md) | `TRACE` | 12 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
-| [acp.md](acp.md) | `ACP` | 10 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, what a failed turn says, and the settings keys a new session names |
+| [acp.md](acp.md) | `ACP` | 11 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, what a failed turn says, the settings keys a new session names, and how a waiting task is shown |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 22 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
@@ -121,7 +121,7 @@ the routing-versus-content split they share.
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 5 | `load_skill` |
 | [tools/search-skills.md](tools/search-skills.md) | `FINDSKILL` | 4 | `search_skills` |
-| [tools/todo-write.md](tools/todo-write.md) | `TODO` | 3 | `todo_write` |
+| [tools/todo-write.md](tools/todo-write.md) | `TODO` | 4 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
 | [tools/ask-user.md](tools/ask-user.md) | `ASK` | 13 | `ask_user` |

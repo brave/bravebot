@@ -1352,16 +1352,21 @@ Records the task list for what the planner is doing.
 
 The whole list every time: it replaces the previous one. There is no routing here, because nothing is
 touched. An unrecognised status reads as outstanding work. A task marked `cancelled` is struck
-through and counted apart from the finished ones.
+through and counted apart from the finished ones. A task marked `waiting` is still open, but its
+next step is not the planner's, such as one that needs a person or an outside event. It is not
+struck through, not drawn as work being done and not dimmed as left open, and it is counted apart
+from the finished ones.
 
 A turn whose last list still has a task pending or in progress when the planner answers is not
-ended there. The planner is told how many tasks are open, and nothing about them, and is asked to
-send the list again with each task marked completed or cancelled. Where work remains it leaves the
+ended there, unless every open task is marked waiting. The planner is told how many tasks are open
+and how many of those are waiting, and nothing about them, and is asked to send the list again with
+each task marked completed, cancelled or waiting. Where work remains it leaves the
 tasks open and says in its answer what is left. This happens at most once in a turn: a list the planner
 sends in answer to the question is not asked about again in that turn. A later turn asks about the
 same list again only if it did work after the list: it ran many rounds, changed a file or ran a
 program. A turn that only read, or answered at once, is not asked. A long turn that leaves the list
-untouched is also reminded part way through, with the number of open tasks and nothing about them. A list the
+untouched is also reminded part way through, with the number of open tasks, how many of them are
+waiting and nothing about them, unless every open task is waiting. A list the
 planner wrote in a session that has read something untrusted is not counted. A reply that stopped at
 the output limit ends the turn as it stands.
 
