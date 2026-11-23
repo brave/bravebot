@@ -10342,7 +10342,12 @@ mod tests {
     #[test]
     fn a_person_cannot_arm_a_watch_under_a_loop_or_a_goal_and_is_told_how_to_clear_it() {
         let mut under_a_loop = session();
-        under_a_loop.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        under_a_loop.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         under_a_loop.arm_watch_by_person("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_loop.watches().is_empty());
         assert!(under_a_loop.looping().is_some(), "the person's loop ended");
