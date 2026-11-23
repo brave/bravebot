@@ -7414,12 +7414,36 @@ mod tests {
         let session_file = state.join("sessions/-repo/record.json");
         std::fs::write(&session_file, "{}").expect("record");
 
-        let remedy = |path: &Path| match workspace.resolve(path.to_str().expect("utf8")) {
-            Err(WorkspaceError::Escapes { remedy, .. }) => remedy,
+        let refused = |path: &Path| match workspace.resolve(path.to_str().expect("utf8")) {
+            Err(error @ WorkspaceError::Escapes { .. }) => error,
             other => panic!("{}: expected Escapes, got {other:?}", path.display()),
         };
-        assert_eq!(remedy(&state.join("AGENTS.md")), Remedy::StateDirectory);
-        assert_eq!(remedy(&session_file), Remedy::StateDirectorySessions);
+        let rules = refused(&state.join("AGENTS.md"));
+        assert!(
+            matches!(
+                rules,
+                WorkspaceError::Escapes {
+                    remedy: Remedy::StateDirectory,
+                    ..
+                }
+            ),
+            "{rules:?}"
+        );
+        let sessions = refused(&session_file);
+        assert!(
+            matches!(
+                sessions,
+                WorkspaceError::Escapes {
+                    remedy: Remedy::StateDirectorySessions,
+                    ..
+                }
+            ),
+            "{sessions:?}"
+        );
+        assert!(
+            sessions.to_string().contains("session records"),
+            "{sessions}"
+        );
     }
 
     #[test]
@@ -8876,6 +8900,7 @@ mod tests {
         std::os::unix::fs::symlink(&beside, project.join("out")).expect("link");
         let state = home.join(".bravebot");
         std::fs::create_dir_all(state.join("facts")).expect("facts");
+        std::fs::create_dir_all(state.join("sessions")).expect("sessions");
         let mut workspace = Workspace::new(&project)
             .expect("workspace")
             .with_state(&state);
@@ -8892,6 +8917,12 @@ mod tests {
         assert_eq!(
             destination_remedy(&workspace, &state.join("facts/x.md")),
             Remedy::StateDirectory
+        );
+        // The session records get their own remedy, so this still fails once
+        // state_directory_remedy stops telling them apart from facts and rules.
+        assert_eq!(
+            destination_remedy(&workspace, &state.join("sessions/s.json")),
+            Remedy::StateDirectorySessions
         );
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
     }
