@@ -102,7 +102,7 @@ export async function sendSummonedTurn(
   session: string,
   summoned: Bot,
   prompt: string,
-  options: { model?: string | null; attachments?: unknown; drops?: unknown; pastes?: unknown },
+  options: { model?: string | null; attachments?: unknown; drops?: unknown; pastes?: unknown; shown?: unknown },
 ): Promise<Answer> {
   const { request } = services
   if (!request) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
@@ -136,6 +136,8 @@ export async function sendSummonedTurn(
   // A new id for this send, which the agent requires on every send (RPCVIEW-10).
   const params: Record<string, unknown> = { session, prompt, address: summoned.definition, messageId: randomUUID() }
   if (hosting?.definition) params.definition = hosting.definition
+  // The line as the window's box showed it, where the bridge reads the `@` names (NAME-12).
+  if (typeof options.shown === 'string') params.shown = options.shown
   const selectedModel = hosting?.model ?? options.model
   if (selectedModel !== undefined) params.model = selectedModel
   services.summoning.begin(session, {

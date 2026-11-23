@@ -87,3 +87,45 @@ Rust behavior and reuses existing UI code.** Reach the owning Rust crates throug
 A new component, hook, helper, or constant uses and, where needed, extends the existing UI
 implementation instead of copying it. Window-only behavior such as layout, focus, animation,
 and menu wiring stays in `ui/`.
+
+---
+
+<a id="UI-007"></a>
+
+## An effect ignores a late result after its dependencies change
+
+**A `useEffect` that sets state from an async call returns a cleanup that marks the call stale, and
+sets state from the result, the error or a `.finally` only while the call is not stale.** Without
+the cleanup, a slow reply for the previous key or session arrives after the dependencies changed
+and replaces the newer state.
+
+A reviewer checks each effect a diff adds or changes that sets state from a `.then`, a `.catch`, a
+`.finally` or an `await`, directly or in an async function it calls, when its dependency array
+holds a value the answer depends on. The convention in the tree is a local flag named `live`,
+`gone`, `current` or `cancelled`. The flag guards every state update the call makes, including a
+`.finally` that clears a loading flag.
+
+```tsx
+// Wrong: a reply for the previous `id` can arrive last and overwrite the current one.
+useEffect(() => { void load(id).then(setData).catch(setProblem) }, [id])
+
+// Right: the cleanup marks the earlier call stale, for the result and for the error.
+useEffect(() => {
+  let live = true
+  void load(id)
+    .then((data) => { if (live) setData(data) })
+    .catch((error) => { if (live) setProblem(error) })
+  return () => { live = false }
+}, [id])
+```
+
+These need no flag:
+
+- a call whose result does not depend on a value in the dependency array;
+- an effect that awaits nothing and whose cleanup unsubscribes;
+- an effect whose completion has to run for the call that started it, whichever call is current,
+  such as the queue effect in `ui/src/renderer/use-turn.ts` that clears `dequeuing` and refreshes
+  the lives in a `.finally`.
+
+**Why:** the view shows data for a key it no longer holds, and nothing in the UI shows that the data
+is stale.

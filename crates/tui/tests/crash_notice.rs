@@ -13,9 +13,9 @@ use bravebot_backtrace::{Process, begin};
 /// build with nowhere to send them and an incognito session are all this launch, and a line about
 /// something that is not happening would be a false alarm.
 ///
-/// Then the first launch that does report says it, and names both ways of turning it off, and no
-/// launch after it says it again. The second launch is the same state directory with a new
-/// process, which is what the file left behind stands for.
+/// Then the first launch that does report says it, and names the command, the key and the variable
+/// that turn it off, and no launch after it says it again. The second launch is the same state
+/// directory with a new process, which is what the file left behind stands for.
 #[test]
 fn the_first_launch_that_reports_says_so_once_and_a_launch_that_does_not_says_nothing() {
     assert_eq!(
@@ -33,6 +33,7 @@ fn the_first_launch_that_reports_says_so_once_and_a_launch_that_does_not_says_no
     );
 
     let line = bravebot_tui::crash_notice::at_startup().expect("the first launch said nothing");
+    assert!(line.contains("/crash-reports off"), "{line}");
     assert!(line.contains("crashReports"), "{line}");
     assert!(line.contains("BRAVEBOT_CRASH_REPORTS=0"), "{line}");
     assert!(line.contains("Brave"), "{line}");

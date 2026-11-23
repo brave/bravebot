@@ -53,6 +53,10 @@ pub struct Commanded {
     ///
     /// What a delay in the line counts from ([LOOP-18](../../../../docs/specs/loop.md#LOOP-18)).
     pub typed_at: std::time::Instant,
+    /// Where the turn this command may begin reads its `@` names from: the line the box showed,
+    /// or nothing for a command nobody typed in the box. Required, so a place that builds a
+    /// command says which (NAME-12).
+    pub names: NamesFrom,
 }
 
 /// A thumbnail of a dropped picture, read for the screen and for nothing else.
@@ -191,6 +195,7 @@ pub fn without_text_files(commanded: Commanded) -> Commanded {
         pasted: commanded.pasted,
         attached: carried,
         typed_at: commanded.typed_at,
+        names: commanded.names,
     }
 }
 
@@ -304,25 +309,75 @@ impl Session {
     /// there to keep a stack trace from taking the screen while somebody is typing around it, and
     /// a marker that outlived the line would be a handle on words this session is the only one
     /// holding.
+    ///
+    /// One pass from the start of the line, taking the marker that comes first each time, so the
+    /// words a marker is replaced with are never searched for another marker. A paste that holds the
+    /// text of another paste's marker is sent as it was pasted.
     pub fn unfolded(&self, line: &str) -> String {
-        let mut line = line.to_string();
-        for pasted in &self.pasted_text {
-            line = line.replace(&pasted.marker, &pasted.text);
+        let mut words = String::with_capacity(line.len());
+        let mut rest = line;
+        while let Some((at, pasted)) = self
+            .pasted_text
+            .iter()
+            .filter_map(|pasted| rest.find(&pasted.marker).map(|at| (at, pasted)))
+            .min_by_key(|(at, _)| *at)
+        {
+            let (before, from_marker) = rest.split_at(at);
+            words.push_str(before);
+            words.push_str(&pasted.text);
+            rest = from_marker.split_at(pasted.marker.len()).1;
         }
-        line
+        words.push_str(rest);
+        words
     }
 
-    /// A line with every paste in it put back behind the marker that stood for it.
+    /// A line with every paste in it put back behind the marker that stood for it, found by
+    /// looking for the text of each paste in the line.
     ///
     /// The inverse, for a line coming back to the box after a turn was stopped. What returns is
     /// the line as it was typed, because the box is where a long paste takes the screen and
     /// somebody who has just stopped a turn is about to edit the prompt, not read it.
+    ///
+    /// A search of the words and not a record of the line, so it cannot tell a paste from the same
+    /// words typed, and it cannot find a paste whose trailing whitespace was trimmed from the words.
+    /// It puts a stopped turn's line back in the box and decides no name: [`NamesFrom`] is the line a
+    /// turn reads its names from. The longest text goes first, so a paste that holds
+    /// another paste's text is put back as a whole and its words are not left standing beside the
+    /// shorter paste's marker.
     pub fn folded(&self, line: &str) -> String {
+        let mut longest_first: Vec<&PastedText> = self.pasted_text.iter().collect();
+        longest_first.sort_by_key(|pasted| std::cmp::Reverse(pasted.text.len()));
         let mut line = line.to_string();
-        for pasted in &self.pasted_text {
+        for pasted in longest_first {
             line = line.replace(&pasted.text, &pasted.marker);
         }
         line
+    }
+
+    /// The line the box held, for the turn about to begin, in the form a stopped turn puts back.
+    ///
+    /// Only where the line was all of what the turn was sent, so a command's argument is not put
+    /// back with the command word in front of it.
+    pub(super) fn shown_exactly(&self, prompt: &str) -> Option<String> {
+        self.turn_names
+            .the_line()
+            .filter(|shown| self.unfolded(shown) == prompt)
+            .map(str::to_string)
+    }
+
+    /// Where a command nobody typed in the box reads its names from: the words of a click's line,
+    /// while the session holds no folded paste, and nothing once it holds one.
+    ///
+    /// Such a line has no box line to keep, so nothing says which of its words were typed. While the
+    /// session holds no paste every word is a typed one or the program's own, and the line is read
+    /// as it always was. Once the session holds a paste, any word could have come from it, and the
+    /// line names nothing. The words are not searched for a paste's text (NAME-12).
+    pub fn names_from_words_nobody_pasted(&self, words: &str) -> NamesFrom {
+        if self.pasted_text.is_empty() {
+            NamesFrom::the_box_line(words)
+        } else {
+            NamesFrom::nothing()
+        }
     }
 
     /// A line in the form worth remembering, with every marker settled.
@@ -643,6 +698,9 @@ impl Session {
         let pasted = self.pasted_named(&typed);
         let attached = self.attachments_named(&typed);
         let line = self.unfolded(&typed);
+        // The turn a command may begin with its argument reads its names from the line as the box
+        // showed it, which is this one before its markers are settled.
+        let names = NamesFrom::the_box_line(typed.clone());
         self.remember(recalled(&line).trim());
         self.settle_staged();
         // Not through [`Session::clear_input`], which keeps a line typed mid-turn: a command carried
@@ -653,6 +711,7 @@ impl Session {
             pasted,
             attached,
             typed_at: std::time::Instant::now(),
+            names,
         }
     }
 
@@ -675,11 +734,12 @@ impl Session {
             line: put_back_to_words(
                 &put_back_to_names(&commanded.line, &commanded.attached),
                 &commanded.pasted,
-                "a picture cannot join that command",
+                bravebot_filetype::markers::A_PICTURE_CANNOT_JOIN_A_COMMAND,
             ),
             pasted: Vec::new(),
             attached: Vec::new(),
             typed_at: commanded.typed_at,
+            names: commanded.names,
         }
     }
 

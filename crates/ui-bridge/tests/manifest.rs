@@ -581,6 +581,67 @@ fn a_declined_plan_runs_nothing_and_can_still_be_read() {
     assert_eq!(front.recorded_runs(&scratch), vec![record.to_string()]);
 }
 
+/// SESSION-28: a desktop plan run keeps no backups, so before one begins every rewind point the
+/// session holds records a desktop coverage gap. The plan is declined, so the gap is shown to be
+/// recorded when the run begins and not when it ends well.
+///
+/// Rejects a run that records no gap, one that records it only once the plan is approved, one that
+/// marks only the newest point, and one that marks the points a later turn opens.
+#[test]
+fn a_plan_run_marks_every_rewind_point_the_session_holds_as_uncovered_by_the_desktop() {
+    let scratch = Scratch::new("bridge-manifest-desktop-gap");
+    let (endpoint, rounds) = scripted_planner(vec![
+        json!({"content": "done"}),
+        json!({"content": "done"}),
+        json!({"content": "1. Write the notes file with a fixed body."}),
+        json!({"content": json!({"steps": [{"capability": "FILE_WRITE",
+            "args": {"path": TARGET, "contents": WRITTEN}}]}).to_string()}),
+    ]);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    // The gaps of every point a finished turn reports, newest first.
+    let turn = |front: &mut FrontEnd, prompt: &str| -> Vec<Value> {
+        front.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
+        let ended = front.question_or_the_end();
+        assert_eq!(ended["event"], "turn.done", "{ended}");
+        ended["data"]["rewind"]
+            .as_array()
+            .expect("the points the turn left")
+            .iter()
+            .map(|point| point["gaps"].clone())
+            .collect()
+    };
+
+    assert_eq!(turn(&mut front, "first"), [json!([])]);
+    assert_eq!(
+        turn(&mut front, "second"),
+        [json!([]), json!([])],
+        "a turn marked a point before any run began"
+    );
+
+    let question = front.plan(&session);
+    front.reply("manifest.reply", &session, &question, "reject");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    assert_eq!(scratch.written(), None, "a declined plan wrote a file");
+
+    assert_eq!(
+        turn(&mut front, "third"),
+        [json!([]), json!(["desktop"]), json!(["desktop"])],
+        "the points held when the run began are marked, newest first, and the one opened after it \
+         is not"
+    );
+    assert_eq!(
+        rounds.try_iter().count(),
+        5,
+        "the script did not line up with the calls the turns and the plan made"
+    );
+}
+
 /// A run the person stopped is not written down, whether the stop arrived at the plan question
 /// or later (MANIFEST-11).
 #[test]

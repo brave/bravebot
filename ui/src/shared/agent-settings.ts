@@ -12,12 +12,18 @@ export interface HooksDocument { path: string; text: string | null; entire: bool
 export interface TimeoutRange { min: number; max: number; defaultFor: Record<Hook['on'], number> }
 /** A refusal that only ever narrows: `value` is null where nothing named it, `path` the weakest file that did. */
 export interface Refusal { value: boolean | null; path: string | null; managed: boolean }
-/** What the settings in force say about the two refusing keys and the run limits. A null limit is the agent's built-in figure. */
+/** A session spend limit, in the shape `session.limit` answers with. */
+export interface SpendFigure { unit: 'tokens' | 'credits'; count: number }
+/** What the settings in force say about the two refusing keys, the run limits and the session
+ * spend limit. A null run limit is the agent's built-in figure. A null session limit is no limit,
+ * and `path` is the file whose figure is in force. */
 export interface Limits {
   readsStayInWorkspace: Refusal
   bypassUnreachable: Refusal
   unreadable: { name: string; path: string }[]
   run: { defaultSeconds: number | null; maxSeconds: number | null; maxOutput: number | null }
+  /** Absent when an older agent built the report. */
+  session?: { limit: SpendFigure | null; path: string | null }
 }
 export interface AgentSettings {
   build: string; configured: boolean; problem: string | null; model: string | null
@@ -31,6 +37,9 @@ export interface AgentSettings {
   ignored?: { name: string; path: string }[]
   /** Absent when an older agent built the report. */
   limits?: Limits
+  /** The diagnostic log directory, which may hold no file yet, and whether this process writes a
+   * log there. A null directory is no state directory. Absent when an older agent built the report. */
+  logs?: { directory: string | null; writing: boolean }
   managed: { path: string | null; keys: string[] }
   network: { roots: string[]; problem: string | null; trustsNothing: boolean; proxy: string | null; authenticated: boolean; unusableProxy: string | null; noProxy: string | null }
 }

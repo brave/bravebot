@@ -20,9 +20,10 @@
 //! decision taken against a question nobody matched is worse than no decision at all.
 
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
-    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HookRequest, HostRequest,
+    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+    RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+    WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -82,6 +83,9 @@ pub enum ToMain {
     /// Programs a line started asked for hosts the allowed-hosts list does not cover. The main
     /// thread must reply.
     Host(HostRequest),
+    /// A plugin's hook is about to fire for the first time in this session. The main thread must
+    /// reply (PLUGIN-7).
+    Hook(HookRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -169,6 +173,7 @@ pub enum Reply {
     Move(Decision),
     Path(Decision),
     Host(Decision),
+    Hook(Decision),
     Ask(Vec<Answer>),
 }
 
@@ -319,6 +324,20 @@ impl Confirmer for RemoteConfirmer {
     fn confirm_host(&mut self, request: &HostRequest) -> Decision {
         match self.exchange(ToMain::Host(request.clone())) {
             Some(Reply::Host(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    /// A worker in a terminal session has a main thread that draws the question.
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    /// A reply to any other question is not an answer to this one. A yes to a write is not consent
+    /// to start a program the plugin carries.
+    fn confirm_hook(&mut self, request: &HookRequest) -> Decision {
+        match self.exchange(ToMain::Hook(request.clone())) {
+            Some(Reply::Hook(decision)) => decision,
             _ => Decision::Reject,
         }
     }
@@ -1245,6 +1264,7 @@ mod tests {
                     ToMain::Move(_) => seen.push("move"),
                     ToMain::Path(_) => seen.push("path"),
                     ToMain::Host(_) => seen.push("host"),
+                    ToMain::Hook(_) => seen.push("hook"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::References(_) => seen.push("references"),
                     ToMain::Spent(_) => seen.push("spent"),

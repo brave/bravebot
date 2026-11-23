@@ -1098,6 +1098,17 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.inner.can_ask_about_a_hook()
+    }
+
+    /// Always the person's. No mode answers whether a plugin's hook may fire, bypassing every check
+    /// included, for the reason none answers the install prompt (PLUGIN-4, PLUGIN-7): the question
+    /// has no mode in its request and [`Unasked`] holds no answer for it.
+    fn confirm_hook(&mut self, request: &crate::confirm::HookRequest) -> Decision {
+        self.asking().confirm_hook(request)
+    }
+
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
     /// invented here would be reported to the model as the user's own words.
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
@@ -1621,6 +1632,140 @@ mod tests {
         // The inner confirmer's answer, whatever it is, rather than one this decided.
         assert_eq!(confining.confirm_write(&a_write()), WriteDecision::reject());
         assert!(!confining.confirm_run(&a_run()).approved());
+    }
+
+    /// Approves every write, run, command output, vetted read and vouch it is asked and counts each
+    /// one; refuses everything else. Every other question is the one the double `ShownWrites` makes
+    /// of it.
+    #[derive(Default)]
+    struct ApprovesAndCounts {
+        writes: usize,
+        runs: usize,
+        outputs: usize,
+        vetted_reads: usize,
+        vouches: usize,
+    }
+
+    impl Confirmer for ApprovesAndCounts {
+        fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
+            self.writes += 1;
+            WriteDecision::approve()
+        }
+        fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+            self.runs += 1;
+            RunDecision::approve()
+        }
+        fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+            self.outputs += 1;
+            Decision::Approve
+        }
+        fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+            self.vetted_reads += 1;
+            Decision::Approve
+        }
+        fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+            self.vouches += 1;
+            Decision::Approve
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_path(&mut self, _request: &crate::confirm::PathRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
+            Decision::Reject
+        }
+        fn confirm_message(
+            &mut self,
+            _request: &crate::confirm::MessageRequest,
+        ) -> crate::confirm::MessageDecision {
+            crate::confirm::MessageDecision::Decline
+        }
+        fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+            Unattended.confirm_move(request)
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    /// MODE-1: asking puts a write, a run, a command's output, a file nobody vouched for and the
+    /// offer to vouch to the person. The inner confirmer approves everything it is asked, so each
+    /// question is answered only if the mode passed it on: the inner confirmer was asked once for
+    /// each and its yes is what comes back. A mode that answered one of them itself, with a refusal
+    /// or with a yes, would leave the count at 0 or return its own answer.
+    ///
+    /// The test above wraps `Unattended`, which refuses, so a mode that refused a write itself
+    /// returns the same answer and passes it. This one approves behind the mode.
+    ///
+    /// Rejects `Unasked::write` refusing under asking (as plan mode does) and the same for each
+    /// other question.
+    #[test]
+    fn asking_puts_a_write_a_run_an_output_a_file_and_a_vouch_to_the_person() {
+        let mut approving = ApprovesAndCounts::default();
+        let mut confining = Confining::new(&mut approving, PermissionMode::Ask, false);
+
+        assert_eq!(
+            confining.confirm_write(&a_write()),
+            WriteDecision::approve(),
+            "a write was not put to the person: the mode answered it"
+        );
+        assert!(
+            confining.confirm_run(&a_run()).approved(),
+            "a run was not put to the person: the mode answered it"
+        );
+        assert_eq!(
+            confining.confirm_read_output(&an_output(Verdict::Safe)),
+            Decision::Approve,
+            "a command's output was not put to the person: the mode answered it"
+        );
+        assert_eq!(
+            confining.confirm_vetted_read(&a_vetted_read(Verdict::Safe)),
+            Decision::Approve,
+            "a file nobody vouched for was not put to the person: the mode answered it"
+        );
+        assert_eq!(
+            confining.confirm_vouch(&a_vouch(Verdict::Safe)),
+            Decision::Approve,
+            "the offer to vouch was not put to the person: the mode answered it"
+        );
+
+        assert_eq!(
+            (
+                approving.writes,
+                approving.runs,
+                approving.outputs,
+                approving.vetted_reads,
+                approving.vouches
+            ),
+            (1, 1, 1, 1, 1),
+            "each question was not put to the confirmer behind the mode exactly once"
+        );
     }
 
     /// The whole of what accepting edits buys, and the whole of what it does not: a write goes
@@ -2229,6 +2374,58 @@ mod tests {
             destination: "https://elsewhere.example/mcp".to_string(),
             authority: "elsewhere.example:443".to_string(),
             may_record: true,
+        }
+    }
+
+    /// PLUGIN-7, S31: no mode answers whether a plugin's hook may fire. Bypassing every check
+    /// answers a write and a run, and this question still reaches the confirmer behind it: a
+    /// refusing person is not overridden, an agreeing one is asked exactly once, and a confirmer
+    /// nobody can ask says so through the mode.
+    ///
+    /// Rejects: a mode that answers the hook question yes unasked, and a wrapper that does not pass
+    /// on whether anybody can be asked.
+    #[test]
+    fn no_mode_answers_the_question_about_a_plugins_hook() {
+        use crate::confirm::{AnswersHooks, HookRequest};
+        let request = HookRequest {
+            plugin: "demo".to_string(),
+            moment: "turn-started",
+            argv: vec!["/p/hook.sh".to_string()],
+            records: true,
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+        ] {
+            let mut refuses = AnswersHooks::new(Decision::Reject);
+            let mut confining = Confining::new(&mut refuses, mode, false);
+            assert!(confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
+            assert_eq!(refuses.asked.len(), 1, "{mode:?} did not put the question");
+
+            let mut agrees = AnswersHooks::new(Decision::Approve);
+            assert_eq!(
+                Confining::new(&mut agrees, mode, false).confirm_hook(&request),
+                Decision::Approve,
+                "{mode:?}"
+            );
+            assert_eq!(agrees.asked.len(), 1, "{mode:?}");
+
+            let mut nobody = Unattended;
+            let mut confining = Confining::new(&mut nobody, mode, false);
+            assert!(!confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
         }
     }
 

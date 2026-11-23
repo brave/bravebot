@@ -29,7 +29,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use std::cell::Cell;
 use std::sync::mpsc;
 
-use crate::list_picker::Placed;
+use crate::list_picker::{self, Placed};
 use crate::select::{self, Click};
 use crate::theme;
 use crate::wrap::display_width;
@@ -811,15 +811,18 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
     // The footer is what Enter and Tab do in the scope in force, then the keys that do not depend
     // on it. The scope has its own row because both of them with the keys are wider than the widest
     // panel, and it takes a second row where the panel is too narrow for the scope alone.
-    let mut footer: Vec<Line> = scope_rows(picker.scope, scope_room(area.width))
-        .into_iter()
-        .map(|row| {
-            Line::from(Span::styled(
-                format!(" {row}"),
-                Style::default().fg(theme::text()),
-            ))
-        })
-        .collect();
+    let mut footer: Vec<Line> = list_picker::scope_rows(
+        &scope_keys(picker.scope),
+        list_picker::scope_room(area.width),
+    )
+    .into_iter()
+    .map(|row| {
+        Line::from(Span::styled(
+            format!(" {row}"),
+            Style::default().fg(theme::text()),
+        ))
+    })
+    .collect();
     footer.push(Line::from(Span::styled(
         format!(" {}", t!(model_picker_keys)),
         Style::default().fg(theme::muted()),
@@ -845,41 +848,9 @@ fn scope_keys(scope: Scope) -> String {
     .to_string()
 }
 
-/// The columns a footer row has in a panel `panel_width` wide: inside the border, less the space
-/// each row starts with.
-fn scope_room(panel_width: u16) -> usize {
-    usize::from(panel_width).saturating_sub(3)
-}
-
-/// The rows [`scope_keys`] is drawn on in `room` columns: one where it fits, and otherwise the
-/// Enter half and the Tab half packed onto as few rows as hold them whole, so the half that names
-/// how to leave the scope is not the one a narrow terminal cuts off.
-fn scope_rows(scope: Scope, room: usize) -> Vec<String> {
-    let line = scope_keys(scope);
-    if display_width(&line) <= room {
-        return vec![line];
-    }
-    let mut rows: Vec<String> = Vec::new();
-    for half in line
-        .split('·')
-        .map(str::trim)
-        .filter(|half| !half.is_empty())
-    {
-        match rows.last_mut() {
-            Some(row) if display_width(row) + 3 + display_width(half) <= room => {
-                row.push_str(" · ");
-                row.push_str(half);
-            }
-            _ => rows.push(half.to_string()),
-        }
-    }
-    rows
-}
-
 /// How many rows the footer takes in a panel `panel_width` wide: the scope rows and the keys row.
 fn footer_height(scope: Scope, panel_width: u16) -> u16 {
-    let rows = scope_rows(scope, scope_room(panel_width)).len();
-    u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(1)
+    list_picker::footer_height(Some(scope_keys(scope).as_str()), panel_width)
 }
 
 /// One drawn row of the list.

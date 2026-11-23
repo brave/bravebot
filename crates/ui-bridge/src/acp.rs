@@ -51,9 +51,10 @@ struct Session {
     /// How many prompts this session has sent, which names the next one's `messageId`.
     sent: u64,
     /// What to tell the editor before the first prompt's answer: the file `--settings` named is read
-    /// as a checkout's file (#2599). Said once, because the editor does not know the session id
-    /// until `session/new` has answered, so nothing can be sent to it before then.
-    opening_note: Option<String>,
+    /// as a checkout's file (#2599), and each key the settings dropped or combined (BACKEND-36,
+    /// RETRIEVE-23). Said once, because the editor does not know the session id until `session/new`
+    /// has answered, so nothing can be sent to it before then.
+    opening_notes: Vec<String>,
 }
 
 /// A question put to the editor and not yet answered.
@@ -303,15 +304,25 @@ impl Acp {
         // window's in auto (AUTO-1). An editor's modes are asking, accepting edits and planning, the
         // editor is the person who answers its questions (ACP-5), and it is not offered auto to move
         // back to.
-        let opening_note = made["settingsRules"]["namedWithheld"]
+        let rules = &made["settingsRules"];
+        let opening_notes: Vec<String> = rules["namedWithheld"]
             .as_str()
-            .map(str::to_string);
+            .into_iter()
+            .chain(
+                rules["droppedKeys"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str),
+            )
+            .map(str::to_string)
+            .collect();
         let mut shared = self.lock();
         shared.sessions.insert(
             handle.clone(),
             Session {
                 directory: cwd.to_string(),
-                opening_note,
+                opening_notes,
                 ..Session::default()
             },
         );
@@ -365,9 +376,10 @@ impl Acp {
             held.sent += 1;
             turn["messageId"] = json!(format!("acp-{}", held.sent));
             let directory = held.directory.clone();
-            if let Some(note) = held.opening_note.take() {
+            for note in std::mem::take(&mut held.opening_notes) {
                 say(&mut shared, &session, &note);
             }
+            say_crash_reports_once(&mut shared, &session);
             shared
                 .unasked
                 .remove(&session)
@@ -883,6 +895,22 @@ fn say(shared: &mut Shared, session: &str, text: &str) {
             "content": { "type": "text", "text": plain(text) },
         }),
     );
+}
+
+/// Tell the editor's person that crash reports are sent, once (CRASH-12).
+///
+/// A message in the session, because this program has no screen and its standard output is the
+/// protocol: the words reach the editor as a string inside a notification and are never written
+/// outside one. Whether it is due is the answer the terminal and the window ask, which is yes only
+/// for a launch that is reporting and has not said it in any front end, so a person told in one is
+/// not told here. Recorded as it is sent, as the terminal records it, because nothing here learns
+/// whether the editor drew it and the alternative is a line said on every prompt.
+fn say_crash_reports_once(shared: &mut Shared, session: &str) {
+    if !bravebot_backtrace::notice_due() {
+        return;
+    }
+    bravebot_backtrace::notice_given();
+    say(shared, session, bravebot_i18n::t!(crash_reports_notice));
 }
 
 /// Put a bridge question to the editor, or refuse it where it cannot be put.

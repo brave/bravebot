@@ -182,6 +182,8 @@ Integrate the shared client into a limited desktop prototype mode using the host
 
 Done when desktop and a second local client see the same session, each can send, answer and cancel, and the view shows which one acted last. Closing a view does not close execution. A send during a turn returns busy and remains an unsent draft. Shared queues are not a prerequisite for networking or mobile integration.
 
+Status: built as a limited prototype mode, [the desktop as a client of the host](desktop-prototype.md) ([HOSTCLIENT](../../specs/desktop-host-client.md)). The comparison of the two approaches and the capability matrix are in that note. The ordinary desktop path is unchanged. Not done: the desktop attaching to a host it did not start ([U4](open-questions.md#u4-attaching-a-client-the-host-did-not-launch)), and a run on Linux.
+
 ### 6. Enable authenticated networking
 
 Write the short pairing/transport and effective-scope decision notes described in the architecture before enabling network access. Add encrypted transport, host identity verification, host-approved pairing, revocation, and scoped read/control authorization to the direct host. A lost device's pairing can be revoked on the host. Test the adapter locally before exposing it to a phone. Add finite readiness expiry for half-open network connections and backgrounded clients.

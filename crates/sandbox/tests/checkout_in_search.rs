@@ -35,10 +35,21 @@ fn executable(directory: &Path, name: &str) -> PathBuf {
     file
 }
 
+/// A file the lookup finds under the bare `name`. Windows tries a bare name with each extension of
+/// `PATHEXT` and returns the path with the extension spelled as `PATHEXT` spells it, so the file is
+/// made with that spelling of `.exe` and the path returned is the one the lookup returns.
 #[cfg(windows)]
 fn executable(directory: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(directory).unwrap();
-    let file = directory.join(name);
+    let extension = std::env::var("PATHEXT")
+        .ok()
+        .and_then(|held| {
+            held.split(';')
+                .find(|extension| extension.eq_ignore_ascii_case(".exe"))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| ".EXE".to_string());
+    let file = directory.join(format!("{name}{extension}"));
     std::fs::write(&file, "").unwrap();
     file
 }
@@ -263,10 +274,94 @@ fn a_value_naming_a_file_in_the_bin_of_the_checkout_holding_a_recorded_directory
         );
     }
     let list = std::env::join_paths([&installed, &planted]).unwrap();
-    assert!(
-        !may_be_run(Names::Commands, Path::new(&list), &outside_stage_writable),
-        "a list with an entry in the checkout's bin was accepted"
-    );
+    // A command list holds no backslash, so a Windows path is refused as a command whatever it
+    // names, and the refusal says nothing about the record there.
+    if cfg!(unix) {
+        assert!(
+            !may_be_run(Names::Commands, Path::new(&list), &outside_stage_writable),
+            "a list with an entry in the checkout's bin was accepted"
+        );
+    }
+}
+
+/// A value of a variable that names a directory or a list of directories (the `XDG_*` and
+/// `PYTHONPATH` shapes) is judged against the same record as a lookup, so the `bin` of the checkout
+/// holding a recorded directory is refused alone and as an entry of a list, and a directory in a
+/// checkout nothing recorded and one outside every checkout are accepted (SANDBOX-30). The kinds are
+/// read from the tables that name the variables, so a variable that changes kind changes this test.
+/// Rejects a directory judged by its name only, which accepts the checkout's `bin`; a list judged by
+/// its first entry or by any entry, which accepts a list whose second entry is the checkout's `bin`;
+/// and a judgment made against a set of its own, which accepts what the record holds.
+#[test]
+fn a_directory_value_naming_the_bin_of_the_checkout_holding_a_recorded_directory_is_withheld() {
+    use bravebot_sandbox::programs::{
+        CODE_SELECTORS, Names, may_be_run, outside_stage_writable, selectors,
+    };
+
+    let kind_of = |name: &str| {
+        CODE_SELECTORS
+            .iter()
+            .find(|(held, _)| *held == name)
+            .map(|(_, kind)| *kind)
+    };
+    assert_eq!(selectors::XDG_RUNTIME_DIR.1, Names::Directory);
+    assert_eq!(selectors::PYTHONPATH.1, Names::Directories);
+    assert_eq!(kind_of("XDG_DATA_DIRS"), Some(Names::Directories));
+
+    let repo = fresh("directory-value-recorded");
+    let here = repo.join("sub");
+    std::fs::create_dir_all(&here).unwrap();
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let planted = repo.join("bin");
+    std::fs::create_dir_all(&planted).unwrap();
+    let unrecorded = fresh("directory-value-unrecorded");
+    std::fs::create_dir_all(unrecorded.join(".git")).unwrap();
+    let in_unrecorded = unrecorded.join("bin");
+    std::fs::create_dir_all(&in_unrecorded).unwrap();
+    let installed = fresh("directory-value-installed").join("bin");
+    std::fs::create_dir_all(&installed).unwrap();
+
+    keep_out_with_checkout(&here);
+
+    for (variable, kind) in [
+        (selectors::XDG_RUNTIME_DIR.0, selectors::XDG_RUNTIME_DIR.1),
+        ("XDG_DATA_DIRS", Names::Directories),
+        (selectors::PYTHONPATH.0, selectors::PYTHONPATH.1),
+    ] {
+        let value = |entries: &[&Path]| match kind {
+            Names::Directory => entries[0].to_path_buf(),
+            _ => PathBuf::from(path_of(entries)),
+        };
+        assert!(
+            !may_be_run(kind, &value(&[&planted]), &outside_stage_writable),
+            "{variable} accepted the bin of the checkout holding the recorded directory"
+        );
+        assert!(
+            may_be_run(kind, &value(&[&in_unrecorded]), &outside_stage_writable),
+            "{variable} refused a directory in a checkout nothing was recorded for"
+        );
+        assert!(
+            may_be_run(kind, &value(&[&installed]), &outside_stage_writable),
+            "{variable} refused a directory outside every checkout"
+        );
+        if kind == Names::Directories {
+            let (installed, planted) = (installed.as_path(), planted.as_path());
+            for entries in [[installed, planted], [planted, installed]] {
+                assert!(
+                    !may_be_run(kind, &value(&entries), &outside_stage_writable),
+                    "{variable} accepted a list with an entry in the checkout's bin: {entries:?}"
+                );
+            }
+            assert!(
+                may_be_run(
+                    kind,
+                    &value(&[installed, in_unrecorded.as_path()]),
+                    &outside_stage_writable
+                ),
+                "{variable} refused a list of directories nothing was recorded for"
+            );
+        }
+    }
 }
 
 /// Recording a directory records the checkout holding it, which is what the lookups of a running

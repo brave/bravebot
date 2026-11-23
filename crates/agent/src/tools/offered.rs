@@ -723,6 +723,10 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
             "fetch_url" => state_fetch_url_beside(tool, &beside),
+            "web_search" => {
+                tool.function.description = web_search_description(&beside);
+                remove_read_without_vet_content(tool, &beside);
+            }
             "search" | "list_files" => remove_read_without_vet_content(tool, &beside),
             "job_output" => {
                 tool.function.description = job_output_description(&beside);
@@ -1066,10 +1070,13 @@ fn table(
                              you can see where the tree continues: with a trailing / where you \
                              are shown the names, and as a reference that says it is a \
                              directory where they are quarantined. A directory with more than \
-                             {per} files gives {per} of them and says how many it left out; list \
-                             it with no depth to see the rest. Omit it to walk the whole tree, \
+                             {per} files gives {per} of them, and one with more than {dirs} \
+                             subdirectories gives {dirs} of them, and the listing says how many it \
+                             left out; list it with no depth to see the rest of its files and the \
+                             files under its subdirectories. Omit it to walk the whole tree, \
                              which in a large project is thousands of paths.",
-                            per = crate::workspace::MAX_FILES_PER_DIRECTORY
+                            per = crate::workspace::MAX_FILES_PER_DIRECTORY,
+                            dirs = crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
                         ),
                         "minimum": 1
                     },
@@ -2684,6 +2691,130 @@ pub fn offer_set_link(tools: &mut Vec<Tool>) {
     tools.push(link);
 }
 
+/// Add `web_search` to a planner's list (WEBSEARCH-1), beside `fetch_url`.
+///
+/// Built here rather than in the table because it is offered only where a key source is configured,
+/// a variable `webSearch.env` names that holds text or a key file, and never to a delegate. The one
+/// argument that decides anything is `service`, a word from a closed set the driver reads as a
+/// literal; the host and the path are written in this crate.
+pub fn offer_web_search(tools: &mut Vec<Tool>) {
+    let mut search = Tool::function(
+        "web_search",
+        web_search_description(&|name| tools.iter().any(|tool| tool.function.name == name)),
+        web_search_schema(),
+    );
+    ask_why(&mut search);
+    tools.push(search);
+}
+
+/// The description of `web_search`, naming only the tools `beside` says are on the list. See
+/// [`spawn_processor_description`].
+fn web_search_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let moves = match (beside("spawn_processor"), beside("write_file")) {
+        (true, true) => {
+            " Hand the reference to spawn_processor to have a question answered about it, or to \
+             write_file as contents_ref to save it."
+        }
+        (true, false) => {
+            " Hand the reference to spawn_processor to have a question answered about it."
+        }
+        (false, true) => " Hand the reference to write_file as contents_ref to save it.",
+        (false, false) => "",
+    };
+    let reading = if beside("vet_content") {
+        " Where you have to read the results yourself, vet_content is the question to ask."
+    } else {
+        ""
+    };
+    format!(
+        "Search the web with the Brave Search API. 'service' picks what is asked: web, news, \
+         videos, images, llm_context (pre-extracted page text for grounding), suggest, \
+         spellcheck or places. What comes back is quarantined, like a file nobody vouched for: \
+         you get a reference rather than the results, and you cannot read it or be told what \
+         it says.{moves}{reading} The user is asked before the query leaves the machine, and \
+         it is sent to the Brave Search API and nowhere else."
+    )
+}
+
+/// The arguments of `web_search`: the vendor's own, by the vendor's names, checked against the
+/// vendor's documented types, ranges and sets before anything is sent.
+fn web_search_schema() -> serde_json::Value {
+    let words = |set: &[&str]| json!({"type": "string", "enum": set});
+    let number = |least: u64, most: u64, what: &str| json!({"type": "integer", "minimum": least, "maximum": most, "description": what});
+    let flag = |what: &str| json!({"type": "boolean", "description": what});
+    json!({
+        "type": "object",
+        "properties": {
+            "service": {
+                "type": "string",
+                "enum": crate::web_search::Service::NAMES,
+                "description": "Which search to make. llm_context returns page text prepared \
+                                for a model. places lists points of interest in an area, and is \
+                                the one service that takes no q."
+            },
+            "q": {
+                "type": "string",
+                "description": "The query. At most 600 characters and 75 words for web and \
+                                llm_context, 400 and 50 for the others. Not taken by places \
+                                where only an area is wanted."
+            },
+            "country": {"type": "string", "description": "Two-letter country the results come \
+                from, such as US or GB, or ALL. Not every country is accepted."},
+            "search_lang": {"type": "string", "description": "Language of the results, such as \
+                en, fr, de or pt-br. On suggest and spellcheck this is a hint."},
+            "ui_lang": {"type": "string", "description": "Preferred language of the response, \
+                as a locale such as en-US. Not taken by images, llm_context, suggest or \
+                spellcheck."},
+            "count": number(1, 200, "How many results. The most is 20 for web and suggest, 50 \
+                for news, videos and llm_context, 100 for places, 200 for images. Not taken by \
+                spellcheck."),
+            "offset": number(0, 9, "Zero-based page, in units of count. Taken by web, news and \
+                videos."),
+            "safesearch": words(&["off", "moderate", "strict"]),
+            "spellcheck": flag("Whether the query is spell-checked first. Defaults to true."),
+            "freshness": {"type": "string", "description": "pd for the last day, pw for the \
+                last week, pm for the last month, py for the last year, or a range written \
+                YYYY-MM-DDtoYYYY-MM-DD."},
+            "text_decorations": flag("Whether display strings carry highlight markers. Web \
+                only."),
+            "result_filter": {"type": "string", "description": "Web only. Comma-separated result \
+                types to keep, from discussions, faq, infobox, news, query, summarizer, videos, \
+                web, locations."},
+            "units": words(&["metric", "imperial"]),
+            "extra_snippets": flag("Up to five more excerpts per result. Web and news."),
+            "operators": flag("Whether search operators in the query are applied."),
+            "operators_fallback": flag("Try relaxed operator matching first, and fall back to \
+                the original if nothing matches."),
+            "include_fetch_metadata": flag("Include fetch metadata. Web, news and videos."),
+            "maximum_number_of_urls": number(1, 50, "llm_context only: the most distinct URLs \
+                in the context."),
+            "maximum_number_of_tokens": number(1024, 32768, "llm_context only: approximate most \
+                tokens in the context. Defaults to 8192."),
+            "context_threshold_mode": words(&["disabled", "strict", "lenient", "balanced"]),
+            "maximum_number_of_tokens_per_url": number(512, 8192, "llm_context only: most \
+                tokens taken from one URL."),
+            "latitude": {"type": "number", "minimum": -90, "maximum": 90, "description": "places \
+                only. Give with longitude, instead of location."},
+            "longitude": {"type": "number", "minimum": -180, "maximum": 180, "description": "places \
+                only. Give with latitude, instead of location."},
+            "location": {"type": "string", "description": "places only: an area written as the \
+                city and country, such as 'tokyo japan' or 'san francisco ca united states'. \
+                Instead of latitude and longitude."},
+            "radius": number(0, 40075000, "places only: metres, a bias towards results nearer \
+                the coordinates and not a strict limit."),
+            "read": {
+                "type": "boolean",
+                "description": "Ask to have the results checked and released in this result, \
+                                as vet_content would, so there is no vet_content call to make. \
+                                Where it would be kept back, or the results are too long for \
+                                one result, they still come back as a reference. Defaults to \
+                                false."
+            }
+        },
+        "required": ["service"]
+    })
+}
+
 /// Add `recall` to a planner's list (RECALL-10), beside `remember`.
 ///
 /// Built here rather than in the table for the reason `remember` is: a delegate is never offered
@@ -2866,10 +2997,10 @@ fn withheld_variables_sentence(names: &[&str]) -> String {
     let listed: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
     format!(
         "The credentials this agent holds for itself ({}), and the variables the person's settings \
-         name as a gateway's token or to be withheld, which are not listed, are removed from the \
-         environment of every program this tool starts, whatever the person's shell holds. A program \
-         that reports one of them unset, or fails for want of one, says nothing about whether the \
-         person has set it.",
+         name as a gateway's token, as a search key or to be withheld, which are not listed, are \
+         removed from the environment of every program this tool starts, whatever the person's shell \
+         holds. A program that reports one of them unset, or fails for want of one, says nothing \
+         about whether the person has set it.",
         listed.join(", ")
     )
 }

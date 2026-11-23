@@ -48,7 +48,8 @@ included. It is read from the home settings file and from the file `--settings` 
 other layer. A project or local file that names it has the key removed, and `bravebot doctor` and the
 desktop settings view name the file. A managed file that names it decides nothing, and `doctor` says so.
 Only the boolean `true` opens a session in auto: `false`, a quoted `"true"`, a number and the key
-outside the `permissions` block leave a session asking, and none of them is reported. A mode flag on
+outside the `permissions` block leave a session asking. The key outside the `permissions` block is
+named as a key nothing reads, as any top-level key is, and none of the others is reported. A mode flag on
 the line wins over the setting ([MODE-5](permission-modes.md#MODE-5)).
 
 The bridge behind an editor's ACP server and the one behind the local host open every session asking, a new
@@ -100,6 +101,7 @@ that, and goes straight to asking where a layer wrote `permissions.bypassUnreach
 `verified-by: bravebot_cli::auto_start::a_resumed_session_asks_unless_the_line_or_the_setting_says_auto`
 `verified-by: bravebot_cli::auto_start::only_the_terminal_client_and_the_windows_bridge_read_the_setting`
 `verified-by: bravebot_config::settings::only_a_boolean_true_under_permissions_opens_a_session_in_auto`
+`verified-by: bravebot_agent::dropped_keys::a_start_in_auto_key_outside_permissions_is_named_and_the_one_inside_is_not`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_open_sessions_in_auto`
 `verified-by: bravebot_config::settings::a_managed_file_cannot_open_sessions_in_auto`
 `verified-by: bravebot_cli::doctor::doctor_says_a_managed_file_naming_the_start_in_auto_setting_decides_nothing`
@@ -143,7 +145,8 @@ as it lands after links are followed and under each other name of a file with a 
 is recognised as [RUN-5](tools/run.md#RUN-5) recognises it, by the file its program resolved to and
 on every platform, and any stage of a pipeline counts. A fetch is put to it for
 `fetch_url`, for the first question about the URL, and not for `download_url`, which puts bytes into
-a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4)). It is consulted
+a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4)). A `web_search` is
+not put to it either ([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2)). It is consulted
 only in auto, only in a turn of a session the person has typed to, and not for a delegate, whose task
 is a sentence the driver composed. Where it is not consulted the question goes to the confirmer
 behind the mode.
@@ -162,6 +165,7 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_run_only_on_the_classifiers_allow_word_for_a_confined_line`
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_fetch_only_on_the_classifiers_allow_word_and_not_a_redirect`
 `verified-by: bravebot_agent::turn::a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::web_search::bypass_answers_a_search_and_auto_leaves_it_to_the_person_without_a_classifier_word`
 `verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_git_config`
 `verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_git_hook`
 `verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_husky_hook`

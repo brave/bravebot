@@ -20,6 +20,7 @@ mod entry;
 mod files;
 mod hover;
 mod menu;
+mod names;
 mod open_loops;
 mod peek;
 mod queue;
@@ -36,10 +37,9 @@ mod watching;
 use attachments::{previews_restaged, put_back_to_names, put_back_to_words};
 use editing::Kill;
 use entry::JOB_ROW_LINES;
+pub use names::NamesFrom;
 use vi::{Change, Inserting, Marked, TypedOver, Yanked};
 
-#[cfg(test)]
-use accounts::apportion;
 #[cfg(test)]
 use attachments::preview_of_dropped;
 #[cfg(test)]
@@ -1192,6 +1192,9 @@ pub struct Session {
     /// place of everything the user pasted, and they would have no way to tell. Numbers are never
     /// reused, so a marker means one thing for as long as the session lasts.
     pasted_text: Vec<PastedText>,
+    /// Where the names of the turn in flight are read from. Nothing for a turn the driver began from
+    /// its own sentences.
+    turn_names: NamesFrom,
     /// Whether history is written to disk.
     ///
     /// Off by default so constructing a session does no I/O: a test would otherwise read and
@@ -1230,8 +1233,12 @@ pub struct Session {
     ///
     /// Read from `~/.bravebot` at startup and rewritten when `/effort` picks one, the same as the
     /// model: how hard to think is a preference about the work rather than a property of a
-    /// checkout.
+    /// checkout. A level chosen with `/effort session` is held here and written nowhere.
     effort: Option<Effort>,
+    /// Whether `effort` was chosen for this session only (`/effort session`), so it is not the
+    /// level the next session opens on. Set by that choice and cleared by a choice that is
+    /// recorded, by `--effort` and by settling the level from the files.
+    effort_is_for_this_session: bool,
     /// Whether the model in force reads the effort level, as its roster row stated.
     ///
     /// True until a listing says otherwise, so a session that has never reached one sends what the
@@ -1603,6 +1610,7 @@ impl Session {
             previews: Vec::new(),
             sent_pasted: Vec::new(),
             pasted_text: Vec::new(),
+            turn_names: NamesFrom::nothing(),
             persist: false,
             said: Vec::new(),
             started: None,
@@ -1611,6 +1619,7 @@ impl Session {
             turn_model: None,
             model_labels: Vec::new(),
             effort: None,
+            effort_is_for_this_session: false,
             model_reads_effort: true,
             breakpoints_given_up: false,
             awaited_listing: None,
@@ -3007,7 +3016,10 @@ impl Session {
         self.said_while_working.clear();
         // Back the way it was typed. A paste that returned as its words would fill the box
         // somebody is about to edit with the stack trace they folded away in the first place.
-        let returning = self.folded(&prompt.into());
+        let prompt = prompt.into();
+        let returning = self
+            .shown_exactly(&prompt)
+            .unwrap_or_else(|| self.folded(&prompt));
         self.set_input(returning);
         // The pictures come back with the words. A line that returned without them would return
         // carrying markers that name nothing, and the user has no way to tell.
@@ -3118,6 +3130,11 @@ impl Session {
 
     /// Take the brief as the person left it, to start a new session from.
     ///
+    /// Taken as the box showed it, with each folded paste still a marker, and not as the words the
+    /// markers stand for: the first prompt of the new session is sent from that line as Enter sends
+    /// a line, so the names it reads are the ones typed there and none from a paste (NAME-12). The
+    /// session keeps its pastes across the clear, so the markers still stand for the same words.
+    ///
     /// The line comes off the box with what it named, as a command's does. It is not recorded in the
     /// history here: it is recorded as the prompt it becomes, by [`Session::start_handed_over`].
     pub fn take_handoff(&mut self) -> Option<String> {
@@ -3125,9 +3142,8 @@ impl Session {
             return None;
         }
         let typed = self.input.trim().to_string();
-        let text = self.unfolded(&typed);
         self.take_line(&typed);
-        Some(text)
+        Some(typed)
     }
 
     /// The words the enhance key would rewrite, or why the line is not words it can (INPUT-48).
@@ -3237,8 +3253,9 @@ impl Session {
     /// Send the prompt [`Session::hand_over`] held, as the person's own line.
     ///
     /// It goes through [`Session::submit`], the path a prompt they typed takes, because that is what
-    /// it is: they read it and chose to send it. A line already in the box by now is kept as the
-    /// draft Up brings back first.
+    /// it is: they read it and chose to send it. The line a handoff holds is the brief as the box
+    /// showed it, so `submit` reads the names the person typed there and none from a folded paste
+    /// (NAME-12). A line already in the box by now is kept as the draft Up brings back first.
     pub fn start_handed_over(&mut self) -> Option<String> {
         if self.status != Status::Idle {
             return None;
@@ -3494,7 +3511,13 @@ impl Session {
         // nowhere. Pictures settle the same way and at the same moment, since a marker rubbed out
         // means the same thing whether the thing behind it was dropped or pasted.
         let taken = self.take_line(&typed);
-        let begun = self.begin_turn(prompt, taken, vec![recall]);
+        // The line as the box showed it, which a loop's ticks and a stop's put-back also keep.
+        let begun = self.begin_turn(
+            prompt,
+            taken,
+            vec![recall],
+            NamesFrom::the_box_line(typed.clone()),
+        );
         // Read from the line as the box held it, which the person typed, and it decides only whether
         // the row under the box says the word went to the model (CMD-2).
         self.leave_word_sent = crate::command_table::is_a_lone_leave_word(&typed);
@@ -3530,6 +3553,9 @@ impl Session {
     /// other. Every tick after it sends the same words with the marker put back, because the picture
     /// went with the tick that took it and a loop sends the same line however long it runs.
     ///
+    /// `names` is where the loop's ticks read their `@` names from (NAME-12): the line the box
+    /// showed when `/loop` was typed, or nothing.
+    ///
     /// `None` where the session is not free to start a turn, since the first tick is a turn like
     /// any other and there is nowhere to put it.
     pub fn start_loop(
@@ -3537,6 +3563,7 @@ impl Session {
         request: crate::loops::Request,
         pasted: Vec<AttachedImage>,
         attached: Vec<Attached>,
+        names: NamesFrom,
     ) -> Option<String> {
         if self.status != Status::Idle {
             self.note(t!(loop_busy));
@@ -3560,7 +3587,7 @@ impl Session {
 
         let (adjusted, pacing) = (request.adjusted, request.pacing);
         let pasted_a_picture = !pasted.is_empty();
-        let mut running = crate::loops::Running::begin(request);
+        let mut running = crate::loops::Running::begin(request).names_as(names);
         if !pasted.is_empty() || !attached.is_empty() {
             // Nothing is said about a dropped file, because a later tick is sent its name and a name
             // is something the turn can act on: it reads the file through the gate it reads any other
@@ -3617,9 +3644,18 @@ impl Session {
         task: &str,
         pasted: Vec<AttachedImage>,
         attached: Vec<Attached>,
+        names: NamesFrom,
     ) -> String {
         self.addressing = Some(addressed);
-        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+        // The task is the line without the pick's marker, which need not be a stretch of the line,
+        // so the line is the one the box showed and not the task (NAME-12).
+        self.begin_composed_turn_with(task.to_string(), (attached, pasted), names)
+    }
+
+    /// Where the names of the turn in flight are read from (NAME-12). Nothing for a turn the driver
+    /// began from its own sentences.
+    pub fn names_of_the_turn(&self) -> &NamesFrom {
+        &self.turn_names
     }
 
     /// Begin the turn `/init` is, or say why there is none (CMD-13).
@@ -3632,31 +3668,48 @@ impl Session {
             return None;
         }
         self.driver_prompt_pending = true;
+        // The sentence is the driver's and holds no `@`, so the turn names nothing.
         Some(self.begin_turn(
             crate::init_command::PROMPT.to_string(),
             (Vec::new(), Vec::new()),
             Vec::new(),
+            NamesFrom::nothing(),
         ))
     }
 
+    /// Begin a turn whose prompt the driver wrote around words the person typed after a command.
+    ///
+    /// The prompt is not part of the line the box handed over, so the line is passed as `names`: the
+    /// names the turn reads are the ones typed on that line and never the words a paste on it stood
+    /// for (NAME-12).
+    fn begin_composed_turn(&mut self, prompt: String, names: NamesFrom) -> String {
+        self.begin_composed_turn_with(prompt, (Vec::new(), Vec::new()), names)
+    }
+
+    /// [`Session::begin_composed_turn`] for a turn that carries what the line named.
+    fn begin_composed_turn_with(
+        &mut self,
+        prompt: String,
+        taken: (Vec<Attached>, Vec<AttachedImage>),
+        names: NamesFrom,
+    ) -> String {
+        self.begin_turn(prompt, taken, Vec::new(), names)
+    }
+
     /// Begin the turn `/review` is (CMD-18).
-    pub fn start_review(&mut self, asked: &crate::review_command::Asked) -> String {
+    pub fn start_review(
+        &mut self,
+        asked: &crate::review_command::Asked,
+        names: NamesFrom,
+    ) -> String {
         self.driver_prompt_pending = true;
-        self.begin_turn(
-            crate::review_command::prompt(asked),
-            (Vec::new(), Vec::new()),
-            Vec::new(),
-        )
+        self.begin_composed_turn(crate::review_command::prompt(asked), names)
     }
 
     /// Begin the turn `/help` is (CMD-24).
-    pub fn start_help(&mut self, question: &str) -> String {
+    pub fn start_help(&mut self, question: &str, names: NamesFrom) -> String {
         self.driver_prompt_pending = true;
-        self.begin_turn(
-            crate::help_command::prompt(question),
-            (Vec::new(), Vec::new()),
-            Vec::new(),
-        )
+        self.begin_composed_turn(crate::help_command::prompt(question), names)
     }
 
     /// Put the release notes `/changelog` shows in the transcript (CMD-25).
@@ -3965,7 +4018,13 @@ impl Session {
         // The driver's own sentence with the judge's reason quoted inside it, which is why it is
         // not a message from the catalog: it goes to a model rather than to a reader.
         let prompt = bravebot_agent::goal::carry_on(&condition, &reason);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
+        // The driver's sentence quoting a judge, so the turn names nothing.
+        Some(self.begin_turn(
+            prompt,
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        ))
     }
 
     /// Act on what a check of the goal came back with, and give back the prompt that sends the
@@ -4191,11 +4250,15 @@ impl Session {
     /// [`Session::submit`], and while a view is open there is no box to press Enter in, since every
     /// key belongs to the mode. So the view is put back to its tail through
     /// [`Session::back_to_the_tail`], which leaves an open one where its reader put it.
+    ///
+    /// `names` says where the turn reads its `@` names from (NAME-12): the line the box showed, or
+    /// nothing. There is no default, so a path that begins a turn has to choose.
     fn begin_turn(
         &mut self,
         prompt: String,
         taken: (Vec<Attached>, Vec<AttachedImage>),
         recall: Vec<crate::history::Ticket>,
+        names: NamesFrom,
     ) -> String {
         // Recorded here because this is the last moment these figures exist: the prompt goes into
         // the transcript and the count goes up below, and `/undo` rewinds to what they replaced.
@@ -4220,6 +4283,7 @@ impl Session {
         self.command_sent_as_prompt = false;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
+        self.turn_names = names;
         self.turn_places
             .insert(self.turns + 1, self.transcript.len());
         self.transcript.push(Entry::user(prompt.clone()));
@@ -5525,6 +5589,7 @@ mod tests {
                             crate::loops::request("5m /status"),
                             Vec::new(),
                             Vec::new(),
+                            NamesFrom::nothing(),
                         );
                         session.complete("an answer", Vec::new(), 0);
                     },
@@ -5687,7 +5752,12 @@ mod tests {
         fn a_loop_tick_leaves_an_open_view_where_its_reader_put_it() {
             let mut session = Session::new("none");
             spawn(&mut session, "reader", "find the parser");
-            session.start_loop(crate::loops::request("5m /status"), Vec::new(), Vec::new());
+            session.start_loop(
+                crate::loops::request("5m /status"),
+                Vec::new(),
+                Vec::new(),
+                NamesFrom::nothing(),
+            );
             session.complete("an answer", Vec::new(), 0);
             session.watch();
             session.scroll_up(6);
@@ -5701,7 +5771,12 @@ mod tests {
             );
 
             let mut session = Session::new("none");
-            session.start_loop(crate::loops::request("5m /status"), Vec::new(), Vec::new());
+            session.start_loop(
+                crate::loops::request("5m /status"),
+                Vec::new(),
+                Vec::new(),
+                NamesFrom::nothing(),
+            );
             session.complete("an answer", Vec::new(), 0);
             session.scroll_up(6);
 
@@ -6818,6 +6893,59 @@ mod tests {
                 session.watched_aside().and_then(|a| a.answer.as_deref()),
                 Some("because of nesting")
             );
+        }
+
+        /// SESSION-20. A resume puts the asides into the view and neither half into the transcript
+        /// the person reads the exchange in, by either path that fills it: the one that has the
+        /// turns' own history and the one for a record that has none. Rejects a resume that draws
+        /// the question or the answer among the exchange's lines, which shows the person a turn the
+        /// session never had and reads as something the planner was told.
+        #[test]
+        fn a_resume_puts_the_asides_in_the_view_and_neither_half_in_the_transcript() {
+            use bravebot_aichat::protocol::Message;
+
+            let mut conversation = bravebot_agent::Conversation::new();
+            conversation.push(Message::user("fix the parser"));
+            conversation.push(Message::assistant("fixed it"));
+
+            for history in [None, Some(Vec::new())] {
+                let mut session = Session::new("none");
+                session.replay(
+                    &conversation,
+                    "a title",
+                    &bravebot_session::sessions::Recalled {
+                        history,
+                        turns: Some(1),
+                        trails: Default::default(),
+                        todos: Default::default(),
+                        asides: vec![Aside {
+                            question: "why recursive?".to_string(),
+                            answer: Some("because of nesting".to_string()),
+                            kept: true,
+                        }],
+                        started: None,
+                    },
+                );
+
+                assert_eq!(session.asides().len(), 1, "the aside was not brought back");
+                let drawn: Vec<&str> = session
+                    .transcript
+                    .iter()
+                    .map(|entry| entry.text.as_str())
+                    .collect();
+                assert!(
+                    drawn.iter().any(|text| text.contains("fixed it")),
+                    "the exchange the session had was not drawn: {drawn:?}"
+                );
+                assert!(
+                    !drawn.iter().any(|text| text.contains("recursive")),
+                    "the question was drawn among the exchange's lines: {drawn:?}"
+                );
+                assert!(
+                    !drawn.iter().any(|text| text.contains("nesting")),
+                    "the answer was drawn among the exchange's lines: {drawn:?}"
+                );
+            }
         }
 
         /// The point of delegating is that the reading lands somewhere else, and the interface
@@ -8570,6 +8698,429 @@ mod tests {
         assert_eq!(s.queued[0].prompt, "look at [Image #1]");
     }
 
+    /// NAME-12: a line queued while a turn runs is begun later from the box line it was queued
+    /// with, so the names of that turn come from what the box showed and not from the words. The
+    /// line holds words equal to an earlier paste's text, typed whole, which a re-derivation from
+    /// the words puts behind that paste's marker.
+    #[test]
+    fn a_queued_line_begins_its_turn_from_the_line_the_box_showed() {
+        let mut s = session();
+        let words = "see @README.md\ntwo\nthree\nfour\nfive";
+        s.paste_text(words);
+        s.set_input(String::new());
+        s.type_char('x');
+        s.submit().expect("submitted");
+        s.paste(words);
+        assert!(s.queue(), "the prompt was not queued");
+        s.complete("done", Vec::new(), 0);
+
+        let begun = s.send_queued().expect("the queued line was not begun");
+        assert_eq!(begun, words);
+        assert_eq!(s.names_of_the_turn().line(), words);
+    }
+
+    /// NAME-12: a tick of a loop reads its names from the box line the loop was typed on, every
+    /// tick and not only the first. The loop is typed with a paste that holds an @name.
+    #[test]
+    fn every_tick_of_a_loop_reads_its_names_from_the_line_the_box_showed() {
+        let mut s = session();
+        for c in "/loop 15m check ".chars() {
+            s.type_char(c);
+        }
+        s.paste_text("one\nsee @README.md\nthree\n");
+        let commanded = s.take_command();
+        let request = crate::loops::request(commanded.line.trim_start_matches("/loop "));
+        s.start_loop(request, Vec::new(), Vec::new(), commanded.names)
+            .expect("the first tick was not sent");
+        assert_eq!(
+            s.names_of_the_turn().line(),
+            "/loop 15m check [Pasted text #1 +3 lines]"
+        );
+        s.complete("done", Vec::new(), 0);
+        let second = s.dispatch_tick().expect("a second tick");
+        assert!(second.contains("@README.md"), "{second}");
+        assert!(
+            !s.names_of_the_turn().line().contains("@README.md"),
+            "a later tick read a name from the pasted words"
+        );
+        assert_eq!(
+            s.names_of_the_turn().line(),
+            "/loop 15m check [Pasted text #1 +3 lines]"
+        );
+    }
+
+    /// A line typed as `before`, a paste that folds and holding `@README.md` and `@session:abc123`
+    /// and ending in a newline, and `after`, taken as a command.
+    fn a_command_with_a_paste(s: &mut Session, before: &str, after: &str) -> Commanded {
+        for c in before.chars() {
+            s.type_char(c);
+        }
+        s.paste_text("one\nsee @README.md and @session:abc123\nthree\n");
+        for c in after.chars() {
+            s.type_char(c);
+        }
+        s.take_command()
+    }
+
+    /// The names a turn reads from where its line was kept, which is what `named_by_the_person`
+    /// reads files and sessions from.
+    fn names_read(s: &Session) -> (Vec<String>, Vec<String>) {
+        let names = s.names_of_the_turn();
+        (
+            names.files(std::path::Path::new("."), &[]),
+            names.sessions(),
+        )
+    }
+
+    /// NAME-12: `/help` and `/review` compose their prompt around the words typed after the command,
+    /// and that argument is trimmed, so a paste ending in a newline is not found in it by its text.
+    /// The names are read from the line the box showed, so the paste names nothing and a name typed
+    /// beside it is read. Rejects looking for the paste's text in the composed prompt, which finds
+    /// nothing here and reads the pasted words as typed.
+    #[test]
+    fn a_help_or_review_line_reads_no_name_from_a_paste_ending_in_a_newline() {
+        let asked = |s: &mut Session, line: &str| -> String {
+            let commanded = a_command_with_a_paste(s, line, "");
+            let names = commanded.names.clone();
+            let words = commanded.line.as_str();
+            if let Some(question) = crate::command_table::argument_to(words, "/help") {
+                return s.start_help(question, names);
+            }
+            let argument = crate::command_table::argument_to(words, "/review").expect("a command");
+            let asked = crate::review_command::parse(argument).expect("a review");
+            s.start_review(&asked, names)
+        };
+        for (line, typed) in [
+            ("/help what is ", "@README.md @session:abc123 "),
+            ("/review the locking ", "@README.md @session:abc123 "),
+        ] {
+            let mut pasted = session();
+            let prompt = asked(&mut pasted, line);
+            assert!(prompt.contains("@README.md"), "{line}: {prompt}");
+            assert_eq!(
+                names_read(&pasted),
+                (Vec::new(), Vec::new()),
+                "{line}: a name in the paste was read"
+            );
+
+            let mut named = session();
+            let _ = asked(&mut named, &format!("{line}{typed}"));
+            assert_eq!(
+                names_read(&named),
+                (vec!["README.md".to_string()], vec!["abc123".to_string()]),
+                "{line}: a name typed beside the paste was not read"
+            );
+        }
+    }
+
+    /// NAME-12: a loop a turn arms for itself repeats the turn's line, and every tick reads the names
+    /// of the line the turn was begun from. The turn is begun by `/plan` or `/agent` with a paste
+    /// ending in a newline, which the command trimmed from its argument. Rejects arming the loop with
+    /// no line, which finds the paste by its text in the repeated words and misses it here.
+    #[test]
+    fn a_loop_a_turn_arms_reads_no_name_from_the_paste_that_turn_held() {
+        let begun_by = |s: &mut Session, line: &str, typed: &str| -> String {
+            let commanded = a_command_with_a_paste(s, &format!("{line}{typed}"), "");
+            let names = commanded.names.clone();
+            let words = commanded.line.as_str();
+            if let Some(task) = crate::command_table::argument_to(words, "/plan") {
+                return s.start_planned(task, Vec::new(), Vec::new(), names);
+            }
+            let argument = crate::command_table::argument_to(words, "/agent").expect("a command");
+            let (name, task) = argument.split_once(char::is_whitespace).expect("a task");
+            let addressed = Addressed {
+                name: name.to_string(),
+                model: None,
+            };
+            s.address(addressed, task.trim(), Vec::new(), Vec::new(), names)
+        };
+        for line in ["/plan summarise ", "/agent reviewer summarise "] {
+            for (typed, expected) in [("", Vec::new()), ("@README.md ", vec!["README.md"])] {
+                let mut s = session();
+                let prompt = begun_by(&mut s, line, typed);
+                assert_eq!(
+                    names_read(&s).0,
+                    expected,
+                    "{line}{typed}: the turn read the wrong names"
+                );
+                s.complete("done", Vec::new(), 0);
+                s.watch_again(&prompt, crate::loops::Wakeup::asked(900, false));
+                for tick in 1..=2 {
+                    let sent = s.dispatch_tick().expect("a tick");
+                    assert!(sent.contains("@README.md"), "{sent}");
+                    assert_eq!(
+                        names_read(&s),
+                        (
+                            expected.iter().map(|name| name.to_string()).collect(),
+                            Vec::new()
+                        ),
+                        "{line}{typed}: tick {tick} read the wrong names"
+                    );
+                    s.complete("done", Vec::new(), 0);
+                }
+            }
+        }
+    }
+
+    /// NAME-12: a line typed to `/after` keeps the line the box showed, so the one tick it sends
+    /// reads the names typed there and none from the paste. Rejects an `/after` that keeps no line.
+    #[test]
+    fn an_after_line_reads_its_names_from_the_line_the_box_showed() {
+        let mut s = session();
+        let commanded = a_command_with_a_paste(&mut s, "/after 5m check @README.md ", "");
+        let argument = crate::command_table::argument_to(&commanded.line, "/after").expect("after");
+        match crate::loops::parse_after(argument) {
+            crate::loops::Delayed::Start(request) => {
+                s.start_after(request, Instant::now(), commanded.names.clone())
+            }
+            crate::loops::Delayed::Unreadable => panic!("the line was not read"),
+        }
+        assert_eq!(
+            s.loops()
+                .iter()
+                .next()
+                .map(|running| running.names().line()),
+            Some("/after 5m check @README.md [Pasted text #1 +3 lines]")
+        );
+        let sent = s.dispatch_tick().expect("the tick");
+        assert!(sent.contains("@session:abc123"), "{sent}");
+        assert_eq!(names_read(&s), (vec!["README.md".to_string()], Vec::new()));
+    }
+
+    /// NAME-12: a command line that waited in the queue begins its turn from the line the box showed
+    /// when it was queued. Rejects taking a queued command without keeping that line, which leaves
+    /// the turn it begins with no line to read names from.
+    #[test]
+    fn a_queued_command_line_begins_its_turn_from_the_line_the_box_showed() {
+        let mut s = session();
+        s.type_char('x');
+        s.submit().expect("submitted");
+        for c in "/plan summarise @README.md ".chars() {
+            s.type_char(c);
+        }
+        s.paste_text("one\nsee @README.md and @session:abc123\nthree\n");
+        assert!(s.queue_command(), "the command was not queued");
+        s.complete("done", Vec::new(), 0);
+
+        let commanded = s.take_queued_command().expect("the command waited");
+        let task = crate::command_table::argument_to(&commanded.line, "/plan").expect("a plan");
+        s.start_planned(task, Vec::new(), Vec::new(), commanded.names.clone());
+        assert_eq!(
+            s.names_of_the_turn().line(),
+            "/plan summarise @README.md [Pasted text #1 +3 lines]"
+        );
+        assert_eq!(names_read(&s), (vec!["README.md".to_string()], Vec::new()));
+    }
+
+    /// NAME-12: a turn the driver begins from its own sentences reads no name, whatever line the
+    /// turn before it was begun from. Rejects a `begin_turn` that keeps the previous turn's names
+    /// when it is given none.
+    #[test]
+    fn a_turn_the_driver_begins_does_not_read_the_names_of_the_turn_before_it() {
+        let mut s = session();
+        for c in "look at @README.md".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert_eq!(names_read(&s).0, vec!["README.md".to_string()]);
+        s.complete("done", Vec::new(), 0);
+
+        s.begin_turn(
+            "carry on".to_string(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
+        assert!(s.names_of_the_turn().is_nothing());
+        assert_eq!(names_read(&s), (Vec::new(), Vec::new()));
+    }
+
+    /// NAME-12, PASTE-1: a paste that holds the spelling of another paste's marker is sent as it was
+    /// pasted, and the words the first marker stands for are not searched for the second marker.
+    /// Rejects replacing one marker at a time over the whole line, which expands the spelling inside
+    /// the first paste as though the person had written that marker.
+    #[test]
+    fn a_paste_that_spells_another_pastes_marker_is_sent_as_it_was_pasted() {
+        let mut s = session();
+        let first = "one\ntwo\n[Pasted text #2 +4 lines]\nfour\n";
+        let second = "five\nsix\nseven\neight\n";
+        s.paste_text(first);
+        let one = s.input.clone();
+        s.paste(" ");
+        s.paste_text(second);
+        let two = s.input.trim_start_matches(&one).trim().to_string();
+        assert_eq!(one, "[Pasted text #1 +4 lines]");
+        assert_eq!(
+            two, "[Pasted text #2 +4 lines]",
+            "the markers are not the ones spelled"
+        );
+
+        assert_eq!(s.unfolded(&s.input), format!("{first} {second}"));
+    }
+
+    /// PASTE-1: a line that did not come from the box is put back behind the longest paste it holds.
+    /// A paste that holds an earlier paste's whole text is put back as one marker, and the earlier
+    /// paste's marker does not stand beside the words left over. Rejects putting the shorter paste
+    /// back first, which splits the later paste.
+    #[test]
+    fn a_line_from_no_box_is_put_back_behind_the_longest_paste_it_holds() {
+        let mut s = session();
+        s.paste_text("one\ntwo\nthree\nfour");
+        s.set_input(String::new());
+        for c in "/plan do ".chars() {
+            s.type_char(c);
+        }
+        s.paste_text("one\ntwo\nthree\nfour\nfive");
+        let commanded = s.take_command();
+        let task = crate::command_table::argument_to(&commanded.line, "/plan").expect("a plan");
+        let prompt = s.start_planned(task, Vec::new(), Vec::new(), commanded.names.clone());
+
+        assert!(s.restore(prompt), "the prompt was not put back");
+        assert_eq!(s.input, "do [Pasted text #2 +5 lines]");
+    }
+
+    /// NAME-12: `/init` begins a turn from the driver's own sentence, so it reads no name, in a
+    /// session that holds a paste and in one that does not, and it does not read the names of the
+    /// turn before it. Rejects a `/init` that begins its turn with the line of the last one.
+    #[test]
+    fn the_init_turn_reads_no_name_even_after_a_line_that_named_a_file() {
+        let mut s = session();
+        s.paste_text("one\nsee @README.md\nthree\nfour");
+        for c in " and @TYPED-NAME.md".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert_eq!(names_read(&s).0, vec!["TYPED-NAME.md".to_string()]);
+        s.complete("done", Vec::new(), 0);
+
+        s.start_init().expect("the turn began");
+        assert!(s.names_of_the_turn().is_nothing());
+        assert_eq!(names_read(&s), (Vec::new(), Vec::new()));
+    }
+
+    /// NAME-12: a line queued while a turn runs is begun from the line the box showed when it was
+    /// queued, the paste still a marker, and a batch sent together reads the names of every line in
+    /// it. Rejects a queue that keeps the words a queued line was sent as, which reads the names in
+    /// a paste, and a batch that keeps the first line only.
+    #[test]
+    fn a_queued_line_and_a_hurried_batch_read_the_names_typed_in_their_lines_only() {
+        let paste = "one\nsee @README.md and @session:abc123\nthree\nfour";
+        let mut s = session();
+        s.type_char('x');
+        s.submit().expect("submitted");
+        for (before, after) in [
+            ("also ", " and @TYPED-NAME.md"),
+            ("then ", " and @Cargo.toml"),
+        ] {
+            for c in before.chars() {
+                s.type_char(c);
+            }
+            s.paste_text(paste);
+            for c in after.chars() {
+                s.type_char(c);
+            }
+            assert!(s.queue(), "the prompt was not queued");
+        }
+        assert!(s.hurry(), "there was a turn to stop and something waiting");
+        stop(&mut s, "x");
+
+        let sent = s.send_queued().expect("the batch was not begun");
+        assert!(
+            sent.contains("@README.md") && sent.contains("@session:abc123"),
+            "{sent}"
+        );
+        assert_eq!(
+            names_read(&s),
+            (
+                vec!["TYPED-NAME.md".to_string(), "Cargo.toml".to_string()],
+                Vec::new()
+            )
+        );
+    }
+
+    /// NAME-12: a command a click stands for was never typed in the box. Its words are read for
+    /// names while the session holds no folded paste, and not once it holds one, since any word
+    /// could have come from it. Rejects a click line that is always read, and one that is never read.
+    #[test]
+    fn a_click_line_reads_its_names_only_while_the_session_holds_no_paste() {
+        let without = session();
+        assert_eq!(
+            without
+                .names_from_words_nobody_pasted("/plan read @README.md")
+                .files(std::path::Path::new("."), &[]),
+            vec!["README.md".to_string()]
+        );
+
+        let mut with_a_paste = session();
+        with_a_paste.paste_text("one\ntwo\nthree\nfour");
+        assert!(
+            with_a_paste
+                .names_from_words_nobody_pasted("/plan read @README.md")
+                .is_nothing()
+        );
+    }
+
+    /// NAME-12: a turn begun with no line reads no name, whatever its words hold and whether or not
+    /// the session holds a paste. The words are a person's own sentence with an `@name` in it and
+    /// the turn still names nothing, because nothing says the person typed them. Rejects a turn
+    /// that reads the names in its own words when it was given no line.
+    #[test]
+    fn a_turn_begun_with_no_line_reads_no_name_whatever_its_words_hold() {
+        let words = "carry on one\nsee @README.md\nthree";
+        let mut with_a_paste = session();
+        with_a_paste.paste_text("one\nsee @README.md\nthree\n");
+        with_a_paste.set_input(String::new());
+        with_a_paste.begin_turn(
+            words.to_string(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
+        assert_eq!(names_read(&with_a_paste), (Vec::new(), Vec::new()));
+
+        let mut without = session();
+        without.begin_turn(
+            words.to_string(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
+        assert_eq!(names_read(&without), (Vec::new(), Vec::new()));
+    }
+
+    /// NAME-12: the turn `/agent` begins keeps the line the box showed even where its task is not a
+    /// stretch of that line, as the task of a picked definition is not (the marker comes out of the
+    /// middle). The name typed beside the paste is read and the paste's names are not. Rejects
+    /// beginning the turn with no line, which drops the line the task is not a stretch of and then
+    /// reads no name at all.
+    #[test]
+    fn an_addressed_turn_keeps_the_line_its_task_was_taken_from() {
+        let mut s = session();
+        let commanded = a_command_with_a_paste(
+            &mut s,
+            "/agent reviewer look [@reviewer] at ",
+            " @README.md",
+        );
+        assert!(commanded.line.contains("@session:abc123"));
+        let addressed = Addressed {
+            name: "reviewer".to_string(),
+            model: None,
+        };
+        let task = "look at one\nsee @README.md and @session:abc123\nthree\n @README.md";
+        s.address(
+            addressed,
+            task.trim(),
+            Vec::new(),
+            Vec::new(),
+            commanded.names.clone(),
+        );
+        assert_eq!(
+            s.names_of_the_turn().line(),
+            "/agent reviewer look [@reviewer] at [Pasted text #1 +3 lines] @README.md"
+        );
+        assert_eq!(names_read(&s), (vec!["README.md".to_string()], Vec::new()));
+    }
+
     /// INPUT-10: a folded paste in a line sent mid-turn reaches the running turn as the words that
     /// were pasted. Sent as the marker, the planner would be given `[Pasted text #1 +3 lines]` in
     /// place of everything the person pasted.
@@ -8604,6 +9155,64 @@ mod tests {
 
         s.restore(prompt);
         assert_eq!(s.input, "what is [Pasted text #1 +3 lines]");
+    }
+
+    /// A later paste that holds an earlier paste's text is put back whole where the line leaves
+    /// the box, and its markers are not read again inside the words. Rejects putting a marker back
+    /// by replacing one paste's text at a time over the words in paste order, which splits the
+    /// later paste and leaves its words unmarked.
+    #[test]
+    fn a_paste_holding_an_earlier_paste_is_put_back_whole() {
+        let mut s = session();
+        let first = "one\ntwo\nthree\nfour\n";
+        let second = "one\ntwo\nthree\nfour\nfive\n";
+        s.paste_text(first);
+        s.set_input(String::new());
+        s.paste_text(second);
+        assert_eq!(s.input, "[Pasted text #2 +5 lines]");
+
+        assert_eq!(s.unfolded(&s.input), second);
+        s.submit().expect("submitted");
+        assert_eq!(
+            s.names_of_the_turn().line(),
+            "[Pasted text #2 +5 lines]",
+            "the turn did not keep the line as the box showed it"
+        );
+    }
+
+    /// A stopped turn puts back the line the box held, so a paste that holds an earlier paste is
+    /// not split into the earlier paste's marker and the words around it.
+    #[test]
+    fn a_stopped_turn_puts_back_a_paste_that_holds_an_earlier_paste() {
+        let mut s = session();
+        s.paste_text("one\ntwo\nthree\nfour\n");
+        s.set_input(String::new());
+        s.paste_text("one\ntwo\nthree\nfour\nfive\n");
+        let prompt = s.submit().expect("submitted");
+
+        s.restore(prompt);
+        assert_eq!(s.input, "[Pasted text #2 +5 lines]");
+    }
+
+    /// Words in the box that equal an earlier paste's text are typed words. A turn reads the names
+    /// in them, and a stopped turn does not put them behind that paste's marker. The paste has no
+    /// trailing newline, so the words typed after it was rubbed out are exactly its text once the
+    /// line is trimmed. Rejects finding pastes by their text in the words.
+    #[test]
+    fn typed_words_equal_to_an_earlier_paste_are_not_put_behind_its_marker() {
+        let mut s = session();
+        let pasted = "see @README.md\ntwo\nthree\nfour\nfive";
+        s.paste_text(pasted);
+        assert_eq!(s.input, "[Pasted text #1 +5 lines]");
+        s.set_input(String::new());
+        s.paste(pasted);
+        assert_eq!(s.input, pasted, "the words were not typed whole");
+        let prompt = s.submit().expect("submitted");
+        assert_eq!(prompt, pasted);
+
+        assert_eq!(s.names_of_the_turn().line(), pasted);
+        s.restore(prompt);
+        assert_eq!(s.input, pasted);
     }
 
     /// Deleting the marker is the only way a user has to take a paste back, so it has to be the
@@ -9111,7 +9720,8 @@ mod tests {
         let request = crate::loops::request("5m check the deploy");
 
         assert_eq!(
-            s.start_loop(request, Vec::new(), Vec::new()).as_deref(),
+            s.start_loop(request, Vec::new(), Vec::new(), NamesFrom::nothing())
+                .as_deref(),
             Some("check the deploy")
         );
         assert_eq!(s.status, Status::Working);
@@ -9141,6 +9751,7 @@ mod tests {
             crate::loops::request("15m look at [Image #1]"),
             commanded.pasted,
             commanded.attached,
+            NamesFrom::nothing(),
         );
 
         assert_eq!(sent.as_deref(), Some("look at [Image #1]"));
@@ -9173,6 +9784,7 @@ mod tests {
             crate::loops::request("15m look at [Image #1]"),
             commanded.pasted,
             commanded.attached,
+            NamesFrom::nothing(),
         );
         s.complete("the first answer", Vec::new(), 0);
         s.loop_turn_ended(None);
@@ -9214,6 +9826,7 @@ mod tests {
             crate::loops::request("15m look at [Image #1]"),
             commanded.pasted,
             commanded.attached,
+            NamesFrom::nothing(),
         );
 
         assert_eq!(sent.as_deref(), Some("look at [Image #1]"));
@@ -9289,7 +9902,12 @@ mod tests {
             ("8d watch", t!(loop_interval_capped, every = "7d")),
         ] {
             let mut s = session();
-            s.start_loop(crate::loops::request(typed), Vec::new(), Vec::new());
+            s.start_loop(
+                crate::loops::request(typed),
+                Vec::new(),
+                Vec::new(),
+                NamesFrom::nothing(),
+            );
 
             assert!(
                 s.transcript.iter().any(|entry| entry.text == said),
@@ -9310,7 +9928,8 @@ mod tests {
         let request = crate::loops::request("5m /status");
 
         assert_eq!(
-            s.start_loop(request, Vec::new(), Vec::new()).as_deref(),
+            s.start_loop(request, Vec::new(), Vec::new(), NamesFrom::nothing())
+                .as_deref(),
             Some("/status")
         );
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
@@ -9322,7 +9941,12 @@ mod tests {
     #[test]
     fn a_later_tick_of_a_loop_over_a_command_is_sent_as_a_prompt_and_runs_nothing() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m /exit"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m /exit"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
 
@@ -9349,6 +9973,7 @@ mod tests {
                 _ => panic!("unread"),
             },
             Instant::now(),
+            NamesFrom::nothing(),
         );
         assert_eq!(s.status, Status::Idle, "a turn started at once");
         assert!(s.looping().is_some());
@@ -9377,8 +10002,14 @@ mod tests {
                 _ => panic!("unread"),
             },
             Instant::now(),
+            NamesFrom::nothing(),
         );
-        s.begin_turn("now".to_string(), (Vec::new(), Vec::new()), Vec::new());
+        s.begin_turn(
+            "now".to_string(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
         assert!(s.looping().is_some(), "an unrelated turn ended it");
@@ -9540,7 +10171,12 @@ mod tests {
     #[test]
     fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
         let mut under_a_loop = session();
-        under_a_loop.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        under_a_loop.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         under_a_loop.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_loop.watches().is_empty());
         assert!(
@@ -9571,7 +10207,12 @@ mod tests {
     fn a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended() {
         for start in [
             &mut (|s: &mut Session| {
-                s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+                s.start_loop(
+                    crate::loops::request("5m watch"),
+                    Vec::new(),
+                    Vec::new(),
+                    NamesFrom::nothing(),
+                );
             }) as &mut dyn FnMut(&mut Session),
             &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
         ] {
@@ -9625,7 +10266,12 @@ mod tests {
         assert_eq!(s.arming(), Arming::Allowed { free: 7 });
 
         let mut looping = session();
-        looping.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        looping.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         assert_eq!(looping.arming(), Arming::UnderALoop);
 
         let mut goal = session();
@@ -10252,7 +10898,12 @@ mod tests {
     #[test]
     fn a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.complete("done", Vec::new(), 0);
 
         // Due, but the person has started something of their own.
@@ -10586,7 +11237,12 @@ mod tests {
             "an idle session held the machine awake"
         );
 
-        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.keep_awake();
         assert!(s.caffeinate.holding(), "a running tick held nothing");
 
@@ -10663,7 +11319,12 @@ mod tests {
                 .clone()
         }
         let mut s = session();
-        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         assert_eq!(last_note(&s), "loop 1, tick 1");
 
         s.complete("done", Vec::new(), 0);
@@ -10693,7 +11354,12 @@ mod tests {
     #[test]
     fn a_turn_that_says_the_loop_is_finished_ends_it_and_says_so() {
         let mut s = session();
-        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::finished(true)));
         assert!(s.looping().is_none());
@@ -10716,7 +11382,12 @@ mod tests {
     #[test]
     fn a_prompt_typed_during_a_loop_is_not_a_tick_of_it() {
         let mut s = session();
-        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         assert!(s.looping().expect("a loop").ticking());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(120, false)));
@@ -10743,6 +11414,7 @@ mod tests {
             crate::loops::request("watch the build"),
             Vec::new(),
             Vec::new(),
+            NamesFrom::nothing(),
         );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(900, false)));
@@ -10762,7 +11434,12 @@ mod tests {
     #[test]
     fn clearing_the_session_ends_the_loop() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.clear();
         assert!(s.looping().is_none());
         assert!(
@@ -10788,7 +11465,12 @@ mod tests {
     #[test]
     fn a_loop_past_its_age_ends_and_says_so_instead_of_ticking() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.complete("done", Vec::new(), 0);
         let later = Instant::now() + crate::loops::MAX_AGE;
         assert_eq!(s.loop_tick_at(later), None);
@@ -10807,7 +11489,12 @@ mod tests {
         assert!(!s.stop_loops());
         assert!(s.transcript.is_empty());
 
-        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         assert!(s.stop_loops());
         assert!(s.looping().is_none());
     }
@@ -10822,6 +11509,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            NamesFrom::nothing(),
         );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
@@ -10899,6 +11587,7 @@ mod tests {
             crate::loops::request("5m check the deploy"),
             Vec::new(),
             Vec::new(),
+            NamesFrom::nothing(),
         );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
@@ -10906,6 +11595,7 @@ mod tests {
             crate::loops::request("1h check the pull request"),
             Vec::new(),
             Vec::new(),
+            NamesFrom::nothing(),
         );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
@@ -10943,6 +11633,7 @@ mod tests {
                 crate::loops::request(&format!("5m watch {n}")),
                 Vec::new(),
                 Vec::new(),
+                NamesFrom::nothing(),
             );
             s.complete("done", Vec::new(), 0);
             s.loop_turn_ended(None);
@@ -10954,6 +11645,7 @@ mod tests {
             crate::loops::request("5m one too many"),
             Vec::new(),
             Vec::new(),
+            NamesFrom::nothing(),
         );
         assert_eq!(sent, None);
         assert_eq!(s.status, Status::Idle, "a refused loop began a turn");
@@ -10972,7 +11664,9 @@ mod tests {
         let mut s = two_loops();
         s.transcript.clear();
         let after = |s: &mut Session, line: &str| match crate::loops::parse_after(line) {
-            crate::loops::Delayed::Start(request) => s.start_after(request, Instant::now()),
+            crate::loops::Delayed::Start(request) => {
+                s.start_after(request, Instant::now(), NamesFrom::nothing())
+            }
             _ => panic!("unread"),
         };
 
@@ -11016,7 +11710,9 @@ mod tests {
     fn the_note_for_an_after_line_typed_earlier_says_the_time_left() {
         let typed = |ago: Duration| Instant::now().checked_sub(ago).expect("an earlier instant");
         let start = |s: &mut Session, ago: Duration| match crate::loops::parse_after("5m tail") {
-            crate::loops::Delayed::Start(request) => s.start_after(request, typed(ago)),
+            crate::loops::Delayed::Start(request) => {
+                s.start_after(request, typed(ago), NamesFrom::nothing())
+            }
             _ => panic!("unread"),
         };
 
@@ -11058,7 +11754,12 @@ mod tests {
     fn a_number_that_was_used_is_not_given_to_a_later_loop() {
         let mut s = two_loops();
         assert!(s.stop_loop(Some(1)));
-        s.start_loop(crate::loops::request("5m a third"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m a third"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
         s.transcript.clear();
@@ -11107,7 +11808,12 @@ mod tests {
         // Loop 1 is every hour and loop 2 every five minutes, so by an hour and a minute both are
         // due and the younger loop became due first.
         for line in ["1h check the pull request", "5m check the deploy"] {
-            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.start_loop(
+                crate::loops::request(line),
+                Vec::new(),
+                Vec::new(),
+                NamesFrom::nothing(),
+            );
             s.complete("done", Vec::new(), 0);
             s.loop_turn_ended(None);
         }
@@ -11134,7 +11840,12 @@ mod tests {
     fn a_turn_ending_arms_only_the_loop_whose_tick_it_was() {
         let mut s = session();
         for line in ["1h check the pull request", "5m check the deploy"] {
-            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.start_loop(
+                crate::loops::request(line),
+                Vec::new(),
+                Vec::new(),
+                NamesFrom::nothing(),
+            );
             s.complete("done", Vec::new(), 0);
             s.loop_turn_ended(None);
         }
@@ -11290,7 +12001,12 @@ mod tests {
     #[test]
     fn a_goal_and_a_loop_are_never_both_running() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.start_goal("cargo test exits 0".to_string());
         assert!(s.looping().is_none(), "the loop outlived the goal");
         assert!(s.goal().is_some());
@@ -11303,7 +12019,12 @@ mod tests {
 
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
-        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         assert!(s.goal().is_none(), "the goal outlived the loop");
         assert!(s.looping().is_some());
         assert!(
@@ -11432,7 +12153,12 @@ mod tests {
         s.complete("before the goal", Vec::new(), 1_000);
         s.start_goal("cargo test exits 0".to_string());
         s.complete("under the goal", Vec::new(), 3_500);
-        s.begin_turn("carry on".to_string(), (Vec::new(), Vec::new()), Vec::new());
+        s.begin_turn(
+            "carry on".to_string(),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
         s.progressed(bravebot_agent::Spent {
             tokens: 700,
             ..Default::default()
@@ -11714,7 +12440,12 @@ mod tests {
         s.pause_goal();
         assert_eq!(s.arming(), bravebot_agent::watch::Arming::UnderAGoal);
 
-        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m watch"),
+            Vec::new(),
+            Vec::new(),
+            NamesFrom::nothing(),
+        );
 
         assert!(s.goal().is_none(), "the loop left the paused goal standing");
         assert!(s.looping().is_some());
@@ -12659,22 +13390,6 @@ mod tests {
             s.indicator().expect("working").verb,
             t!(indicator_answering),
             "the label outlived the question"
-        );
-    }
-
-    /// The `/context` rows must add up to the measured total, so each share is a whole number
-    /// and the rounding remainders are handed out rather than dropped.
-    #[test]
-    fn a_count_is_apportioned_in_whole_numbers_that_add_up_to_it() {
-        assert_eq!(apportion(10, &[1, 1, 1]), vec![4, 3, 3]);
-        assert_eq!(apportion(777, &[0, 300, 0, 700]).iter().sum::<u64>(), 777);
-        assert_eq!(apportion(100, &[0, 0]), vec![0, 0]);
-        assert_eq!(apportion(0, &[5, 5]), vec![0, 0]);
-        assert_eq!(
-            apportion(u64::MAX, &[u64::MAX, u64::MAX])
-                .iter()
-                .sum::<u64>(),
-            u64::MAX
         );
     }
 
@@ -14331,6 +15046,42 @@ mod tests {
             assert_eq!(last.total, 500);
         }
 
+        /// SCROLL-10: a session holds 20000 lines across all calls and no more. The test above sizes
+        /// its loop from the constant, so it passes for any bound; this one fixes the number.
+        #[test]
+        fn a_session_holds_twenty_thousand_lines_for_expansion_and_no_more() {
+            let mut s = Session::new("kernel-enforced");
+            let mut call = |lines: usize| {
+                s.finish_activity(Activity::running("Read", "f").done("lines"));
+                s.returned(Returned {
+                    lines: vec!["glimpse".to_string()],
+                    total: lines,
+                    from_the_end: false,
+                    whole: vec!["a".to_string(); lines],
+                });
+                s.transcript.last().unwrap().returned.clone().unwrap()
+            };
+
+            // Forty calls of 500 lines fill the bound exactly, and the one that reaches 20000 is
+            // still held in full.
+            for number in 1..=40 {
+                let held = call(500);
+                assert_eq!(
+                    held.whole.len(),
+                    500,
+                    "call {number} of 500 lines was cut before the session held 20000"
+                );
+            }
+
+            // One more call is past the bound: it keeps the glimpse and still counts its lines.
+            let past = call(2);
+            assert_eq!(
+                past.whole, past.lines,
+                "a call past 20000 lines kept its whole result"
+            );
+            assert_eq!(past.total, 2);
+        }
+
         /// VIEW-24: a glimpse is of the call that just finished, so it goes under that call and
         /// not under the one before it.
         #[test]
@@ -14511,6 +15262,19 @@ mod tests {
             );
         }
 
+        /// A reply that ran out of words mid-thought is drawn whole once it is finished, where the
+        /// same text arriving draws nothing (VIEW-18). A finished reply read as one still being
+        /// written would leave a blank entry where the answer should be.
+        #[test]
+        fn a_finished_reply_that_stopped_mid_thought_is_drawn_whole() {
+            let mut s = working();
+            s.complete("<think>the user wants the config", Vec::new(), 0);
+            assert_eq!(
+                s.transcript.last().expect("an entry").text,
+                "<think>the user wants the config"
+            );
+        }
+
         /// And the same for what a round says on its way to the next call.
         #[test]
         fn a_round_that_thought_before_speaking_records_only_what_it_said() {
@@ -14530,6 +15294,21 @@ mod tests {
             let before = s.transcript.len();
             s.narrate("<think>nothing worth saying yet</think>");
             assert_eq!(s.transcript.len(), before);
+        }
+
+        /// A round that ran out of words mid-thought before its call is drawn whole, as a finished
+        /// reply is (VIEW-18). A round's narration read as one still being written would be
+        /// dropped as empty, and the turn would read as having said nothing before the call.
+        #[test]
+        fn a_round_that_stopped_mid_thought_is_drawn_whole() {
+            let mut s = working();
+            let before = s.transcript.len();
+            s.narrate("<think>the user wants the config");
+            assert_eq!(s.transcript.len(), before + 1, "the round left no entry");
+            assert_eq!(
+                s.transcript.last().expect("an entry").text,
+                "<think>the user wants the config"
+            );
         }
 
         /// What a request that was thrown away had written is not part of the reply that
@@ -15286,6 +16065,52 @@ mod tests {
             s.replay(&conversation, "a title", &recalled);
             assert!(s.transcript.iter().any(|e| e.text == "The answer"));
             assert!(!s.transcript.iter().any(|e| e.text.contains("weighing")));
+        }
+
+        /// A reply the record holds that ran out of words mid-thought is drawn whole on a resume,
+        /// as it was when it finished (VIEW-18). A resume that read it as a reply still being
+        /// written would drop it as empty.
+        #[test]
+        fn a_resumed_reply_that_stopped_mid_thought_is_drawn_whole() {
+            let transcript = resumed(
+                vec![
+                    Message::user("question"),
+                    Message::assistant("<think>weighing it up"),
+                ],
+                &BTreeMap::new(),
+            );
+            let said: Vec<&str> = transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::Assistant)
+                .map(|entry| entry.text.as_str())
+                .collect();
+            assert_eq!(said, vec!["<think>weighing it up"]);
+        }
+
+        /// The record with no turn history is replayed on a path of its own, and a reply that ran
+        /// out of words mid-thought is drawn whole there too (VIEW-18).
+        #[test]
+        fn a_legacy_resumed_reply_that_stopped_mid_thought_is_drawn_whole() {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("question"));
+            conversation.push(Message::assistant("<think>weighing it up"));
+            let recalled = bravebot_session::sessions::Recalled {
+                history: None,
+                turns: None,
+                trails: BTreeMap::new(),
+                todos: BTreeMap::new(),
+                asides: Vec::new(),
+                started: None,
+            };
+            let mut s = session();
+            s.replay(&conversation, "a title", &recalled);
+            let said: Vec<&str> = s
+                .transcript
+                .iter()
+                .filter(|entry| entry.speaker == Speaker::Assistant)
+                .map(|entry| entry.text.as_str())
+                .collect();
+            assert_eq!(said, vec!["<think>weighing it up"]);
         }
 
         /// The audit is written beside the record, so what a gate decided two sessions ago is on

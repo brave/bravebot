@@ -80,9 +80,35 @@ pub fn offer(
 /// out, because a file the person thinks went and did not would be worse than a send that says
 /// why it stopped.
 pub fn named(workspace: &Workspace, prompt: &str) -> Result<Vec<String>, Failure> {
+    surveyed(workspace, bravebot_mentions::referenced(prompt))
+}
+
+/// The files a sent `prompt` names, read out of `shown`, the line as the window's box showed it,
+/// where one is given.
+///
+/// The words behind a folded paste are sent as text and name no file (NAME-12), so the names are
+/// read in the line with each paste still behind its marker. `shown` only narrows: a name it holds
+/// that `prompt` does not is left out, so a window cannot name a file the sent words never named.
+pub fn named_as_shown(
+    workspace: &Workspace,
+    prompt: &str,
+    shown: Option<&str>,
+) -> Result<Vec<String>, Failure> {
+    let Some(shown) = shown else {
+        return named(workspace, prompt);
+    };
+    let sent = bravebot_mentions::referenced(prompt);
+    let names = bravebot_mentions::referenced(shown)
+        .into_iter()
+        .filter(|name| sent.contains(name))
+        .collect();
+    surveyed(workspace, names)
+}
+
+fn surveyed(workspace: &Workspace, names: Vec<String>) -> Result<Vec<String>, Failure> {
     let sources = workspace.reference_sources();
     // A name under a reference's alias is the file in that directory (REFER-6).
-    bravebot_agent::named::surveyed(workspace, bravebot_mentions::referenced(prompt), |name| {
+    bravebot_agent::named::surveyed(workspace, names, |name| {
         bravebot_mentions::resolved(workspace.root(), name, &sources)
     })
     .into_iter()

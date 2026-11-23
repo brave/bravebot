@@ -150,6 +150,24 @@ The plan is [put to you before it runs](#a-plan-is-put-to-you-first), drawn and 
 here rather than printed on one line. In [plan mode](../security/permission-modes.md)
 a plan with a write in it does not run at all, decided before the plan is put to anybody.
 
+### From the desktop app
+
+Type the same line in a chat's composer and press Enter:
+
+```
+/manifest collect every TODO comment into notes/todos.md
+```
+
+The task appears as the run's task row, not as a message from you, so it cannot be forked from and is
+not exported. The plan card follows, and the run starts when you choose **Run this plan**. While it
+runs you can read, edit and stop, but not send. The chat's record shows as a **Plan run** in the
+session list.
+
+Typed while a turn is running, the line waits in the queue and the run starts once the turn ends.
+`/manifest` with no task sends nothing and says that a manifest run needs a task to plan. A run takes
+no attached files: a line with a file on the paperclip or dropped onto it is refused and put back in
+the composer, so name the file in the task instead.
+
 ## A manifest run is recorded, but cannot be continued
 
 A plan-then-execute run cannot be resumed. Its conversation is empty, because a session is turns over

@@ -283,3 +283,22 @@ test('a plan names the rules it is not held to as they are spelled', () => {
   }))
   assert.deepEqual(held, ['"Edit(n\\u{200b}otes)"', '"Edit(s\\u{200b}rc)"'])
 })
+
+// BACKEND-36, RETRIEVE-23: a key no reader read, a key a file wrote twice and a managed value that
+// pins nothing are sentences the agent words; the banner counts each as a setting not in force and
+// draws it as text, so markup in a key or a file name is never markup.
+test('a key that was not read as written is a setting not in force and is drawn as text', () => {
+  const said = ['permissions.denyy in /p/.bravebot/settings.json is not read by this build: it configures nothing and restricts nothing']
+  assert.equal(t.notInForce(rules({ droppedKeys: said })), true)
+  assert.equal(t.notInForce(rules({ droppedKeys: [] })), false)
+  assert.equal(t.notInForce(NONE), false, 'an older bridge sends no list')
+
+  const markup = render(RulesBanner, { rules: rules({ droppedKeys: [...said, 'run.scrub in /p/s.json is written more than once'] }) })
+  assert.ok(markup.includes('2 permission settings are not in force'), markup)
+  assert.ok(markup.includes(said[0]), markup)
+  assert.ok(markup.includes('data-test="rules-note-dropped"'), markup)
+
+  const forged = '<img src="https://example.com/x.png"> in /p/s.json is not read by this build'
+  const drawn = render(RulesBanner, { rules: rules({ droppedKeys: [forged] }) })
+  assert.ok(!drawn.includes('<img'), drawn)
+})

@@ -25,7 +25,7 @@ OpenAI's is sent chat completions, as [Chat completions](#chat-completions) says
 `OPENAI_API_KEY=<your key>`, or store it with `bravebot auth login gateway openai`, which needs no
 block written first: it adds `"provider": {"openai": {}}` to your settings, and that entry sends the
 stored key to `api.openai.com`. A block you write yourself has to say where the key lives: one
-naming no `env`, no `options.apiKey` and no stored key sends none, and OpenAI refuses the request.
+naming no `env`, no `options.apiKey`, no `options.keyFile` and no stored key sends none, and OpenAI refuses the request.
 `OPENAI_API_KEY` is a name other OpenAI tools read as well, and naming it in `env` is what makes
 bravebot send the key your shell holds, so the entry the sign-in adds does not name it. Like any
 variable a `provider` block names, it is [withheld from the programs bravebot

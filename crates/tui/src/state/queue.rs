@@ -25,6 +25,9 @@ pub(super) const GIVE_WAY_AFTER: Duration = Duration::from_secs(10);
 pub struct Queued {
     /// The line, as it was typed.
     pub prompt: String,
+    /// Where the names of the turn this becomes are read from: the line as the box showed it, with
+    /// each folded paste still a marker, or nothing for a line a click stood for (NAME-12).
+    names: NamesFrom,
     /// Files it named, settled at the moment it was queued.
     attached: Vec<Attached>,
     /// Pictures it named, settled at the same moment and for the same reason.
@@ -247,6 +250,7 @@ impl Session {
         }
         self.queued.push(Queued {
             prompt,
+            names: NamesFrom::the_box_line(typed),
             attached,
             pasted,
             waiting,
@@ -271,8 +275,11 @@ impl Session {
         if !matches!(self.status, Status::Working | Status::Running) {
             return false;
         }
+        let names = self.names_from_words_nobody_pasted(line);
         self.queued.push(Queued {
             prompt: line.to_string(),
+            // Never typed in the box, so no line says which of its words were typed.
+            names,
             attached: Vec::new(),
             pasted: Vec::new(),
             waiting: Waiting::Command,
@@ -408,12 +415,14 @@ impl Session {
             .count()
             .max(1);
         let mut prompts = Vec::new();
+        let mut names = Vec::new();
         let mut attached = Vec::new();
         let mut pasted = Vec::new();
         let mut recall = Vec::new();
         let hurried = self.queued[0].hurried;
         for next in self.queued.drain(..together) {
             prompts.push(next.prompt);
+            names.push(next.names);
             attached.extend(next.attached);
             pasted.extend(next.pasted);
             recall.extend(next.recall);
@@ -433,7 +442,12 @@ impl Session {
             prompts.as_slice(),
             [only] if crate::command_table::is_a_command_given_words(only)
         );
-        let begun = self.begin_turn(prompts.join("\n"), (attached, pasted), recall);
+        let begun = self.begin_turn(
+            prompts.join("\n"),
+            (attached, pasted),
+            recall,
+            NamesFrom::joined(names),
+        );
         self.leave_word_sent = lone;
         self.command_sent_as_prompt = given_words;
         Some(begun)
@@ -460,6 +474,7 @@ impl Session {
             pasted: taken.pasted,
             attached: taken.attached,
             typed_at: taken.typed_at,
+            names: taken.names,
         })
     }
 

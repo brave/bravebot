@@ -484,3 +484,76 @@ replace: let joined = self.confidentiality.join(shown); => let joined = shown;
 mutation: Context::fresh starts a turn's context private
 file: crates/core/src/policy.rs
 replace: confidentiality: Confidentiality::Public, => confidentiality: Confidentiality::Private,
+
+
+mutation: Context::integrity reports a fallen context as trusted
+file: crates/core/src/policy.rs
+replace: self.integrity => Integrity::Trusted
+
+mutation: Context::confidentiality reports a private context as public
+file: crates/core/src/policy.rs
+replace: self.confidentiality => Confidentiality::Public
+
+mutation: Context::label reports a fallen context as trusted
+file: crates/core/src/policy.rs
+replace: Label::new(self.integrity, self.confidentiality) => Label::new(Integrity::Trusted, self.confidentiality)
+
+mutation: Grants::spend spends an endorsement made for another tool
+file: crates/core/src/policy.rs
+replace: let matches = crate::compare::same_text(&grant.tool, tool) => let matches = true
+
+mutation: Grants::spend spends an endorsement made for another field
+file: crates/core/src/policy.rs
+replace: && crate::compare::same_text(&grant.field, field) => && true
+
+mutation: Grants::spend spends an endorsement made for another value
+file: crates/core/src/policy.rs
+replace: && crate::compare::same_text(&grant.value, value); => && true;
+
+mutation: Grants::spend leaves a spent endorsement to be spent again
+file: crates/core/src/policy.rs
+replace: self.pending.remove(at); => let _ = at;
+
+mutation: Grants::issue drops the endorsement a person's answer issued
+file: crates/core/src/policy.rs
+replace: self.pending.push(grant); => let _ = grant;
+
+mutation: fetch_reason reads a rule about a host as no rule
+file: crates/core/src/policy.rs
+replace: let ruled = FetchReason::Ruled(ruling); => let ruled = FetchReason::Ruled(crate::permissions::Ruling::Allow);
+
+mutation: FetchReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let fetch_allowed = ruling == crate::permissions::Ruling::Allow; => let fetch_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: mcp_reason lets a rule answer for a server that asks about every call
+file: crates/core/src/policy.rs
+replace: if standing == McpStanding::AskedEveryCall { => if false {
+
+mutation: mcp_reason lets a rule answer for a call with private arguments
+file: crates/core/src/policy.rs
+replace: let private_arguments = !public_arguments; => let private_arguments = false;
+
+mutation: mcp_reason lets a standing answer overturn an ask rule
+file: crates/core/src/policy.rs
+replace: return McpReason::Ruled(ruling); => return if ruling == crate::permissions::Ruling::Allow { McpReason::Ruled(ruling) } else { McpReason::StoppedAsking };
+
+mutation: McpReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let call_allowed = ruling == crate::permissions::Ruling::Allow; => let call_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: McpReason::asks lets a call with private arguments through
+file: crates/core/src/policy.rs
+replace: // answers for the tool. => Self::Private => false,
+
+mutation: search_reason lets a rule answer for a search made after private content was shown
+file: crates/core/src/policy.rs
+replace: let private_context = !public_context; => let private_context = false;
+
+mutation: SearchReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let search_allowed = ruling == crate::permissions::Ruling::Allow; => let search_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: SearchReason::asks lets a search after private content through
+file: crates/core/src/policy.rs
+replace: // The planner's context holds private content, or nothing answers for a search. => Self::Private => false,

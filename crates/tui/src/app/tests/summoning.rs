@@ -88,7 +88,12 @@ fn a_picked_definition_addresses_the_line_as_the_agent_command_does() {
 
     assert_eq!(
         handle_key(&mut session, key(KeyCode::Enter)),
-        Action::Address("lantern what changed?".to_string(), Vec::new(), Vec::new())
+        Action::Address(
+            "lantern what changed?".to_string(),
+            Vec::new(),
+            Vec::new(),
+            crate::state::NamesFrom::the_line_in_a_test("[@lantern] what changed?")
+        )
     );
     assert!(session.input().is_empty());
     assert!(!session.pick_stands(), "the pick outlived the line");
@@ -157,7 +162,8 @@ fn a_picked_line_waits_as_an_agent_command_and_addresses_the_turn_after() {
         Some(Action::Address(
             "lantern check it".to_string(),
             Vec::new(),
-            Vec::new()
+            Vec::new(),
+            crate::state::NamesFrom::the_line_in_a_test("/agent lantern check it")
         ))
     );
     std::fs::remove_dir_all(&root).ok();
@@ -188,7 +194,8 @@ fn a_second_definition_picked_replaces_the_first_and_only_it_is_sent() {
         Action::Address(
             "reviewer review the diff".to_string(),
             Vec::new(),
-            Vec::new()
+            Vec::new(),
+            crate::state::NamesFrom::the_line_in_a_test("review the diff [@reviewer] ")
         )
     );
     std::fs::remove_dir_all(&root).ok();
@@ -220,7 +227,12 @@ fn shift_enter_on_a_picked_definition_starts_a_line_and_keeps_the_pick() {
         session.status = crate::state::Status::Idle;
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Address("lantern check it".to_string(), Vec::new(), Vec::new()),
+            Action::Address(
+                "lantern check it".to_string(),
+                Vec::new(),
+                Vec::new(),
+                crate::state::NamesFrom::the_line_in_a_test("[@lantern] check it\n")
+            ),
             "working: {working}"
         );
         std::fs::remove_dir_all(&root).ok();

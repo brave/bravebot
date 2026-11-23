@@ -33,10 +33,21 @@ pub(super) fn manifest_answer_for(key: KeyEvent, drawn: &Drawn) -> Option<Respon
 
 /// Ask whether to fetch a URL, blocking until answered.
 pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest) -> Answer {
-    ask_plain(
+    ask_fetch_reading(terminal, request, super::next_press)
+}
+
+/// [`ask_fetch`], taking each event from `next`, so a test can stand in for the terminal.
+pub(crate) fn ask_fetch_reading<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &FetchRequest,
+    next: impl FnMut() -> super::Next,
+) -> Answer {
+    super::ask_scrolled_reading(
         terminal,
+        Answer::Reject,
         |frame, scroll, seen| draw_fetch(frame, request, scroll, seen),
-        answer_for,
+        |pressed, drawn| answer_for(pressed, drawn).map(super::Step::from),
+        next,
     )
 }
 

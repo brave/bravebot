@@ -521,13 +521,6 @@ pub(super) fn run_turn_animated(
     // other turn carries the definition the session was started under, if any (CLI-17). Kept past
     // the turn as well, because a stop puts the line back as it was typed, name and all.
     let addressed = session.take_addressing();
-    // Whether the name is the one the session stands under and not one a `/agent` line named for
-    // this turn alone, which the record keeps beside the prompt (ADDRESS-12).
-    let addressing_standing = addressed.as_ref().is_some_and(|addressed| {
-        session
-            .standing_definition()
-            .is_some_and(|standing| standing.name == addressed.name)
-    });
 
     // Before the worker starts, because a sign-in needs the terminal and this is the thread that
     // has it. Left to the worker, the URL and code the AWS CLI prints would land in a frame this
@@ -572,24 +565,7 @@ pub(super) fn run_turn_animated(
     let worker_workspace = workspace.clone();
     // No round limit: the person reading this screen is the bound, and a stop reaches a turn
     // mid-round. A number here would only interrupt work that was going fine.
-    // Which tick of a loop this is, where it is one at all. A prompt the person typed in the
-    // middle of a loop is not a tick of it and carries nothing.
-    let tick = session
-        .loops()
-        .in_flight()
-        .and_then(|running| running.tick());
-    // And what the session is working towards, where a person set a condition. Every turn under a
-    // goal carries it, the first one included: the round that sets the direction is the one that
-    // most needs to know what it is aiming at.
-    // A goal the person has held still is not aimed at: the turn is told nothing about it.
-    let working_towards = session
-        .goal_in_force()
-        .map(|goal| goal.condition().to_string());
-    // And whether this turn may arm a standing watch. Read here for the reason the mode is read
-    // here: only the session can count what is live, and a tool answering out of a stale count
-    // would tell the planner about a watch the session then refused.
-    let arming = session.arming();
-    // And whether a wait this turn asks for would become a later look at this line, which decides
+    // Whether a wait this turn asks for would become a later look at this line, which decides
     // whether it is offered a way to ask for one. Read here for the reason `arming` is: only the
     // session knows what it is already doing, and a tool answering out of a stale reading would
     // tell the planner a watch exists that the session then declines to keep.
@@ -600,74 +576,23 @@ pub(super) fn run_turn_animated(
     let permission_mode = session.live_permission_mode();
     // The worker starts the language servers, and the info panel on this thread names them.
     let language_servers = session.language_servers().clone();
-    let kept_jobs = session.kept_jobs().cloned();
-    let mut task = run
-        .task(prompt, session, permissions)
-        .with_rounds(None)
-        // There is somebody in front of this, so a run prompt here may offer the key whose answer
-        // outlives the session. A one-shot run says nothing here and reads no record.
-        .remembering(Some(stored.id().to_string()))
-        .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
-        .addressing_standing(addressing_standing)
-        // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
-        // sends, ticks and goal rounds included (CLI-19).
-        .with_system_prompts(session.system_prompts().clone())
-        // Whether a check that finds nothing answers in the person's place. Read off the session
-        // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
-        // began with.
-        .with_auto_vetting(session.auto_vetting())
-        .ticking(tick)
-        .arming(arming)
-        .looking_again(looking_again)
-        // This front end writes the links `set_link` records to the session record (SETLINK-2).
-        .keeping_links(true)
-        // And the files this session has already agreed the planner may be given, so a planner
-        // reading the same `.env` on turn after turn is asked about it once.
-        .already_exposed(exposed.clone())
-        .working_towards(working_towards)
-        // The kept facts already put in front of the planner on this session, so one is injected
-        // once (RECALL-9).
-        .with_injected_facts(stored.injected_facts().clone())
-        // The servers the session started, with a grant naming each. Their tools are offered once
-        // a person has read the list, which the turn puts to them before it plans (SERVERS-8).
-        .with_mcp(session.servers.session.clone())
-        // What earlier turns left open, where it changed since the planner was last told, and
-        // this session's own line in place of the turn's about changes left unbuilt (OPEN-3,
-        // OPEN-4).
-        .with_open_loops(session.open_loops_for_the_planner());
-    // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
-    // path and their keystroke is what vouches for it, exactly as `--file` does on the command
-    // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
-    // sent and the files that came with it cannot disagree.
-    for file in files_named_by_the_person(
-        session,
-        prompt,
-        wrote,
-        workspace.root(),
-        &workspace.reference_sources(),
-    ) {
-        task = task.with_file(file);
-    }
-    if session.take_driver_prompt() || wrote == Wrote::TheDriver {
-        task = task.written_by_the_driver();
-    }
-    task = with_firing_watch(task, session);
-    // The jobs the session keeps, so one started here is still running when the next turn begins
-    // (RUN-15).
-    if let Some(kept) = kept_jobs {
-        task = task.keeping_jobs(kept);
-    }
-    task = with_named_sessions(task, session, workspace.root(), prompt, wrote);
-    task = with_mcp_prompt(task, session, prompt, wrote);
-    task = with_submitted_attachments(task, session);
-    task = with_session_advisor(task, session);
-    task = with_session_style(task, session);
-    task = with_own_repository(task, session);
-    task = with_session_skill_mode(task, session);
-    task = with_session_limit(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
-    let task = task.with_file_authority(file_authority.clone());
+    // Bound once and never reassigned: the files and session excerpts of the task are added inside
+    // `the_turn_task`, from the line the turn was begun from, and nowhere in this function.
+    let task = the_turn_task(
+        run,
+        session,
+        permissions,
+        workspace,
+        stored,
+        &exposed,
+        &file_authority,
+        prompt,
+        wrote,
+        addressed.as_ref(),
+        looking_again,
+    );
     // The same map, for a `/btw` typed beside the turn to read the decisions the turn is making.
     session.set_turn_files(Some(file_authority.clone()));
     let retained = RetainedTurn {
@@ -691,7 +616,7 @@ pub(super) fn run_turn_animated(
         let (task, worker_config) = settle_the_turn(
             &worker_config,
             &egress,
-            task,
+            task.into_task(),
             &permission_mode,
             addressed_model.as_deref(),
         );
@@ -899,9 +824,10 @@ pub(super) fn run_turn_animated(
     ))
 }
 
-/// The level a turn was sent with, kept for the record the turn's save writes, so the Sessions
-/// screen can say how hard the model was asked to think. It is nothing for a model that reads no
-/// level, since none was sent, and it follows `/effort` from one turn to the next.
+/// The level in force when a turn finishes, kept for the record the turn's save writes, so the
+/// Sessions screen can say how hard the model was asked to think. It is the level the turn was sent
+/// with unless `/effort` or `/effort session` chose another while the turn ran. It is nothing for a
+/// model that reads no level, since none is sent, and it follows `/effort` from one turn to the next.
 pub(super) fn keep_the_effort_of(
     stored: &mut bravebot_session::sessions::Handle,
     session: &Session,
@@ -1179,6 +1105,10 @@ fn answer_in_a_turn(
             let answer = crate::confirm::ask_path(terminal, &request);
             replying.plainly(session, answer, crate::remote_confirm::Reply::Path);
         }
+        crate::remote_confirm::ToMain::Hook(request) => {
+            let answer = crate::confirm::ask_hook(terminal, &request);
+            replying.plainly(session, answer, crate::remote_confirm::Reply::Hook);
+        }
         crate::remote_confirm::ToMain::Host(request) => {
             let answer = crate::confirm::ask_host(terminal, &request);
             replying.plainly(session, answer, crate::remote_confirm::Reply::Host);
@@ -1385,6 +1315,36 @@ pub(super) enum Wrote {
     TheDriver,
 }
 
+/// Whose line the prompt `App::submit` was handed is, which decides whether a `@path` in it
+/// vouches for a file.
+///
+/// Everything the person typed or queued is theirs. The sentence a goal carries the work on with
+/// is this program's, and so is the one a watch fires with (FSWATCH-4), so a session whose watch
+/// is firing answers [`Wrote::TheDriver`]. A fire must also not leave a loop behind repeating
+/// itself, which is the other thing this answers.
+///
+/// Split out from `App::submit` so it can be tested: that function needs a terminal.
+pub(super) fn whose_line(session: &Session) -> Wrote {
+    if session.watch_is_firing() {
+        Wrote::TheDriver
+    } else {
+        Wrote::ThePerson
+    }
+}
+
+/// The condition a turn starting now is told it is working towards, where there is one.
+///
+/// A goal the person has held still is not aimed at (GOAL-14, GOAL-18): the turn is told nothing
+/// about it, so this reads the goal in force and not the goal that is set.
+///
+/// Split out from the turn's start so it can be tested: the function that builds the turn's task
+/// needs a terminal and a backend.
+pub(super) fn goal_to_work_towards(session: &Session) -> Option<String> {
+    session
+        .goal_in_force()
+        .map(|goal| goal.condition().to_string())
+}
+
 /// The wait that starts a loop nobody typed `/loop` for, where there is one.
 ///
 /// `None` where the turn asked for nothing, and where it was not offered a later look before it
@@ -1425,45 +1385,195 @@ pub(super) fn will_look_again(session: &Session, wrote: Wrote) -> bool {
         && session.watches().is_empty()
 }
 
-/// The files a prompt vouches for, read with each folded paste put back behind its marker.
-///
-/// The words a person pasted are sent as text and name no file (NAME-12), so an `@` in them does
-/// not vouch for a path nobody typed. [`Session::folded`] puts the marker back where the words are.
-pub(super) fn files_named_by_the_person(
-    session: &Session,
-    prompt: &str,
-    wrote: Wrote,
-    root: &std::path::Path,
-    sources: &bravebot_mentions::Sources,
-) -> Vec<String> {
-    files_named_in(&session.folded(prompt), wrote, root, sources)
+/// What a prompt names with `@`: the files it vouches for and the past sessions it quotes.
+pub(super) struct NamesRead {
+    /// Paths, resolved as a reference alias resolves them (REFER-6).
+    pub(super) files: Vec<String>,
+    /// Ids of sessions named with `@session:<id>` (NAME-10).
+    pub(super) sessions: Vec<String>,
 }
 
-/// The files a prompt vouches for by naming them with `@`.
+/// The task a turn is begun with, built from the session as it stands and from nothing the worker
+/// thread owns.
 ///
-/// Out of a line the person wrote, and out of no other. The keystroke is the whole of what vouches
-/// for the path, so a sentence this program wrote has nothing to vouch with: an `@` a judge
-/// happened to put in a reason would otherwise open a file on its own say-so, wearing an
-/// endorsement nobody gave.
-pub(super) fn files_named_in(
+/// The one place a turn's files and session excerpts are added, through
+/// [`with_the_names_the_person_wrote`], which reads the line the turn was begun from and not the
+/// prompt (NAME-12). Apart from `run_turn_animated` so a test builds the same task without a
+/// terminal and reads its `files` and `session_excerpts`.
+///
+/// What comes back is a [`TurnTask`], which has no `files` to push to. `run_turn_animated` takes
+/// the plain task out of it only where the worker begins.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a piece of session or settings state a turn reads once, and a bundle would only hold them together"
+)]
+pub(super) fn the_turn_task(
+    run: &RunSettings,
+    session: &mut Session,
+    permissions: &Permissions,
+    workspace: &Workspace,
+    stored: &bravebot_session::sessions::Handle,
+    exposed: &bravebot_core::credentials::Exposed,
+    file_authority: &bravebot_core::file_authority::FileAuthority,
     prompt: &str,
+    wrote: Wrote,
+    addressed: Option<&crate::state::Addressed>,
+    looking_again: bool,
+) -> TurnTask {
+    // Whether the name is the one the session stands under and not one a `/agent` line named for
+    // this turn alone, which the record keeps beside the prompt (ADDRESS-12).
+    let addressing_standing = addressed.is_some_and(|addressed| {
+        session
+            .standing_definition()
+            .is_some_and(|standing| standing.name == addressed.name)
+    });
+    // Which tick of a loop this is, where it is one at all. A prompt the person typed in the
+    // middle of a loop is not a tick of it and carries nothing.
+    let tick = session
+        .loops()
+        .in_flight()
+        .and_then(|running| running.tick());
+    // And what the session is working towards, where a person set a condition. Every turn under a
+    // goal carries it, the first one included: the round that sets the direction is the one that
+    // most needs to know what it is aiming at.
+    let working_towards = goal_to_work_towards(session);
+    // And whether this turn may arm a standing watch. Read here for the reason the mode is read
+    // here: only the session can count what is live, and a tool answering out of a stale count
+    // would tell the planner about a watch the session then refused.
+    let arming = session.arming();
+    let kept_jobs = session.kept_jobs().cloned();
+    let mut task = run
+        .task(prompt, session, permissions)
+        .with_rounds(None)
+        // There is somebody in front of this, so a run prompt here may offer the key whose answer
+        // outlives the session. A one-shot run says nothing here and reads no record.
+        .remembering(Some(stored.id().to_string()))
+        .addressing(addressed.map(|addressed| addressed.name.clone()))
+        .addressing_standing(addressing_standing)
+        // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
+        // sends, ticks and goal rounds included (CLI-19).
+        .with_system_prompts(session.system_prompts().clone())
+        // Whether a check that finds nothing answers in the person's place. Read off the session
+        // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
+        // began with.
+        .with_auto_vetting(session.auto_vetting())
+        .ticking(tick)
+        .arming(arming)
+        .looking_again(looking_again)
+        // This front end writes the links `set_link` records to the session record (SETLINK-2).
+        .keeping_links(true)
+        // And the files this session has already agreed the planner may be given, so a planner
+        // reading the same `.env` on turn after turn is asked about it once.
+        .already_exposed(exposed.clone())
+        .working_towards(working_towards)
+        // The kept facts already put in front of the planner on this session, so one is injected
+        // once (RECALL-9).
+        .with_injected_facts(stored.injected_facts().clone())
+        // The servers the session started, with a grant naming each. Their tools are offered once
+        // a person has read the list, which the turn puts to them before it plans (SERVERS-8).
+        .with_mcp(session.servers.session.clone())
+        // What earlier turns left open, where it changed since the planner was last told, and
+        // this session's own line in place of the turn's about changes left unbuilt (OPEN-3,
+        // OPEN-4).
+        .with_open_loops(session.open_loops_for_the_planner());
+    // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
+    // path and their keystroke is what vouches for it, exactly as `--file` does on the command
+    // line. Read from the line the turn was begun from rather than tracked while it is typed, so
+    // the line that was sent and the files that came with it cannot disagree.
+    task = with_the_names_the_person_wrote(
+        task,
+        session,
+        wrote,
+        workspace.root(),
+        &workspace.reference_sources(),
+    );
+    if session.take_driver_prompt() || wrote == Wrote::TheDriver {
+        task = task.written_by_the_driver();
+    }
+    task = with_firing_watch(task, session);
+    // The jobs the session keeps, so one started here is still running when the next turn begins
+    // (RUN-15).
+    if let Some(kept) = kept_jobs {
+        task = task.keeping_jobs(kept);
+    }
+    task = with_mcp_prompt(task, session, prompt, wrote);
+    task = with_submitted_attachments(task, session);
+    task = with_session_advisor(task, session);
+    task = with_session_style(task, session);
+    task = with_own_repository(task, session);
+    task = with_session_skill_mode(task, session);
+    task = with_session_limit(task, session);
+    TurnTask(task.with_file_authority(file_authority.clone()))
+}
+
+/// A task [`the_turn_task`] built: its files and session excerpts are the ones the turn's line
+/// names and no code after the builder has added to them.
+///
+/// The field is private to this module and the type has no accessor but [`TurnTask::into_task`], so
+/// a line in `run_turn_animated` that pushes a file onto the task it holds does not compile. The
+/// plain task comes out where the worker is started, and a change that takes it out earlier to edit
+/// it is the one thing left that the compiler does not refuse.
+pub(super) struct TurnTask(Task);
+
+impl TurnTask {
+    /// The task to hand to the worker.
+    pub(super) fn into_task(self) -> Task {
+        self.0
+    }
+}
+
+/// The names a turn reads from where its line was kept.
+///
+/// Read from the line as the box showed it, with each folded paste still a marker, so the words a
+/// person pasted are sent as text and name no file and no session (NAME-12). A name in them is not
+/// one the person typed, and the box showed only the marker. [`Session::names_of_the_turn`] is that
+/// line, which a path that begins a turn has to hand over; a turn begun from no line, as the
+/// driver's own sentences are, has nothing and reads no name.
+///
+/// No word of the prompt reaches this function: the reader takes the session and not the words, so
+/// the unfolded prompt cannot be read for names here. A turn the driver wrote reads no name
+/// whatever line was kept, since no keystroke vouched for its sentences.
+///
+/// Split out from `run_turn_animated` so a test reaches the same step: that function needs a
+/// terminal.
+pub(super) fn named_by_the_person(
+    session: &Session,
     wrote: Wrote,
     root: &std::path::Path,
     sources: &bravebot_mentions::Sources,
-) -> Vec<String> {
+) -> NamesRead {
     match wrote {
-        // A name under a reference's alias is the file in that directory (REFER-6).
-        Wrote::ThePerson => bravebot_mentions::referenced(prompt)
-            .into_iter()
-            .map(|name| {
-                // A reference directory with no text spelling leaves the name as typed. Nothing
-                // in the workspace has that name, so the turn's read refuses it by name, and no
-                // other directory is read in its place.
-                bravebot_mentions::resolved(root, &name, sources).unwrap_or(name)
-            })
-            .collect(),
-        Wrote::TheDriver => Vec::new(),
+        Wrote::ThePerson => {
+            let names = session.names_of_the_turn();
+            NamesRead {
+                files: names.files(root, sources),
+                sessions: names.sessions(),
+            }
+        }
+        Wrote::TheDriver => NamesRead {
+            files: Vec::new(),
+            sessions: Vec::new(),
+        },
     }
+}
+
+/// Give the task the files and the session excerpts the turn's line names.
+///
+/// The one place the task is built from names, so `run_turn_animated` and the tests reach the same
+/// code. The names come from [`named_by_the_person`] and from nothing else, which keeps a name
+/// inside a folded paste out of `Task::files` and out of the excerpts (NAME-12).
+pub(super) fn with_the_names_the_person_wrote(
+    mut task: Task,
+    session: &mut Session,
+    wrote: Wrote,
+    root: &std::path::Path,
+    sources: &bravebot_mentions::Sources,
+) -> Task {
+    let named = named_by_the_person(session, wrote, root, sources);
+    for file in named.files {
+        task = task.with_file(file);
+    }
+    with_named_sessions(task, session, root, &named.sessions)
 }
 
 /// A row of the `@` list for each earlier session of this directory but the open one, newest first.
@@ -1517,7 +1627,7 @@ pub(super) fn definitions_offered(
 
 /// Carry the prompt of an MCP server a line runs, which the turn fetches (CMD-26).
 ///
-/// From a line the person wrote and from no other, for the reason [`files_named_in`] is: the
+/// From a line the person wrote and from no other, for the reason [`NamesFrom`] is: the
 /// keystroke is what runs it, and a line this program composed to carry a goal on is no keystroke.
 /// A line typed at the box whose arguments do not parse was refused where Enter was pressed. One
 /// that reaches here without parsing, a loop's prompt, goes on as the sentence it is and the person
@@ -1548,24 +1658,20 @@ pub(super) fn with_mcp_prompt(
     }
 }
 
-/// Add what each past session a prompt names with `@session:<id>` said, and tell the person what
+/// Add what each past session a line names with `@session:<id>` said, and tell the person what
 /// was and was not added.
 ///
-/// From a line the person wrote and from no other, for the reason [`files_named_in`] is: the
-/// keystroke is what vouches for it. A session that cannot be quoted is said so in the transcript
+/// `ids` are read by [`named_by_the_person`], from the line the person typed and from no other: the
+/// keystroke is what vouches for them. A session that cannot be quoted is said so in the transcript
 /// and the turn goes on without it, since the line is still a question worth answering.
 pub(super) fn with_named_sessions(
     mut task: Task,
     session: &mut Session,
     root: &Path,
-    prompt: &str,
-    wrote: Wrote,
+    ids: &[String],
 ) -> Task {
-    if wrote == Wrote::TheDriver {
-        return task;
-    }
-    for id in bravebot_mentions::referenced_sessions(prompt) {
-        match bravebot_session::excerpt::of(root, &id) {
+    for id in ids {
+        match bravebot_session::excerpt::of(root, id) {
             Ok(excerpt) => {
                 let chars = excerpt.chars;
                 session.note(if excerpt.cut {
@@ -1573,9 +1679,9 @@ pub(super) fn with_named_sessions(
                 } else {
                     t!(session_mention_added, id = id.as_str(), chars = chars)
                 });
-                task = task.with_session_excerpt(id, excerpt.text);
+                task = task.with_session_excerpt(id.clone(), excerpt.text);
             }
-            Err(refused) => session.note(refused.said(&id)),
+            Err(refused) => session.note(refused.said(id)),
         }
     }
     task

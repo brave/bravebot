@@ -39,7 +39,7 @@ session, the reach somebody remembered for a command, the command lines a shell 
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)). The rules and facts a person's sessions remember live here too, as `projects/<id>/` and `facts/` ([recall.md](recall.md)), written readable by their owner alone and refused to programs like the rest of the directory.
 The diagnostic logs, `logs/`, are written there too ([diagnostic-log.md](diagnostic-log.md)). Which Bedrock models refused the ask to show thinking is kept there as `bedrock-refusals.json`
-([BACKEND-63](backends.md#BACKEND-63)). `bravebot bug-report` writes into the working directory and adds nothing here.
+([BACKEND-63](backends.md#BACKEND-63)). The directories a confined stage may write are kept there as `stage-writes`, one line each, so that a later process leaves them out of the search for programs ([sandboxing.md](sandboxing.md#SANDBOX-30)). `bravebot bug-report` writes into the working directory and adds nothing here.
 [definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the
 definition a desktop bot is made as. [checkouts.md](checkouts.md) proposes another, which nothing
 yet builds either: the checkouts delegates are given, `checkouts/`, which hold a project's files
@@ -48,6 +48,10 @@ written readable by their owner alone and are read through the trust map.
 roster of sessions running in the background, `jobs/` ([BG-4](background-sessions.md#BG-4)).
 The Sessions screen keeps three small files there, the grouping of its list, the sessions pinned
 in it and the sessions archived from it, each holding only ids and words ([SCREEN-11](sessions-screen.md#SCREEN-11)).
+The plugins a person installed live in `plugins/`, one directory and one record for each
+([plugins.md](plugins.md)), and the answers about them live in two files beside the MCP ones:
+`hooks-approved`, one line for each hook of a plugin the person said yes to, and the `plugin` lines of
+`mcp-approved` ([HOOK-11](hooks.md#HOOK-11), [SERVERS-27](mcp-servers.md#SERVERS-27)).
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered
@@ -55,7 +59,8 @@ command lines, [sandboxing.md](sandboxing.md#SANDBOX-23) for the remembered reac
 [permissions.md](permissions.md) for the granted rules,
 [trust-map.md](trust-map.md) for the kept answers to the startup question,
 [skills.md](skills.md) and [instructions.md](instructions.md) for what is read out of
-the directory,
+the directory, [hooks.md](hooks.md) and [mcp-servers.md](mcp-servers.md) for the files that record what
+a person approved,
 [premium-credentials.md](premium-credentials.md) for the premium key,
 [chatgpt-sign-in.md](chatgpt-sign-in.md) and [xai-sign-in.md](xai-sign-in.md) for the sign-ins,
 [tools/lsp.md](tools/lsp.md) for the index and why sitting here confers nothing on it, and
@@ -306,7 +311,7 @@ Left where they are at any age: the rules a person granted, the answers to the s
 past a session, the memories left untrusted, the acceptances of findings, the prompt history, the
 settings, standing instructions, skills, the premium key and the ChatGPT and xAI sign-ins, which a
 person asked to keep or wrote themselves. The record of Bedrock models that refused the ask to show thinking is left too: it
-bounds its own entries by their age ([BACKEND-63](backends.md#BACKEND-63)). The diagnostic logs are bounded by their own rule
+bounds its own entries by their age ([BACKEND-63](backends.md#BACKEND-63)). The record of directories a stage may write is left too, and a person clears it by deleting the file ([sandboxing.md](sandboxing.md#SANDBOX-30)). The diagnostic logs are bounded by their own rule
 ([diagnostic-log.md](diagnostic-log.md)).
 
 Removal stops at the state directory, and the sessions it looks in are the state directory's own: a

@@ -9,6 +9,13 @@
 //! Not from the message catalog: the planner reads this, so it is part of what the model is given
 //! and not something a person is being told.
 
+/// Why a pasted picture cannot go with a command the driver carries out itself.
+///
+/// Such a command is carried out rather than sent, so there is no request for the picture to
+/// travel in. The terminal and the desktop window both give this reason, so the two hand over the
+/// same words.
+pub const A_PICTURE_CANNOT_JOIN_A_COMMAND: &str = "a picture cannot join that command";
+
 /// A line with each marker in `named` replaced by the name beside it.
 pub fn put_back_to_names<'a>(
     line: &str,

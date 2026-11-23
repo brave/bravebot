@@ -10,13 +10,15 @@ import type { BravebotApi, ThemeState } from '../src/preload/index'
 import type { Experience } from '../src/shared/experience'
 import { EMPTY_CONVERSATION, parseExperience } from '../src/shared/experience'
 import type { Appearance } from '../src/shared/theme'
+import { parseHidden } from '../src/shared/panels'
 import type { Bot } from '../src/shared/bots'
 import type { EffortLevel } from '../src/shared/protocol'
 import type {
   BridgeEvent, EventMap, EventName, ForkedSession, OpenedSession, RewindPoint, RewoundSession, Said, SessionSummary,
 } from '../src/shared/protocol'
+import type { BackgroundGroup } from '../src/renderer/background-list'
 import {
-  BOTS, BOT_HOME, BOT_SAID, DIRECTORY, EVERYTHING_SAID, FORKS, FORK_SAID, IDS, MODELS, PLAN_SAID, REWIND, RULES, SESSIONS,
+  BACKGROUND, BOTS, BOT_HOME, BOT_SAID, DIRECTORY, EVERYTHING_SAID, FORKS, FORK_SAID, IDS, MODELS, PLAN_SAID, REWIND, RULES, SESSIONS,
   SHORT_SAID, SUMMONS, TODOS,
 } from './fixtures'
 import { PLAN_RUN, QUICK } from './scenarios'
@@ -40,6 +42,8 @@ export const playground = {
   /** Which scenario a typed prompt gets as its reply. */
   reply: QUICK as Scenario,
   running: null as string | null,
+  /** The groups `background.list` answers with, which a drive script may change between polls. */
+  background: BACKGROUND() as BackgroundGroup[],
   listeners: new Set<() => void>(),
   changed(): void { for (const listen of this.listeners) listen() },
 }
@@ -76,6 +80,8 @@ let rows: SessionSummary[] = SESSIONS()
 let bots: Bot[] = BOTS()
 let experience: Experience = parseExperience(null)
 let effort: EffortLevel | null = null
+/** The level every playground session began with, which a model of the ChatGPT account is sent (CHATGPT-10). */
+const sessionBegan: EffortLevel | null = 'medium'
 let appearance: Appearance = (localStorage.getItem('playground:theme') as Appearance | null) ?? 'system'
 let requests = 100
 let created = 0
@@ -310,8 +316,9 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'language.set': return ok({ saved: true, tag: params.tag })
     case 'update.status': return ok({ check: 'on', running: '0.19.0', newer: false, checked: null })
     case 'session.list': return ok({ sessions: rows })
+    case 'background.list': return ok({ groups: playground.background })
     case 'models.list': return ok(MODELS)
-    case 'effort.get': return ok({ recorded: effort, inForce: effort, outranked: false })
+    case 'effort.get': return ok({ recorded: effort, inForce: effort, outranked: false, ...(typeof params.session === 'string' ? { sessionBegan } : {}) })
     case 'effort.set': effort = (params.level as EffortLevel | null | undefined) ?? null; return ok({ recorded: effort })
     case 'mentions.named': return ok({ files: [] })
     case 'mentions.offer': {
@@ -409,6 +416,16 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
         shownRoot: '/Users/example/Library/Application Support/bravebot-ui-b',
       },
     })
+    case 'permissions.check': return ok({
+      decision: 'deny',
+      rule: 'Bash(git push:*)',
+      shownRule: 'Bash(git push:*)',
+      file: '/Users/example/.bravebot/settings.json',
+      shownFile: '/Users/example/.bravebot/settings.json',
+      granted: false,
+      reason: 'Pushes go through review.',
+      notInForce: null,
+    })
     case 'permissions.revoke': return ok({ paths: [], commands: [] })
     case 'watches.list': return ok({ busy: false, watches: [{ number: 1, path: 'src/cache.ts', state: 'watching', remainingSeconds: 86_400, armedBy: null }] })
     case 'watches.add': case 'watches.stop': return ok({ busy: false, watches: [] })
@@ -416,6 +433,7 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'settings.inspect': return ok({
       build: '0.19.0 (playground)', configured: playground.configured, problem: playground.configured ? null : 'No model service is configured.', model: 'sample/fast', brave: false, bedrock: false,
       providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] },
+      logs: { directory: '/Users/example/.bravebot/logs', writing: true },
       network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null },
     })
     case 'hooks.inspect': return ok({ path: '~/.bravebot/hooks.json', text: null, entire: true, timeoutSeconds: { min: 1, max: 600, defaultFor: {} }, hooks: [] })
@@ -453,6 +471,8 @@ const bridge: BravebotApi = {
   request: request as BravebotApi['request'],
   readLayout: async () => { try { return JSON.parse(localStorage.getItem('playground:layout') ?? 'null') } catch { return null } },
   writeLayout: (layout) => localStorage.setItem('playground:layout', JSON.stringify(layout)),
+  readHiddenPanels: async () => { try { return parseHidden(JSON.parse(localStorage.getItem('playground:hidden') ?? '[]')) } catch { return [] } },
+  writeHiddenPanels: (hidden) => localStorage.setItem('playground:hidden', JSON.stringify(hidden)),
   readView: async () => { try { return JSON.parse(localStorage.getItem('playground:view') ?? 'null') ?? { grouped: true, collapsed: [], tab: 'sessions' } } catch { return { grouped: true, collapsed: [], tab: 'sessions' } } },
   writeView: (view) => localStorage.setItem('playground:view', JSON.stringify(view)),
   readTheme: async () => ({ chosen: appearance }),

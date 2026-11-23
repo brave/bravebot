@@ -47,8 +47,10 @@ use crate::workspace::{Listing, Page, Paging, Workspace};
 mod link;
 mod message;
 mod recall;
+mod web_search;
 use link::set_link;
 use recall::{propose_rule, recall, remember};
+use web_search::web_search;
 mod offered;
 
 use offered::checkouts_share_refs;
@@ -57,8 +59,9 @@ use offered::state_withheld;
 pub use offered::{
     Beside, Named, Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
     offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
-    offer_set_link, offer_tool_loader, state_confinement, state_read_output_answer,
-    state_vet_content_answer, state_what_is_beside, state_withheld_variables,
+    offer_set_link, offer_tool_loader, offer_web_search, state_confinement,
+    state_read_output_answer, state_vet_content_answer, state_what_is_beside,
+    state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -98,13 +101,14 @@ pub struct Entries {
     /// one reference at a time rather than as a number: handed a listing of files alone it sees a
     /// tree with no branches.
     pub directories: usize,
-    /// How many files were left out of each directory the per-directory cap cut (LIST-5), in the
-    /// order of the last of `paths`, which are those directories. Counts of directory entries,
-    /// released with `count`, so the turn can say beside the references how much each one holds
-    /// that is not listed.
-    pub left_out: Vec<usize>,
-    /// Whether the listing reached the cap over the whole walk, as against leaving files out by
-    /// the per-directory cap alone. Shape like `count`, from the same release.
+    /// How many files and how many subdirectories were left out of each directory a per-directory
+    /// cap cut (LIST-5), in the order of the last of `paths`, which are those directories. Counts
+    /// of directory entries, released with `count`, so the turn can say beside the references how
+    /// much each one holds that is not listed.
+    pub left_out: Vec<(usize, usize)>,
+    /// Whether the listing reached the cap over the whole walk, as against leaving files or
+    /// subdirectories out by the per-directory caps alone. Shape like `count`, from the same
+    /// release.
     pub at_the_cap: bool,
 }
 
@@ -2451,6 +2455,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "load_skill" | "load_tool" => Some("name"),
         "search_skills" => Some("query"),
         "fetch_url" => Some("url"),
+        "web_search" => Some("q"),
         "job_output" => Some("job"),
         "vet_content" => Some("ref"),
         "run" => Some("command"),
@@ -3125,6 +3130,7 @@ const READ_THOUGH_UNDECLARED: &[(&str, &str)] = &[
     ("watch_file", "path_ref"),
     ("download_url", "path_ref"),
     ("fetch_url", "read"),
+    ("web_search", "read"),
     ("spawn_processor", "read"),
     ("schedule_next", "stop"),
 ];
@@ -3423,6 +3429,27 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         },
         // The same refusal for the same reason, and a write on top of it.
         "download_url" if !tools.delegated => download_url(policy, tools, confirmer, &arguments),
+        // Offered only where a variable or a key file offered a key when the turn started, and never
+        // to a delegate: a call to it from anywhere else is answered as an unknown name is. Refused
+        // here as well as absent from the list. The list the turn settled decides it, and the
+        // environment is not asked again, so a variable removed since is reported as a key that
+        // cannot be used and not as an unknown tool. `read` asks for vet_content's release in the
+        // result, as fetch_url's does (WEBSEARCH-9).
+        "web_search"
+            if !tools.delegated
+                && tools.offered.is_some_and(|list| {
+                    list.iter().any(|tool| tool.function.name == "web_search")
+                }) =>
+        {
+            match read_asked_of(&arguments) {
+                Ok(read_asked) => {
+                    let mut produced = web_search(policy, tools, confirmer, &arguments);
+                    produced.read_asked = read_asked;
+                    produced
+                }
+                Err(refusal) => *refusal,
+            }
+        }
         "job_output" => job_output(policy, tools, reporter, &arguments),
         // A delegate ends when it answers, a tick the person timed has its next look coming
         // already, and a turn nothing will ask again has nowhere for a wait to go, so none of the
@@ -4653,9 +4680,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // been written since (READ-8). Looked up by the path as the trust map keys it and the window as
     // the read applies it, so a spelling or a limit that comes to the same lines is the same read.
     let (first_line, line_limit) = crate::workspace::window_of(offset, limit);
+    let window_key = workspace.window_key(&proposed_path);
     let earlier = tools
         .reads
-        .token_of(&keyed, first_line, line_limit)
+        .token_of(&window_key, first_line, line_limit)
         .map(str::to_string);
     let shown_token;
     let page = match workspace.read_page_unless_unchanged(
@@ -4772,7 +4800,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     priced(Produced {
         glimpsed: Some(glimpsed),
         window: Some(crate::conversation::ReadWindow {
-            file: keyed,
+            file: window_key,
             offset: first_line,
             limit: line_limit,
             token: shown_token,
@@ -5936,8 +5964,8 @@ fn list_files<S: Sink>(
                 // The second is what keeps the quarantined listing describing the same tree the
                 // trusted one does, where a directory is rendered with a trailing slash among the
                 // files. The third says whether a pattern selected anything.
-                // The fourth is how many files each directory the per-directory cap cut left out,
-                // a count of directory entries like the others.
+                // The fourth is how many files and how many subdirectories each directory a
+                // per-directory cap cut left out, counts of directory entries like the others.
                 let (count, directories, files, left_out, at_the_cap) = {
                     let shaped = policy.render_in_place("list_files", &listing, |listing| {
                         (
@@ -5949,27 +5977,32 @@ fn list_files<S: Sink>(
                             listing
                                 .partly_listed
                                 .iter()
-                                .map(|(_, left_out)| *left_out)
-                                .collect::<Vec<usize>>(),
+                                .map(|(_, files, directories)| (*files, *directories))
+                                .collect::<Vec<(usize, usize)>>(),
                             listing.at_the_cap,
                         )
                     });
                     let proof = policy.authorise_display_release(
                         "how many entries a listing has, how many of them it stopped at, how \
-                         many are files, how many files each directory it cut left out and \
-                         whether it reached the cap over the whole walk",
+                         many are files, how many files and subdirectories each directory it cut \
+                         left out and whether it reached the cap over the whole walk",
                     );
                     shaped.declassify(&proof)
                 };
                 // The directories last, which is the order the kernel reads the two apart by. A
-                // directory the per-directory cap cut is a directory reference like one the walk
+                // directory a per-directory cap cut is a directory reference like one the walk
                 // stopped at, so it is named the only way a quarantined listing names anything.
                 // Those come after the ones the walk stopped at, so which references they are is
                 // decided by the counts alone and `left_out` lines up with the last of them.
                 let paths = policy.render_in_place("list_files", &listing, |listing| {
                     let mut paths = listing.files.clone();
                     paths.extend(listing.directories.iter().cloned());
-                    paths.extend(listing.partly_listed.iter().map(|(name, _)| name.clone()));
+                    paths.extend(
+                        listing
+                            .partly_listed
+                            .iter()
+                            .map(|(name, _, _)| name.clone()),
+                    );
                     paths
                 });
                 // A call that asked to read gets the listing as one document too, under the
@@ -6006,7 +6039,7 @@ fn list_files<S: Sink>(
                     listing
                         .partly_listed
                         .iter()
-                        .map(|(name, _)| format!("{name}/")),
+                        .map(|(name, _, _)| format!("{name}/")),
                 );
                 entries.sort();
                 entries.join("\n")
@@ -6024,6 +6057,30 @@ fn list_files<S: Sink>(
     }
 }
 
+/// What a directory a per-directory cap cut left out, worded for the end of its line in a listing:
+/// its files, its subdirectories, or both. A count of directory entries and no name. `more` puts
+/// "more" before the noun, as a listing's own line does, and leaves it out of the sentence a
+/// quarantined listing carries beside its references.
+pub(crate) fn left_out_clause(files: usize, directories: usize, more: bool) -> String {
+    let (file, many_files, directory, many_directories) = if more {
+        (
+            "more file",
+            "more files",
+            "more subdirectory",
+            "more subdirectories",
+        )
+    } else {
+        ("file", "files", "subdirectory", "subdirectories")
+    };
+    let files = (files > 0).then(|| tally(files, file, many_files));
+    let directories = (directories > 0).then(|| tally(directories, directory, many_directories));
+    [files, directories]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>()
+        .join(" and ")
+}
+
 /// A listing as the planner reads it where it may: one entry a line, a directory with a trailing
 /// slash, and the driver's sentences about a cap, a pattern that matched nothing, a directory that
 /// could not be opened and links not entered. Rendered inside the kernel under the listing's label.
@@ -6039,16 +6096,26 @@ fn render_listing<S: Sink>(
         let selected_no_file = listing.files.is_empty();
         let mut entries: Vec<String> = listing.files.clone();
         entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
-        // A directory the per-directory cap cut, with how many of its files are not shown,
-        // so the planner knows to list it by name for the rest (LIST-5).
-        entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
-            format!(
-                "{name}/ ({} not listed)",
-                tally(*left_out, "more file", "more files")
-            )
-        }));
+        // A directory a per-directory cap cut, with how many of its files and subdirectories are
+        // not shown, so the planner knows the listing of it is incomplete (LIST-5).
+        entries.extend(
+            listing
+                .partly_listed
+                .iter()
+                .map(|(name, files, directories)| {
+                    format!(
+                        "{name}/ ({} not listed)",
+                        left_out_clause(*files, *directories, true)
+                    )
+                }),
+        );
         entries.sort();
         let cut_per_directory = !listing.partly_listed.is_empty();
+        let files_cut = listing.partly_listed.iter().any(|(_, files, _)| *files > 0);
+        let directories_cut = listing
+            .partly_listed
+            .iter()
+            .any(|(_, _, directories)| *directories > 0);
         let listing = Listing {
             files: entries,
             directories: Vec::new(),
@@ -6072,9 +6139,10 @@ fn render_listing<S: Sink>(
         } else if listing.truncated {
             // Said plainly, because a model given a silently capped listing will treat
             // it as the whole tree and conclude a file does not exist. Each cap that left
-            // files out has its own sentence, as `listing_capped_note` does for a
-            // quarantined listing: "stopped at N files" misstates a per-directory cut,
-            // and the per-directory sentence alone hides that the walk stopped as well.
+            // files or subdirectories out has its own sentence, as `listing_capped_note`
+            // does for a quarantined listing: "stopped at N files" misstates a
+            // per-directory cut, and the per-directory sentences alone hide that the walk
+            // stopped as well.
             let mut body = listing.files.join("\n");
             if listing.at_the_cap || !cut_per_directory {
                 body.push_str(&format!(
@@ -6083,7 +6151,7 @@ fn render_listing<S: Sink>(
                     listing.files.len()
                 ));
             }
-            if cut_per_directory {
+            if files_cut {
                 // A listing of that directory with a depth is cut the same way, so the
                 // rest is reached with none.
                 body.push_str(&format!(
@@ -6091,6 +6159,19 @@ fn render_listing<S: Sink>(
                      is incomplete; to see the rest of a directory marked \"not \
                      listed\", list that directory by its name with no depth)",
                     crate::workspace::MAX_FILES_PER_DIRECTORY
+                ));
+            }
+            if directories_cut {
+                // A listing with no depth walks into every subdirectory and names files only, so
+                // it shows what is under the subdirectories left out and none of them by name.
+                // No other tool is named: this sentence is written without the turn's list of
+                // tools (TOOL-6).
+                body.push_str(&format!(
+                    "\n\n(this listing took at most {} subdirectories from any one directory \
+                     and is incomplete; for a directory marked \"not listed\", list it by its \
+                     name with no depth to see the files under all of its subdirectories, \
+                     since a listing with no depth names files only)",
+                    crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
                 ));
             }
             body
@@ -8054,9 +8135,16 @@ fn edit_file<S: Sink, C: Confirmer>(
             //
             // Only where that label is trusted. A quarantined excerpt would take the confirmation
             // down with it, and a planner that cannot be told its edit landed is worse off than
-            // one that is told only that. The file itself is always trusted by this point:
-            // `read_trusted_content` above refuses to locate a passage in anything else.
-            if body_label.is_trusted() {
+            // one that is told only that.
+            //
+            // The label is the context's, which is not the file's. The file is trusted by this
+            // point because `read_trusted_content` above refuses to locate a passage in anything
+            // else. A context that has met something untrusted is refused earlier still, by
+            // `read_planner_argument` and `Policy::promote_confined_read`, so no turn reaches the
+            // count-alone arm today. It stays as a second refusal, the way a resumed context's
+            // refusal does in `Policy`, and `what_an_edit_result_shows` is the one place that
+            // chooses: it reads a `Label` and nothing else.
+            if what_an_edit_result_shows(body_label) == EditResultShows::LinesAndCount {
                 let region = policy.render_in_place("edit_file", &body, |contents| {
                     crate::replace::changed_region(&current, &contents)
                 });
@@ -8129,6 +8217,27 @@ fn edit_file<S: Sink, C: Confirmer>(
             &e,
             &shown_path,
         ),
+    }
+}
+
+/// What an edit's result holds (EDIT-4 in docs/specs/tools/edit-file.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditResultShows {
+    /// The lines the edit produced, then the count of replacements.
+    LinesAndCount,
+    /// The count of replacements alone, marked untrusted.
+    CountAlone,
+}
+
+/// Which of the two an edit's result is, chosen from the label of the edited body alone.
+///
+/// The body carries the integrity of the context the edit was worked out in. The function takes
+/// that label and no bytes, so the choice is not a decision taken from the file's contents.
+fn what_an_edit_result_shows(body_label: Label) -> EditResultShows {
+    if body_label.is_trusted() {
+        EditResultShows::LinesAndCount
+    } else {
+        EditResultShows::CountAlone
     }
 }
 
@@ -9949,8 +10058,9 @@ fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
 
 /// The directories a file that a bare program name resolves to may not lie in (CMDLINE-8): those
 /// the session opened ([`crate::workspace::Workspace::unproven_directories`]), the ones a stage
-/// was let write with `request_path` (in the same set), and the ones a remembered grant lets a
-/// stage write, such as the `bin` of a virtualenv outside the project.
+/// was let write with `request_path` (in the same set), the ones a remembered grant lets a
+/// stage write, such as the `bin` of a virtualenv outside the project, and the ones an earlier
+/// process let a stage write ([`bravebot_sandbox::programs::recorded_earlier`]).
 ///
 /// The toolchain lists ([`bravebot_sandbox::toolchain::Toolchain`]) are not added. An install is
 /// read and never written, and a cache is not a directory a program is looked up in, so neither can
@@ -9972,6 +10082,14 @@ fn unproven_directories(tools: &Tools<'_>) -> Vec<std::path::PathBuf> {
             if !directories.contains(&granted) {
                 directories.push(granted);
             }
+        }
+    }
+    // What the lookups of a program bravebot starts leave out because an earlier process recorded
+    // it, read from the state directory when the process began. This session may never have opened
+    // the directory, so the set the workspace holds does not have it.
+    for earlier in bravebot_sandbox::programs::recorded_earlier() {
+        if !directories.contains(&earlier) {
+            directories.push(earlier);
         }
     }
     directories
@@ -11142,10 +11260,9 @@ fn operand_names_of<S: Sink>(
         if found.contains_key(&operand) {
             continue;
         }
-        let looked_up = match std::path::Path::new(&operand).strip_prefix(workspace.root()) {
-            Ok(relative) => relative.to_string_lossy().into_owned(),
-            Err(_) => operand.clone(),
-        };
+        let looked_up = workspace
+            .below_root(&operand)
+            .unwrap_or_else(|| operand.clone());
         let others = workspace.other_trust_keys(&looked_up);
         found.insert(operand, (others.keys, others.complete));
     }
@@ -14031,6 +14148,11 @@ fn advise<S: Sink>(
                  without it."
             }
         })
+        .waiting(waited),
+        Err(crate::advisor::AdviceError::NotServed) => Produced::problem(
+            "refused: no configured service answers for the advisor model, so it is not asked. \
+             Carry on without it.",
+        )
         .waiting(waited),
         Err(crate::advisor::AdviceError::Denied(error)) => request_denied(&error, waited),
     }
@@ -18425,10 +18547,12 @@ mod tests {
         }
     }
 
-    /// PLUGIN-1: no tool the planner or a delegate is offered installs, removes, enables, disables
-    /// or lists a plugin. The only way is the typed `/plugin` command.
+    /// PLUGIN-1: no tool the planner or a delegate is offered installs, updates, removes, enables,
+    /// disables or lists a plugin. The only way is the typed `/plugin` command. A tool that updates
+    /// a plugin is about plugins, so the same check refuses it as the one for an install does.
     ///
-    /// Rejects: a tool added to any offered list whose name or description is about plugins.
+    /// Rejects: a tool added to any offered list whose name or description is about plugins,
+    /// including one named for updating them.
     #[test]
     fn no_tool_offered_installs_or_changes_a_plugin() {
         use bravebot_core::delegate::{Definitions, Kind};
@@ -20417,7 +20541,7 @@ mod tests {
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
-            for reaching in ["fetch_url", "download_url"] {
+            for reaching in ["fetch_url", "download_url", "web_search"] {
                 assert!(
                     !offered.iter().any(|t| t == reaching),
                     "a {name} was offered {reaching}, a way to reach a host of its own"
@@ -21001,6 +21125,28 @@ mod tests {
                 "{name}: {line}"
             );
         }
+    }
+
+    /// AGENT-5: an `each` that names no delegate is refused with a sentence saying it was empty. An
+    /// empty array is not read as a missing `each`, which would be one delegate on the shared task,
+    /// and is not accepted as naming zero delegates, which would start nothing and answer nothing.
+    ///
+    /// Rejects: `tasks_in` returning `Ok` for an empty `each`, either the empty list or the shared
+    /// task alone, and a refusal that does not say the list was empty.
+    #[test]
+    fn an_empty_each_is_refused_with_a_sentence_saying_it_was_empty() {
+        let refusal = tasks_in(&json!({"task": "t", "each": []}))
+            .map(|tasks| tasks.len())
+            .expect_err("an empty each named no delegate and was accepted");
+        assert!(
+            refusal.contains("'each' was empty"),
+            "the planner is not told the list was empty: {refusal}"
+        );
+        assert_eq!(
+            tasks_in(&json!({"task": "t"})).map(|tasks| tasks.len()),
+            Ok(1),
+            "a call with no each at all is the one task, which the empty list must not be read as"
+        );
     }
 
     /// AGENT-5: a planner told the most one call starts splits a fan-out into calls of that size,
@@ -25023,6 +25169,46 @@ mod tests {
             !loaded.contains("outside-the-workspace"),
             "a path outside the workspace was named: {loaded}"
         );
+    }
+
+    /// LOAD-4: where a project skill's directory is a link, each file is judged by the trust map
+    /// under the name the link gives it and under the name where it lands. The regression it
+    /// rejects: the files being judged under one of the two names only, so a file the map
+    /// distrusts under the other name is still offered. `ok.md` is the control: it is trusted
+    /// under both names.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_of_a_linked_skill_is_judged_under_both_the_link_name_and_the_landed_name() {
+        let fixture = SkillFixture::new("skill-files-link-both-names");
+        let target = fixture.project.join("shared/lint");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(
+            target.join("SKILL.md"),
+            "---\nname: lint\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        for file in ["ok.md", "distrusted-landed.md", "distrusted-link.md"] {
+            std::fs::write(target.join(file), "x").unwrap();
+        }
+        std::fs::create_dir_all(fixture.project.join(".bravebot/skills")).unwrap();
+        std::os::unix::fs::symlink(&target, fixture.project.join(".bravebot/skills/lint")).unwrap();
+
+        let workspace = fixture.workspace();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("shared/lint/distrusted-landed.md");
+        store.distrust(".bravebot/skills/lint/distrusted-link.md");
+        let catalogue = crate::skills::resolved(
+            &workspace,
+            None,
+            store,
+            bravebot_core::permissions::Permissions::default(),
+            &mut RecordingSink::new(),
+        );
+
+        let skill = catalogue.get("lint").expect("offered");
+        assert_eq!(skill.landed.as_deref(), Some("shared/lint"));
+        assert_eq!(skill.files, ["ok.md"]);
     }
 
     /// LOAD-4: a link that lands where the trust map distrusts the directory is named no landing,

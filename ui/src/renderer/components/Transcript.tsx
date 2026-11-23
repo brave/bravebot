@@ -1,5 +1,6 @@
 import { Watches } from './Watches'
 import type { Enhancement } from '../enhancing'
+import type { Handoff } from '../handoff'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { Fragment, memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
@@ -16,7 +17,7 @@ import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
-import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps } from './Composer'
+import { BackendTray, Composer, ProjectMenu, type ComposerFooterProps, type QueuedRow } from './Composer'
 import { BotView } from './BotView'
 import type { BotConversation } from '../../shared/bot-history'
 import type { FolderQuestion, RefusedFolder, RulesQuestion, SessionSummary } from '../../shared/protocol'
@@ -44,10 +45,11 @@ import { reconnectingWords, type RetryDue } from '../retry'
 import { pointForPrompt, undoRow } from '../rewind'
 import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
-import type { Paste } from '../../shared/pastes'
+import type { Paste, PastedText } from '../../shared/pastes'
+import { PastedTextPreview } from './PastedTextPreview'
 
 interface Live {
   model: string | null
@@ -87,6 +89,10 @@ interface Live {
   sendRefused?: string | null
   staging?: Staging
   enhancement?: Enhancement
+  /** A Hand Off to New Chat… request that is out, or a brief armed in the box (SESSION-34). */
+  handoff?: Handoff | null
+  /** The chat this one was handed off from (SESSION-34). */
+  handedOffFrom?: { id: string; title: string } | null
 }
 
 /**
@@ -132,7 +138,13 @@ interface Props {
   /** Escape over a rewrite: put back what was written, and say whether there was one. */
   onRestoreEnhanced: () => boolean
   onDismissEnhancement: () => void
-  queued: string[]
+  /** Stop a Hand Off to New Chat… request that is out (SESSION-34). */
+  onStopHandoff: () => void
+  /** Escape over an armed brief: drop it and put back what the box held. Says whether there was one. */
+  onEscapeHandoff: () => boolean
+  /** Drop the armed brief where the box is empty, or always where `force` is set. */
+  onDropHandoff: (force?: boolean) => void
+  queued: QueuedRow[]
   queuePaused: boolean
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
@@ -329,6 +341,9 @@ export function Transcript({
   onStopEnhance,
   onRestoreEnhanced,
   onDismissEnhancement,
+  onStopHandoff,
+  onEscapeHandoff,
+  onDropHandoff,
   queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
@@ -379,6 +394,7 @@ export function Transcript({
   const [watches, setWatches] = useState(false)
   const [permissions, setPermissions] = useState(false)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [peeking, setPeeking] = useState<PastedText | null>(null)
   useEffect(() => {
     const preview = (event: Event) => setPreviewPath((event as CustomEvent<string>).detail)
     document.addEventListener('bravebot:preview-file', preview)
@@ -495,6 +511,9 @@ export function Transcript({
   const stopEnhance = useEvent(onStopEnhance)
   const restoreEnhanced = useEvent(onRestoreEnhanced)
   const dismissEnhancement = useEvent(onDismissEnhancement)
+  const stopHandoff = useEvent(onStopHandoff)
+  const escapeHandoff = useEvent(onEscapeHandoff)
+  const dropHandoff = useEvent(onDropHandoff)
   const cancel = useEvent(onCancel)
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
@@ -534,6 +553,17 @@ export function Transcript({
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])
+  /** Fold a long text paste behind a marker. False for a short one, which the browser inserts. */
+  const pastedText = useEvent((text: string): boolean => {
+    if (!live) return false
+    // A paste over a selection replaces it, as the browser's paste this one stands in for would.
+    const area = input.current?.shadowRoot?.querySelector('textarea')
+    const start = area?.selectionStart ?? draft.length
+    const next = stageText(live.staging ?? EMPTY_STAGING, text, draft, start, area?.selectionEnd ?? start)
+    if (!next) return false
+    restage(live.handle, next)
+    return true
+  })
   /** Stage a bot picked from the `@` list to answer this message (MEMORY-14). */
   const summon = useEvent((picked: SummonedBot, word: string | null) => {
     if (!live) return
@@ -567,6 +597,11 @@ export function Transcript({
   const [dragging, setDragging] = useState(false)
   const carriesFiles = (event: React.DragEvent): boolean => event.dataTransfer.types.includes('Files')
   const preview = useEvent((path: string) => setPreviewPath(path))
+  /** Open a folded paste whole. The viewer holds a copy, so the draft and the staging stay as they are (PASTE-13). */
+  const peek = useEvent((marker: string) => {
+    const item = live?.staging?.staged.find((entry) => entry.via === 'text' && entry.marker === marker)
+    if (item?.via === 'text') setPeeking({ ...item.pasted })
+  })
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
   const dismissRefusal = useEvent(onDismissRefusal)
@@ -846,6 +881,7 @@ export function Transcript({
         )}
         <SessionNotices
           forkedFrom={live.forkedFrom}
+          handedOffFrom={live.handedOffFrom ?? null}
           kept={live.trustRemembered ?? null}
           vetting={live.autoVetting === true}
           rules={live.rules ?? null}
@@ -935,6 +971,10 @@ export function Transcript({
           onStopEnhance={stopEnhance}
           onRestoreEnhanced={restoreEnhanced}
           onDismissEnhancement={dismissEnhancement}
+          handoff={live.handoff ?? null}
+          onStopHandoff={stopHandoff}
+          onEscapeHandoff={escapeHandoff}
+          onDropHandoff={dropHandoff}
           onCancel={cancel}
           onModel={chooseModelFor}
           permissionMode={live.permissionMode}
@@ -946,9 +986,11 @@ export function Transcript({
           onRemoveAttachment={removeAttachment}
           staged={named(live.staging, draft)}
           onRemoveStaged={removeStaged}
+          onPasteText={pastedText}
           summonable={summonable}
           onSummon={summon}
           onPreview={preview}
+          onPeek={peek}
           queued={queued}
           queuePaused={queuePaused}
           onResumeQueued={resumeQueued}
@@ -969,6 +1011,7 @@ export function Transcript({
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
       {permissions && <Permissions session={live.handle} onClose={() => setPermissions(false)} onRemembered={(kept) => onTrustRemembered(live.handle, kept)} />}
       {previewPath && <FilePreview session={live.handle} path={previewPath} onClose={() => setPreviewPath(null)} />}
+      {peeking && <PastedTextPreview pasted={peeking} onClose={() => setPeeking(null)} />}
     </main>
   )
 }
@@ -1639,8 +1682,10 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-export function SessionNotices({ forkedFrom, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, handedOffFrom = null, kept, vetting, rules, refused = [], onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
+  /** The chat this one was started from with Hand Off to New Chat… (SESSION-34). */
+  handedOffFrom?: { id: string; title: string } | null
   kept: KeptTrust | null
   vetting: boolean
   rules: SettingsRules | null
@@ -1650,9 +1695,15 @@ export function SessionNotices({ forkedFrom, kept, vetting, rules, refused = [],
   onManage: () => void
 }): React.JSX.Element | null {
   const unheld = t.notInForce(rules, refused) || t.grantedRules(rules)
-  if (!forkedFrom && !kept && !vetting && !unheld) return null
+  if (!forkedFrom && !handedOffFrom && !kept && !vetting && !unheld) return null
   return (
     <div className="session-notices">
+      {handedOffFrom && (
+        <p className="session-banner session-notice" role="note" data-test="handed-off-from" data-tooltip={`Record ${handedOffFrom.id}`}>
+          <Icon name="message-bubble" />
+          <span className="notice-text">Handed off from <strong>{handedOffFrom.title}</strong>.</span>
+        </p>
+      )}
       {forkedFrom && (
         <p className="fork-banner session-notice divider">
           <span className="fork-mark"><ForkIcon /></span>
@@ -1699,7 +1750,8 @@ export function RulesBanner({ rules, refused: folders = [] }: { rules: SettingsR
   const ignored = rules.filesystemIgnored ?? []
   const granted = rules.granted ?? []
   const { closed, refused: unlisted } = unopened(rules, folders)
-  const count = rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + refused.length + ignored.length + (rules.namedWithheld ? 1 : 0)
+  const dropped = rules.droppedKeys ?? []
+  const count = rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + refused.length + ignored.length + dropped.length + (rules.namedWithheld ? 1 : 0)
   return (
     <details className="rules-banner" role="note" data-test="rules-note">
       <summary className="session-notice">
@@ -1734,6 +1786,16 @@ export function RulesBanner({ rules, refused: folders = [] }: { rules: SettingsR
         </div>
       )}
       {rules.namedWithheld && <p>{rules.namedWithheld}</p>}
+      {dropped.length > 0 && (
+        <>
+          <p>{words.uiRulesNoteDropped()}</p>
+          <ul data-test="rules-note-dropped">
+            {dropped.map((said, index) => (
+              <li key={index}>{said}</li>
+            ))}
+          </ul>
+        </>
+      )}
       {rules.unreadable.length > 0 && (
         <>
           <p>These entries could not be read as rules, so they decide nothing:</p>
@@ -1892,49 +1954,61 @@ function ThreeAnswers({
   )
 }
 
+/** A fold's title on a stopped run, with the carat a card's Details fold has. */
+function PlanSummary({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <summary><Icon className="chevron" name="carat-right" />{children}</summary>
+}
+
 /**
  * A manifest run that stopped, with what it produced.
  *
- * Three cases read differently. The person stopped it, the agent refused or failed it and said
+ * A declined plan is one caption line, since the decided card above it shows the plan. Otherwise
+ * three cases read differently. The person stopped it, the agent refused or failed it and said
  * why, or the model service failed. The plan and the steps that ran are shown in every case
  * where they exist, because the run somebody needs to read is the one that stopped.
  */
 function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
-  const declined = ended.declined === true
+  // The decided card above already shows the declined plan, so the ending is one caption line.
+  if (ended.declined === true && !ended.stopped) {
+    return (
+      <p className="session-notice plan-ended-note">
+        <span className="notice-text">
+          Nothing was read or written.
+          {ended.record && <> Saved as run <code>{ended.record}</code>.</>}
+        </span>
+      </p>
+    )
+  }
   const title = ended.stopped
     ? 'You stopped this run'
-    : declined
-      ? 'The plan was declined, so nothing ran'
-      : ended.problem
-        ? 'The run stopped'
-        : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
+    : ended.problem
+      ? 'The run stopped'
+      : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
   const detail: React.ReactNode = ended.stopped
     ? 'Steps that finished before the stop remain in the project. The run was not saved.'
-    : declined
-      ? 'Nothing was read or written.'
-      : ended.problem ?? (ended.accountMessage
-        ? <FailureSentence text={ended.accountMessage} command={ended.accountCommand} />
-        : failureSummary(ended.category ?? ended.kind).description)
+    : ended.problem ?? (ended.accountMessage
+      ? <FailureSentence text={ended.accountMessage} command={ended.accountCommand} />
+      : failureSummary(ended.category ?? ended.kind).description)
   const attempt = ended.attempt
   return (
-    <div className={`plan-ended ${ended.stopped || declined ? 'quiet' : 'failed'}`}>
+    <div className={`plan-ended ${ended.stopped ? 'quiet' : 'failed'}`}>
       <strong>{title}</strong>
       <p className="plan-detail">{detail}</p>
       {attempt?.plan && (
         <details>
-          <summary>The plan</summary>
+          <PlanSummary>The plan</PlanSummary>
           <pre className="plan-text">{attempt.plan}</pre>
         </details>
       )}
       {!attempt?.plan && attempt?.proposed && (
         <details>
-          <summary>What the planner proposed, which could not be used</summary>
+          <PlanSummary>What the planner proposed, which could not be used</PlanSummary>
           <pre className="plan-text">{attempt.proposed}</pre>
         </details>
       )}
       {!!attempt?.steps.length && (
         <details open>
-          <summary>Steps that ran</summary>
+          <PlanSummary>Steps that ran</PlanSummary>
           <pre className="plan-text">{attempt.steps.join('\n')}</pre>
         </details>
       )}
@@ -1993,6 +2067,12 @@ type RowProps = {
   face?: Face
   /** Open a long prompt: find or a fork landing landed on this row. */
   revealed?: boolean
+  /**
+   * What an entry the person can no longer answer says became of it, in place of "Request cancelled
+   * when the turn ended". A window that shares a session with another client uses it for a question
+   * that was settled without telling it who answered or how.
+   */
+  interruptedNote?: string
 }
 
 /**
@@ -2012,6 +2092,7 @@ export const Row = memo(function Row({
   forkable,
   face,
   revealed,
+  interruptedNote,
 }: RowProps): React.JSX.Element {
   const card = (
     <Card
@@ -2035,7 +2116,7 @@ export const Row = memo(function Row({
   // vouched for it. The turn ending declassifies nothing.
   return (
     <div className="interrupted-request">
-      <strong>Request cancelled when the turn ended</strong>
+      <strong>{interruptedNote ?? 'Request cancelled when the turn ended'}</strong>
       <Collapse title="Request details" isOpen={undefined} data-test="interrupted-details">
         {card}
       </Collapse>

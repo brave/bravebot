@@ -9,6 +9,7 @@ governs:
   - crates/agent/src/processor.rs
   - crates/choice/src/lib.rs
   - crates/choice/src/number.rs
+  - crates/cli/tests/layering.rs
 guards:
   - symbol: ProcessorSpec::new
   - symbol: Policy::before_processor
@@ -433,7 +434,9 @@ processor, and no choice is made. A request that fails, whether on that answer, 
 service refuses, on a reply cut at the token ceiling or on one the service reports as incomplete,
 tells the planner one word of a closed set the driver wrote, as it does for every processor. The byte is labelled as the answer is, by taint over what the
 processor was given ([PROC-3](#PROC-3)). Nothing else of the answer is kept, and neither this
-process nor the gate compares the text or the byte. The gate refuses a spec that was not built to
+process nor the gate compares the text or the byte. The crate keeps nothing between calls: it holds
+no `static`, no `thread_local!` and no interior mutability, so the reader it supplies has no place
+to keep a copy of the text for a later call. The gate refuses a spec that was not built to
 choose, so the answer of a processor that writes a document is read by no one for a number.
 
 The number is stored under a reference of its own kind, apart from the text slots, so it is no
@@ -483,7 +486,9 @@ word for it. The read is the ninth of the
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 `verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
 `verified-by: bravebot_agent::turn::a_call_asking_for_a_number_is_refused_unless_it_asks_in_the_planners_own_terms`
-`verified-by: by-construction (Policy::read_a_number takes a function pointer that captures nothing of the caller's and returns a u8, so one byte is all of an answer that leaves the policy layer through it, and labels.md pins its uses file by file, so a second reader of an answer is a moved count that check-spec fails on)`
+`verified-by: bravebot_cli::layering::the_reader_of_a_number_keeps_nothing_between_calls`
+`verified-by: bravebot_cli::layering::the_state_scan_sees_each_refused_word_and_skips_the_lifetime_tests_and_comments`
+`verified-by: by-construction (Policy::read_a_number takes a function pointer that captures nothing of the caller's and returns a u8, so one byte is all the call hands back; the type does not stop the function it points at from keeping a copy of the text for a later call, and crates/cli/tests/layering.rs refuses that by reading the source of crates/choice/src for the item static, thread_local, a named type with a Cell or an Atomic part, Mutex, RwLock, OnceLock and LazyLock, and allows the lifetime 'static; that check does not see every way to keep a value, a lazy cell from another crate and a leaked box among them, so a reviewer reads a diff of that crate for those; labels.md pins the uses of Policy::read_a_number file by file, so a second reader of an answer is a moved count that check-spec fails on)`
 
 ## Known costs
 

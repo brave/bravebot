@@ -11,8 +11,11 @@ import { type Interjection, type Live, NEW_CHAT, liveKey } from './live'
 import { conversationPreferences, setConversation } from './experience'
 import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
-import { scheduleArgument, type ScheduleAnswer } from '../shared/schedule'
-import { grantsOf, named, sent, summonOf, type Staged } from './staging'
+import type { ScheduleAnswer } from '../shared/schedule'
+import type { AsideStarted } from '../shared/aside'
+import { manifestTask } from '../shared/manifest'
+import { planRun as startPlanRun } from './plan-run'
+import { exitOf, folded, grantsOf, named, sent, summonOf, type Staged } from './staging'
 import * as t from './transcript'
 
 /** What `useTurn` takes from the component that owns the sessions and the composer. */
@@ -105,19 +108,26 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
     const attachments = selectedFiles ?? sending?.attachments ?? []
-    // A queued message carries what it named when it was queued. Otherwise it is what the draft
-    // still names: a marker deleted before sending took its file or picture off.
+    // A queued message carries what it named when it was queued, and a draft from the composer
+    // what it named before its folded pastes were put back. Otherwise it is what the prompt still
+    // names: a marker deleted before sending took its file or picture off.
     const staged = queuedStaged ?? named(sending?.staging, prompt)
+    // A queued message is sent with the files it was queued with and takes nothing off the
+    // composer. A draft from the composer leaves with what the composer held.
+    const queued = selectedFiles !== undefined
     const grants = grantsOf(staged)
     // The bot picked from the `@` list for this message, which answers this turn alone (MEMORY-14).
     const summoned = summonOf(staged)
+    // The line as the box showed it, each folded paste behind its marker. The names are read there
+    // and not in the pasted words, which name no file (NAME-12). Sent only when it differs.
+    const line = folded(staged, prompt)
+    const shown = line === prompt ? {} : { shown: line }
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
-    // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
-    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt })
+    // reads the names again at `turn.send`, and that check is the one that decides what goes.
+    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt: line })
     if (!mentioned.ok) {
       const refused = mentioned.error?.message ?? 'The files this message names could not be checked.'
-      const queued = selectedFiles !== undefined
       updateSession(handle, (old) => old ? {
         ...old,
         sendRefused: refused,
@@ -142,7 +152,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
             summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             sendRefused: null,
-            staging: queuedStaged ? old.staging : sent(old.staging),
+            staging: queued ? old.staging : sent(old.staging),
             entries: [
               ...old.entries,
               ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })),
@@ -162,17 +172,17 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     try {
       if (summoned) {
         // The main process names the summoned bot's definition and sends it for this turn alone.
-        await callSummon({ session: handle, slug: summoned.slug, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
+        await callSummon({ session: handle, slug: summoned.slug, prompt, ...shown, model, attachments: attachments.map((file) => file.id), ...grants })
       } else if (bot) {
         // A bot's turn never goes through `call`. It needs files attached, and the main process
         // strips those from anything a window sends — a window that could name a file to read
         // would be a window that could have the planner read any file on the machine. So this
         // names the bot and says whether the briefing is due, and the paths are composed over
         // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
+        await callBot({ session: handle, slug: bot.slug, prompt, ...shown, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
       } else {
         // A new id for each Send, which the agent requires on every send (RPCVIEW-10).
-        await call('turn.send', { session: handle, prompt, model, messageId: crypto.randomUUID(), attachments: attachments.map((file) => file.id), ...grants })
+        await call('turn.send', { session: handle, prompt, ...shown, model, messageId: crypto.randomUUID(), attachments: attachments.map((file) => file.id), ...grants })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {
@@ -210,24 +220,85 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
    * turn ends (CMD-8). Nothing here reads the argument. A line typed while a `/schedule` line already
    * waits waits behind it, whatever it is, since the bridge cannot see this queue and would answer a
    * read before the write typed first (CMD-8).
+   *
+   * `staged` is what the line names. Only its markers and file names are sent, and the bridge puts
+   * each marker back into the argument as the file's name, or as the sentence that a picture cannot
+   * join a command (DROP-4). A line that waits keeps them for when it is asked again.
    */
-  const schedule = useCallback(async (handle: string, argument: string, line: string, queuedAlready = false) => {
+  const schedule = useCallback(async (handle: string, argument: string, line: string, staged: Staged[], queuedAlready = false) => {
     const waiting = !queuedAlready && openedLives.current.get(handle)?.queued?.some((item) => item.schedule !== undefined)
     if (waiting) {
-      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], schedule: argument }] } : old)
+      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, schedule: argument }] } : old)
       return
     }
     try {
-      const answer = await call<ScheduleAnswer>('schedule.command', { session: handle, argument })
+      const answer = await call<ScheduleAnswer>('schedule.command', { session: handle, argument, ...markersOf(staged) })
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.scheduleAnswered(answer)] } : old)
     } catch (error) {
       if (error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
-        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], schedule: argument }] } : old)
+        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged, schedule: argument }] } : old)
         return
       }
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(String(error))] } : old)
     }
   }, [])
+
+  /**
+   * Ask a typed `/btw <question>` or `/recap` of the bridge (CMD-1, CMD-8, CMD-16). The line is never
+   * sent as a prompt, and its answer arrives as `aside.done`, drawn as a row and never part of the
+   * conversation.
+   *
+   * A `/btw` goes out at once, while a turn runs and lines wait in the queue too (CMD-8): the bridge
+   * asks it over the exchange the turn sent. A `/recap` the bridge refuses while a turn runs
+   * (`turn_in_flight`, the bridge's decision) waits in the queue and is asked again when the turn
+   * ends (CMD-16). A `/btw` carries the pictures and files staged on its line (CMD-5). One the
+   * bridge refuses with staged items, such as a dropped file while a turn runs, goes back in the
+   * composer with them, so it can be asked again. A file chosen with the paperclip is a grant a
+   * question cannot be handed, so a `/btw` with one is refused here.
+   */
+  const askAside = useCallback(async (handle: string, kind: 'btw' | 'recap', question: string, line: string, onLine: Staged[], queuedAlready = false) => {
+    const asking = openedLives.current.get(handle)
+    if (kind === 'btw' && (asking?.attachments?.length ?? 0) > 0) {
+      if (handleRef.current === handle) setDraft(line)
+      setProblem('A /btw question cannot carry files chosen with the paperclip. Take them off and ask again.')
+      return
+    }
+    const model = asking?.model ?? null
+    // What was pasted or dropped on the line goes with the question (CMD-5): pictures and PDFs as
+    // the ids the main process resolves, as it does for a prompt's, and a text file as its name
+    // (DROP-4). The bridge refuses a dropped file while a turn runs, in the terminal's words.
+    // `onLine` was found on the line before its folded pastes were put back, and `line` is the
+    // words, so a line put back in the composer holds no marker that names nothing.
+    const staged = kind === 'btw' ? onLine : []
+    const carried = {
+      pastes: grantsOf(staged).pastes,
+      drops: staged.flatMap((item) => item.via === 'drop' && item.file.kind !== 'text' ? [item.file.id] : []),
+      files: markersOf(staged.filter((item) => item.via === 'drop' && item.file.kind === 'text')).files,
+    }
+    try {
+      const started = kind === 'btw'
+        ? await call<AsideStarted>('session.btw', { session: handle, question, model, ...carried })
+        : await call<AsideStarted>('session.recap', { session: handle, model })
+      if (staged.length > 0) updateSession(handle, (old) => old ? { ...old, staging: sent(old.staging) } : old)
+      if (started.besideTurn) updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.asideOut(question)] } : old)
+    } catch (error) {
+      if (kind === 'recap' && error instanceof RequestFailed && error.code === 'turn_in_flight' && !queuedAlready) {
+        updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], aside: 'recap' }] } : old)
+        return
+      }
+      if (staged.length > 0 && handleRef.current === handle) setDraft(line)
+      updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.errored(error instanceof RequestFailed ? error.reason : String(error))] } : old)
+    }
+  }, [])
+
+  /** Start a plan run for a typed `/manifest <task>` line (MANIFEST-9). See `plan-run.ts`. */
+  const planRun = useCallback((handle: string, task: string, line: string, queuedAlready = false) => startPlanRun({
+    call,
+    read: (target) => openedLives.current.get(target),
+    update: (target, change) => updateSession(target, (old) => old ? change(old) : old),
+    putBack: (target, text) => { if (handleRef.current === target) setDraft(text) },
+    setProblem,
+  }, handle, task, line, queuedAlready), [])
 
   // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
   // bridge's check of the message's `@` names before it marks the chat running, and without this the
@@ -242,16 +313,21 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       if (!message) continue
       const handle = item.handle
       dequeuing.current.add(handle)
-      // A waiting `/schedule` line is asked again and starts no turn.
-      const settled = message.schedule !== undefined
-        ? schedule(handle, message.schedule, message.prompt, true)
-        : send(message.prompt, handle, message.attachments, message.staged)
+      // A waiting `/schedule` or `/recap` line is asked again and starts no turn, and a waiting
+      // `/manifest` line starts its run.
+      const settled = message.aside === 'recap'
+        ? askAside(handle, 'recap', '', message.prompt, [], true)
+        : message.schedule !== undefined
+          ? schedule(handle, message.schedule, message.prompt, message.staged, true)
+          : message.manifest !== undefined
+            ? planRun(handle, message.manifest, message.prompt, true)
+            : send(message.prompt, handle, message.attachments, message.staged)
       void settled.finally(() => {
         dequeuing.current.delete(handle)
         refreshLives((revision) => revision + 1)
       })
     }
-  }, [live, livesRevision, send, updateSession])
+  }, [live, livesRevision, send, askAside, planRun, updateSession])
 
   /**
    * Send a line into the turn that is running (INPUT-10), or say it was not taken.
@@ -327,17 +403,31 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
 
   /** Hold the draft for after the turn: each queued message starts a turn of its own, with the grants it names. */
   const queueDraft = () => {
-    if (!draft.trim()) return
-    const typed = scheduleArgument(draft)
-    if (typed !== null && handleRef.current) {
+    // Each exit carries the words, with every folded paste put back, and what the folded draft
+    // names (PASTE-1).
+    const exit = exitOf(live?.staging, draft)
+    if (!exit) return
+    if (exit.to === 'schedule' && handleRef.current) {
       const handle = handleRef.current
       setDraft('')
-      void schedule(handle, typed, draft.trim())
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void schedule(handle, exit.argument, exit.line, exit.staged)
+      return
+    }
+    if (exit.to === 'aside' && handleRef.current) {
+      setDraft('')
+      void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
+      return
+    }
+    const task = manifestTask(draft)
+    if (task !== null && handleRef.current) {
+      setDraft('')
+      void planRun(handleRef.current, task, draft.trim())
       return
     }
     setLive((old) => old ? {
       ...old,
-      queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
+      queued: [...(old.queued ?? []), { prompt: exit.line, attachments: old.attachments ?? [], staged: exit.staged }],
       attachments: [],
       staging: sent(old.staging),
     } : old)
@@ -346,35 +436,61 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
 
   /** Send whatever is in the composer, on the same terms the Send button uses. */
   const submit = useCallback(() => {
-    const prompt = draft.trim()
-    if (!handleRef.current || !canSend(live, backendReady, prompt)) return
-    setDraft('')
-    const typed = scheduleArgument(prompt)
-    if (typed !== null) {
-      void schedule(handleRef.current, typed, prompt)
+    const exit = exitOf(live?.staging, draft)
+    if (!handleRef.current || !exit || !canSend(live, backendReady, exit.line)) return
+    if (exit.to === 'schedule') {
+      setDraft('')
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void schedule(handleRef.current, exit.argument, exit.line, exit.staged)
       return
     }
-    void send(prompt)
-  }, [draft, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, backendReady])
+    if (exit.to === 'aside') {
+      setDraft('')
+      void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
+      return
+    }
+    // `planRun` reads the folded draft, so a paste or other staged item it names is refused.
+    const task = manifestTask(draft)
+    if (task !== null) {
+      setDraft('')
+      void planRun(handleRef.current, task, draft.trim())
+      return
+    }
+    setDraft('')
+    // A refused send puts `exit.line` back in the composer, which is the words.
+    void send(exit.line, undefined, undefined, exit.staged)
+  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, planRun, backendReady])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
     const handle = handleRef.current
-    const text = draft.trim()
-    if (!handle || !text || !live) return
-    const typed = scheduleArgument(text)
-    if (typed !== null) {
+    if (!handle || !live) return
+    const exit = exitOf(live.staging, draft)
+    if (!exit) return
+    if (exit.to === 'schedule') {
       setDraft('')
-      void schedule(handle, typed, text)
+      setLive((old) => old ? { ...old, attachments: [], staging: sent(old.staging) } : old)
+      void schedule(handle, exit.argument, exit.line, exit.staged)
       return
     }
-    if (route(live, named(live.staging, draft)) === 'queue') { queueDraft(); return }
-    const staged = named(live.staging, draft)
-    const line = { id: crypto.randomUUID(), prompt: text, attachments: [], staged }
+    if (exit.to === 'aside') {
+      setDraft('')
+      void askAside(handle, exit.kind, exit.question, exit.line, exit.staged)
+      return
+    }
+    // A `/manifest` line is never sent into a turn: it starts a run, or waits for the turn to end.
+    const task = manifestTask(draft)
+    if (task !== null) {
+      setDraft('')
+      void planRun(handle, task, draft.trim())
+      return
+    }
+    if (route(live, exit.staged) === 'queue') { queueDraft(); return }
+    const line = { id: crypto.randomUUID(), prompt: exit.line, attachments: [], staged: exit.staged }
     updateSession(handle, (old) => old ? sentInto(old, line) : old)
     setDraft('')
     void interject(handle, line)
   }
 
-  return { answerTrust, answerRules, answerFolder, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
+  return { answerTrust, answerRules, answerFolder, send, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
 }

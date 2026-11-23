@@ -30,10 +30,11 @@ export function markersOf(staged: Staged[]): { files: { marker: string; name: st
  *
  * A file chosen with the paperclip is a grant the running turn cannot be handed, and the bot's
  * memory update reads nothing from the person: both wait for the turn to end. A line that summons
- * a bot starts a turn addressed to that bot, so it waits too (MEMORY-14).
+ * a bot starts a turn addressed to that bot, so it waits too (MEMORY-14). A compaction is no turn to
+ * go into, so a line waits for it to end (CMD-34).
  */
-export function route(live: Pick<Live, 'consolidating' | 'attachments'>, staged: Staged[] = []): 'interject' | 'queue' {
-  return live.consolidating || live.attachments?.length || staged.some((item) => item.via === 'summon') ? 'queue' : 'interject'
+export function route(live: Pick<Live, 'consolidating' | 'compacting' | 'attachments'>, staged: Staged[] = []): 'interject' | 'queue' {
+  return live.consolidating || live.compacting || live.attachments?.length || staged.some((item) => item.via === 'summon') ? 'queue' : 'interject'
 }
 
 /** Draw `line` as sent into the turn, and take off the composer what it named. */

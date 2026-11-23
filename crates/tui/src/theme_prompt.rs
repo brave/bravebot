@@ -228,6 +228,7 @@ fn panel() -> Panel {
     Panel {
         title: t!(theme_picker_title),
         keys: t!(theme_picker_keys),
+        scope_line: None,
         width: 42,
     }
 }
@@ -369,6 +370,27 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// VIEW-46. The theme picker has no scope: no scope line is drawn for it, and Tab leaves it with
+    /// none and the cursor where it was.
+    ///
+    /// Rejects: a panel given a scope line, which draws an Enter and Tab row that does nothing here,
+    /// and a Tab that gives the picker a scope or moves its cursor.
+    #[test]
+    fn the_theme_picker_has_no_scope_and_ignores_tab() {
+        let mut picker = Picker::new(offered(), "nord");
+        assert_eq!(panel().scope_line, None);
+        assert_eq!(picker.scope(), None);
+        for (code, modifiers) in [
+            (KeyCode::Tab, KeyModifiers::NONE),
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+        ] {
+            list_picker::handle_key(&mut picker, code, modifiers);
+            assert_eq!(picker.scope(), None, "{code:?}");
+            assert_eq!(picker.chosen().expect("a theme").name, "nord", "{code:?}");
+        }
+        assert!(!rendered(&picker).contains("Tab:"), "{}", rendered(&picker));
     }
 
     #[test]

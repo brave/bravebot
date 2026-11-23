@@ -57,3 +57,5 @@ A delegate is offered no `propose_rule`, and a call from one is answered as an u
 `verified-by: bravebot_agent::tools::tests::questions::an_incognito_session_proposes_no_rule`
 `verified-by: bravebot_agent::tools::tests::questions::a_one_shot_run_refuses_a_rule`
 `verified-by: bravebot_agent::tools::tests::questions::no_permission_mode_answers_a_rule`
+`verified-by: bravebot_cli::running::a_lines_run_refuses_a_rule_proposal`
+`verified-by: bravebot_cli::one_shot::a_program_over_lines_cannot_answer_a_question_that_proposes_a_rule`

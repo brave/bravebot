@@ -628,7 +628,8 @@ jobs:
           if-no-files-found: ignore
 
   # The Verus contracts (docs/development/verification.md). `make check-verus` verifies the crates
-  # that carry contracts, requires Verus to refuse every mutation in verify/mutations.txt, and checks
+  # that carry contracts, requires Verus to refuse every mutation in verify/mutations.txt and every
+  # one-token change the sweep makes that verify/survivors.txt does not list, and checks
   # verify/history.rs the same way. Verus runs on a toolchain of its own through rustup, newer than
   # the one the workspace builds on, and the release is checked against its digest before it runs.
   # On a pull request, only where crates/core, verify/ or the scripts that run them changed.
@@ -973,7 +974,8 @@ jobs:
   # starts nothing, so without this job no process is started under a container and the refusals
   # and the empty Windows base rest on the code alone.
   #
-  # Only the tests written for Windows run. The rest of the sandbox crate's tests use Unix paths
+  # Only the tests written for Windows run, and the search-for-programs tests named in the step
+  # that follows them. The rest of the sandbox crate's tests use Unix paths
   # and programs, and the agent's other confined-process tests spawn a POSIX shell. The browser
   # opener's four Windows tests in bravebot-tui also run (the step that follows the confine
   # test): `the_windows_launch_is_rundll32_with_the_entry_point_and_the_address_as_two_arguments`,
@@ -1092,6 +1094,46 @@ jobs:
       - name: Test the backend with real processes
         run: cargo test -p bravebot-sandbox --locked --no-fail-fast --test windows -- --nocapture
 
+      # SANDBOX-30 and #3901: the search for programs leaves out every directory a stage may write
+      # and the checkout holding one, and a record in the state directory carries those directories
+      # to the next process. The test file runs whole. The library tests are listed by name, since
+      # most of them plant a program with an executable bit or a link and are Unix only, and the step
+      # reads how many ran because a filter that matches nothing, after a rename, passes. A Windows
+      # lookup tries a bare name with each extension of `PATHEXT`, so the tests that plant a program
+      # give it one.
+      - name: Test the search for programs and the record of directories a stage may write
+        run: |
+          cargo test -p bravebot-sandbox --locked --no-fail-fast --test checkout_in_search
+          tests=(
+            programs::tests::start_is_given_the_program_the_resolved_names
+            programs::tests::start_removes_the_names_it_is_given_and_no_others
+            programs::tests::withhold_takes_a_name_set_after_start_off_again
+            programs::tests::start_gives_a_reduced_path_only_where_it_is_asked_for
+            programs::tests::a_windows_executable_extension_is_not_part_of_a_programs_name
+            programs::tests::a_program_in_a_directory_a_stage_may_write_is_not_found
+            programs::tests::the_program_behind_a_writable_directory_is_the_one_found
+            programs::tests::a_program_is_found_when_no_writable_directory_is_involved
+            programs::tests::an_empty_path_entry_is_never_searched
+            programs::tests::the_system_temp_directory_counts_as_writable
+            programs::tests::an_absolute_path_is_the_callers_own_choice
+            programs::tests::a_relative_name_with_a_separator_is_not_looked_up
+            programs::tests::a_registered_directory_is_kept_out_of_the_search
+            programs::tests::a_started_program_with_no_searched_entry_is_given_no_path_at_all
+            programs::tests::a_recorded_directory_that_does_not_exist_is_still_compared_by_name
+            programs::tests::may_be_run_holds_for_nothing_in_an_option_variable_and_nothing_in_an_empty_list
+            programs::record_tests::a_directory_is_handed_to_the_record_once_however_often_it_is_recorded
+            programs::record_tests::the_checkout_holding_a_directory_is_left_out_but_not_handed_to_the_record
+            programs::record_tests::nothing_in_the_system_temporary_directory_is_handed_on
+            programs::record_tests::a_path_a_line_cannot_carry_is_not_handed_on
+            programs::record_tests::a_record_adds_only_the_lines_that_can_be_read
+            programs::record_tests::a_record_is_read_to_its_bounds
+            programs::record_tests::a_loaded_directory_is_not_handed_on_again_and_a_machine_row_is_not_one_a_stage_wrote
+            programs::record_tests::a_line_the_record_could_not_write_is_handed_on_again
+          )
+          cargo test -p bravebot-sandbox --locked --lib -- --exact "${tests[@]}" \
+            | tee "$RUNNER_TEMP/programs.log"
+          grep -q "test result: ok. ${#tests[@]} passed" "$RUNNER_TEMP/programs.log"
+
       - name: Test a confined program run for a person
         # The session is granted its temporary directory, so it is a directory of its own and not
         # the runner's.
@@ -1150,8 +1192,11 @@ jobs:
   # The job also runs the tests that pin how a `deny` or `ask` command rule folds the spellings of a
   # program that Windows ignores, and refuses an 8.3 short name (#3926). They pass on every host,
   # but a test that passes on the Linux host does not show the name handling is the same on a
-  # Windows host. The last step asks the volume which characters it opens as an ASCII letter and
-  # whether a deny rule covers the program word spelled with each (PERM-5).
+  # Windows host. The step before the last runs the check of a named settings file, the record of
+  # directories a stage may write and the test that a program found off Unix is started as the file
+  # it resolved to (SANDBOX-30, PERM-14, CMDLINE-8, #3901). The last step asks the volume which
+  # characters it opens as an ASCII letter and whether a deny rule covers the program word spelled
+  # with each (PERM-5).
   names-windows:
     name: Awkward names on Windows
     runs-on: windows-latest
@@ -1205,10 +1250,26 @@ jobs:
             | tee "$RUNNER_TEMP/mentions.log"
           grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/mentions.log"
 
+      - name: Test a full-path rule inside a workspace the host canonicalizes with a prefix
+        # Windows canonicalizes the workspace to `\\?\C:\..` and a rule is written `C:/..`, a
+        # difference no other host has, so the relative name the file tools ask by is only covered
+        # where this runs (PERM-7).
+        run: |
+          mkdir -p "$RUNNER_TEMP/names"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/names")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-agent --locked --lib -- --exact \
+            permissions::tests::a_full_path_rule_inside_the_workspace_covers_its_relative_names_on_windows \
+            | tee "$RUNNER_TEMP/full-path-rule.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/full-path-rule.log"
+
       - name: Test how a command rule folds the spellings of a program
         run: |
           tests=(
             ambient::tests::a_program_and_a_wrapper_are_read_as_the_permission_rules_read_them
+            pure::tests::a_windows_path_is_not_in_the_table
+            policy::tests::a_step_resolved_to_a_windows_path_is_not_read_proven
+            policy::tests::a_step_is_renamed_when_its_file_name_differs_from_the_file_it_resolved_to
             permissions::tests::a_restricting_rule_covers_the_program_under_the_names_windows_ignores
             permissions::tests::an_allow_rule_grants_none_of_the_names_windows_ignores
             permissions::tests::the_fold_leaves_a_name_that_is_not_the_program_alone
@@ -1218,6 +1279,46 @@ jobs:
           cargo test -p bravebot-core --locked --lib -- --exact "${tests[@]}" \
             | tee "$RUNNER_TEMP/rules.log"
           grep -q "test result: ok. ${#tests[@]} passed" "$RUNNER_TEMP/rules.log"
+
+      # The check of a named `--settings` file reads the directories a stage may write, which on
+      # Linux and Windows the sandbox cannot hold one file back from (PERM-14, #3901). Windows
+      # canonicalizes a path to the `\\?\` form, so a root and a file are compared in more than one
+      # spelling there. The record of those directories is read from the state directory and
+      # appended to as bytes, which is where a Windows line ending or a verbatim path would show
+      # (SANDBOX-30). The step reads how many ran, as the steps above do.
+      - name: Test the check of a named settings file and the record of directories a stage may write
+        run: |
+          tests=(
+            named_reach::tests::a_file_in_a_root_is_withheld_only_where_one_file_cannot_be_held_back
+            named_reach::tests::a_file_not_yet_written_is_placed_by_its_directory
+            named_reach::tests::dot_dot_spellings_are_read_by_where_they_land
+            named_reach::tests::the_roots_hold_the_directories_an_earlier_process_granted
+            named_reach::tests::the_roots_are_the_working_directory_then_each_other_directory_once
+            named_reach::tests::a_directory_recorded_twice_stays_until_it_is_closed_twice
+            settings::tests::a_named_file_inside_a_writable_root_grants_nothing_where_one_file_cannot_be_held_back
+            settings::tests::a_named_file_inside_an_added_directory_grants_nothing_where_one_file_cannot_be_held_back
+            settings::tests::a_named_file_inside_a_writable_root_keeps_granting_where_one_file_can_be_held_back
+            settings::tests::layered_withholds_a_named_file_inside_a_directory_an_earlier_process_recorded
+          )
+          cargo test -p bravebot-config --locked --lib -- --exact "${tests[@]}" \
+            | tee "$RUNNER_TEMP/named-reach.log"
+          grep -q "test result: ok. ${#tests[@]} passed" "$RUNNER_TEMP/named-reach.log"
+          records=(
+            stage_record::tests::a_missing_record_reads_as_empty
+            stage_record::tests::lines_appended_are_read_back_in_order
+            stage_record::tests::a_record_at_the_size_bound_takes_no_more_and_is_read_to_a_whole_line
+            stage_record::tests::a_record_with_bytes_that_are_not_text_is_handed_on_as_it_is
+            stage_record::tests::a_directory_that_is_or_holds_the_home_is_not_recorded
+            stage_record::tests::a_record_at_the_byte_bound_alone_takes_no_more
+            stage_record::tests::a_record_at_the_line_bound_alone_takes_no_more
+          )
+          cargo test -p bravebot-agent --locked --lib -- --exact "${records[@]}" \
+            | tee "$RUNNER_TEMP/stage-record.log"
+          grep -q "test result: ok. ${#records[@]} passed" "$RUNNER_TEMP/stage-record.log"
+          cargo test -p bravebot-agent --locked --lib -- --exact \
+            programs::tests::a_program_found_off_unix_is_started_as_the_file_it_resolved_to \
+            | tee "$RUNNER_TEMP/started-as.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/started-as.log"
 
       - name: Test the program word against the spellings the volume opens
         # Opens every character below U+10000 by name against a file for each ASCII letter. The first

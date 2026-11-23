@@ -447,10 +447,12 @@ pub(crate) fn without_denied<S: Sink>(
     policy: &Policy<'_, S>,
 ) -> Answer {
     answer.locations.retain(|location| {
-        let named = match Path::new(&location.path).strip_prefix(root) {
-            Ok(relative) => relative.to_string_lossy().into_owned(),
-            Err(_) => location.path.clone(),
-        };
+        let named = bravebot_core::spelling::below(
+            root,
+            &location.path,
+            crate::workspace::BACKSLASH_SEPARATES,
+        )
+        .unwrap_or_else(|| location.path.clone());
         !workspace.rule_denies_reading(policy, &named)
     });
     if policy.any_read_is_denied() {
@@ -586,10 +588,9 @@ pub fn label_for_locations<S: Sink>(
         if named.iter().any(|(path, _)| *path == location.path) {
             continue;
         }
-        let looked_up = match Path::new(&location.path).strip_prefix(workspace.root()) {
-            Ok(relative) => relative.to_string_lossy().into_owned(),
-            Err(_) => location.path.clone(),
-        };
+        let looked_up = workspace
+            .below_root(&location.path)
+            .unwrap_or_else(|| location.path.clone());
         named.push((&location.path, workspace.other_trust_keys(&looked_up)));
     }
     // The queried file is asked under the name a read of the typed path is asked under, not under

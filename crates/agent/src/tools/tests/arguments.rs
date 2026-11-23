@@ -646,6 +646,36 @@ fn a_directory_a_remembered_grant_lets_a_stage_write_is_in_the_unproven_set() {
     }
 }
 
+/// The set a line is judged against holds a directory an earlier process let a stage write, which
+/// this session never opened, and no directory the record does not hold (CMDLINE-8). Rejects a set
+/// built from this session's own directories and grants alone, which leaves a file a stage of an
+/// earlier process planted in that directory proven as the system's.
+#[cfg(unix)]
+#[test]
+fn a_directory_an_earlier_process_let_a_stage_write_is_in_the_unproven_set() {
+    let scratch = Scratch::new("unproven-earlier-root");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let earlier = Scratch::new("unproven-earlier-granted");
+    let unrelated = Scratch::new("unproven-earlier-unrelated");
+    let granted = earlier.path.canonicalize().expect("canonical");
+    let control = unrelated.path.canonicalize().expect("canonical");
+
+    let before = with_tools(&workspace, |tools| super::unproven_directories(tools));
+    assert!(!before.contains(&granted), "the control: {before:?}");
+
+    bravebot_sandbox::programs::load_record(
+        format!("directory\t{}\n", granted.display()).as_bytes(),
+    );
+
+    let held = with_tools(&workspace, |tools| super::unproven_directories(tools));
+    assert!(held.contains(&granted), "{held:?}");
+    assert!(!held.contains(&control), "{held:?}");
+    assert!(
+        held.contains(&workspace.root().to_path_buf()),
+        "the session's own directory left the set: {held:?}"
+    );
+}
+
 /// The statement lands on `run` and on no other tool, and only on a turn that confines.
 /// The regressions it rejects are a statement appended to every description, and one
 /// appended on a turn that does not confine.
@@ -893,7 +923,9 @@ fn run_names_its_own_credentials_and_says_what_an_unset_report_means() {
         "the statement does not say what an unset report means: {run}"
     );
     assert!(
-        run.contains("the person's settings name as a gateway's token or to be withheld, which are not listed"),
+        run.contains(
+            "name as a gateway's token, as a search key or to be withheld, which are not listed"
+        ),
         "the statement does not say that settings add variables it does not list: {run}"
     );
 }

@@ -41,6 +41,22 @@ pub(crate) fn current_workspace(
         .map(|workspace| workspace.with_named_settings_file(settings.named_settings_file()))
 }
 
+/// [`current_workspace`] for a session or a run that may start a stage: every directory recorded
+/// from here on is appended to the record of directories a stage may write
+/// ([`bravebot_agent::stage_record::follow`], SANDBOX-30).
+///
+/// The sink is switched on before the workspace is built, since building it records the directory
+/// the session is in. A command that opens no session builds its workspace with
+/// [`current_workspace`] and appends nothing, so `bravebot doctor` leaves the state directory as it
+/// found it.
+pub(crate) fn session_workspace(
+    settings: &bravebot_config::Settings,
+    managed: &Managed,
+) -> Result<Workspace, String> {
+    bravebot_agent::stage_record::follow();
+    current_workspace(settings, managed)
+}
+
 /// The exit for a workspace that could not be opened, with the problem drawn: it can name a
 /// directory a checkout chose (LAYER-3).
 pub(crate) fn workspace_problem(problem: &str) -> ExitCode {

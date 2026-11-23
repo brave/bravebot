@@ -154,7 +154,7 @@ const RETENTION_KEY: &str = "retentionDays";
 ///
 /// Named as a constant because the read of the home layer's value and the list of keys this build
 /// reads both spell it here.
-const CRASH_REPORTS_KEY: &str = "crashReports";
+pub(crate) const CRASH_REPORTS_KEY: &str = "crashReports";
 
 /// The key that turns the daily usage ping off, which only the person's own settings file is asked.
 ///
@@ -259,6 +259,14 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // install scripts from running, and a checkout listing it, or a pattern holding it, runs them
     // (BACKEND-24, RUN-12). So the list is the person's alone, and a checkout's entries are not read.
     ("run.scrubEnv", Entitled::OwnOrNamed),
+    // The file it names is read as the key the `web_search` tool sends to the search service, so a
+    // checkout's file would be choosing which file of the person's is read and sent as a credential.
+    (WEB_SEARCH_KEY_FILE, Entitled::OwnOrNamed),
+    // Each name is a variable of the person's environment read as the key the `web_search` tool
+    // sends to the search service, and withheld from every program the agent starts, so a
+    // checkout's file would choose which variable of the person's is sent as a credential, and
+    // which are kept from their programs.
+    (WEB_SEARCH_ENV, Entitled::OwnOrNamed),
 ];
 
 /// How a key of [`NARROW_ONLY`] is read, and which of two values it states is the narrower one.
@@ -426,18 +434,20 @@ const NARROW_ONLY: &[(&str, Narrows, Entitled)] = &[
 struct Narrowed {
     /// What the last layer entitled to the key wrote, usable or not.
     standing: Option<serde_json::Value>,
+    /// The file that wrote `standing`.
+    standing_from: Option<PathBuf>,
     /// What each layer not entitled wrote, weakest layer first.
     offered: Vec<(PathBuf, serde_json::Value)>,
 }
 
 impl Narrowed {
     /// Put the value in force under `key` in `document`, and answer for the files that wrote one
-    /// that was not obeyed, weakest first.
+    /// that was not obeyed, weakest first, and for the file whose value is in force.
     ///
     /// An offered value is compared with the one in force when its turn comes, so two checkout
     /// files each narrow what the one before left, and a figure in the other unit than the one in
     /// force is refused whichever file wrote it.
-    fn settle(self, kind: Narrows, document: &mut Document, key: &str) -> Vec<PathBuf> {
+    fn settle(self, kind: Narrows, document: &mut Document, key: &str) -> Settled {
         self.settle_against(kind, kind.unstated().as_ref(), document, key)
     }
 
@@ -453,10 +463,18 @@ impl Narrowed {
         unstated: Option<&serde_json::Value>,
         document: &mut Document,
         key: &str,
-    ) -> Vec<PathBuf> {
-        let Self { standing, offered } = self;
+    ) -> Settled {
+        let Self {
+            standing,
+            standing_from,
+            offered,
+        } = self;
+        let mut from = None;
         let mut held = match standing {
-            Some(value) if kind.usable(&value) => Some(value),
+            Some(value) if kind.usable(&value) => {
+                from = standing_from;
+                Some(value)
+            }
             // The person's own file stating nothing usable states that there is nothing to keep.
             Some(value) => {
                 document.displaced.push(value);
@@ -476,6 +494,7 @@ impl Narrowed {
                 if let Some(wider) = held.replace(value) {
                     document.displaced.push(wider);
                 }
+                from = Some(path);
                 continue;
             }
             document.displaced.push(value);
@@ -489,8 +508,16 @@ impl Narrowed {
         if let Some(value) = held {
             document.put_key(key, value);
         }
-        refused
+        Settled { refused, from }
     }
+}
+
+/// What [`Narrowed::settle`] decided about one key.
+struct Settled {
+    /// The files whose value was not obeyed, weakest first.
+    refused: Vec<PathBuf>,
+    /// The file whose value is in force, or `None` where no value is.
+    from: Option<PathBuf>,
 }
 
 /// The number of days a record is kept when no `retentionDays` is stated.
@@ -508,6 +535,27 @@ const RETRIEVAL_BLOCK: &str = "retrieval";
 /// An entry is the person's answer to whether to read that directory, so a directory not named is
 /// not read, and only a file the person wrote or named can name one.
 const SHARED_SKILLS_KEY: &str = "sharedSkillDirectories";
+
+/// The block holding `webSearch.keyFile`, which only the person's own files may write.
+const WEB_SEARCH_BLOCK: &str = "webSearch";
+
+/// The name of the file key inside [`WEB_SEARCH_BLOCK`].
+const WEB_SEARCH_KEY_NAME: &str = "keyFile";
+
+/// `webSearch.keyFile`: the absolute path of a file holding the key the `web_search` tool sends.
+///
+/// Named as a constant because the per-layer look that removes it from a checkout's file, the read
+/// of the merged root and the list of keys this build reads all spell it here.
+const WEB_SEARCH_KEY_FILE: &str = "webSearch.keyFile";
+
+/// The name of the list of variable names inside [`WEB_SEARCH_BLOCK`].
+const WEB_SEARCH_ENV_NAME: &str = "env";
+
+/// `webSearch.env`: the names of the variables the `web_search` tool reads its key from, tried in
+/// order.
+///
+/// Named as a constant for the reason [`WEB_SEARCH_KEY_FILE`] is.
+const WEB_SEARCH_ENV: &str = "webSearch.env";
 
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
@@ -567,6 +615,7 @@ const READ_KEYS: &[&str] = &[
     "updateCheck",
     USAGE_PING_KEY,
     VETTING_BLOCK,
+    WEB_SEARCH_BLOCK,
 ];
 
 /// The most of it worth reading.
@@ -699,6 +748,8 @@ pub struct Settings {
     editor_mode: Option<String>,
     /// The session spend limit the top-level `limit` key named, if it named a usable one.
     limit: Option<crate::limit::Limit>,
+    /// The file whose value is in force for each key of [`NARROW_ONLY`] a layer stated.
+    narrowed_from: BTreeMap<&'static str, PathBuf>,
     /// The size in tokens above which the top-level `deferMcpToolsAbove` key asks for a server's
     /// tools to be offered by name, if it named a usable one.
     defer_mcp_tools_above: Option<u64>,
@@ -858,6 +909,17 @@ pub struct Settings {
     /// Read from the layers [`HOME_ONLY`] entitles, since naming a directory puts every skill in it
     /// in front of the planner.
     shared_skills: Vec<String>,
+    /// The path `webSearch.keyFile` named, if it named an absolute one.
+    ///
+    /// Read from the layers [`HOME_ONLY`] entitles. The file is not opened here. A `Debug` of the
+    /// settings withholds it, since it is a string the person wrote.
+    web_search_key_file: Option<crate::web_search_key::KeyPath>,
+    /// The variable names `webSearch.env` listed, in the order written, each trimmed.
+    ///
+    /// Blank entries and entries that are not strings are dropped, as a provider's `env` entries
+    /// are. Names only: no value is read here. Read from the layers [`HOME_ONLY`] entitles. A
+    /// `Debug` of the settings says how many there are and not what they are.
+    web_search_env: crate::web_search_key::Variables,
     /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
     language: Option<String>,
     /// The entries of the `references` block that name a directory, in alias order (REFER-1).
@@ -1088,6 +1150,55 @@ impl RunDeadlines {
     }
 }
 
+/// Each rule in force and the file that wrote it, cloned out of [`Settings`] by
+/// [`Settings::rule_sources`].
+///
+/// Kept apart from [`Settings`] so that a front end holding a session's rules can name the file
+/// and reason for the rule that decides a call without keeping the whole of the settings (CLI-30).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuleSources(Vec<RuleSource>);
+
+impl RuleSources {
+    /// The file that wrote the rule `anchored` in `list`, and the rule as that file spelled it,
+    /// as [`Settings::rule_source`] answers.
+    pub fn source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
+        source_of(&self.0, list, anchored)
+    }
+
+    /// Why the person wrote the rule `anchored` in `list`, where their own file said (PERM-1), as
+    /// [`Settings::rule_reason`] answers.
+    pub fn reason(&self, list: &str, anchored: &str) -> Option<&str> {
+        reason_of(&self.0, list, anchored)
+    }
+}
+
+/// The first entry of `sources` for the rule `anchored` in `list`, which is the weakest layer
+/// that wrote it.
+fn find_rule_source<'a>(
+    sources: &'a [RuleSource],
+    list: &str,
+    anchored: &str,
+) -> Option<&'a RuleSource> {
+    sources
+        .iter()
+        .find(|source| source.list == list && source.anchored == anchored)
+}
+
+/// The file and spelling [`RuleSources::source`] and [`Settings::rule_source`] answer with.
+fn source_of<'a>(
+    sources: &'a [RuleSource],
+    list: &str,
+    anchored: &str,
+) -> Option<(&'a Path, &'a str)> {
+    find_rule_source(sources, list, anchored)
+        .map(|source| (source.file.as_path(), source.written.as_str()))
+}
+
+/// The reason [`RuleSources::reason`] and [`Settings::rule_reason`] answer with.
+fn reason_of<'a>(sources: &'a [RuleSource], list: &str, anchored: &str) -> Option<&'a str> {
+    find_rule_source(sources, list, anchored).and_then(|source| source.reason.as_deref())
+}
+
 /// One rule in force, with the file that wrote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuleSource {
@@ -1231,6 +1342,8 @@ struct LayerFacts {
     /// What each layer said about a key of [`NARROW_ONLY`], one entry per row of the table, settled
     /// by [`LayerFacts::settle_narrowed`] once all are read.
     narrowed: Vec<Narrowed>,
+    /// The file whose value is in force for a key of [`NARROW_ONLY`], where one is.
+    narrowed_from: BTreeMap<&'static str, PathBuf>,
     /// Settled per layer for the reason `model` is: how long the person's own records are kept is
     /// theirs to state, and the merge keeps whichever file spoke last.
     retention_unreadable: Vec<PathBuf>,
@@ -1321,6 +1434,7 @@ impl LayerFacts {
                 if let Some(replaced) = held.standing.replace(value) {
                     merged.displaced.push(replaced);
                 }
+                held.standing_from = Some(path.to_path_buf());
             } else {
                 held.offered.push((path.to_path_buf(), value));
             }
@@ -1332,9 +1446,12 @@ impl LayerFacts {
     /// files that named a key of [`HOME_ONLY`].
     fn settle_narrowed(&mut self, merged: &mut Document) {
         for ((key, kind, _), held) in NARROW_ONLY.iter().zip(std::mem::take(&mut self.narrowed)) {
-            let refused = held.settle(*kind, merged, key);
+            let Settled { refused, from } = held.settle(*kind, merged, key);
             if !refused.is_empty() {
                 self.not_obeyed.entry(*key).or_default().extend(refused);
+            }
+            if let Some(path) = from {
+                self.narrowed_from.insert(*key, path);
             }
         }
     }
@@ -1656,6 +1773,7 @@ impl LayerFacts {
         settings.model_outranks_a_pick = self.model_above_home && settings.model.is_some();
         settings.effort_outranks_a_pick = self.effort_above_home && settings.effort.is_some();
         settings.not_obeyed = self.not_obeyed;
+        settings.narrowed_from = self.narrowed_from;
         settings.retention_unreadable = self.retention_unreadable;
     }
 }
@@ -1812,15 +1930,20 @@ impl Settings {
     /// flag is typed by the person running this invocation, and whatever gets them to type it could
     /// get them to type any other command (PERM-14).
     pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
-        let mut roots: Vec<PathBuf> = cwd.map(Path::to_path_buf).into_iter().collect();
-        roots.extend(crate::named_reach::added_writable_directories());
-        Self::layered_reaching(
-            home,
-            cwd,
-            named,
-            &roots,
-            bravebot_sandbox::holds_one_file_back(),
-        )
+        Self::layered_on(home, cwd, named, bravebot_sandbox::holds_one_file_back())
+    }
+
+    /// [`Settings::layered`] for a platform that can or cannot hold one file back from a stage, with
+    /// the roots a stage may write taken from [`crate::named_reach::writable_roots`], so a test
+    /// states the platform and still reads the roots of the process.
+    fn layered_on(
+        home: Option<PathBuf>,
+        cwd: Option<&Path>,
+        named: Option<&Path>,
+        can_hold_one_file_back: bool,
+    ) -> Self {
+        let roots = crate::named_reach::writable_roots(cwd);
+        Self::layered_reaching(home, cwd, named, &roots, can_hold_one_file_back)
     }
 
     /// As [`Settings::layered`], for the directories a stage may write and whether this platform's
@@ -2073,6 +2196,20 @@ impl Settings {
         settings.chatgpt_models = crate::provider::account_models(root);
         settings.style = word(root, "style");
         settings.shared_skills = strings(root, SHARED_SKILLS_KEY);
+        settings.web_search_key_file = object(root, WEB_SEARCH_BLOCK)
+            .and_then(|block| word(block, WEB_SEARCH_KEY_NAME))
+            .filter(|path| std::path::Path::new(path).is_absolute())
+            .map(crate::web_search_key::KeyPath::new);
+        settings.web_search_env = crate::web_search_key::Variables::new(
+            object(root, WEB_SEARCH_BLOCK)
+                .map(|block| {
+                    strings(block, WEB_SEARCH_ENV_NAME)
+                        .into_iter()
+                        .map(|name| name.trim().to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
         settings.language = word(root, "language");
         settings
     }
@@ -2219,6 +2356,11 @@ impl Settings {
     /// zero, is absence: a misspelt limit leaves the session unbounded, as it was without the key.
     pub fn limit(&self) -> Option<crate::limit::Limit> {
         self.limit
+    }
+
+    /// The file whose figure [`Settings::limit`] is, where the layers named one.
+    pub fn limit_by(&self) -> Option<&Path> {
+        self.narrowed_from.get("limit").map(PathBuf::as_path)
     }
 
     /// The size in tokens above which the settings in force have a server's tools offered by name
@@ -2500,10 +2642,14 @@ impl Settings {
     /// said for a `Read` or `Edit` rule written with a single leading slash. Where two layers wrote
     /// the same rule, the weakest layer that did is named.
     pub fn rule_source(&self, list: &str, anchored: &str) -> Option<(&Path, &str)> {
-        self.rule_sources
-            .iter()
-            .find(|source| source.list == list && source.anchored == anchored)
-            .map(|source| (source.file.as_path(), source.written.as_str()))
+        source_of(&self.rule_sources, list, anchored)
+    }
+
+    /// Each rule in force and the file that wrote it, for a caller that keeps them without the
+    /// rest of the settings. Its lookups answer as [`Settings::rule_source`] and
+    /// [`Settings::rule_reason`] do.
+    pub fn rule_sources(&self) -> RuleSources {
+        RuleSources(self.rule_sources.clone())
     }
 
     /// Why the person wrote the rule `anchored` in `list`, where their own file said (PERM-1).
@@ -2513,10 +2659,7 @@ impl Settings {
     /// person's own file: a reason is display text and is shown as the person's own words, so a
     /// checkout's is not read at all.
     pub fn rule_reason(&self, list: &str, anchored: &str) -> Option<&str> {
-        self.rule_sources
-            .iter()
-            .find(|source| source.list == list && source.anchored == anchored)
-            .and_then(|source| source.reason.as_deref())
+        reason_of(&self.rule_sources, list, anchored)
     }
 
     /// The `permissions` blocks and `deny`, `ask` and `allow` values that were not the shape rules
@@ -2837,6 +2980,8 @@ impl Settings {
             && self.not_obeyed.values().all(Vec::is_empty)
             && self.style.is_none()
             && self.shared_skills.is_empty()
+            && self.web_search_key_file.is_none()
+            && self.web_search_env.is_empty()
             && self.language.is_none()
             && self.ask_idle_seconds.is_none()
             && self.start_in_auto.is_none()
@@ -2925,6 +3070,25 @@ impl Settings {
     /// them (INSTR-17).
     pub fn shared_skill_directories(&self) -> &[String] {
         &self.shared_skills
+    }
+
+    /// The absolute path of the file `webSearch.keyFile` named as holding the web search key.
+    ///
+    /// `None` where no layer entitled to name it did, and where what it named is not a string that
+    /// is an absolute path. Only the path: nothing here opens the file.
+    pub fn web_search_key_file(&self) -> Option<&str> {
+        self.web_search_key_file
+            .as_ref()
+            .and_then(|path| path.to_str())
+    }
+
+    /// The names of the variables `webSearch.env` listed as holding the web search key, in the order
+    /// the key is looked for in them.
+    ///
+    /// Names only, from the layers entitled to name them: a name may be any string, so it is never
+    /// said to the planner, and no value is read here.
+    pub fn web_search_env(&self) -> &[String] {
+        &self.web_search_env
     }
 
     /// The language the person's own file asked the interface to be read in, as the file spelled it
@@ -3158,6 +3322,12 @@ impl Settings {
             .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
             .chain(self.tui_context_menu.is_some().then_some("tui.contextMenu"))
             .chain(self.deep_links.is_some().then_some("deepLinks"))
+            .chain(
+                self.web_search_key_file
+                    .is_some()
+                    .then_some(WEB_SEARCH_KEY_FILE),
+            )
+            .chain((!self.web_search_env.is_empty()).then_some(WEB_SEARCH_ENV))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -4153,7 +4323,8 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "sessionsKeys"
                     || key == "search"
                     || key == "tui"
-                    || key == "download" =>
+                    || key == "download"
+                    || key == WEB_SEARCH_BLOCK =>
             {
                 for (name, value) in above {
                     lay_over(displaced, under, name, value);
@@ -4175,8 +4346,14 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                 merge_permissions(displaced, under, above);
             }
             // Any of these blocks spelled as anything but an object holds no name, so it removes none.
+            // `webSearch` is one: a project, local or named layer writing `null`, a string or a
+            // number there must not replace the person's `webSearch.env` and `webSearch.keyFile`,
+            // which are what name the variables withheld from a program the `run` tool starts.
             (Some(serde_json::Value::Object(_)), value)
-                if key == "run" || key == "permissions" || key == "tui" =>
+                if key == "run"
+                    || key == "permissions"
+                    || key == "tui"
+                    || key == WEB_SEARCH_BLOCK =>
             {
                 displaced.push(value);
             }
@@ -6601,6 +6778,57 @@ mod tests {
         }
     }
 
+    /// A file named by `--settings` inside a directory an earlier process let a stage write is
+    /// withheld where the platform cannot hold one file back, through the roots `Settings::layered`
+    /// takes from the process: the working directory, this process's `--add-dir` directories and
+    /// the directories of the record. Rejects a `layered` that takes its roots from the working
+    /// directory and `--add-dir` alone, which reads a file an earlier process's stage could have
+    /// rewritten as the person's own. The platform answer is stated, since macOS answers that it can
+    /// hold the file back and withholds nothing; where the host cannot, `layered` itself is asked
+    /// as well.
+    #[test]
+    fn layered_withholds_a_named_file_inside_a_directory_an_earlier_process_recorded() {
+        let layers = Layers::new("layered-recorded").named(NAMED_GRANTS_ALL);
+        let recorded = layers
+            .named
+            .as_deref()
+            .and_then(Path::parent)
+            .expect("a parent")
+            .to_path_buf();
+        let read = |can_hold_one_file_back| {
+            Settings::layered_on(
+                Some(layers.home.clone()),
+                Some(&layers.cwd),
+                layers.named.as_deref(),
+                can_hold_one_file_back,
+            )
+        };
+        assert_eq!(
+            read(false).named_withheld(),
+            None,
+            "the control: nothing is recorded yet, so the file grants"
+        );
+
+        bravebot_sandbox::programs::load_record(
+            format!("directory\t{}\n", recorded.display()).as_bytes(),
+        );
+
+        let withheld = read(false);
+        assert_eq!(withheld.named_withheld(), layers.named.as_deref());
+        assert!(withheld.permissions().allow.is_empty());
+        assert_eq!(
+            read(true).named_withheld(),
+            None,
+            "a platform that holds it back"
+        );
+        if !bravebot_sandbox::holds_one_file_back() {
+            assert_eq!(
+                layers.read_on_this_platform().named_withheld(),
+                layers.named.as_deref()
+            );
+        }
+    }
+
     /// A file nobody named is a checkout's file whatever the roots say, so the answer never reports
     /// one withheld. Rejects a report of every project file as the named one.
     #[test]
@@ -6889,6 +7117,107 @@ mod tests {
         assert!(settings.sandbox_hosts().allowed.is_none());
     }
 
+    /// SANDBOX-24, SANDBOX-25: a `sandbox` block spelled as anything but an object in the project,
+    /// local or `--settings` layer holds no name, so it removes none of the person's: the four
+    /// filesystem lists, the host list with `onUnlisted`, the mode and the hold-back of the
+    /// temporary directory stay as the home file wrote them, and the lists a checkout may not widen
+    /// are not widened. The fault this rejects is reading the lists from the merged root, where such
+    /// a value replaces the person's whole block.
+    #[test]
+    fn a_sandbox_block_that_is_not_an_object_takes_no_setting_away() {
+        const HOME: &str = r#"{"sandbox": {
+            "mode": "workspace-write",
+            "holdBackTemporaryDirectory": true,
+            "filesystem": {
+                "allowRead": ["/home/person/read"], "allowWrite": ["/home/person/write"],
+                "denyRead": ["/home/person/deny-read"], "denyWrite": ["/home/person/deny-write"]},
+            "network": {"allowedHosts": ["mine.example"], "deniedHosts": ["blocked.example"],
+                        "onUnlisted": "ask"}
+        }}"#;
+        let shapes = [
+            r#"{"sandbox": null}"#,
+            r#"{"sandbox": "x"}"#,
+            r#"{"sandbox": 5}"#,
+            r#"{"sandbox": []}"#,
+        ];
+        for (n, shape) in shapes.iter().enumerate() {
+            let settled = [
+                (
+                    "project",
+                    Layers::new(&format!("sandbox-shape-project-{n}"))
+                        .global(HOME)
+                        .project(shape)
+                        .read(),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("sandbox-shape-local-{n}"))
+                        .global(HOME)
+                        .local(shape)
+                        .read(),
+                ),
+                (
+                    "named",
+                    Layers::new(&format!("sandbox-shape-named-{n}"))
+                        .global(HOME)
+                        .named(shape)
+                        .read(),
+                ),
+            ];
+            for (layer, settings) in settled {
+                let said = format!("a {layer} layer of {shape}");
+                let lists = settings.sandbox_filesystem();
+                assert_eq!(
+                    paths_of(&lists.allow_read),
+                    ["/home/person/read"],
+                    "{said} took allowRead away"
+                );
+                assert_eq!(
+                    paths_of(&lists.allow_write),
+                    ["/home/person/write"],
+                    "{said} took allowWrite away"
+                );
+                assert_eq!(
+                    paths_of(&lists.deny_read),
+                    ["/home/person/deny-read"],
+                    "{said} took denyRead away"
+                );
+                assert_eq!(
+                    paths_of(&lists.deny_write),
+                    ["/home/person/deny-write"],
+                    "{said} took denyWrite away"
+                );
+                let hosts = settings.sandbox_hosts();
+                assert_eq!(
+                    spelled(hosts.allowed.as_deref().expect("a list")),
+                    ["mine.example"],
+                    "{said} took allowedHosts away"
+                );
+                assert_eq!(
+                    spelled(&hosts.denied),
+                    ["blocked.example"],
+                    "{said} took deniedHosts away"
+                );
+                assert_eq!(
+                    hosts.on_unlisted,
+                    Some(crate::sandbox_network::OnUnlisted::Ask),
+                    "{said} took onUnlisted away"
+                );
+                assert_eq!(
+                    settings.sandbox().map(|(mode, _)| mode),
+                    Some(SandboxMode::WorkspaceWrite),
+                    "{said} took the mode away"
+                );
+                assert!(
+                    settings.sandbox_holds_back_temporary_directory(),
+                    "{said} took the temporary directory hold-back away"
+                );
+                assert_eq!(settings.sandbox_filesystem_ignored().count(), 0, "{said}");
+                assert_eq!(settings.sandbox_hosts_ignored().count(), 0, "{said}");
+            }
+        }
+    }
+
     /// A rule is traced to the layer that wrote it, in the list it was written in, so a report of
     /// which rule decided can name the file to edit (CLI-30). The same text in two lists and two
     /// layers is where a lookup on the text alone would name the wrong file.
@@ -6921,6 +7250,67 @@ mod tests {
             settings.rule_source("deny", &anchored),
             Some((project.as_path(), "Read(/secret)"))
         );
+    }
+
+    /// The sources cloned out of the settings answer every lookup as the settings do, across two
+    /// layers, so a front end that keeps only them names the same file and reason (CLI-30).
+    #[test]
+    fn rule_sources_answer_as_the_settings_do() {
+        let layers = Layers::new("rule-sources-cloned")
+            .global(
+                r#"{"permissions": {
+                     "deny": [{"rule": "Bash(rm *)", "reason": "never from a session"}],
+                     "allow": ["Bash(git *)", "Read(/notes.md)"]
+                   }}"#,
+            )
+            .project(r#"{"permissions": {"ask": ["Bash(git *)"], "deny": ["Read(/secret)"]}}"#);
+        let settings = layers.read();
+        let sources = settings.rule_sources();
+
+        let rules = settings.permissions();
+        let mut asked: Vec<(&str, String)> = Vec::new();
+        for (list, held) in [
+            ("deny", &rules.deny),
+            ("ask", &rules.ask),
+            ("allow", &rules.allow),
+        ] {
+            asked.extend(held.iter().map(|rule| (list, rule.clone())));
+        }
+        assert_eq!(asked.len(), 5);
+        asked.push(("deny", "Bash(git *)".to_owned()));
+        asked.push(("allow", "Bash(make *)".to_owned()));
+
+        for (list, rule) in &asked {
+            assert_eq!(
+                sources.source(list, rule),
+                settings.rule_source(list, rule),
+                "{list} {rule}"
+            );
+            assert_eq!(
+                sources.reason(list, rule),
+                settings.rule_reason(list, rule),
+                "{list} {rule}"
+            );
+        }
+
+        let global = layers.home.join(SETTINGS_FILE);
+        let project = layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE);
+        assert_eq!(
+            sources.source("deny", "Bash(rm *)"),
+            Some((global.as_path(), "Bash(rm *)"))
+        );
+        assert_eq!(
+            sources.reason("deny", "Bash(rm *)"),
+            Some("never from a session")
+        );
+        assert_eq!(
+            sources.source("ask", "Bash(git *)").map(|(file, _)| file),
+            Some(project.as_path())
+        );
+        assert_eq!(sources.reason("ask", "Bash(git *)"), None);
+        assert_eq!(sources.source("deny", "Bash(git *)"), None);
+        assert_eq!(sources.clone(), sources);
+        assert_eq!(RuleSources::default().source("deny", "Bash(rm *)"), None);
     }
 
     /// An `allow` rule a checkout wrote is not in force, so it is traced to no file: nothing could
@@ -7797,6 +8187,56 @@ mod tests {
             from_named,
             [("x-route".to_string(), "named-eu".to_string())]
         );
+        assert_eq!(named.not_obeyed(PROVIDER_BLOCK).count(), 0);
+    }
+
+    /// BACKEND-24: a file a block names holds the token a gateway is sent, so a layer able to name
+    /// one would choose which file's content goes to a host. A checkout's layers arrive with the
+    /// checkout, so the file is the person's own file's to name, and the file `--settings` names is
+    /// the person's own act. The regression it rejects is reading `keyFile` from a project or local
+    /// layer's block, which this holds by the block being ignored whole.
+    #[test]
+    fn a_project_layer_cannot_name_a_key_file_for_a_gateway() {
+        let named_by = |file: &str| {
+            format!(
+                r#"{{"provider": {{"gw": {{"options": {{
+                    "baseURL": "https://personal.invalid/v1", "keyFile": "{file}"
+                }}}}}}}}"#
+            )
+        };
+        let settings = Layers::new("provider-key-file")
+            .global(
+                r#"{"provider": {"gw": {"options": {"baseURL": "https://personal.invalid/v1"}}}}"#,
+            )
+            .project(&named_by("/this/checkout/chose"))
+            .local(&named_by("/this/machine/chose"))
+            .read();
+        assert_eq!(settings.providers().len(), 1);
+        assert!(
+            settings
+                .providers()
+                .iter()
+                .all(|provider| provider.key_file.is_none() && !provider.names_a_credential()),
+            "a checkout's key file was read"
+        );
+        assert_eq!(settings.not_obeyed(PROVIDER_BLOCK).count(), 2);
+
+        let only_project = Layers::new("provider-key-file-only-project")
+            .project(&named_by("/this/checkout/chose"))
+            .read();
+        assert!(
+            only_project
+                .providers()
+                .iter()
+                .all(|provider| provider.key_file.is_none()),
+            "a checkout with no home layer above it named a key file"
+        );
+        assert_eq!(only_project.not_obeyed(PROVIDER_BLOCK).count(), 1);
+
+        let named = Layers::new("provider-key-file-named")
+            .named(&named_by("/the/person/named"))
+            .read();
+        assert!(named.providers()[0].key_file.is_some());
         assert_eq!(named.not_obeyed(PROVIDER_BLOCK).count(), 0);
     }
 
@@ -9567,15 +10007,18 @@ mod tests {
         ] {
             let held = Narrowed {
                 standing: None,
+                standing_from: None,
                 offered: vec![(PathBuf::from("/checkout/settings.json"), offered.clone())],
             };
             let mut document = Document::default();
-            let refused = held.settle_against(
-                Narrows::Limit,
-                Some(&serde_json::json!("200k")),
-                &mut document,
-                "limit",
-            );
+            let refused = held
+                .settle_against(
+                    Narrows::Limit,
+                    Some(&serde_json::json!("200k")),
+                    &mut document,
+                    "limit",
+                )
+                .refused;
             assert_eq!(refused.len(), reported, "{offered}");
             assert_eq!(
                 limit_stated(document.root.get("limit")),
@@ -11095,6 +11538,8 @@ mod tests {
         ("askIdleSeconds", false, false),
         ("permissions.startInAuto", false, false),
         ("run.scrubEnv", false, false),
+        ("webSearch.keyFile", false, false),
+        ("webSearch.env", false, false),
     ];
 
     /// The text of a layer naming only `key`, inside its block where the key is written
@@ -11341,6 +11786,98 @@ mod tests {
         assert_eq!(both.get("GOOGLE_CLOUD_PROJECT"), None);
         let service = vertex(&both).expect("the person's key configures the service");
         assert!(!service.base_url.contains("project-from-the-file"));
+    }
+
+    /// The six network names and the three Google names, each spelled out so that a name dropped
+    /// from the lists in `env_var` fails its own case where a loop over those lists would pass.
+    const NETWORK_AND_GOOGLE_NAMES: [&str; 9] = [
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "ALL_PROXY",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEX_LOCATION",
+    ];
+
+    /// BACKEND-33: a checkout that stated a network or Google name would choose what the process
+    /// trusts, where it sends requests or which Google account receives a conversation, so these
+    /// names are the person's alone to state. `DEPLOY_TARGET` is the control: a name no list holds
+    /// is not person-only, so a predicate that answered `true` for every name fails.
+    #[test]
+    fn the_network_and_google_names_are_person_only() {
+        for name in NETWORK_AND_GOOGLE_NAMES {
+            assert!(
+                crate::env_var::is_person_only(name),
+                "{name} is not in the person-only lists"
+            );
+        }
+        assert!(!crate::env_var::is_person_only("DEPLOY_TARGET"));
+    }
+
+    /// BACKEND-33: a checkout's project and local files decide nothing for the network and Google
+    /// names, so `doctor` must not tell the person that a checkout overrode a name it decides
+    /// nothing for, and the value in use must be the person's. The values differ between the
+    /// person's file and the checkout's, so a checkout that won is visible in the report and in
+    /// `get`. `DEPLOY_TARGET` is the control: a name a checkout may set is reported with the
+    /// checkout's file, so a report that never names anything fails.
+    #[test]
+    fn a_checkouts_file_never_wins_a_network_or_google_name() {
+        let person = |name: &str| format!(r#"{{"env": {{"{name}": "person-value"}}}}"#);
+        let checkout = |name: &str| format!(r#"{{"env": {{"{name}": "checkout-value"}}}}"#);
+
+        for name in NETWORK_AND_GOOGLE_NAMES {
+            let with_project = Layers::new(&format!("person-only-project-{name}"))
+                .global(&person(name))
+                .project(&checkout(name))
+                .read();
+            let with_local = Layers::new(&format!("person-only-local-{name}"))
+                .global(&person(name))
+                .local(&checkout(name))
+                .read();
+            for (file, settings) in [("project", &with_project), ("local", &with_local)] {
+                let reported: Vec<(&str, &Path)> = settings.overridden().collect();
+                assert!(
+                    reported.is_empty(),
+                    "{name}: a {file} file was reported as winning it: {reported:?}"
+                );
+                assert_eq!(
+                    settings.get(name),
+                    Some("person-value"),
+                    "{name}: a {file} file decided it"
+                );
+            }
+        }
+
+        let name = "DEPLOY_TARGET";
+        let by_project = Layers::new("person-only-control-project")
+            .global(&person(name))
+            .project(&checkout(name));
+        let by_local = Layers::new("person-only-control-local")
+            .global(&person(name))
+            .local(&checkout(name));
+        for (file, layers, winner) in [
+            (
+                "project",
+                &by_project,
+                by_project.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+            ),
+            (
+                "local",
+                &by_local,
+                by_local.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+            ),
+        ] {
+            let settings = layers.read();
+            assert_eq!(
+                settings.overridden().collect::<Vec<_>>(),
+                [(name, winner.as_path())],
+                "a {file} file's {name} was not reported"
+            );
+            assert_eq!(settings.get(name), Some("checkout-value"), "{file}");
+        }
     }
 
     /// BACKEND-33: which AWS account, region, profile and tier models receive a conversation is the
@@ -12138,6 +12675,40 @@ mod tests {
         assert_eq!(named.not_obeyed("agent").count(), 0);
     }
 
+    /// ADDRESS-13: a blank value is how a line is commented out, and a number, a boolean, `null`,
+    /// an array or an object is not a definition name. Reading one as a name would send a run to
+    /// look up a definition called `""`, `"1"` or `"true"` and report it as missing, or would stop
+    /// a run whose settings only held a commented-out line. Surrounding space is the shape a
+    /// hand-edited file has, so a padded name is still a name.
+    #[test]
+    fn an_agent_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"agent": ""}"#,
+            r#"{"agent": "   "}"#,
+            "{\"agent\": \"\\t\\n\"}",
+            r#"{"agent": 1}"#,
+            r#"{"agent": true}"#,
+            r#"{"agent": null}"#,
+            r#"{"agent": ["my-reviewer"]}"#,
+            r#"{"agent": {"name": "my-reviewer"}}"#,
+        ] {
+            let settings = Settings::parse(text);
+            assert_eq!(settings.agent(), None, "{text} named a definition");
+            assert!(settings.is_empty(), "{text} counted as a setting made");
+            assert_eq!(settings.names().count(), 0, "{text} was listed as set");
+        }
+
+        let blank_layers = Layers::new("agent-blank-layers")
+            .global(r#"{"agent": "   "}"#)
+            .named(r#"{"agent": 7}"#)
+            .read();
+        assert_eq!(blank_layers.agent(), None);
+
+        let padded = Settings::parse("{\"agent\": \" my-reviewer\\n\"}");
+        assert_eq!(padded.agent(), Some("my-reviewer"));
+        assert_eq!(padded.names().collect::<Vec<_>>(), ["agent"]);
+    }
+
     /// ASK-9: the time is a whole positive count of seconds. Zero would close every question before
     /// it could be read, so it and anything that is not a whole count leave a question waiting for
     /// as long as it takes.
@@ -12335,6 +12906,236 @@ mod tests {
 
         let nothing = Layers::new("shared-skills-unset").global("{}").read();
         assert!(nothing.shared_skill_directories().is_empty());
+    }
+
+    /// A checkout's project and local layers cannot name the web search key file, the person's own
+    /// layer and a file the command line named can, and each refused layer is reported. An
+    /// implementation that read the key from the merged root without the home-only look would let a
+    /// cloned repository choose which file of the person's is read and sent as a credential.
+    #[test]
+    fn a_project_layer_cannot_name_a_web_search_key_file() {
+        let settings = Layers::new("web-search-layers")
+            .global(r#"{"webSearch": {"keyFile": "/home/person/search-key.txt"}}"#)
+            .project(r#"{"webSearch": {"keyFile": "/etc/passwd"}}"#)
+            .local(r#"{"webSearch": {"keyFile": "/etc/hosts"}}"#)
+            .read();
+        assert_eq!(
+            settings.web_search_key_file(),
+            Some("/home/person/search-key.txt")
+        );
+        assert_eq!(settings.not_obeyed(WEB_SEARCH_KEY_FILE).count(), 2);
+
+        let only_project = Layers::new("web-search-only-project")
+            .project(r#"{"webSearch": {"keyFile": "/etc/passwd"}}"#)
+            .read();
+        assert_eq!(only_project.web_search_key_file(), None);
+        assert_eq!(only_project.not_obeyed(WEB_SEARCH_KEY_FILE).count(), 1);
+        assert!(!only_project.is_empty());
+
+        let named = Layers::new("web-search-named")
+            .named(r#"{"webSearch": {"keyFile": "/home/person/named-key.txt"}}"#)
+            .read();
+        assert_eq!(
+            named.web_search_key_file(),
+            Some("/home/person/named-key.txt")
+        );
+        assert_eq!(named.not_obeyed(WEB_SEARCH_KEY_FILE).count(), 0);
+
+        let nothing = Layers::new("web-search-unset").global("{}").read();
+        assert_eq!(nothing.web_search_key_file(), None);
+    }
+
+    /// `webSearch.env` is read from the person's own file and the file `--settings` names, and a
+    /// project or local file naming it is ignored and reported. The fault this rejects is reading
+    /// the list from any layer, which would let a checkout choose which of the person's variables
+    /// is sent to a host as a credential, and which are kept from their programs.
+    #[test]
+    fn a_project_layer_cannot_name_a_web_search_variable() {
+        let settings = Layers::new("web-search-env-layers")
+            .global(r#"{"webSearch": {"env": ["PERSONAL_SEARCH_KEY"]}}"#)
+            .project(r#"{"webSearch": {"env": ["CHECKOUT_CHOSEN"]}}"#)
+            .local(r#"{"webSearch": {"env": ["LOCAL_CHOSEN"]}}"#)
+            .read();
+        assert_eq!(settings.web_search_env(), ["PERSONAL_SEARCH_KEY"]);
+        assert_eq!(settings.not_obeyed(WEB_SEARCH_ENV).count(), 2);
+
+        let only_project = Layers::new("web-search-env-only-project")
+            .project(r#"{"webSearch": {"env": ["CHECKOUT_CHOSEN"]}}"#)
+            .read();
+        assert!(only_project.web_search_env().is_empty());
+        assert_eq!(only_project.not_obeyed(WEB_SEARCH_ENV).count(), 1);
+        assert!(!only_project.is_empty());
+
+        let named = Layers::new("web-search-env-named")
+            .named(r#"{"webSearch": {"env": ["NAMED_SEARCH_KEY"]}}"#)
+            .read();
+        assert_eq!(named.web_search_env(), ["NAMED_SEARCH_KEY"]);
+        assert_eq!(named.not_obeyed(WEB_SEARCH_ENV).count(), 0);
+    }
+
+    /// A project file naming only `webSearch.keyFile` leaves the person's `webSearch.env` in force,
+    /// and the reverse. The fault this rejects is removing the whole `webSearch` block from a
+    /// checkout's layer, which would report one setting as ignored and hide the other.
+    #[test]
+    fn the_two_web_search_settings_are_each_refused_to_a_project_layer_on_their_own() {
+        let settings = Layers::new("web-search-two-keys")
+            .global(r#"{"webSearch": {"env": ["PERSONAL_SEARCH_KEY"]}}"#)
+            .project(r#"{"webSearch": {"keyFile": "/etc/passwd"}}"#)
+            .read();
+        assert_eq!(settings.web_search_env(), ["PERSONAL_SEARCH_KEY"]);
+        assert_eq!(settings.web_search_key_file(), None);
+        assert_eq!(settings.not_obeyed(WEB_SEARCH_KEY_FILE).count(), 1);
+        assert_eq!(settings.not_obeyed(WEB_SEARCH_ENV).count(), 0);
+    }
+
+    /// A `webSearch` spelled as anything but an object in the project, local or `--settings` layer
+    /// holds no name, so it removes none: the person's `webSearch.env` and `webSearch.keyFile` stay
+    /// in force and the variables stay withheld from a program `run` starts. The fault this rejects
+    /// is the merge laying such a value over the person's whole block, which drops the variable
+    /// names and so stops them being withheld.
+    #[test]
+    fn a_web_search_block_that_is_not_an_object_takes_neither_setting_away() {
+        const HOME: &str = r#"{"webSearch": {"env": ["PERSONAL_SEARCH_KEY"], "keyFile": "/home/person/search-key.txt"}}"#;
+        let shapes = [
+            r#"{"webSearch": null}"#,
+            r#"{"webSearch": "x"}"#,
+            r#"{"webSearch": 5}"#,
+            r#"{"webSearch": []}"#,
+        ];
+        for (n, shape) in shapes.iter().enumerate() {
+            let settled = [
+                (
+                    "project",
+                    Layers::new(&format!("web-search-shape-project-{n}"))
+                        .global(HOME)
+                        .project(shape)
+                        .read(),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("web-search-shape-local-{n}"))
+                        .global(HOME)
+                        .local(shape)
+                        .read(),
+                ),
+                (
+                    "named",
+                    Layers::new(&format!("web-search-shape-named-{n}"))
+                        .global(HOME)
+                        .named(shape)
+                        .read(),
+                ),
+            ];
+            for (layer, settings) in settled {
+                assert_eq!(
+                    settings.web_search_env(),
+                    ["PERSONAL_SEARCH_KEY"],
+                    "a {layer} layer of {shape} took the variable away"
+                );
+                assert_eq!(
+                    settings.web_search_key_file(),
+                    Some("/home/person/search-key.txt"),
+                    "a {layer} layer of {shape} took the key file away"
+                );
+                assert!(
+                    crate::scrub::names_against(&settings, &[])
+                        .iter()
+                        .any(|name| name == "PERSONAL_SEARCH_KEY"),
+                    "a {layer} layer of {shape} left the variable in a program's environment"
+                );
+            }
+        }
+    }
+
+    /// An entry that is not a usable name is dropped as a provider's `env` entry is: blank, spaces
+    /// only and a non-string are gone, a name is trimmed, the order is kept, and a `webSearch` that
+    /// is not an object or an `env` that is not an array names none. The faults this rejects are
+    /// keeping a blank entry, which reads the empty name, and not trimming, which names a variable
+    /// no environment holds.
+    #[test]
+    fn web_search_variable_names_are_read_as_a_providers_env_is() {
+        let names = Settings::parse(
+            r#"{"webSearch": {"env": [" FIRST_KEY ", "", "   ", 7, null, ["NESTED"], "SECOND_KEY"]}}"#,
+        );
+        assert_eq!(names.web_search_env(), ["FIRST_KEY", "SECOND_KEY"]);
+        for text in [
+            r#"{"webSearch": {"env": "ONE_KEY"}}"#,
+            r#"{"webSearch": {"env": {"a": "b"}}}"#,
+            r#"{"webSearch": "ONE_KEY"}"#,
+            r#"{"webSearch": {}}"#,
+        ] {
+            assert!(Settings::parse(text).web_search_env().is_empty(), "{text}");
+        }
+    }
+
+    /// A file holding only `webSearch.env` is not empty settings, and the key is listed among the
+    /// names the file set. The fault this rejects is leaving it out of both, which would print "no
+    /// settings.json" above the path of the file that holds it.
+    #[test]
+    fn a_file_that_only_names_a_web_search_variable_is_not_empty_settings() {
+        let settings = Settings::parse(r#"{"webSearch": {"env": ["ONLY_THIS"]}}"#);
+        assert!(!settings.is_empty());
+        assert!(settings.names().any(|name| name == WEB_SEARCH_ENV));
+    }
+
+    /// The variables `webSearch.env` names are withheld from a program `run` starts, every one of
+    /// them and the fixed credentials beside them, and only those the person's files name. The
+    /// fault this rejects is reading the list for the search and leaving the variable in the
+    /// environment of the programs, which hands the key to every program a turn starts.
+    #[test]
+    fn the_variables_web_search_env_names_are_withheld_from_a_program() {
+        let settings = Settings::parse(
+            r#"{"webSearch": {"env": ["SEARCH_KEY_ONE", "SEARCH_KEY_TWO"]}, "run": {"scrubEnv": ["OTHER"]}}"#,
+        );
+        let withheld = crate::scrub::names_against(&settings, &[]);
+        for expected in [
+            "SEARCH_KEY_ONE",
+            "SEARCH_KEY_TWO",
+            "OTHER",
+            "SERVICES_KEY_AICHAT",
+        ] {
+            assert!(
+                withheld.iter().any(|name| name == expected),
+                "{expected} was not withheld: {withheld:?}"
+            );
+        }
+        let kept = crate::scrub::names_against(&Settings::default(), &[]);
+        assert!(!kept.iter().any(|name| name == "SEARCH_KEY_ONE"));
+        let layered = Layers::new("web-search-env-withheld")
+            .project(r#"{"webSearch": {"env": ["CHECKOUT_CHOSEN"]}}"#)
+            .read();
+        assert!(
+            !crate::scrub::names_against(&layered, &[])
+                .iter()
+                .any(|name| name == "CHECKOUT_CHOSEN"),
+            "a checkout's name was withheld from the person's programs"
+        );
+    }
+
+    /// Only a string that is an absolute path names the key file: a relative path, a blank, a
+    /// number, a list and a block that is not an object are all absent. An implementation that
+    /// accepted a relative path would resolve it against the working directory, which is the
+    /// checkout, and one that accepted any value would take a number as a path.
+    #[test]
+    fn a_web_search_key_file_must_be_an_absolute_path() {
+        for text in [
+            r#"{"webSearch": {"keyFile": "search-key.txt"}}"#,
+            r#"{"webSearch": {"keyFile": "./search-key.txt"}}"#,
+            r#"{"webSearch": {"keyFile": "~/search-key.txt"}}"#,
+            r#"{"webSearch": {"keyFile": ""}}"#,
+            r#"{"webSearch": {"keyFile": "   "}}"#,
+            r#"{"webSearch": {"keyFile": 7}}"#,
+            r#"{"webSearch": {"keyFile": ["/home/person/search-key.txt"]}}"#,
+            r#"{"webSearch": "/home/person/search-key.txt"}"#,
+            r#"{"keyFile": "/home/person/search-key.txt"}"#,
+        ] {
+            assert_eq!(Settings::parse(text).web_search_key_file(), None, "{text}");
+        }
+        assert_eq!(
+            Settings::parse(r#"{"webSearch": {"keyFile": "/home/person/search-key.txt"}}"#)
+                .web_search_key_file(),
+            Some("/home/person/search-key.txt")
+        );
     }
 
     /// INSTR-12: a style opens the system prompt, so a checkout's layers cannot pick one.

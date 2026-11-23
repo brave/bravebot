@@ -183,6 +183,7 @@ approval on something the server already knew.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+`verified-by: bravebot_agent::lsp::quarantined_bytes_written_over_a_vouched_path_report_no_diagnostics`
 
 <a id="WRITE-6"></a>
 ### WRITE-6: a replaced file keeps its line endings and its byte order mark

@@ -49,6 +49,16 @@ matter:
 
 - `pnpm run drive:manual-walkthrough`: the manual 0.9 verification through the real app
   and backend, with a local model fixture. Runs in CI; detailed coverage is below.
+- `pnpm run drive:prototype`: the desktop as a client of `bravebot-host`, through the real host, the
+  real app and a model service the script serves itself. The host starts the desktop and the host
+  test client, which stands in for a phone and is read from the host's own output, so the window is
+  not the only witness. Both see one session and each view names the client that acted last; a
+  message the other client sent is in the window with no send from it; the desktop answers a write
+  the other client's turn asks about; the phone cancels one turn and the desktop another, and each is
+  named in the other's view; a send during a turn is
+  refused as busy and the draft stays in the box; and closing the window leaves the session and its
+  turn running. No paid inference. Not run in CI yet. See
+  [desktop prototype mode](../../docs/design/mobile/desktop-prototype.md).
 - After building, `node scripts/drive-agent-settings.mjs`: 0.9 settings, hook forms and
   conflicts, watch controls, approval evidence, background cancellation, context/failure
   states, focus restoration and narrow layouts. Uses deterministic IPC fixtures.
@@ -70,6 +80,10 @@ matter:
   bridge, against a model service and a website the script serves itself. A host the person's
   file allows is fetched with no card, a host a rule refuses is neither asked about nor
   fetched, and the banner names what is not in force. No paid inference.
+- `pnpm run drive:rule-check`: the Permissions panel's rule check, through the real app and
+  bridge, against a model service the script serves itself. `Bash git push` is refused by the
+  person's own deny rule, named with its file and reason, and a checkout's ungranted allow rule
+  is named as not in force. Screenshots of both answers, light and dark. No paid inference.
 - `pnpm run drive:permission-mode`: the composer's permission mode, through the real app and
   bridge, against a model service the script serves itself, in a directory nobody trusted.
   Accepting edits writes with no card and still asks about a command, the control works while a
@@ -80,6 +94,10 @@ matter:
   in workspace-write, the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and where
   the platform confines a program, a program the agent runs is held to the mode chosen for its turn.
   The script writes two small files under the real home and removes them. No paid inference.
+- `pnpm run drive:spend-limit`: the composer's spend limit (TURN-8), through the real app and
+  bridge, against a model service the script serves itself. A small limit set in the composer
+  brings up the limit question before the turn's second request, and answering "go on without a
+  limit" clears the control. No paid inference.
 - After building, `node scripts/drive-agent-rpc.mjs`: an actual automatic watch turn against
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
@@ -97,6 +115,29 @@ matter:
   `schedule-command.test.mjs` pins the `/schedule` line in the composer: which typed lines go to the
   bridge as `schedule.command`, that the answer is drawn as a transcript row and never sent to the
   model, and that a `schedule.ran` event draws the line a `run-now` ends with.
+- `allow-list.test.mjs` pins the rules for the methods the window may send, which `src/main/index.ts`
+  lists in one `const ALLOWED = new Set([...])` literal: no name approves or decides (in any
+  capitalisation), `models.list` is there, no name is listed twice, and a `//` comment inside the
+  literal does not change which names are read. The rule on `approve` and `decide` is a naming check:
+  it stops a method whose name says it approves or decides from being added without a person
+  noticing. The `*.reply` methods carry the person's answers through the window, and
+  `session-directory.test.mjs` classifies each of them and fails for a name added to the literal and
+  not classified there. Nothing counts the names. `scripts/allow-list.mjs` reads the literal for
+  `allow-list.test.mjs`, `session-directory.test.mjs` and `drive:menu`, so the three mean the same
+  list. Seven other tests match text inside the literal with checks of their own. Every reader cuts
+  the literal at its first closing bracket, so keep a `]` out of a comment inside it.
+- `single-instance.test.mjs` and `single-instance-electron.test.mjs` pin the one-instance rule. The
+  first runs `src/main/single-instance.ts` against a fake `app` and fake windows (a launch that does
+  not get the lock quits, a second launch restores, shows and focuses a minimised main window,
+  builds one when there is none, never raises another window, and reads nothing the second process
+  passed) and reads `src/main/index.ts` as text for the lock coming before every window, bridge and
+  state read. The second starts the real Electron on Linux under `xvfb-run`, on one
+  `--user-data-dir` and on another: the second launch on a profile exits 0 with no window, the first
+  stays and raises its window, a launch on another profile runs beside it, and a restart through
+  `relaunchUnlessRunning` starts a process that holds the lock. Elsewhere it prints `skipped`, and
+  under `CI` on Linux a missing `xvfb-run` or Electron fails it. On macOS or Windows,
+  `SINGLE_INSTANCE_ELECTRON=1 node --test scripts/single-instance-electron.test.mjs` runs it on the
+  desktop with scratch profiles, `HOME` and `BRAVEBOT_HOME`; it opens and closes small windows.
 - After building, `node scripts/drive-turn-details.mjs`: notices, completed-turn usage,
   live and unavailable audits, background delivery, disclosure persistence, cancellation,
   focus restoration and the narrow context drawer, using an isolated profile and synthetic events.
@@ -157,23 +198,29 @@ at, that a control keeps keyboard focus through an animation.
 | --- | --- |
 | `pnpm run drive` | Launch, list sessions, filter them by title and project, group them by checkout, fold one away, start one from a heading, open one |
 | `pnpm run drive:session-list` | A list of 260 sessions: that it draws a page and a **Show more** row that moves focus to the first row it drew, that search reaches past the page, that the open session and a working one stay drawn past the page, that grouped every checkout keeps a heading counting all its sessions and a **Show more** row of its own, that the archive has its own page, and that a row's actions menu is mounted only while open and opens, shuts and returns focus by mouse and keyboard |
+| `pnpm run drive:background-sessions` | The background sessions section ([BG-17](../../docs/specs/background-sessions.md#BG-17)) against a mocked `background.list`: a heading for each state in BG-16 order with its count, the short id, name, time and state words of a row, a long name cut with an ellipsis, the directory and last prompt of the selected row, the selected row moving under its new heading when its state changes between reads, the copy action putting `bravebot attach <short id>` on the clipboard as the section's only action, no reads while the Bots tab hides the list, and the section hidden while the roster is empty. Screenshots in light and dark |
 | `node scripts/drive-close-chat.mjs` (after `pnpm run bridge && pnpm exec electron-vite build`) | **Close Chat** on a chat row's right-click menu, through the real menu and command router against a mocked bridge: a chat still working behind the open one is closed from its own row (the agent is told to close its handle, its working mark goes, the open chat stays open), as is a draft behind the open one, whose row id is the draft's and not a record's; the open draft's own row closes it; a row nothing is open for closes nothing |
+| `node scripts/drive-window-lifecycle.mjs` (after `pnpm run bridge && pnpm exec electron-vite build`; macOS only, it skips elsewhere because closing the last window quits the app) | **File › New Chat** after the main window was closed, twice, in real Electron with a scratch profile and state directory and a mocked bridge: no uncaught exception in the main process, Close Chat, Send, Cancel Turn and Find are greyed with no window while New Chat stays enabled, a command that needs a window builds none, and New Chat builds one window whose page starts a chat. The unit-level cases (a fake `electron`, Open Recent, a late close of an earlier window, a context menu with no window) are in `scripts/menu-window.test.mjs`, run by `node --test scripts/*.test.mjs` |
 | `pnpm run drive:window-fault` | A failure of the page ([DIAG-10](../../docs/specs/diagnostic-log.md#DIAG-10)), in a real window with a real agent and a scratch state directory: the browser refuses one `removeChild` with a `NotFoundError`, as it does when a node React expects to find has gone, and the window shows the fault screen, as an alert, with the error and the components React was drawing, writes one `window.fault` line holding the kind and the error's name and nothing of its message, and comes back on **Reload**. Screenshots in light and dark |
+| `pnpm run drive:pointer-crash` | The renderer process survives the pointer ([#3581](https://github.com/brave/bravebot/issues/3581)), in a real window with a real agent, a scratch state directory and Playwright's mouse: a session is written through the window, its record is marked as the terminal's, and in a window short enough that the inspector column scrolls the pointer is swept over the transcript in 8 launches (`POINTER_RUNS`). A page that ends (`crash` event, `window.fault kind=renderer_gone` line) fails the run. Not covered: the operating system's own pointer, which an attempt to post with CoreGraphics did not deliver to the page. The rule it protects is also pinned by `scripts/context-column-contain.test.mjs` |
 | `pnpm run drive:resize` | Divider drags, the clamps, keyboard resizing, persistence |
 | `pnpm run drive:columns` | Folding each side column, and what is remembered |
-| `pnpm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
+| `pnpm run drive:panels` | The context panels, the Overview and Files tabs, and the transcript's tool runs on the real profile. First, on an isolated profile with the acceptance fixture's bridge: the Choose sections checklist, that a panel turned off is kept in `bravebot-ui.json` and still off after a relaunch, and every section off. Screenshots in light and dark. |
 | `pnpm run drive:markdown` | Markdown rendering, light and dark |
 | `pnpm run drive:providers` | Settings › Providers second in the list, Fix and the arrow keys choosing an account, hiding a model and a service, moving rows by drag and by keyboard, the model picker leaving out what was hidden in the chosen order, and Reset to defaults keeping the sign-in. Screenshots at the default and minimum size and in dark. Isolated profile, deterministic bridge. |
 | `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, the service rail and its marks, search across services, the Reasoning column by click and keyboard, turn payload, per-conversation persistence, and discovery error recovery. A warning of the model list, drawn with the command it names as code in the code type role, at the window's size and at its minimum. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
 | `pnpm run drive:run` | Approving a command from the window, end to end through a live turn |
 | `pnpm run drive:fetch` | Approving and refusing a fetch, and a redirect to another host, from the window, end to end, against a local model service and website |
 | `pnpm run drive:language` | Choosing the window's language in Settings ▸ General: saved where `/language` keeps it, read from the next start, Automatic removing it, a choice that cannot be saved, `BRAVEBOT_LOCALE` outranking it, and Restart held back while a turn runs. Every row's layout in English and French, light and dark; screenshots in `$TMPDIR/bravebot-language` |
+| `pnpm run drive:crash-reports` | The crash reports notice and switch ([CRASH-11](../../docs/specs/crash-reports.md#CRASH-11), [CRASH-12](../../docs/specs/crash-reports.md#CRASH-12)), on a bridge built with a submission address, which `build-bridge.sh` leaves out of its check builds: the first launch that is reporting says so once under the welcome with a More toggle, a second launch and a launch the terminal already told say nothing, the switch in Settings ▸ General ▸ Privacy writes `crashReports` into the person's own file and keeps the other keys, and `BRAVEBOT_CRASH_REPORTS=0` shows it off and locked with the variable's name, writes nothing and records no notice. Screenshots in light and dark in `$TMPDIR/bravebot-crash-reports`. Run `pnpm run build` afterwards to put back the bridge a development build uses |
 | `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
 | `pnpm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once; and that rows swept through under the file-drop overlay count for nothing until the drag ends. Screenshots of a card waiting and read, light and dark |
 | `pnpm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
+| `pnpm run drive:rule-check` | Which rule decides a call, asked in the Permissions panel: the decision, rule, file, reason and a checkout rule not in force |
 | `pnpm run drive:permission-mode` | The composer's permission mode: accepting edits, plan mode, a change while a turn runs, and the menu shortcut |
 | `pnpm run drive:sandbox-mode` | The composer's sandbox mode: the menu offers workspace-write, read-only and strict and no way to turn the sandbox off, and a program is held to the mode chosen for its turn |
+| `pnpm run drive:spend-limit` | The composer's spend limit: a small limit brings up the limit question, and going on without a limit clears the control |
 | `pnpm run drive:ask` | Answering a series of questions the planner asks, likewise live |
 | `pnpm run drive:menu` | The application menu: what it offers, what it greys, and what it refuses to offer |
 | `pnpm run drive:export` | Exporting a conversation to text, Markdown and PDF, with and without the tool calls, and what the file leaves out either way |
@@ -200,6 +247,13 @@ contents over CDP, and an AppKit key equivalent never sees it. So it asserts the
 ⌘C/⌘V actually reaching the composer — the role assertion proves the item is there, only a
 person proves the keystroke arrives.
 
+`drive:menu` checks the same allow-list for the same two rules through `scripts/allow-list.mjs`, and
+it is not run in CI: it needs Electron, and it reads a macOS bundle's `Info.plist`. It sends one
+prompt to a model service the script serves, so the transcript holds a prompt and a reply, and it
+right-clicks both: the reply's menu must offer copy alone, and the prompt's menu copy, fork and
+rewind. `drive:fork` asserts the reply's menu and a prompt's copy and fork on a real profile, and only
+when a stored session holds two prompts.
+
 Each driver launches the app, prints a line per assertion and leaves screenshots under
 `/tmp/bravebot-ui/` or a driver-specific path in `/tmp`. Eight of the checks cost real tokens:
 `drive:markdown`, `drive:run`, `drive:ask`, `drive:bot-turn`, `drive:bot-memory`, `drive-turn.mjs`,
@@ -221,6 +275,11 @@ pinned to light and that its renderer bundle cannot switch appearance at runtime
 
 ### Which drivers touch your real profile
 
+The app is one instance per profile (`--user-data-dir`, or the default `userData`). A driver that
+launches without `--user-data-dir` while the app is open on the default profile, for example from
+`pnpm run dev`, now exits at once and the open app raises its window. A driver with a profile of its
+own, which is every driver that sets `--user-data-dir`, runs beside any other instance.
+
 **Many drivers run against the real user profile.** A driver that launches Electron without
 `--user-data-dir` uses the app's real `userData`, so it reads and writes your `bravebot-ui.json`
 (columns, bots, recents, theme) and `experience.json`, and the agent it starts uses your `HOME`,
@@ -229,7 +288,7 @@ running it, and do not run one you have not read on a machine whose bots or sess
 about. These launch without `--user-data-dir`. All but `drive`, `drive-packaged` and `drive-smoke`
 launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use the real profile:
 
-`drive`, `drive-ask`, `drive-columns`, `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`,
+`drive`, `drive-ask`, `drive-columns`, `drive-export`, `drive-fork`, `drive-markdown`,
 `drive-packaged`, `drive-panels`, `drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`,
 `drive-tree` and `drive-turn`.
 
@@ -277,19 +336,26 @@ the temporary directory, so remove a directory named `bravebot-drive-bot-turn-*`
 `bravebot-drive-bot-memory-*` after killing a driver that way. `drive-bots` spends no tokens and
 copies nothing.
 
+`drive-menu` runs in a temporary world from `scripts/drive-world.mjs`: a `HOME`, a profile and a
+project of its own, and a model service the script serves, which the scratch `settings.json` names
+as the provider. It needs no credentials. It opens the project with `openProject`, which starts a
+chat, and sends one prompt to the service, so the checks that need an open chat or a transcript
+entry run on that chat. The driver asks the app for its `userData`. When that is not the scratch
+profile, it prints the failed check, closes the app and exits non-zero before it clicks or types.
+
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-memory`,
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-background-sessions`, `drive-bot-history`, `drive-bot-memory`,
 `drive-bot-summon`, `drive-bot-turn`, `drive-bots`, `drive-close-chat`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
-`drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
-`drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
-`drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
+`drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`,
+`drive-secure-files`, `drive-session-list`, `drive-spend-limit`, `drive-shown`, `drive-turn-details`,
+`drive-ux-acceptance`, `drive-vetting`, `drive-visual`, `drive-window-lifecycle` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
-`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-note-changelog-awake`, `drive-paste`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
+`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-note-changelog-awake`, `drive-paste`,
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the
@@ -430,8 +496,9 @@ table above. Two jobs:
   Electron build and the walkthrough.
 
 The workflow does not run the other Electron drivers, packaged-app checks, or the
-upstream agent's full test suite. Run the applicable local checks above. The exception is the
-Windows installers, which `Install on Windows` installs and starts on a runner of each
+upstream agent's full test suite. `drive:menu` is one of those drivers, and the allow-list rules it
+checks run as `allow-list.test.mjs` among the Node tests. Run the applicable local checks above. The
+exception is the Windows installers, which `Install on Windows` installs and starts on a runner of each
 architecture; [releasing](../../docs/development/releasing.md#the-windows-installers) says what it
 checks.
 

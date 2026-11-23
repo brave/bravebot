@@ -193,6 +193,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         task,
         cancel,
         hooks,
+        plugin_hooks,
         ..
     } = inputs;
     let read_output_is = || super::setup::read_output_is(task, plan.offers_read_output);
@@ -452,6 +453,8 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         match task.delegate {
             None => Some(AfterCompacting {
                 hooks,
+                plugin_hooks,
+                asker: &mut *confirmer,
                 workspace,
                 said: &mut *state.hook_notices,
             }),
@@ -1435,6 +1438,10 @@ pub(super) fn build_request<R: Reporter>(
 /// not the session's.
 pub(super) struct AfterCompacting<'a> {
     pub hooks: &'a bravebot_config::hooks::Hooks,
+    /// The hooks enabled plugins carry, asked about before one fires (PLUGIN-7).
+    pub plugin_hooks: &'a crate::plugin_hooks::PluginHooks,
+    /// Where the question about a plugin's hook is put.
+    pub asker: &'a mut dyn Confirmer,
     pub workspace: &'a Workspace,
     /// The sentences the hooks said went wrong, for the turn's account of itself (HOOK-7).
     pub said: &'a mut Vec<String>,
@@ -1708,6 +1715,33 @@ fn retrieve_if_due<S: Sink, R: Reporter>(
     }
 }
 
+/// Run the hooks declared for `compacted`, the person's own and the plugins' that were answered
+/// yes, and say which plugin's files no longer match the install (HOOK-2, HOOK-11).
+fn fire_compacted<R: Reporter>(
+    after: AfterCompacting<'_>,
+    session: &crate::chatgpt::AccountSession,
+    reporter: &mut R,
+) {
+    let joined = after.plugin_hooks.joined_with(
+        after.hooks,
+        bravebot_config::hooks::Moment::Compacted,
+        None,
+        session.plugin_hook_answers(),
+        after.asker,
+    );
+    after.said.extend(super::fire_hooks(
+        &joined,
+        bravebot_config::hooks::Moment::Compacted,
+        None,
+        after.workspace,
+        reporter,
+    ));
+    after.said.extend(super::say_stopped_plugins(
+        session.plugin_hook_answers(),
+        reporter,
+    ));
+}
+
 /// Shorten the conversation before a request when it is past the budget, or when the service
 /// refused the last one and there may be something to cut.
 ///
@@ -1818,13 +1852,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
                     (done.summarised, done.kept),
                 );
                 if let Some(after) = afterwards {
-                    after.said.extend(super::fire_hooks(
-                        after.hooks,
-                        bravebot_config::hooks::Moment::Compacted,
-                        None,
-                        after.workspace,
-                        reporter,
-                    ));
+                    fire_compacted(after, session, reporter);
                 }
             }
             // Nothing to shorten yet, which is the ordinary answer and not worth a word.
@@ -2126,6 +2154,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         task,
         cancel,
         hooks,
+        plugin_hooks,
         prompt_notices,
         ..
     } = inputs;
@@ -2163,10 +2192,20 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // The name is the one dispatch just matched on, which selects the entries that
     // fire and reaches no process: what a hook is told is the moment and nothing else.
     state.hook_notices.extend(fire_hooks(
-        hooks,
+        &plugin_hooks.joined_with(
+            hooks,
+            bravebot_config::hooks::Moment::ToolFinished,
+            Some(&call.function.name),
+            task.account_session().plugin_hook_answers(),
+            &mut confirming.turn(),
+        ),
         bravebot_config::hooks::Moment::ToolFinished,
         Some(&call.function.name),
         workspace,
+        reporter,
+    ));
+    state.hook_notices.extend(super::say_stopped_plugins(
+        task.account_session().plugin_hook_answers(),
         reporter,
     ));
     // What a hook on a question drawn during this call had to say, which is the person's to

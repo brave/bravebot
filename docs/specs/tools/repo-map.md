@@ -67,10 +67,12 @@ nobody vouched for could raise its own declaration to the top of the map by ment
 
 A declaration can be a binding with its value on the same line, so the file is scanned as any read
 is ([CRED-15](../credential-protection.md#CRED-15)) and dropped whole on a finding. It is counted
-together with the files that could not be read or were too large, in one number, so the result does
-not say which file held a credential ([CRED-19](../credential-protection.md#CRED-19)).
+together with the files that could not be read or were too large (more than 512 KiB), in one number,
+so the result does not say which file held a credential
+([CRED-19](../credential-protection.md#CRED-19)).
 
 `verified-by: bravebot_agent::workspace::a_repo_map_leaves_out_a_file_holding_a_credential`
+`verified-by: bravebot_agent::workspace::a_repo_map_leaves_out_a_file_past_the_per_file_size_limit`
 
 <a id="MAP-4"></a>
 ### MAP-4: a file a deny rule covers, or that sits in a vendored or generated tree, is not mapped
@@ -90,10 +92,10 @@ files a map reaches.
 
 `budget` is in tokens, clamped to a range, and the declarations kept are the highest ranked that fit,
 not the first in the file. A map that shows fewer declarations than it found, stopped at a cap on
-files or bytes, or could not open a directory says so to the planner, and so does one that left out
-files nobody vouched for. A file nobody vouched for is not charged to the cap on files, so the map
-reports the cap as reached only when files it may open reach it ([MAP-1](#MAP-1)). The cap bounds
-the files the walk collects and the budget bounds what is shown. It does not bound how many files
+files or on 32 MiB of source, or could not open a directory says so to the planner, and so does one
+that left out files nobody vouched for. A file nobody vouched for is not charged to the cap on files,
+so the map reports the cap as reached only when files it may open reach it ([MAP-1](#MAP-1)). The
+cap bounds the files the walk collects and the budget bounds what is shown. It does not bound how many files
 the walk meets and sets aside as unvouched ([Known costs](#known-costs)). A directory named where a
 file is expected, and a file named where a directory is, are refused.
 
@@ -104,6 +106,7 @@ exist when the map was cut off.
 `verified-by: bravebot_agent::repo_map::a_tight_budget_keeps_the_declaration_that_ranks_first_not_the_first_in_the_file`
 `verified-by: bravebot_agent::repo_map::a_path_too_long_for_the_budget_does_not_empty_the_map`
 `verified-by: bravebot_agent::workspace::a_repo_map_says_when_the_file_cap_stopped_it`
+`verified-by: bravebot_agent::workspace::a_repo_map_says_when_the_byte_cap_stopped_it`
 `verified-by: bravebot_agent::workspace::a_repo_map_still_says_when_vouched_files_reach_the_file_cap_beside_unvouched_ones`
 `verified-by: bravebot_agent::workspace::a_repo_map_does_not_charge_files_nobody_vouched_for_to_the_file_cap`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_file_is_refused`

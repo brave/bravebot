@@ -147,6 +147,6 @@ findings shown to the person, so a session that cannot fix one still ends. CI ru
 the required `Security` context, and is the check on a tree the hook never saw.
 
 The same file is linked as `.bravebot/settings.json`, where the `hooks` key does nothing: bravebot
-reads hooks only from `hooks.json` in its state directory, and `bravebot doctor` names the key as
-one nothing reads. Codex and Cursor do not read the hook, so CI is the only check on work done in
-them.
+reads hooks only from `hooks.json` in its state directory, and `bravebot doctor` and a session as it
+opens name the key as one nothing reads. Codex and Cursor do not read the hook, so CI is the only
+check on work done in them.

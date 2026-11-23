@@ -511,6 +511,8 @@ check-fuzz: fuzz-prerequisites check-fuzz-lints
 # Verus (docs/development/verification.md). contrib/check-verus.py runs Verus on each crate that
 # carries contracts, which has to verify, and on a copy of it under each mutation in
 # verify/mutations.txt, which has to fail, so a contract a broken body also meets fails here.
+# contrib/check-verus-sweep.py changes one token at a time in each contracted function, and fails
+# on a change Verus still verifies that verify/survivors.txt does not list.
 # verify/history.rs holds the fixes from the history that are not yet contracts in their crates,
 # each refused under the `before_<commit>` cfg that restores the code before the fix. Verus brings
 # its own toolchain, so `check` does not run this; the Verus job in ci.yml does.
@@ -529,6 +531,8 @@ VERUS_HISTORY = before_3facf14a before_e0cd1903 before_20ce6086
 check-verus: check-verus-contracts
 	@python3 contrib/check-verus.py --selftest
 	@VERUS="$(VERUS)" python3 contrib/check-verus.py
+	@python3 contrib/check-verus-sweep.py --selftest
+	@VERUS="$(VERUS)" python3 contrib/check-verus-sweep.py
 	$(VERUS) verify/history.rs
 	@set -e; for cfg in $(VERUS_HISTORY); do \
 		out=$$($(VERUS) verify/history.rs --cfg $$cfg 2>&1) && { \
@@ -845,9 +849,11 @@ check-ui-build: check-extension
 
 check-ui-walkthrough:
 	cd ui && if [ "$$(uname -s)" = Linux ]; then \
-		xvfb-run -a node scripts/drive-manual-walkthrough.mjs; \
+		xvfb-run -a node scripts/drive-manual-walkthrough.mjs && \
+		xvfb-run -a node scripts/drive-reports.mjs; \
 	else \
-		node scripts/drive-manual-walkthrough.mjs; \
+		node scripts/drive-manual-walkthrough.mjs && \
+		node scripts/drive-reports.mjs; \
 	fi
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
