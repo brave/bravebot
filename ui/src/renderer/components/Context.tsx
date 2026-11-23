@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
 import { HIDEABLE, toggleHidden } from '../../shared/panels'
@@ -67,7 +67,7 @@ const PANEL_ICONS: Record<(typeof HIDEABLE)[number], IconName> = {
  * in there, and what does this file look like in a real editor — is not one the transcript can be
  * asked.
  */
-export const Context = memo(function Context({ live, audit, details, hidden = NONE_HIDDEN, onHidden, onAddNote, onAddFolder, onCloseFolder }: {
+export const Context = memo(function Context({ live, audit, details, hidden = NONE_HIDDEN, onHidden, sectionsAsked = 0, onAddNote, onAddFolder, onCloseFolder }: {
   live: Live | null
   /**
    * The Overview panels a person has turned off, as kept in `bravebot-ui.json` (PANEL-20). Each
@@ -76,6 +76,11 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
   hidden?: readonly PanelName[]
   /** Called with the whole new list, in column order, when a person ticks or unticks a section. */
   onHidden?: (hidden: PanelName[]) => void
+  /**
+   * Raised by one each time the View menu's Choose Sections is picked: the column moves to the
+   * Overview tab and opens the checklist, as `/sidebar` opens the terminal's.
+   */
+  sectionsAsked?: number
   /** Open the dialog that adds a note to this session's record. */
   onAddNote?: () => void
   /** Ask for a folder to open beside the project, through the main process's picker. */
@@ -87,6 +92,14 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
   details?: React.ReactNode
 }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
+  // Cleared when the checklist closes, so the menu does not open again by itself when a person
+  // later goes to the Files tab and back, which remounts it.
+  const [openRequest, setOpenRequest] = useState(0)
+  useEffect(() => {
+    if (!sectionsAsked) return
+    setTab('overview')
+    setOpenRequest(sectionsAsked)
+  }, [sectionsAsked])
   const off = new Set<PanelName>(tab === 'overview' ? ['files', ...hidden] : HIDEABLE)
   const allOff = tab === 'overview' && HIDEABLE.every((name) => off.has(name))
   const reveal = (path: string) => {
@@ -148,7 +161,8 @@ export const Context = memo(function Context({ live, audit, details, hidden = NO
         {/* Each choice is drawn and saved at once and leaves the menu open (`data-is-interactive`);
             Escape only closes it (PANEL-20). */}
         {tab === 'overview' && onHidden && (
-          <IconMenu icon="list-settings" label={t.uiContextSections()} className="context-sections" data-test="context-sections">
+          <IconMenu icon="list-settings" label={t.uiContextSections()} className="context-sections" data-test="context-sections"
+            openRequest={openRequest} onOpen={(open) => { if (!open) setOpenRequest(0) }}>
             {HIDEABLE.map((name) => {
               const shown = !hidden.includes(name)
               return (

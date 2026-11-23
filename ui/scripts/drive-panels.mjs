@@ -324,6 +324,57 @@ check(JSON.stringify(stored().hidden) === '["notes"]', `bravebot-ui.json holds "
   await page.screenshot({ path: `${SHOTS_DIR}/16-sections-all-off-dark.png` })
   await theme(page, 'light')
 
+  // View > Choose Sections, on a folded column showing the Files tab: it unfolds the column, moves
+  // to Overview and opens the checklist with focus on its button, a keyboard path like /sidebar.
+  await page.locator('[data-test="inspector-tabs"] [role="tab"]').filter({ hasText: 'Files' }).click()
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: 'Context panel', exact: true }).click()
+  await page.waitForTimeout(600)
+  check(await folded(page), 'the column is folded before View > Choose Sections')
+  await page.mouse.move(600, 500)
+  const viewItem = await app.evaluate(({ Menu }) => {
+    const view = Menu.getApplicationMenu()?.items.find((i) => i.label === 'View')
+    const found = view?.submenu?.items.find((i) => i.id === 'app.sections')
+    found?.click()
+    return found ? { label: found.label, enabled: found.enabled } : null
+  })
+  check(viewItem?.label === 'Choose Sections…' && viewItem.enabled, `the View menu has Choose Sections… (${JSON.stringify(viewItem)})`)
+  await page.waitForTimeout(900)
+  check(!(await folded(page)), 'choosing it unfolds the column')
+  check(await row(page, 'plan').isVisible(), 'and opens the checklist')
+  check(
+    (await page.locator('[data-test="inspector-tabs"] [role="tab"][aria-selected="true"]').textContent())?.trim() === 'Overview',
+    'on the Overview tab',
+  )
+  const focused = () => page.evaluate(() => document.activeElement?.dataset?.panel ?? document.activeElement?.tagName.toLowerCase())
+  check((await focused()) === 'plan', `with focus on its first row, Plan (${await focused()})`)
+  // The keyboard alone: down to Files read, Enter turns it on (every section is off here), Enter
+  // again turns it back off.
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(150)
+  check((await focused()) === 'read', `ArrowDown moves to the next row (${await focused()})`)
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(300)
+  check(!(await hidden(page, 'read')) && (await row(page, 'read').getAttribute('aria-checked')) === 'true',
+    'Enter ticks it and shows its panel')
+  check(await row(page, 'plan').isVisible(), 'and the checklist stays open')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(300)
+  check(await hidden(page, 'read'), 'Enter again turns it back off')
+  await page.screenshot({ path: `${SHOTS_DIR}/17-sections-from-menu-light.png` })
+  await theme(page, 'dark')
+  await page.screenshot({ path: `${SHOTS_DIR}/17-sections-from-menu-dark.png` })
+  await theme(page, 'light')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(400)
+  check(!(await row(page, 'plan').isVisible()), 'Escape closes the checklist the menu opened')
+  // Going to Files and back remounts the button; the checklist does not open again by itself.
+  await page.locator('[data-test="inspector-tabs"] [role="tab"]').filter({ hasText: 'Files' }).click()
+  await page.waitForTimeout(200)
+  await page.locator('[data-test="inspector-tabs"] [role="tab"]').filter({ hasText: 'Overview' }).click()
+  await page.waitForTimeout(400)
+  check(!(await row(page, 'plan').isVisible()), 'and coming back to Overview leaves it closed')
+
   // Put the profile back as it started: every section on and the column at its default width.
   await sections(page).click()
   await page.waitForTimeout(400)

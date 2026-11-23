@@ -55,6 +55,7 @@ export type CommandId =
   | 'view.theme'
   | 'app.about'
   | 'app.caffeinate'
+  | 'app.sections'
   | 'help.changelog'
   | 'help.doctor'
   | 'help.update'
@@ -238,6 +239,9 @@ export const COMMANDS: readonly Command[] = [
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
   // App-wide, and the first time it is turned on a dialog says what it does and does not do.
   { id: 'app.caffeinate', label: 'Keep Computer Awake During Turns', requires: 'always', checkbox: true },
+  // The desktop's /sidebar (PANEL-20): unfolds the context column and opens its Choose sections
+  // checklist. Needs a session, because the column draws no panels without one.
+  { id: 'app.sections', label: 'Choose Sections…', requires: 'session' },
   // The release notes compiled into the agent, shown as plain text. Nothing is fetched.
   { id: 'help.changelog', label: 'Release Notes…', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
