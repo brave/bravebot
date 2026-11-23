@@ -22,7 +22,7 @@
 //!   reported with the file that wrote it and, where it is not in force, why. The window shows
 //!   them and edits nothing.
 
-use bravebot_config::{Managed, Settings};
+use bravebot_config::{Managed, RuleSources, Settings};
 use bravebot_core::permissions::Permissions;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -33,6 +33,9 @@ pub struct SettingsRules {
     /// What a turn and a run are given. Empty where no file wrote a rule, which changes nothing
     /// about what a session asks (PERM-12).
     pub permissions: Permissions,
+    /// The file that wrote each rule in `permissions`, and the reason given for it, as the
+    /// settings said when the session opened (PERM-12).
+    pub sources: RuleSources,
     /// The rules in force, as the files spelled them, for a front end to show.
     pub deny: Vec<String>,
     pub ask: Vec<String>,
@@ -173,6 +176,7 @@ impl SettingsRules {
         let proposed = bravebot_agent::permissions::proposed(settings, profile.as_deref());
         Self {
             permissions,
+            sources: settings.rule_sources(),
             deny: readable(&lists.deny),
             ask: readable(&lists.ask),
             allow,
@@ -424,6 +428,37 @@ mod tests {
         assert_eq!(held_back.named_withheld, None);
         assert_eq!(held_back.json()["namedWithheld"], json!(null));
         assert_eq!(fetching(&held_back, "example.com"), Some(Ruling::Allow));
+    }
+
+    /// The rules keep the file that wrote each one, so a question about a rule later in the
+    /// session is answered from what the session opened with (PERM-12).
+    #[test]
+    fn the_rules_keep_the_file_that_wrote_a_deny_rule() {
+        let (dir, settings) = layers(
+            Some(r#"{"permissions": {"allow": ["WebFetch(domain:example.com)"]}}"#),
+            Some(r#"{"permissions": {"deny": ["Bash(git push:*)"]}}"#),
+        );
+        let rules = SettingsRules::read(&settings, dir.path());
+        let (file, written) = rules
+            .sources
+            .source("deny", "Bash(git push:*)")
+            .expect("the deny rule's file");
+        assert!(
+            file.ends_with("project/.bravebot/settings.json"),
+            "{}",
+            file.display()
+        );
+        assert_eq!(written, "Bash(git push:*)");
+        let (file, _) = rules
+            .sources
+            .source("allow", "WebFetch(domain:example.com)")
+            .expect("the allow rule's file");
+        assert!(file.ends_with("home/settings.json"), "{}", file.display());
+        assert_eq!(
+            rules.sources.source("deny", "WebFetch(domain:example.com)"),
+            None
+        );
+        assert_eq!(rules.sources, settings.rule_sources());
     }
 
     /// An `allow` rule in the person's own file holds, since there is a person at this front end.

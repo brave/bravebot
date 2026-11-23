@@ -35,12 +35,40 @@ pub(crate) const TRACK_MOTION_ONLY_WHILE_DRAGGING: &str = "\x1b[?1003l\x1b[?1000
 /// takes it back again whenever the prompt is edited elsewhere, and a difference between the two
 /// setups would show as a mode that only survives until the first edit.
 pub(super) fn take_over_terminal<W: Write>(out: &mut W, mouse: bool) -> io::Result<()> {
-    enable_raw_mode()?;
+    take_over(
+        out,
+        mouse,
+        enable_raw_mode,
+        |out| {
+            crate::theme::sense(out);
+            crate::theme::restore_saved();
+        },
+        enhanced_keys,
+    )
+}
+
+/// [`take_over_terminal`], told how to enter raw mode, how to sense the terminal's colours and whether
+/// it understands disambiguated keys, so that a test can read the order they happen in.
+///
+/// The order is the whole of what this adds to [`ask_for_modes`] (INPUT-33). Raw mode comes first and
+/// a failure to enter it ends the takeover, so a session never draws on a terminal that will hand
+/// its input back as lines. The colour question comes after it, so the reply arrives as bytes rather
+/// than as a line, and before the alternate screen, so the query is not painted into the session.
+/// Whether the keyboard is understood is asked for last, and only here: the first answer is a query
+/// written to the terminal, which has to follow raw mode and the colour question and not precede
+/// them, so it is passed as something to call and not as a value to read first.
+pub(super) fn take_over<W: Write>(
+    out: &mut W,
+    mouse: bool,
+    enter_raw_mode: impl FnOnce() -> io::Result<()>,
+    sense: impl FnOnce(&mut W),
+    enhanced: impl FnOnce() -> bool,
+) -> io::Result<()> {
+    enter_raw_mode()?;
     // After raw mode, so the reply arrives as bytes rather than a line, and before the
     // alternate screen, so the query is not painted into the session.
-    crate::theme::sense(out);
-    crate::theme::restore_saved();
-    ask_for_modes(out, enhanced_keys(), mouse)
+    sense(out);
+    ask_for_modes(out, enhanced(), mouse)
 }
 
 /// Ask the terminal for every mode the interface draws and reads in.
@@ -155,7 +183,14 @@ pub(super) fn give_back_modes<W: Write>(out: &mut W, enhanced: bool) -> io::Resu
 /// Asked once and remembered, because answering means writing a query and waiting for a reply, and
 /// doing that on every handover to an editor would cost a round trip each time.
 pub(super) fn enhanced_keys() -> bool {
-    keyboard_reply().unwrap_or(false)
+    enhanced(keyboard_reply())
+}
+
+/// Whether to ask for disambiguated keys, given what the terminal said about them: only where it said
+/// it understands them (INPUT-33). A terminal that gave no answer in time is one that does not, since
+/// a request it does not understand is left on the screen as text.
+pub(super) fn enhanced(reply: Option<bool>) -> bool {
+    reply.unwrap_or(false)
 }
 
 /// Whether the terminal answered the keyboard query at all, which ends with the primary device
@@ -198,13 +233,12 @@ pub(super) fn edit_prompt(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) -> io::Result<()> {
-    hand_back_terminal(terminal.backend_mut())?;
-    terminal.show_cursor()?;
-
-    let edited = crate::editor::edit(session.input());
-
-    take_over_terminal(terminal.backend_mut(), session.mouse_captured())?;
-    terminal.clear()?;
+    let edited = handed_over(
+        terminal,
+        give_back_for_a_program,
+        || crate::editor::edit(session.input()),
+        |terminal| take_again_from_a_program(terminal, session.mouse_captured()),
+    )?;
 
     match edited {
         Ok(line) => session.take_edited(line),
@@ -225,13 +259,12 @@ pub(super) fn show_transcript(
 ) -> io::Result<()> {
     let text = render::as_text(session);
 
-    hand_back_terminal(terminal.backend_mut())?;
-    terminal.show_cursor()?;
-
-    let shown = crate::editor::show(&text);
-
-    take_over_terminal(terminal.backend_mut(), session.mouse_captured())?;
-    terminal.clear()?;
+    let shown = handed_over(
+        terminal,
+        give_back_for_a_program,
+        || crate::editor::show(&text),
+        |terminal| take_again_from_a_program(terminal, session.mouse_captured()),
+    )?;
 
     // Said rather than swallowed, for the reason the prompt's editor says it: an editor that
     // would not start looks exactly like a key that does nothing.
@@ -255,13 +288,12 @@ pub(super) fn open_file_in_editor(
     line: Option<u32>,
     column: Option<u32>,
 ) -> io::Result<()> {
-    hand_back_terminal(terminal.backend_mut())?;
-    terminal.show_cursor()?;
-
-    let opened = crate::editor::open_file(file, line, column);
-
-    take_over_terminal(terminal.backend_mut(), session.mouse_captured())?;
-    terminal.clear()?;
+    let opened = handed_over(
+        terminal,
+        give_back_for_a_program,
+        || crate::editor::open_file(file, line, column),
+        |terminal| take_again_from_a_program(terminal, session.mouse_captured()),
+    )?;
 
     if let Err(failure) = opened {
         session.note(failure.to_string());
@@ -283,16 +315,68 @@ pub(super) fn edit_body(
     body: &str,
     path: &str,
 ) -> Result<String, String> {
-    hand_back_terminal(terminal.backend_mut()).map_err(|error| error.to_string())?;
-    // A cursor that cannot be shown does not stop the editor from running.
-    let _ = terminal.show_cursor();
-
-    let edited = crate::editor::edit_body(body, &crate::editor::scratch_extension(path));
-
-    take_over_terminal(terminal.backend_mut(), mouse).map_err(|error| error.to_string())?;
-    terminal.clear().map_err(|error| error.to_string())?;
+    let edited = handed_over(
+        terminal,
+        |terminal| {
+            hand_back_terminal(terminal.backend_mut())?;
+            // A cursor that cannot be shown does not stop the editor from running.
+            let _ = terminal.show_cursor();
+            Ok(())
+        },
+        || crate::editor::edit_body(body, &crate::editor::scratch_extension(path)),
+        |terminal| take_again_from_a_program(terminal, mouse),
+    )
+    .map_err(|error| error.to_string())?;
 
     edited.map_err(|failure| failure.to_string())
+}
+
+/// Run `run` with the terminal given away: given back before it, taken again after it. The one place
+/// the order of a handover is written, and every handover goes through it: the editor a prompt is
+/// written in, the viewer a transcript is read in, the editor opened on a file, the editor a write's
+/// body is changed in, and the shell a stop leaves the terminal to (INPUT-33, INPUT-47).
+///
+/// The order is the whole of what a handover owes the program that takes the terminal. The modes are
+/// given back before it runs, because a program started over a screen of its own with mouse reporting
+/// on gets reports it did not ask for, and taken again after it, because a session that does not take
+/// the terminal again is a screen nobody draws on. So nothing runs when the terminal could not be
+/// given back, and the terminal is taken again whatever the program did. What the program reports is
+/// the caller's to say, which is why a failure of its own is carried back in `R` and not raised here.
+///
+/// Generic in what it holds so the order can be watched without a terminal, which a test does not
+/// have.
+pub(super) fn handed_over<T, R>(
+    held: &mut T,
+    give_back: impl FnOnce(&mut T) -> io::Result<()>,
+    run: impl FnOnce() -> R,
+    take_again: impl FnOnce(&mut T) -> io::Result<()>,
+) -> io::Result<R> {
+    give_back(held)?;
+    let ran = run();
+    take_again(held)?;
+    Ok(ran)
+}
+
+/// What a handover to a program that draws on the terminal gives back: the modes the session asked
+/// for, and then the cursor, which the session hides while it draws.
+fn give_back_for_a_program(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> io::Result<()> {
+    hand_back_terminal(terminal.backend_mut())?;
+    terminal.show_cursor()
+}
+
+/// What a handover takes again once the program has returned: the modes, and a clear screen.
+///
+/// The screen is cleared because the alternate screen came back empty while the interface still holds
+/// the frame it drew before leaving. Without it the first redraw sends only what changed, over a
+/// screen that has nothing under it.
+fn take_again_from_a_program(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    mouse: bool,
+) -> io::Result<()> {
+    take_over_terminal(terminal.backend_mut(), mouse)?;
+    terminal.clear()
 }
 
 /// Stop this process the way the terminal would have on Ctrl-Z, and return once it is continued.
@@ -310,28 +394,6 @@ pub(super) fn edit_body(
 pub(super) fn stop_until_continued() -> io::Result<()> {
     rustix::process::kill_current_process_group(rustix::process::Signal::TSTP)
         .map_err(io::Error::from)
-}
-
-/// Run `stop` with the terminal given away: given back before it, taken again after it.
-///
-/// The order is the whole of what a stop owes the shell (INPUT-47): a stop sent while the screen of
-/// its own and raw mode are still on leaves the shell drawing under a mouse it does not know is
-/// reported, and a session that does not take the terminal again is a screen nobody draws on. So
-/// the terminal is not stopped over when it could not be given back, and it is taken again whatever
-/// the stop did. What the stop reports is the caller's to say, which is why it is not a result.
-///
-/// Generic in what it holds so the order can be watched without a terminal, which a test does not
-/// have.
-#[cfg(unix)]
-pub(super) fn around_a_stop<T>(
-    held: &mut T,
-    give_back: impl FnOnce(&mut T) -> io::Result<()>,
-    stop: impl FnOnce(),
-    take_again: impl FnOnce(&mut T) -> io::Result<()>,
-) -> io::Result<()> {
-    give_back(held)?;
-    stop();
-    take_again(held)
 }
 
 /// Make `attempt` again for as long as it reports that a signal interrupted it.
@@ -370,12 +432,9 @@ pub(super) fn suspend_session(
     let mouse = session.mouse_captured();
     let mut failure = None;
 
-    let taken_again = around_a_stop(
+    let taken_again = handed_over(
         terminal,
-        |terminal| {
-            hand_back_terminal(terminal.backend_mut())?;
-            terminal.show_cursor()
-        },
+        give_back_for_a_program,
         || failure = stop_until_continued().err(),
         |terminal| {
             until_not_interrupted(|| take_over_terminal(terminal.backend_mut(), mouse))?;

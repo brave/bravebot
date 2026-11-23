@@ -1688,6 +1688,49 @@ fn wait_for_a_wake<C: Confirmer, R: Reporter>(
     waits.note_typed(arrival.typed());
 }
 
+/// What the planner is told of a delegate's report, and what the person is shown of it.
+///
+/// `presented` is what the gate decided the planner may hold, so which arm applies was settled
+/// there (DELEGATE-8). Where the planner was given the words, the person is shown the same words.
+/// Where it was given a reference, the planner's text names the reference and holds none of the
+/// words, and the person is shown the preview every quarantined result is drawn with, marked as
+/// kept from the planner (WATCH-13). `opening` is the driver's own sentence about how the run
+/// ended, which both arms put first.
+///
+/// Nothing here compares the report: the arm is the gate's answer, and the label shown is the
+/// reference's own.
+fn told_and_drawn_report<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    presented: &Presentation,
+    report: &Labelled<String>,
+    kind: &str,
+    opening: &str,
+) -> (String, crate::report::Reported) {
+    match presented {
+        Presentation::Visible(text) => {
+            policy.heard_from_delegate(report.label());
+            (
+                format!("{opening} It reported:\n\n{text}"),
+                crate::report::Reported::Said(text.clone()),
+            )
+        }
+        Presentation::Quarantined(reference) => {
+            let shown = preview_for(policy, "delegate", report);
+            (
+                format!("{opening} {}", reference.describe()),
+                crate::report::Reported::Kept(crate::report::Shown {
+                    as_the_planner_had_it: None,
+                    origin: format!("a {kind} delegate"),
+                    reach: crate::report::Reach::NotThePlanner,
+                    label: reference.label.to_string(),
+                    lines: shown.lines,
+                    preview: shown.preview,
+                }),
+            )
+        }
+    }
+}
+
 /// Take back every delegate that has finished, or wait for one where `wait` is set.
 ///
 /// A report reaches the planner as a message of its own rather than as the result of the call
@@ -1800,36 +1843,15 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 // was given the words, the person may read the same words; where it was given a
                 // reference, they get the preview every quarantined result is drawn with, which
                 // is the same arrangement as a read the planner may not see.
-                let (body, reported) = match &presented {
-                    Presentation::Visible(text) => {
-                        policy.heard_from_delegate(delegated.report.label());
-                        (
-                            format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
-                                 It reported:\n\n{text}"
-                            ),
-                            crate::report::Reported::Said(text.clone()),
-                        )
-                    }
-                    Presentation::Quarantined(reference) => {
-                        let shown = preview_for(policy, "delegate", &delegated.report);
-                        (
-                            format!(
-                                "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound} \
-                                 {}",
-                                reference.describe()
-                            ),
-                            crate::report::Reported::Kept(crate::report::Shown {
-                                as_the_planner_had_it: None,
-                                origin: format!("a {kind} delegate"),
-                                reach: crate::report::Reach::NotThePlanner,
-                                label: reference.label.to_string(),
-                                lines: shown.lines,
-                                preview: shown.preview,
-                            }),
-                        )
-                    }
-                };
+                let (body, reported) = told_and_drawn_report(
+                    policy,
+                    &presented,
+                    &delegated.report,
+                    &kind,
+                    &format!(
+                        "{TOOL_BUDGET_SPENT} {stopped}The {kind} delegate {id} has finished.{bound}"
+                    ),
+                );
                 let from = provenance_of(&presented, "delegate report");
                 (note, body, false, Some(reported), from)
             }
@@ -6142,6 +6164,82 @@ mod tests {
         );
     }
 
+    /// WATCH-13 and DELEGATE-8 for a report the planner was handed a reference to. No turn reaches
+    /// this arm today: a delegate starts from a trusted conversation and nothing it does lowers
+    /// that, so the arm is given a `Presentation::Quarantined` directly. The planner is told the
+    /// reference and none of the words. The person is given the words as a preview, kept from the
+    /// planner, with the label the reference carries and the delegate it came from. A report the
+    /// planner was given in words is the control: said, unmarked, and told in full.
+    #[test]
+    fn a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked() {
+        use crate::report::{Reach, Reported};
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "draw a quarantined report");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        // The label comes from the kernel, as in the tests around this one, so the report is
+        // never given a label the kernel would not.
+        let report = policy
+            .label_piped_input("WHAT-THE-UNVOUCHED-LOOK-FOUND\nand-a-second-line".to_string());
+        let reference = bravebot_core::reference::Reference::new(
+            bravebot_core::SlotId::new("ref:1"),
+            "a reader delegate",
+            2,
+            41,
+            report.label(),
+        );
+        let kept = Presentation::Quarantined(reference.clone());
+
+        let (told, drawn) = told_and_drawn_report(&mut policy, &kept, &report, "reader", "OPENING");
+
+        assert_eq!(
+            told,
+            format!("OPENING {}", reference.describe()),
+            "the planner was told something other than the opening and the reference"
+        );
+        assert!(
+            !told.contains("WHAT-THE-UNVOUCHED-LOOK-FOUND") && !told.contains("It reported"),
+            "the planner was given the words of a report it may not read: {told}"
+        );
+        match drawn {
+            Reported::Kept(shown) => {
+                assert_eq!(
+                    shown.reach,
+                    Reach::NotThePlanner,
+                    "kept from the wrong context"
+                );
+                assert_eq!(
+                    shown.label, "(U,priv)",
+                    "the label drawn is not the reference's"
+                );
+                assert_eq!(shown.origin, "a reader delegate");
+                assert_eq!(shown.as_the_planner_had_it, None);
+                assert_eq!(shown.lines, 2);
+                assert_eq!(
+                    shown.preview,
+                    vec!["WHAT-THE-UNVOUCHED-LOOK-FOUND", "and-a-second-line"],
+                    "the person was not given the words as a preview"
+                );
+            }
+            Reported::Said(text) => {
+                panic!("a report the planner may not read was drawn as said: {text}")
+            }
+        }
+
+        // The control reuses the report above: the words arm takes its text from the presentation
+        // and only the report's confidentiality from the report, so no label is built for it.
+        let said = Presentation::Visible("THE-WORDS".to_string());
+        let (told, drawn) = told_and_drawn_report(&mut policy, &said, &report, "reader", "OPENING");
+        assert_eq!(told, "OPENING It reported:\n\nTHE-WORDS");
+        assert_eq!(drawn, Reported::Said("THE-WORDS".to_string()));
+    }
+
     /// DELEGATE-26 where the report is quarantined. The sentence about the bound is the driver's
     /// own and sits beside the report, so the planner reads the same words whether it is shown the
     /// text or handed a reference to it. An untrusted report is given here directly, since a
@@ -7231,6 +7329,111 @@ mod tests {
             };
             assert_eq!(servers, expected, "a {kind}'s server grants");
         }
+    }
+
+    /// PREM-9: what `/status` says about the tier after a turn is the turn's own `premium`, so it
+    /// is true where a key was handed to the turn's requests and false where none was: no key
+    /// stored, a key stored beside a premium host that is not Brave's, and a delegate that was lent
+    /// none. A turn that set it from the configuration, or to a constant, would report the tier
+    /// the build knows about and not the one the turn ran on.
+    ///
+    /// The backend is the scripted one, so no request leaves and the premium host named here is
+    /// never reached; it only has to be a host `PremiumKey::held` accepts.
+    #[test]
+    fn a_turn_reports_premium_when_it_was_handed_a_key_to_present_and_not_otherwise() {
+        use self::ceiling::said;
+        use self::fallback::{configured, take};
+        use bravebot_aichat::SubscriptionCredential;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Wallet(AtomicUsize);
+        impl crate::shared::Spends for Wallet {
+            fn spend_one(&self) -> SubscriptionCredential {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                SubscriptionCredential {
+                    key: bravebot_config::Secret::new("a-lent-key"),
+                }
+            }
+        }
+
+        let holding = |premium_host: &str| {
+            let mut config = configured(None);
+            config.premium_key = Some(bravebot_config::Secret::new("the-premium-key"));
+            config.premium_endpoint = Some(premium_host.to_string());
+            config
+        };
+        let braves = holding("https://ai-chat-premium.bsg.brave.software");
+        let theirs = holding("http://127.0.0.1:9/their-own-host");
+        let premium_of = |name: &str, config: &Config| {
+            take(
+                name,
+                config,
+                Task::new("look it up"),
+                vec![said("done", &[], None)],
+            )
+            .outcome
+            .expect("the turn answered")
+            .premium
+        };
+
+        assert!(
+            !premium_of("premium-none-held", &configured(None)),
+            "a turn holding no key reported premium"
+        );
+        assert!(
+            !premium_of("premium-not-brave", &theirs),
+            "a key stored beside a host that is not Brave's was reported as sent"
+        );
+        assert!(
+            premium_of("premium-held", &braves),
+            "a turn that was handed the key to present did not report premium"
+        );
+
+        // A delegate looks for no key of its own, so what it reports is whether the turn lent it
+        // one, whatever the configuration holds.
+        let delegated = |name: &str, lent: Option<&dyn crate::shared::Spends>| {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            crate::backend::scripted::script(vec![said("done", &[], None)]);
+            let task = Task::delegated(a_delegate_spec("reader", CapabilitySet::default()));
+            let outcome = super::delegated(
+                &braves,
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                TrustedPrograms::new(),
+                &Cancel::new(),
+                &mut Vouched {
+                    trust: TrustStore::new("/work"),
+                    programs: TrustedPrograms::new(),
+                },
+                &mut Vec::new(),
+                &mut 0,
+                &mut Worked::default(),
+                lent,
+                None,
+            );
+            crate::backend::scripted::clear();
+            outcome.expect("the delegate answered").premium
+        };
+        let wallet = Wallet(AtomicUsize::new(0));
+        assert!(
+            !delegated("premium-delegate-not-lent", None),
+            "a delegate lent no key reported premium because the configuration holds one"
+        );
+        assert!(
+            delegated("premium-delegate-lent", Some(&wallet)),
+            "a delegate that was lent the turn's key did not report premium"
+        );
     }
 
     /// MSG-6, MSG-9: what `take_session_messages` does with a batch it cannot present, and with a

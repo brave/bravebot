@@ -1344,6 +1344,40 @@ mod tests {
             past_the_bound[0]["arguments"],
             serde_json::json!([{"name": "unit", "type": "string", "required": true}])
         );
+
+        // An empty `enum` offers no value, so it is no list, and a value is kept up to
+        // `MAX_CHOICE` characters (not bytes): one more makes the whole list unkept.
+        let listing_of = |listed: serde_json::Value| {
+            serde_json::json!({"tools": [{
+                "name": "a",
+                "inputSchema": {
+                    "properties": {"unit": {"type": "string", "enum": listed}},
+                    "required": ["unit"],
+                },
+            }]})
+            .to_string()
+        };
+        let bare = serde_json::json!([{"name": "unit", "type": "string", "required": true}]);
+        assert_eq!(
+            tools(&listing_of(serde_json::json!([])))[0]["arguments"],
+            bare,
+            "an empty enum"
+        );
+        for longest in ["x".repeat(MAX_CHOICE), "\u{e9}".repeat(MAX_CHOICE)] {
+            assert_eq!(
+                tools(&listing_of(serde_json::json!([longest])))[0]["arguments"],
+                serde_json::json!([
+                    {"name": "unit", "type": "string", "enum": [longest], "required": true}
+                ]),
+                "a value of {MAX_CHOICE} characters is kept"
+            );
+        }
+        assert_eq!(
+            tools(&listing_of(serde_json::json!(["x".repeat(MAX_CHOICE + 1)])))[0]["arguments"],
+            bare,
+            "a value of {} characters keeps no value",
+            MAX_CHOICE + 1
+        );
     }
 
     /// An argument name is what a model writes back, so one that is not a plain name makes the

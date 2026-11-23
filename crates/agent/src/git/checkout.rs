@@ -173,7 +173,10 @@ impl Refused {
 
 /// The keys of `.git/config` that decide how a file is written. `config.worktree` is not read:
 /// it is the main worktree's, and a linked worktree has its own.
-struct Settings {
+pub(super) struct Settings {
+    /// Whether git writes this checkout as Git for Windows does. It is the host's, so a test
+    /// asks for either through [`Settings::read_for`].
+    windows: bool,
     autocrlf: bool,
     eol: Option<Vec<u8>>,
     symlinks: bool,
@@ -181,9 +184,16 @@ struct Settings {
 
 impl Settings {
     fn read(git_dir: &Path) -> Result<Settings, Refused> {
+        Settings::read_for(git_dir, cfg!(windows))
+    }
+
+    /// The settings of the repository at `git_dir` as git reads them on Windows where `windows`
+    /// and elsewhere where not, whatever the host is.
+    pub(super) fn read_for(git_dir: &Path, windows: bool) -> Result<Settings, Refused> {
         let mut settings = Settings {
+            windows,
             // Git for Windows sets core.autocrlf in a system file this reader does not open.
-            autocrlf: cfg!(windows),
+            autocrlf: windows,
             eol: None,
             symlinks: cfg!(unix),
         };
@@ -218,8 +228,8 @@ impl Settings {
     }
 
     /// Whether a `text` attribute has git write CRLF.
-    fn text_converts(&self) -> bool {
-        cfg!(windows) && self.eol.as_deref() != Some(b"lf")
+    pub(super) fn text_converts(&self) -> bool {
+        self.windows && self.eol.as_deref() != Some(b"lf")
     }
 }
 
@@ -227,7 +237,7 @@ impl Settings {
 ///
 /// Every line counts, including a macro's definition, so a pattern no file in the tree matches
 /// still refuses the checkout: telling which files a pattern matches is not needed to refuse.
-fn conversion(bytes: &[u8], text_converts: bool) -> Option<Conversion> {
+pub(super) fn conversion(bytes: &[u8], text_converts: bool) -> Option<Conversion> {
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
     for line in bytes.split(|b| *b == b'\n') {
         let line = line.trim_start();

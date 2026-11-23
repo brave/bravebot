@@ -219,7 +219,10 @@ pub(super) fn set_effort(session: &mut Session, word: &str, scope: crate::model_
 /// for something else and wrong for somebody who has just typed a language, who would be told they
 /// were reading it while they read English. What is saved is the tag of the catalog that answered,
 /// so the word on disk is one the build knows, whatever spelling was typed.
-pub(super) fn set_language(session: &mut Session, word: &str) {
+///
+/// Public so the test of what an incognito session saves, which cannot share a process with another
+/// test (the mode is one-way), reaches the command as the interface does.
+pub fn set_language(session: &mut Session, word: &str) {
     let word = word.trim();
     let available = bravebot_i18n::tags().join(", ");
     let kept = |session: &mut Session, tag: Option<&str>| match tag {

@@ -18,8 +18,18 @@
   padding: 0 var(--leo-spacing-xl);
   border-bottom: 1px solid var(--border-subtle);
 }
+/* The tabs and, at the end of the row, the Choose sections menu. The tabs keep the bottom edge so
+   their underline still sits on the head's border. */
+.context-head-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--leo-spacing-m);
+}
+.context-sections { align-self: center; }
 .inspector-tabs {
   display: block;
+  flex: 1;
+  min-width: 0;
   margin-bottom: -1px;
   --leo-tab-item-font: var(--type-meta-strong);
 }
@@ -68,6 +78,10 @@
   --leo-icon-size: var(--icon-control);
 }
 .panel-empty leo-icon { flex: none; }
+/* Every Overview section turned off. The line is a panel's own empty row inside `.panel-inner`, so
+   it starts at the same left edge as "No notes.". This adds the space above it and the 1px border
+   Leo's Collapse draws round a panel's contents, transparent here as it is there. */
+.context-all-off { padding-top: var(--leo-spacing-l); border-inline: 1px solid transparent; }
 
 /* ------------------------------------------------------------------ rows */
 

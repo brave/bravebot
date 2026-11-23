@@ -258,7 +258,8 @@ impl CommandPattern {
 struct PathPattern {
     /// Segments, `**` and `*` intact.
     segments: Vec<String>,
-    /// Whether the pattern names a single leading segment and so may float in a deny or ask rule.
+    /// Whether the pattern starts at a plain directory name, has more segments after it, and was
+    /// not written from `./`, so it floats to any depth in a deny or ask rule (PERM-4).
     ///
     /// Claude Code's asymmetry: `Read(secrets/**)` as a deny rule catches a `secrets` directory at
     /// any depth, and the same pattern as an allow rule grants only the one at the top. A rule
@@ -3731,6 +3732,36 @@ mod tests {
         }
     }
 
+    /// PERM-4: a bare name matches at any depth in `allow` as well as in `deny` and `ask`, which is
+    /// where it differs from a pattern with a directory part: `Edit(src/**)` grants only the `src`
+    /// at the top, and `Edit(notes.md)` grants a `notes.md` wherever it turns up. An implementation
+    /// that floats a name only where it restricts leaves the nested copy out of `allow`.
+    #[test]
+    fn a_bare_name_matches_at_any_depth_in_allow_as_well_as_in_deny_and_ask() {
+        for list in 0..3 {
+            let rule = "Edit(notes.md)";
+            let permissions = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            for path in ["notes.md", "docs/notes.md", "vendor/pkg/docs/notes.md"] {
+                assert!(
+                    matches!(
+                        permissions.for_path(Subject::Edit, path),
+                        Decision::Ruled(_)
+                    ),
+                    "list {list}: Edit(notes.md) missed {path}"
+                );
+            }
+            assert_eq!(
+                permissions.for_path(Subject::Edit, "docs/notes.txt"),
+                Decision::Unmatched,
+                "list {list}: Edit(notes.md) ruled a different name"
+            );
+        }
+    }
+
     /// A volume that folds case opens `.ENV` when it is asked for `.env`, so a deny rule written
     /// in one spelling covers the other, whichever the planner writes.
     #[test]
@@ -4053,6 +4084,71 @@ mod tests {
             allowing.for_path(Subject::Edit, "vendor/pkg/src/lib.js"),
             Decision::Unmatched
         );
+    }
+
+    /// PERM-4: the floating is decided by where the pattern starts, a plain directory name, and not
+    /// by how many segments follow it. `src/lib/**` has three segments and floats in `deny` and in
+    /// `ask` to the `src/lib` under any directory, but only to a `src/lib` and not to a `lib` or
+    /// to another child of `src`. In `allow` it grants the top `src/lib` alone, and the same
+    /// pattern written from `./` stays at the top in all three lists. An implementation that
+    /// floats only a two-segment pattern leaves the nested copy of `src/lib` unruled.
+    #[test]
+    fn a_relative_pattern_of_several_plain_segments_floats_when_it_restricts_and_not_when_it_grants()
+     {
+        for (list, ruling) in [("deny", Ruling::Deny), ("ask", Ruling::Ask)] {
+            let rule = "Edit(src/lib/**)";
+            let restricting = match ruling {
+                Ruling::Deny => rules(&[rule], &[], &[]),
+                _ => rules(&[], &[rule], &[]),
+            };
+            for path in ["src/lib/a.ts", "vendor/pkg/src/lib/a.js"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Ruled(ruling),
+                    "list {list}: src/lib/** did not rule {path}"
+                );
+            }
+            for path in ["vendor/pkg/src/other.js", "lib/a.ts"] {
+                assert_eq!(
+                    restricting.for_path(Subject::Edit, path),
+                    Decision::Unmatched,
+                    "list {list}: src/lib/** ruled {path}, which is not a src/lib"
+                );
+            }
+        }
+
+        let allowing = rules(&[], &[], &["Edit(src/lib/**)"]);
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "src/lib/a.ts"),
+            Decision::Ruled(Ruling::Allow),
+            "allow: src/lib/** missed the workspace's own src/lib"
+        );
+        assert_eq!(
+            allowing.for_path(Subject::Edit, "vendor/pkg/src/lib/a.js"),
+            Decision::Unmatched,
+            "allow: src/lib/** granted the nested copy"
+        );
+
+        for list in 0..3 {
+            let rule = "Edit(./src/lib/**)";
+            let anchored = match list {
+                0 => rules(&[rule], &[], &[]),
+                1 => rules(&[], &[rule], &[]),
+                _ => rules(&[], &[], &[rule]),
+            };
+            assert!(
+                matches!(
+                    anchored.for_path(Subject::Edit, "src/lib/a.ts"),
+                    Decision::Ruled(_)
+                ),
+                "list {list}: ./src/lib/** missed the workspace's own src/lib"
+            );
+            assert_eq!(
+                anchored.for_path(Subject::Edit, "vendor/pkg/src/lib/a.js"),
+                Decision::Unmatched,
+                "list {list}: ./src/lib/** floated to a nested copy"
+            );
+        }
     }
 
     /// PERM-3: `./x` starts at the workspace, and only a specifier with no slash in it is a name

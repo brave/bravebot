@@ -1498,8 +1498,9 @@ turn left it and stays resumable. Servers started for this process keep running.
 
 It is refused, with a line saying why, for an id that is no session of this directory, for the
 session already open, for a [manifest run](../using/manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued),
-and for a session a running background session holds. Where this directory records no other session
-it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
+and for a session a running background session holds. An id that is no session of this directory gets
+the one line "no session with that id in this directory", whether or not the directory records another
+session. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.
 
 ## `/bg`

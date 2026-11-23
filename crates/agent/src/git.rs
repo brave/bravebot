@@ -4251,7 +4251,9 @@ mod tests {
 
     mod checkouts {
         use super::*;
-        use crate::git::checkout::{Bound, Conversion, Made, Name, Refused, check_name, make};
+        use crate::git::checkout::{
+            Bound, Conversion, Made, Name, Refused, Settings, check_name, conversion, make,
+        };
         use crate::git::status::{Stat, parse_index};
 
         fn target(repo: &Repo) -> PathBuf {
@@ -4722,6 +4724,105 @@ mod tests {
                 b"nul2.txt",
             ] {
                 assert_eq!(check_name(name, true), Ok(()), "{}", name.escape_ascii());
+            }
+        }
+
+        /// CHECKOUT-4. Each character Windows reserves, each control character and each device
+        /// name is refused there on its own, and the backslash is a separator there alone.
+        /// Elsewhere the same names are allowed.
+        #[test]
+        fn each_character_and_device_name_windows_reserves_is_refused_there_alone() {
+            let mut refused: Vec<Vec<u8>> = "<>:\"|?*"
+                .chars()
+                .map(|reserved| format!("a{reserved}b").into_bytes())
+                .collect();
+            refused.extend((1u8..0x20).map(|control| vec![b'a', control, b'b']));
+            for device in [
+                "PRN",
+                "AUX",
+                "NUL",
+                "CONOUT$",
+                "COM1",
+                "COM9",
+                "LPT9",
+                "aux.tar.gz",
+            ] {
+                refused.push(device.as_bytes().to_vec());
+            }
+            for name in refused {
+                let shown = name.escape_ascii();
+                assert_eq!(check_name(&name, true), Err(Name::Windows), "{shown}");
+                assert_eq!(check_name(&name, false), Ok(()), "{shown}");
+            }
+            assert_eq!(check_name(b"a\\b", true), Err(Name::Separator));
+            assert_eq!(check_name(b"a\\b", false), Ok(()));
+            assert_eq!(check_name(b"a b", true), Ok(()));
+        }
+
+        /// CHECKOUT-4. On Windows the reader takes `core.autocrlf` to be set where the config says
+        /// nothing, since Git for Windows sets it in a system file the reader does not open, so the
+        /// checkout is refused; a config that turns it off is accepted and a `text` attribute then
+        /// has git write CRLF unless `core.eol` is `lf`. Elsewhere nothing converts. The settings
+        /// are read for either host from any host. Rejects a reader that asks the host it runs on
+        /// and not the one it was told.
+        #[test]
+        fn the_settings_git_for_windows_applies_are_read_for_either_host_from_any_host() {
+            let repo = Repo::new("checkout-settings-windows");
+            let read = |config: &str, windows: bool| {
+                repo.put("config", config);
+                Settings::read_for(&repo.git, windows)
+            };
+            let says_nothing = "[core]\n\trepositoryformatversion = 0\n";
+            let autocrlf = Some(Refused::Converts(Conversion::AutoCrlf));
+
+            assert_eq!(read(says_nothing, true).err(), autocrlf);
+            assert_eq!(read("", true).err(), autocrlf);
+            let off = read("[core]\n\tautocrlf = false\n", true).expect("autocrlf off");
+            assert!(off.text_converts());
+            let input = read("[core]\n\tautocrlf = input\n", true).expect("autocrlf input");
+            assert!(input.text_converts());
+            let lf = read("[core]\n\tautocrlf = false\n\teol = lf\n", true).expect("eol lf");
+            assert!(!lf.text_converts());
+            assert_eq!(
+                read("[core]\n\tautocrlf = false\n\teol = crlf\n", true).err(),
+                Some(Refused::Converts(Conversion::CoreEol))
+            );
+
+            let nothing = read(says_nothing, false).expect("nothing converts elsewhere");
+            assert!(!nothing.text_converts());
+            let off = read("[core]\n\tautocrlf = false\n", false).expect("autocrlf off");
+            assert!(!off.text_converts());
+            assert_eq!(read("[core]\n\tautocrlf = true\n", false).err(), autocrlf);
+        }
+
+        /// CHECKOUT-4. A `text` or `crlf` attribute is a conversion where git writes text with
+        /// CRLF, which is on Windows, and not elsewhere; `crlf=input` is not one on either. The
+        /// attributes that convert on every host do so on both. Rejects a reader that refuses a
+        /// `text` attribute where git writes the file as stored, or accepts one where it does not.
+        #[test]
+        fn a_text_attribute_is_a_conversion_only_where_git_writes_text_with_crlf() {
+            let on_windows = [
+                ("*.txt text\n", Some(Conversion::Text)),
+                ("*.txt text=auto\n", Some(Conversion::Text)),
+                ("*.txt crlf\n", Some(Conversion::Text)),
+                ("*.txt crlf=input\n", None),
+                ("*.txt -text\n", None),
+                ("*.png binary\n", None),
+                ("*.txt filter=x\n", Some(Conversion::Filter)),
+            ];
+            for (attributes, converts) in on_windows {
+                let bytes = attributes.as_bytes();
+                assert_eq!(
+                    conversion(bytes, true),
+                    converts,
+                    "{attributes:?} on Windows"
+                );
+                let elsewhere = converts.filter(|found| *found != Conversion::Text);
+                assert_eq!(
+                    conversion(bytes, false),
+                    elsewhere,
+                    "{attributes:?} elsewhere"
+                );
             }
         }
 
