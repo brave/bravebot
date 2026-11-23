@@ -316,6 +316,7 @@ pub const DENIED: &[&str] = &[
     "mentions.named",
     "drops.classify",
     "pastes.check",
+    "pastes.clean",
     // Work that runs without a request, or a plan walked as one run.
     "watches.list",
     "watches.add",

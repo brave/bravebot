@@ -489,6 +489,7 @@ impl Bridge {
             }
             "drops.classify" => crate::attached::classified(request),
             "pastes.check" => crate::attached::paste_check(request),
+            "pastes.clean" => crate::attached::paste_clean(request),
             "turn.cancel" => self.cancel_turn(request),
             "turn.interject" => self.interject_turn(request),
             "session.enhance" => self.enhance_draft(request),
