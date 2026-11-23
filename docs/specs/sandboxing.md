@@ -3673,12 +3673,14 @@ Windows cannot subtract from a grant, so a stage that a `denyRead` would reach i
 none runs with the path held back; whether the folding of a glob holds on NTFS is not verified. On
 Linux an ext4 or f2fs directory can carry a per-directory `casefold` flag. A glob is expanded by
 listing each directory and compares every name in both cases. The test that expands a glob over
-names in several cases does not set the flag, and no test runs a stage over a directory with the
-flag set. An entry with no wildcard is resolved by the volume, as above, and that is not verified
-over a flagged directory either
-([#4041](https://github.com/brave/bravebot/issues/4041), row 36). The trust map has such a test on
-real directories ([#4279](https://github.com/brave/bravebot/issues/4279)); a stage over a flagged
-directory has none.
+names in several cases does not set the flag. A second test runs a confined stage over a new
+directory with the flag set, once with a glob entry and once with a plain entry, and asserts that a
+read of the file under another case is refused. It runs only where the flag can be set (Linux on
+ext4 or f2fs with casefold, with the privilege `chattr +F` takes) and otherwise prints why it
+skipped, so no CI host is assumed to run it
+([#4041](https://github.com/brave/bravebot/issues/4041), row 36). An entry with no wildcard is
+resolved by the volume, as above. The trust map has a test on real directories
+([#4279](https://github.com/brave/bravebot/issues/4279)).
 
 An entry that is refused is not in force. A refused allowance leaves reach where it was. A refused
 `denyRead` or `denyWrite` is a path the person meant to hold back, so a stage is not started while one
@@ -3815,6 +3817,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_tui::logo::filesystem_rules_are_named_on_the_opening_screen_and_none_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not`
 `verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case`
+`verified-by: bravebot_agent::confine::a_denied_read_refuses_a_confined_read_of_a_file_under_another_case_in_a_casefold_directory`
 `verified-by: bravebot_agent::confine::a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_unicode_form`
 `verified-by: bravebot_agent::confine::a_denied_read_holds_back_a_directory_the_base_reads`
 `verified-by: bravebot_agent::confine::an_allowed_read_lifts_the_table_and_never_reaches_a_private_key`

@@ -57,6 +57,34 @@ fn touch(file: impl std::fmt::Display) -> String {
 #[path = "../../sandbox/test-support/scratch_root.rs"]
 mod scratch_root;
 
+/// Real directories with the casefold flag set, shared with the unit tests of the crate.
+#[cfg(target_os = "linux")]
+#[allow(
+    clippy::unwrap_used,
+    reason = "the fixture is shared with the unit tests, where an unwrap fails at the line that did"
+)]
+#[path = "../test-support/casefold_layouts.rs"]
+mod casefold_layouts;
+
+/// A new directory under `base` with the casefold flag set and the directory above it without,
+/// holding a file `.env`, or `None` after printing why the host cannot make one.
+#[cfg(target_os = "linux")]
+fn casefold_directory(base: &Path) -> Option<PathBuf> {
+    let made = casefold_layouts::build(&base.join("casefold"), &casefold_layouts::LAYOUTS[0]);
+    if made.is_none() {
+        eprintln!(
+            "skipped: this host refused to set the casefold flag (chattr +F) on a new directory"
+        );
+    }
+    made
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn casefold_directory(_base: &Path) -> Option<PathBuf> {
+    eprintln!("skipped: the casefold flag is set per directory on Linux only");
+    None
+}
+
 /// Where the directories of this suite are made: a directory beside the shared scratch root, which
 /// is outside the system temporary directory when the checkout is inside it (SANDBOX-30 leaves that
 /// directory out of the search for programs).
@@ -2578,6 +2606,66 @@ fn a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case() {
     }
     let neighbour = places.run("cat notes.txt", Some(&listed));
     assert_eq!(neighbour.stdout, "kept-notes\n", "{neighbour:?}");
+}
+
+/// The regression it rejects: a `denyRead` entry that does not name a file stored as `Server.pem`
+/// in a directory that folds case, when a program opens it as `SERVER.PEM` (SANDBOX-25, #4041). A
+/// glob that compares names by exact case, or a plain entry that is held to the spelling it was
+/// written in, passes the tests that do not set the flag and lets this read through. The directory
+/// carries the flag, so the volume opens every spelling of the name, and the stage without the list
+/// reads the file under each, which is the control that the refusal is the list's and not a missing
+/// file. A neighbour the entry does not name is still read.
+///
+/// It runs only where the flag can be set: Linux on ext4 or f2fs with casefold and the privilege
+/// `chattr +F` takes. Elsewhere it prints why it skipped and passes.
+#[cfg(unix)]
+#[test]
+fn a_denied_read_refuses_a_confined_read_of_a_file_under_another_case_in_a_casefold_directory() {
+    if !can_confine() {
+        eprintln!("skipped: this machine cannot apply a sandbox profile");
+        return;
+    }
+    let places = Places::new("filesystem-deny-read-casefold");
+    let Some(flagged) = casefold_directory(&places.session) else {
+        return;
+    };
+    std::fs::write(flagged.join("Server.pem"), "held-pem\n").expect("a file");
+    std::fs::write(flagged.join("notes.txt"), "kept-notes\n").expect("a file");
+    let directory = flagged.display().to_string();
+
+    let spellings = ["Server.pem", "SERVER.PEM", "server.pem"];
+    for spelling in spellings {
+        let control = places.run(&format!("cat '{directory}/{spelling}'"), None);
+        assert_eq!(
+            control.stdout, "held-pem\n",
+            "{spelling} is there to be read without the list: {control:?}"
+        );
+    }
+    for entry in [
+        format!("{directory}/**/*.pem"),
+        format!("{directory}/server.pem"),
+    ] {
+        let listed =
+            places
+                .confinement()
+                .with_filesystem(&written(&[], &[entry.as_str()], &[], &[]));
+        for spelling in spellings {
+            let ran = places.run(&format!("cat '{directory}/{spelling}'"), Some(&listed));
+            assert!(
+                !ran.ended_well && !ran.stdout.contains("held-pem"),
+                "{spelling} was read with denyRead {entry}: {ran:?}"
+            );
+            assert!(
+                !ran.stderr.contains("No such file"),
+                "{spelling} was refused as missing and not by denyRead {entry}: {ran:?}"
+            );
+        }
+        let neighbour = places.run(&format!("cat '{directory}/notes.txt'"), Some(&listed));
+        assert_eq!(
+            neighbour.stdout, "kept-notes\n",
+            "denyRead {entry}: {neighbour:?}"
+        );
+    }
 }
 
 /// The regression it rejects: a `denyRead` glob compared with names as written, so that
