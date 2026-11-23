@@ -13,7 +13,7 @@
  */
 
 import type { DropOutcome, DroppedFile } from '../shared/drops'
-import type { PastedPicture } from '../shared/pastes'
+import type { PastedPicture, PastedText } from '../shared/pastes'
 import { summonMarker } from '../shared/summons'
 
 /** A bot picked from the `@` list for one message (MEMORY-14). */
@@ -28,6 +28,7 @@ export type Staged =
   | { marker: string; via: 'drop'; file: DroppedFile }
   | { marker: string; via: 'paste'; picture: PastedPicture }
   | { marker: string; via: 'summon'; bot: SummonedBot }
+  | { marker: string; via: 'text'; pasted: PastedText }
 
 export interface Staging {
   /** How many markers this composer has ever written. */
@@ -79,6 +80,74 @@ export function stagePaste(staging: Staging, picture: PastedPicture, draft: stri
   const made = staging.made + 1
   const marker = `[${picture.noun} #${made}]`
   return { staging: { made, staged: [...staging.staged, { marker, via: 'paste', picture }] }, ...writtenAt(draft, caret, [marker]) }
+}
+
+/**
+ * How many newlines a paste needs before it folds, the terminal's `FOLD_AT_NEWLINES`. Two read fine
+ * in the box; the third is where a paste starts taking the screen.
+ */
+export const FOLD_AT_NEWLINES = 3
+
+/**
+ * How many lines `text` is, as a person reading it would count them, a port of the terminal's
+ * `lines_in`: a trailing newline ends the last line rather than starting another.
+ */
+export function linesIn(text: string): number {
+  const newlines = text.split('\n').length - 1
+  return text.endsWith('\n') ? newlines : newlines + 1
+}
+
+/** The marker for a folded paste, the English form of `paste-folded` in `en-US.ftl`. */
+export function foldedMarker(number: number, lines: number): string {
+  return `[Pasted text #${number} +${lines} ${lines === 1 ? 'line' : 'lines'}]`
+}
+
+/**
+ * Fold a pasted `text` behind a marker written at `caret`, numbered from the counter drops and
+ * pictures share. Line endings are normalised first, as the terminal's `normalised` does. `null`
+ * for a paste below the threshold, which the browser inserts itself.
+ */
+export function stageText(staging: Staging, text: string, draft: string, caret: number): StagedPaste | null {
+  const normal = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  if (normal.split('\n').length - 1 < FOLD_AT_NEWLINES) return null
+  const made = staging.made + 1
+  const lines = linesIn(normal)
+  const marker = foldedMarker(made, lines)
+  const pasted: PastedText = { marker, text: normal, number: made, lines }
+  return { staging: { made, staged: [...staging.staged, { marker, via: 'text', pasted }] }, ...writtenAt(draft, caret, [marker]) }
+}
+
+/**
+ * `draft` with every folded paste's marker put back to its words. Every copy of a marker, as the
+ * terminal's `Session::unfolded`: a marker copied twice means the words twice, and a deleted one
+ * drops them.
+ */
+export function unfolded(staging: Staging | undefined, draft: string): string {
+  let words = draft
+  for (const item of staging?.staged ?? []) {
+    if (item.via === 'text') words = words.split(item.marker).join(item.pasted.text)
+  }
+  return words
+}
+
+/** The folded paste whose marker spans `caret`, from its start to its end, or null. */
+export function markerAt(staging: Staging | undefined, draft: string, caret: number): Extract<Staged, { via: 'text' }> | null {
+  for (const item of staging?.staged ?? []) {
+    if (item.via !== 'text') continue
+    for (let at = draft.indexOf(item.marker); at !== -1; at = draft.indexOf(item.marker, at + 1)) {
+      if (caret >= at && caret <= at + item.marker.length) return item
+    }
+  }
+  return null
+}
+
+/**
+ * What a draft carries when it leaves the composer, by send, queue, interject, `/btw` or
+ * `/schedule`: what it still names, found on the folded draft, and its words with every folded
+ * paste put back (PASTE-1).
+ */
+export function leaving(staging: Staging | undefined, draft: string): { words: string; staged: Staged[] } {
+  return { words: unfolded(staging, draft).trim(), staged: named(staging, draft) }
 }
 
 function writtenAt(draft: string, caret: number, written: string[]): { draft: string; caret: number } {

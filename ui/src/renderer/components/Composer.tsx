@@ -384,6 +384,8 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 // A summoned bot is not a chip: its marker stays in the message and is drawn as
                 // the bot's label once the message is sent.
                 if (item.via === 'summon') return null
+                // Nothing stages folded text yet; its chip comes with the paste that makes it.
+                if (item.via === 'text') return null
                 const name = item.via === 'drop' ? item.file.name : 'Pasted image'
                 const thumbnail = item.via === 'drop' ? item.file.thumbnail : item.picture.thumbnail
                 return (

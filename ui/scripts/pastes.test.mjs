@@ -77,6 +77,94 @@ test('a pasted marker uses the noun the main process was told', () => {
 main.noteRoot('s1', '/nonexistent/project')
 main.noteRoot('s2', '/nonexistent/project')
 
+// ---- folded text (PASTE-1) ----------------------------------------------------------------------
+
+const exits = load("export { btwQuestion } from './src/shared/aside'; export { scheduleArgument } from './src/shared/schedule'")
+
+test('a paste of fewer newlines than the threshold is left to the browser, and one at it folds', () => {
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, 'one\ntwo\nthree', '', 0), null)
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, 'one\ntwo\nthree\nfour', '', 0).draft, '[Pasted text #1 +4 lines] ')
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, 'one\ntwo\nthree\n', '', 0).draft, '[Pasted text #1 +3 lines] ',
+    'a trailing newline ends the last line rather than starting another')
+  const windows = staging.stageText(staging.EMPTY_STAGING, 'a\r\nb\r\nc\r\nd', '', 0)
+  assert.equal(windows.draft, '[Pasted text #1 +4 lines] ')
+  assert.equal(windows.staging.staged[0].pasted.text, 'a\nb\nc\nd', 'line endings are normalised')
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, 'a\rb\rc\rd', '', 0).staging.staged[0].pasted.text, 'a\nb\nc\nd')
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, 'a\r\nb\r\nc', '', 0), null, 'a CRLF counts once')
+})
+
+test('lines are counted as a person would count them', () => {
+  assert.equal(staging.linesIn('one'), 1)
+  assert.equal(staging.linesIn('one\n'), 1)
+  assert.equal(staging.linesIn('one\ntwo'), 2)
+  assert.equal(staging.linesIn('one\n\n'), 2)
+  assert.equal(staging.linesIn(''), 1)
+})
+
+test('a folded paste lands at the caret and leaves the words around it as they were', () => {
+  const folded = staging.stageText(staging.EMPTY_STAGING, '1\n2\n3\n4', 'look atthis', 7)
+  assert.equal(folded.draft, 'look at [Pasted text #1 +4 lines] this')
+  assert.equal(folded.caret, 'look at [Pasted text #1 +4 lines] '.length)
+  assert.deepEqual(folded.staging.staged[0].pasted, { marker: '[Pasted text #1 +4 lines]', text: '1\n2\n3\n4', number: 1, lines: 4 })
+})
+
+test('a drop, a picture and a folded paste share one counter, and a number never comes round again', () => {
+  const drop = staging.stageDrop(staging.EMPTY_STAGING, [dropped('d')], '', 0)
+  const shot = staging.stagePaste(drop.staging, picture('p'), drop.draft, drop.caret)
+  const text = staging.stageText(shot.staging, 'a\nb\nc\nd\ne', shot.draft, shot.caret)
+  assert.equal(text.draft, '[Image #1] [Image #2] [Pasted text #3 +5 lines] ')
+  assert.deepEqual(staging.grantsOf(staging.named(text.staging, text.draft)), { drops: ['d'], pastes: ['p'] }, 'text is never a grant')
+  assert.equal(staging.stageText(staging.sent(text.staging), 'a\nb\nc\nd', '', 0).draft, '[Pasted text #4 +4 lines] ')
+})
+
+test('unfolding puts back every copy of a marker, drops a deleted one, and leaves pictures alone', () => {
+  const shot = staging.stagePaste(staging.EMPTY_STAGING, picture('p'), 'see ', 4)
+  const first = staging.stageText(shot.staging, 'A\nB\nC\nD', shot.draft, shot.caret)
+  const second = staging.stageText(first.staging, 'W\nX\nY\nZ', first.draft, first.caret)
+  const one = '[Pasted text #2 +4 lines]', two = '[Pasted text #3 +4 lines]'
+  assert.equal(staging.unfolded(second.staging, second.draft), 'see [Image #1] A\nB\nC\nD W\nX\nY\nZ ')
+  assert.equal(staging.unfolded(second.staging, `${one} and ${one}`), 'A\nB\nC\nD and A\nB\nC\nD', 'a copied marker means the words twice')
+  assert.equal(staging.unfolded(second.staging, staging.withoutMarker(second.draft, one)), 'see [Image #1] W\nX\nY\nZ ')
+  assert.equal(staging.unfolded(second.staging, `typed [Image #1] ${two.slice(1)}`), `typed [Image #1] ${two.slice(1)}`, 'a broken marker is left as typed')
+  assert.equal(staging.unfolded(undefined, one), one)
+})
+
+test('the folded paste under the caret is found at its start, inside it and at its end', () => {
+  const { staging: staged, draft } = staging.stageText(staging.stagePaste(staging.EMPTY_STAGING, picture('p'), 'x ', 2).staging, '1\n2\n3\n4', 'x [Image #1] ', 13)
+  const marker = '[Pasted text #2 +4 lines]'
+  const at = draft.indexOf(marker)
+  for (const caret of [at, at + 5, at + marker.length]) assert.equal(staging.markerAt(staged, draft, caret)?.pasted.number, 2, `caret ${caret}`)
+  assert.equal(staging.markerAt(staged, draft, 0), null, 'plain text')
+  assert.equal(staging.markerAt(staged, draft, draft.indexOf('[Image #1]') + 3), null, 'a picture marker')
+  assert.equal(staging.markerAt(staged, `${draft}then ${marker}`, draft.length + 6)?.marker, marker, 'a second copy of the marker')
+  assert.equal(staging.markerAt(undefined, draft, at), null)
+})
+
+test('a draft leaving the box carries the words, and what it names is found on the folded draft', () => {
+  const folded = staging.stageText(staging.stagePaste(staging.EMPTY_STAGING, picture('p'), '', 0).staging, 'l1\nl2\nl3\nl4', 'explain [Image #1] ', 19)
+  const queued = staging.leaving(folded.staging, `  ${folded.draft}  `)
+  assert.equal(queued.words, 'explain [Image #1] l1\nl2\nl3\nl4')
+  assert.deepEqual(queued.staged.map((item) => item.via), ['paste', 'text'])
+  const aside = staging.leaving(folded.staging, `/btw ${folded.draft}`)
+  assert.equal(exits.btwQuestion(aside.words), 'explain [Image #1] l1\nl2\nl3\nl4')
+  const scheduled = staging.leaving(folded.staging, `/schedule ${folded.draft}`)
+  assert.equal(exits.scheduleArgument(scheduled.words), 'explain [Image #1] l1\nl2\nl3\nl4')
+})
+
+// The marker and the threshold are the terminal's, read from where the terminal keeps them, so the
+// two front ends cannot drift apart.
+test('the folded marker and threshold are the terminal’s', () => {
+  const catalog = readFileSync(join('..', 'crates', 'i18n', 'locales', 'en-US.ftl'), 'utf8')
+  const entry = catalog.match(/^paste-folded = \{ \$lines ->\n((?:\s+\*?\[\w+\] .*\n)+)\s+\}/m)
+  assert.ok(entry, 'paste-folded is in en-US.ftl')
+  const forms = Object.fromEntries([...entry[1].matchAll(/\*?\[(\w+)\] (.*)/g)].map(([, key, form]) => [key, form.trim()]))
+  const spelled = (key, number, lines) => forms[key].replace('{ $number }', number).replace('{ $lines }', lines)
+  assert.equal(staging.foldedMarker(7, 1), spelled('one', 7, 1))
+  assert.equal(staging.foldedMarker(7, 12), spelled('other', 7, 12))
+  const source = readFileSync(join('..', 'crates', 'tui', 'src', 'state', 'attachments.rs'), 'utf8')
+  assert.equal(staging.FOLD_AT_NEWLINES, Number(source.match(/const FOLD_AT_NEWLINES: usize = (\d+);/)[1]))
+})
+
 // A stub of the bridge's `pastes.check`, with a cap, a type, a noun and a note the agent does not
 // use, so a number, literal or wording of this process's own would fail the tests below. The
 // bridge's own answer is pinned in crates/ui-bridge/tests/attaching.rs.
