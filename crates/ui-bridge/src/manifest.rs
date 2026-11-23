@@ -73,6 +73,88 @@ fn attempt_json(attempt: &Attempt) -> Value {
     })
 }
 
+/// The words a run's record is titled by: the task, with the markers of the pictures and PDFs
+/// dropped onto it, such as `[Image #1]`, replaced by the files' names in the order they stand.
+///
+/// The window lists the attachments in the order their markers stand in the task. The planner is
+/// still shown the task with its markers, each of which answers a `Dropped file:` part (DROP-11).
+/// A marker past the last attachment is left as it is.
+fn titled(task: &str, attachments: &[bravebot_agent::turn::Attachment]) -> String {
+    let mut names = attachments.iter().map(|dropped| {
+        std::path::Path::new(&dropped.path).file_name().map_or_else(
+            || dropped.path.clone(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    });
+    let mut out = String::with_capacity(task.len());
+    let mut rest = task;
+    while let Some(open) = rest.find('[') {
+        let (before, from) = rest.split_at(open);
+        out.push_str(before);
+        let marker = from
+            .find(']')
+            .map(|close| &from[..=close])
+            .filter(|marker| {
+                marker[1..marker.len() - 1]
+                    .split_once(" #")
+                    .is_some_and(|(noun, number)| {
+                        !noun.is_empty()
+                            && noun.chars().all(char::is_alphabetic)
+                            && !number.is_empty()
+                            && number.chars().all(|c| c.is_ascii_digit())
+                    })
+            });
+        match marker.and_then(|marker| names.next().map(|name| (marker, name))) {
+            Some((marker, name)) => {
+                out.push_str(&name);
+                rest = &from[marker.len()..];
+            }
+            None => {
+                out.push('[');
+                rest = &from[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::titled;
+    use bravebot_agent::turn::Attachment;
+
+    fn dropped(path: &str, media: &str) -> Attachment {
+        Attachment {
+            path: path.to_string(),
+            media: media.to_string(),
+        }
+    }
+
+    #[test]
+    fn each_marker_takes_the_next_files_name() {
+        let attachments = [
+            dropped("/d/a.png", "image/png"),
+            dropped("/d/b.pdf", "application/pdf"),
+        ];
+        assert_eq!(
+            titled("compare [Image #1] with [PDF #3] [x]", &attachments),
+            "compare a.png with b.pdf [x]"
+        );
+    }
+
+    #[test]
+    fn a_marker_with_no_file_and_brackets_that_are_no_marker_stay() {
+        assert_eq!(
+            titled(
+                "[Image #1] and [Image #2] [a #] [#1] [",
+                &[dropped("/d/a.png", "image/png")]
+            ),
+            "a.png and [Image #2] [a #] [#1] ["
+        );
+    }
+}
+
 /// Run one task as a manifest to its end, record it, and say what happened.
 pub(crate) fn walk(walk: Walk) {
     let Walk {
@@ -155,6 +237,7 @@ pub(crate) fn walk(walk: Walk) {
         .with_permissions(state.answers.rules.permissions.clone())
         .with_permission_mode(permission_mode.clone())
         .with_mcp(mcp);
+    let title = titled(&asked, &attachments);
     let task = attachments.into_iter().fold(task, |task, dropped| {
         task.with_attachment(dropped.path, dropped.media)
     });
@@ -191,7 +274,7 @@ pub(crate) fn walk(walk: Walk) {
         true => None,
         false => bravebot_session::sessions::record_manifest_run(
             &project,
-            &asked,
+            &title,
             &outcome,
             reporter.spent(),
             crate::FRONT,

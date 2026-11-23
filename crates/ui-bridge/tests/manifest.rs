@@ -903,6 +903,43 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
     );
 }
 
+/// A run with a picture dropped onto its task is titled with the file's name where the marker
+/// stands, so the list of chats names the file and not a number. The planner was shown the marker.
+#[test]
+fn a_run_with_a_dropped_picture_is_titled_by_the_files_name() {
+    let scratch = Scratch::new("bridge-manifest-dropped-picture-title");
+    let shot = scratch.path.join("sketch.png");
+    std::fs::write(&shot, [0x89u8, 0x50]).unwrap();
+    let shot = shot.display().to_string();
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call(
+        "manifest.run",
+        json!({"session": session, "task": "build the notes from [Image #2]", "attachments": [shot]}),
+    );
+    let events = front.answering(
+        &session,
+        &[
+            ("manifest.request", "approve"),
+            ("confirm.request", "approve"),
+        ],
+    );
+    let ended = events.last().unwrap();
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+    let run = ended["data"]["record"]
+        .as_str()
+        .expect("a record")
+        .to_string();
+
+    let read = front.record("manifest.read", &scratch, &run);
+    assert_eq!(
+        read["ok"]["record"]["title"], "build the notes from sketch.png",
+        "{read}"
+    );
+}
+
 /// DROP-2, MANIFEST-11: the rule a picture dropped onto the task records stays in the session's
 /// trust map after the run, and the next turn still holds it.
 #[test]
