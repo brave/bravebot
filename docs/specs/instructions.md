@@ -542,6 +542,7 @@ change of the file.
 `verified-by: bravebot_agent::turn::a_style_takes_the_place_of_the_opening_alone_and_yields_to_system_prompt`
 `verified-by: bravebot_agent::styles::a_style_is_found_by_its_whole_name_only`
 `verified-by: bravebot_agent::styles::no_style_takes_the_quarantine_guidance_with_it`
+`verified-by: bravebot_agent::styles::proactive_says_it_changes_no_mode_and_still_puts_a_write_to_the_person`
 `verified-by: bravebot_agent::styles::a_file_in_the_home_directory_is_a_style_by_its_name`
 `verified-by: bravebot_agent::styles::a_file_cannot_stand_in_for_a_built_in_name`
 `verified-by: bravebot_agent::styles::a_name_that_is_not_a_slug_never_reaches_a_path`

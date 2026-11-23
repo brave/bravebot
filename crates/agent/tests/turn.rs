@@ -112226,3 +112226,220 @@ fn output_a_person_approves_has_its_colour_codes_taken_out_for_the_planner_only(
         "{third}"
     );
 }
+
+// CRED-11 legs: the line is scanned before anybody is asked, a destination past the scan's budget
+// is passed over, a connection string carries the credential as the credential is carried, and a
+// commit message is a line like any other.
+
+/// The assignment a `.env` file holds for the declared key, built from its two halves.
+fn the_declared_assignment() -> String {
+    format!("{}={}", "AWS_ACCESS_KEY_ID", DECLARED_KEY)
+}
+
+/// CRED-11. The line is scanned as the turn's own words before the question about running it is
+/// put, so a person is never asked to approve a line that carries a credential: the approval
+/// prompt is one of the places the clause keeps a value out of. The confirmer here approves every
+/// run, so a scan placed after the question reaches the same refusal only after being asked, and
+/// the number of questions is the observation. The control is an ordinary line, which is asked
+/// about once.
+///
+/// Rejects a scan placed after the approval or after the line is compiled, and a refusal that is
+/// made only on the line's way out.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_line_carrying_a_credential_is_refused_before_the_person_is_asked_about_it() {
+    let scratch = Scratch::new("credential-line-never-asked");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let line = the_declared_assignment();
+    a_run_turn(
+        &scratch,
+        &format!(r#"{{"command":"printf {line} > .env"}}"#),
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .expect("the turn runs");
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        0,
+        "the person was asked to approve a line that carries a credential"
+    );
+    assert!(
+        !scratch.path.join(".env").exists(),
+        "a credential the line carried was written to the tree"
+    );
+
+    let control = Scratch::new("credential-line-never-asked-control");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = confirmer.seen.clone();
+    a_run_turn(
+        &control,
+        r#"{"command":"touch quiet.txt"}"#,
+        &mut confirmer,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+    .expect("the turn runs");
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "an ordinary line was not put to the person, so the count above proves nothing"
+    );
+}
+
+/// What a line left at `destination`, where `destination` held what `before` wrote and the line is
+/// `cat .env > <destination>` with the whole tree vouched for. Returns the destination's bytes
+/// afterwards and what the planner was told.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_destination_a_line_overwrote(
+    name: &str,
+    destination: &str,
+    before: impl FnOnce(&std::path::Path),
+) -> (String, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("{}\n", the_declared_assignment()),
+    )
+    .unwrap();
+    before(&scratch.path.join(destination));
+    let programs = vouching_for_writing("cat", &[".env"], &scratch.path, destination, false);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (_home, _reporter, answered, _work) =
+        a_run_turn_scanning_with_work(&workspace, &format!("cat .env > {destination}"), programs);
+    let left = std::fs::read(scratch.path.join(destination)).unwrap_or_default();
+    (String::from_utf8_lossy(&left).into_owned(), answered)
+}
+
+/// CRED-11. What a destination held before the line is kept up to a budget of 8 MiB, so that a
+/// refused destination can be put back, and a destination past the budget is passed over rather
+/// than scanned: a finding there could not be acted on, and a refusal that leaves the value in the
+/// file stops the line and protects nothing. The destination here is one byte past the budget and
+/// the line overwrites it with a credential, so the credential stays and nothing is refused. The
+/// control is a destination of ten bytes, which is scanned, refused and given back its old bytes,
+/// so the fixture is one the scan reaches.
+///
+/// Rejects an arm that scans a destination whose prior contents were not kept, and a budget that
+/// is larger than the clause says.
+#[test]
+fn a_destination_past_the_scans_budget_is_passed_over_and_one_within_it_is_scanned() {
+    let (past, said) =
+        the_destination_a_line_overwrote("credential-run-past-the-budget", "big.txt", |path| {
+            let file = std::fs::File::create(path).unwrap();
+            file.set_len(8 * 1024 * 1024 + 1).unwrap();
+        });
+    assert!(
+        past == format!("{}\n", the_declared_assignment()),
+        "a destination past the budget was scanned and put back, leaving {} bytes: {said}",
+        past.len()
+    );
+    assert!(
+        !said.contains("refused"),
+        "a destination past the budget was refused for what the line left in it: {said}"
+    );
+
+    let (within, said) =
+        the_destination_a_line_overwrote("credential-run-within-the-budget", "small.txt", |path| {
+            std::fs::write(path, "0123456789").unwrap();
+        });
+    assert_eq!(
+        within, "0123456789",
+        "the destination within the budget was not put back: {said}"
+    );
+    assert!(
+        said.contains("refused"),
+        "the control line was not refused, so the fixture does not reach the scan: {said}"
+    );
+}
+
+/// CRED-11. A password inside a connection string is the credential in the file's own syntax, and
+/// `write_file` leaves it out of the tree as it leaves out the key itself, though no name beside it
+/// says what it is. The control is the same string with no password, which is written. The
+/// regression it rejects is a scan that recognises a credential only when it stands alone or is
+/// assigned to a name, and so lets the same value through inside a connection string.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_credential_inside_a_connection_string_is_kept_out_of_the_tree_as_the_credential_is() {
+    let wrote = |name: &str, url: &str| {
+        let scratch = Scratch::new(name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "write_file",
+                &format!(r#"{{"path":"app.env","contents":"DATABASE_URL={url}\n"}}"#),
+            ),
+            reply_with("understood"),
+        ]);
+        turns::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("set the project up"),
+            // Approving every write, so the refusal is the only thing that can stop this one.
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut RecordingSink::new(),
+        )
+        .expect("turn runs");
+        std::fs::read_to_string(scratch.path.join("app.env")).ok()
+    };
+    // Put together a piece at a time, so no line of this file is a connection string with a
+    // password in it.
+    let mut with_a_password = String::from("postgres://");
+    with_a_password.push_str("appuser");
+    with_a_password.push(':');
+    with_a_password.push_str("p9Kx2mQ7vL4n");
+    with_a_password.push_str("R8tZ3wY6");
+    with_a_password.push('@');
+    with_a_password.push_str("db.internal/app");
+
+    assert_eq!(
+        wrote("credential-url-password", &with_a_password),
+        None,
+        "a password in a connection string was written to the tree"
+    );
+    assert_eq!(
+        wrote(
+            "credential-url-no-password",
+            "postgres://appuser@db.internal:5432/app"
+        )
+        .as_deref(),
+        Some("DATABASE_URL=postgres://appuser@db.internal:5432/app\n"),
+        "the control was not written, so the refusal above proves nothing"
+    );
+}
+
+/// CRED-11 names a commit among the places a credential is not copied to. A commit message the
+/// planner writes is part of the line, so the line is refused before it runs and nothing is
+/// committed. What the commit would pick up from the tree is the clause's other half and is not
+/// scanned (the spec records it under its costs), so this pins the half a turn can refuse.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_commit_message_carrying_a_credential_stops_the_line_and_commits_nothing() {
+    let scratch = Scratch::new("credential-commit-message");
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .current_dir(&scratch.path)
+            .args(args)
+            .output()
+            .expect("git starts")
+    };
+    assert!(git(&["init", "-q"]).status.success(), "git init failed");
+
+    let message = the_declared_assignment();
+    let (_home, _reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        &format!("git commit --allow-empty -q -m {message}"),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+
+    assert!(
+        answered.contains("refused"),
+        "the planner was not told the line did not run: {answered}"
+    );
+    assert!(
+        !git(&["rev-parse", "--verify", "-q", "HEAD"])
+            .status
+            .success(),
+        "a commit was made with a credential in its message"
+    );
+}

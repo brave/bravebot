@@ -499,6 +499,41 @@ fn a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed() {
     );
 }
 
+/// ARM-5: `watch_file` itself answers a surface that keeps no watches as it answers any name
+/// nobody offered, whoever calls it. The dispatch arm refuses first, so this is the tool's own
+/// arm, and it has to say the same thing: the wording of the three refusals above ("a loop is
+/// running", "as many watches as it keeps") would tell the planner there is a watch to wait for.
+/// The control is the same call with room to arm, which arms. The regressions it rejects are the
+/// arm falling into the "no room" refusal (`free` taken as 0), and the arm arming anyway.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_surface_that_keeps_no_watches_answers_the_tool_itself_as_an_unknown_name() {
+    let scratch = Scratch::new("unavailable");
+    std::fs::write(scratch.path.join("a.txt"), "hello\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut count = 0;
+    let (armed_with_room, _) = armed(
+        &workspace,
+        Arming::Allowed { free: 8 },
+        &mut count,
+        json!({"path": "a.txt"}),
+    );
+    assert!(armed_with_room.watch.is_some(), "the control did not arm");
+    assert_eq!(count, 1, "the control did not count its watch");
+
+    let mut count = 0;
+    let (produced, told) = armed(
+        &workspace,
+        Arming::Unavailable,
+        &mut count,
+        json!({"path": "a.txt"}),
+    );
+    assert_eq!(told, "error: no such tool 'watch_file'");
+    assert!(produced.watch.is_none(), "a watch was armed anyway");
+    assert_eq!(count, 0, "a watch the surface cannot keep was counted");
+}
+
 /// A reference names a file this conversation was never shown the name of, and a fire's
 /// prompt carries the path it was armed on into the user's own role. Resolving one here
 /// would put a name off an untrusted listing in the one position nothing can label.

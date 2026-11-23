@@ -8152,7 +8152,8 @@ fn edit_file<S: Sink, C: Confirmer>(
             // count-alone arm today. It stays as a second refusal, the way a resumed context's
             // refusal does in `Policy`, and `what_an_edit_result_shows` is the one place that
             // chooses: it reads a `Label` and nothing else.
-            if what_an_edit_result_shows(body_label) == EditResultShows::LinesAndCount {
+            let shows = what_an_edit_result_shows(body_label);
+            let lines = if shows == EditResultShows::LinesAndCount {
                 let region = policy.render_in_place("edit_file", &body, |contents| {
                     crate::replace::changed_region(&current, &contents)
                 });
@@ -8199,22 +8200,19 @@ fn edit_file<S: Sink, C: Confirmer>(
                     policy.allow_exposing_read(&keyed, answered_by);
                 }
 
-                let told = policy.render_in_place("edit_file", &region, |region| match region {
-                    Some(excerpt) => format!("{}\n\n{headline}", excerpt.render()),
-                    None => headline.clone(),
-                });
-                Produced::new(told, "", note)
-                    .with_changes(changes)
-                    .with_written(written)
-                    .marked_untrusted(false)
-                    .having_changed_a_file_at(workspace, &landed)
+                Some(
+                    policy.render_in_place("edit_file", &region, |region| match region {
+                        Some(excerpt) => format!("{}\n\n{headline}", excerpt.render()),
+                        None => headline.clone(),
+                    }),
+                )
             } else {
-                confirmed(headline, note)
-                    .with_changes(changes)
-                    .with_written(written)
-                    .marked_untrusted(true)
-                    .having_changed_a_file_at(workspace, &landed)
-            }
+                None
+            };
+            edit_result(shows, headline, note, lines)
+                .with_changes(changes)
+                .with_written(written)
+                .having_changed_a_file_at(workspace, &landed)
         }
         // As the read above: the name the planner is told is the one it asked with. `Stale` is the
         // arm that reaches here in practice, and it carries the path the write was routed on.
@@ -8246,6 +8244,27 @@ fn what_an_edit_result_shows(body_label: Label) -> EditResultShows {
         EditResultShows::LinesAndCount
     } else {
         EditResultShows::CountAlone
+    }
+}
+
+/// The result of an edit that landed, assembled from what the result shows.
+///
+/// `LinesAndCount` is the lines the edit produced and then the count, under the label they were
+/// shaped with, and is not marked untrusted. `CountAlone` is the headline alone, marked untrusted,
+/// whatever lines are handed in. The choice was made by `what_an_edit_result_shows` and nothing
+/// here looks at the lines to make another. A `LinesAndCount` with no lines, which the caller does
+/// not build, comes out as the count alone, the narrower of the two.
+fn edit_result(
+    shows: EditResultShows,
+    headline: String,
+    note: String,
+    lines: Option<Labelled<String>>,
+) -> Produced {
+    match (shows, lines) {
+        (EditResultShows::LinesAndCount, Some(told)) => {
+            Produced::new(told, "", note).marked_untrusted(false)
+        }
+        _ => confirmed(headline, note).marked_untrusted(true),
     }
 }
 
@@ -23091,8 +23110,9 @@ mod tests {
 
     /// Every tool this program builds for a planner or a delegate: the table under each way a turn
     /// can be scheduled and armed, with the kinds of delegate written into it, a delegate of each
-    /// kind, and the two tools added beside the table, `advisor` and `load_tool`. The tools an MCP
-    /// server offers are not built here.
+    /// kind, and every tool added beside the table: `advisor`, `load_tool`, `propose_plan`,
+    /// `message_session`, `remember`, `propose_rule`, `set_link`, `recall` and `web_search`. The
+    /// tools an MCP server offers are not built here.
     fn every_list_a_turn_can_offer() -> Vec<Tool> {
         use bravebot_core::delegate::{Definitions, Kind};
 
@@ -23130,7 +23150,60 @@ mod tests {
         }
         offer_advisor(&mut offered);
         offer_tool_loader(&mut offered, &["server:tool".to_string()]);
+        offer_propose_plan(&mut offered);
+        offer_message_session(&mut offered);
+        offer_remember(&mut offered);
+        offer_propose_rule(&mut offered);
+        offer_set_link(&mut offered);
+        offer_recall(&mut offered);
+        offer_web_search(&mut offered);
         offered
+    }
+
+    /// ROUTE-7: the list the field scan and the name scan read holds every tool a planner can be
+    /// offered beside the table. A builder left out of it is a tool whose fields nobody reads, so
+    /// a `command` or `script` field added to it would pass `only_run_takes_a_command_line`. The
+    /// regression it rejects is a new `offer_*` builder that is never added to the list, and any
+    /// of the nine named here being dropped from it. A tool added to the table needs no
+    /// line here, because the table is read whole.
+    #[test]
+    fn the_list_every_scan_reads_holds_each_tool_offered_beside_the_table() {
+        let held: Vec<String> = every_list_a_turn_can_offer()
+            .into_iter()
+            .map(|tool| tool.function.name)
+            .collect();
+        for name in [
+            "advisor",
+            "load_tool",
+            "propose_plan",
+            "message_session",
+            "remember",
+            "propose_rule",
+            "set_link",
+            "recall",
+            "web_search",
+        ] {
+            assert!(
+                held.iter().any(|held| held == name),
+                "{name} is offered to a planner and is not in the list the scans read"
+            );
+        }
+    }
+
+    /// ROUTE-7: no tool a planner can be offered is named for a shell, whichever builder makes it.
+    /// `no_shell_is_offered` reads the table and each delegate's list. This reads every list the
+    /// field scan reads, so a tool built beside the table, which a planner reads as its own, is
+    /// held to the same names. The regression it rejects is a `shell_exec` or `exec_script` tool
+    /// added by one of the `offer_*` builders.
+    #[test]
+    fn no_tool_built_beside_the_table_is_named_for_a_shell() {
+        for tool in every_list_a_turn_can_offer() {
+            let name = &tool.function.name;
+            assert!(
+                !name.contains("shell") && !name.contains("exec"),
+                "{name} takes a shell string"
+            );
+        }
     }
 
     /// A planner that asks the user for a path, a filename, or whether something is installed is

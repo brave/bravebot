@@ -507,6 +507,11 @@ what that is worth and where it stops.
 `verified-by: bravebot_agent::turn::a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it`
 `verified-by: bravebot_agent::turn::a_credential_a_line_nobody_vouched_for_left_is_not_scanned`
 `verified-by: bravebot_agent::turn::a_credential_a_vouched_line_left_at_a_destination_the_map_distrusts_is_not_scanned`
+`verified-by: bravebot_agent::turn::a_line_carrying_a_credential_is_refused_before_the_person_is_asked_about_it`
+`verified-by: bravebot_agent::turn::a_destination_past_the_scans_budget_is_passed_over_and_one_within_it_is_scanned`
+`verified-by: bravebot_agent::turn::a_credential_inside_a_connection_string_is_kept_out_of_the_tree_as_the_credential_is`
+`verified-by: bravebot_agent::turn::a_commit_message_carrying_a_credential_stops_the_line_and_commits_nothing`
+`verified-by: bravebot_agent::shell::a_line_the_person_typed_is_run_though_it_writes_what_looks_like_a_credential`
 `verified-by: bravebot_agent::workspace::a_destination_that_is_not_there_has_no_text_to_scan`
 `verified-by: bravebot_agent::workspace::a_destination_exactly_the_size_of_the_budget_is_read_in_full`
 `verified-by: bravebot_agent::workspace::a_destination_one_byte_past_the_budget_is_not_read`
