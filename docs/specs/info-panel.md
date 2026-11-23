@@ -13,6 +13,7 @@ governs:
   - crates/ui-bridge/src/window_title.rs
   - ui/src/shared/window-title.ts
   - ui/src/renderer/window-title.ts
+  - ui/src/renderer/components/Context.tsx
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -22,7 +23,8 @@ What lets somebody running many sessions at once tell which terminal holds which
 title, the desktop app's window title ([PANEL-19](#PANEL-19)), and the info panel beside the transcript, which holds the session's name, its goal, the
 issues and pull requests it is for and has met, the model and effort it runs on, its context and
 cache, its token total, the language servers and MCP servers it has started, and its plan, and the
-checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)). A session
+checklist `/sidebar` opens that turns each section on or off ([PANEL-17](#PANEL-17)), with the
+desktop app's own checklist for the panels of its context column ([PANEL-20](#PANEL-20)). A session
 gets its own links from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
 [`set_link`](tools/set-link.md) for an address the person typed, and, where it has none, from the
 planner's own commands ([PANEL-18](#PANEL-18)). It lists the other issues and pull
@@ -848,6 +850,42 @@ written are node tests in `ui/scripts/window-title.test.mjs`, which this check c
 `verified-by: bravebot_ui_bridge::window_title::control_characters_in_a_name_do_not_reach_the_window`
 `verified-by: bravebot_agent::title::control_and_invisible_characters_in_a_name_are_made_visible`
 
+<a id="PANEL-20"></a>
+### PANEL-20: the desktop context column's checklist turns each Overview panel on or off, and the choice is kept
+
+The head of the desktop app's right-hand context column holds a button that opens a checklist, with
+one checkable row for each panel of the Overview tab in the order the column draws them: Plan, Files
+read, Changes, Confined content, Notes and Asides. A row says what its panel's heading says, so it
+reads Calls made where the heading does for a session that holds only replayed calls. The Files tab
+is not a row, since turning it off would leave that tab blank. A row is checked while its panel is
+drawn, and it is there whether or not the panel has anything to show.
+
+Choosing a row turns its panel on or off at once, with no reload, and the checklist stays open.
+Escape closes it and keeps every change already made, so there is no cancel that undoes them. A
+panel turned off is hidden as the other tab's panels are: it stays in the page and keeps its fold,
+and it is out of the tab order and the accessibility tree. With every Overview panel turned off the
+column is still drawn, with its head, the checklist's button and one line saying every section is
+turned off. The checklist never folds or closes the column.
+
+The choice is written to the app's own state file, `bravebot-ui.json`, under the key `hidden`, on
+each change, so closing the window loses nothing. The key holds the names of the panels turned off:
+`plan`, `read`, `writes`, `confined`, `notes` and `asides`. It is read with the rest of the file at
+the start. A value that is not a list, or a list that holds any other name, leaves every panel on,
+and a panel the list does not name is on, so a panel a later version adds is on with no migration.
+A name read from the file is compared with the fixed list and never drawn ([PANEL-11](#PANEL-11)).
+The column's width and whether it is folded are kept in the same file, as they already are. The
+choice is separate from `~/.bravebot/sidebar` ([PANEL-17](#PANEL-17)): the desktop neither reads
+nor writes that file, and the terminal does not read `hidden`.
+
+**Why.** The context column is the desktop's info panel, and it already keeps its width and its fold
+across launches, as [PANEL-5](#PANEL-5) keeps the terminal's. The section choice is the part it
+lacked. The desktop's panels are not the terminal's sections, so one file for both would let each
+erase the other's choice under [PANEL-17](#PANEL-17)'s rule that a name it does not know turns every
+section on. The tests are node tests in `ui/scripts`, added with the code they hold, and are cited
+here as they land.
+
+`verified-by: none`
+
 ## Known costs
 
 - **A terminal that is not asked shows no resize pointer.** Over the border it draws its own pointer,
@@ -908,3 +946,9 @@ written are node tests in `ui/scripts/window-title.test.mjs`, which this check c
 
 - **Turning a section off while the panel is closed shows nothing ([PANEL-17](#PANEL-17)).** `/sidebar`
   does not open the panel, so the change is first seen the next time it is opened.
+
+- **A choice of sections made in the terminal is not seen on the desktop, nor the reverse
+  ([PANEL-20](#PANEL-20)).** The terminal keeps its choice in `~/.bravebot/sidebar` and the desktop
+  keeps its own in `bravebot-ui.json`, because their sections are different sets and a shared file
+  would turn every section on for whichever side read a name it does not know. A person who uses
+  both chooses twice.
