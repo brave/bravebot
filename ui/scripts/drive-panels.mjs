@@ -203,12 +203,29 @@ const { profile: userData, directory, state } = makeProfile()
 const sections = page2 => page2.locator('[data-test="context-sections"]')
 const row = (page2, name) => page2.locator(`leo-menu-item[data-panel="${name}"]`)
 const shown = (page2, name) => page2.locator(`#panel-${name}`).isVisible()
+const hidden = (page2, name) => page2.locator(`#panel-${name}.off`).count().then((n) => n === 1)
+const gutter = (page2) => page2.getByRole('separator', { name: 'Resize the context panel' })
+const width = async (page2) => Number(await gutter(page2).getAttribute('aria-valuenow'))
+const folded = async (page2) => (await page2.locator('.app.right-folded').count()) > 0
+const stored = () => JSON.parse(readFileSync(join(userData, 'bravebot-ui.json'), 'utf8'))
+const HIDEABLE = ['plan', 'read', 'writes', 'confined', 'notes', 'asides']
 
-/** Launch on the fixture profile with the fixture bridge, and open its first conversation. */
-const openFixture = async () => {
-  const app = await launch(userData, { BRAVEBOT_HOME: state })
-  const page = await app.firstWindow()
-  page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
+/**
+ * Launch on the fixture profile with the fixture bridge through `launchLive`, and open its first
+ * conversation. The column is unfolded only when asked, so a relaunch can check the fold it finds.
+ */
+const openFixture = async ({ unfold = true } = {}) => {
+  // The window opens 900px wide under a virtual display, and the app folds the column of any
+  // window 1120px wide or less at load and stores that fold. Widening it as it is made keeps the
+  // fold the relaunch is checking the one this script left.
+  const { app, page } = await launchLive(async () => {
+    const app = await launch(userData, { BRAVEBOT_HOME: state })
+    await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) w.setSize(1350, 900)
+      electronApp.on('browser-window-created', (_, w) => w.setSize(1350, 900))
+    })
+    return app
+  })
   await page.setViewportSize({ width: 1350, height: 900 })
   await installBridge(app, { directory })
   // The fixture answers every method it does not know with `{}`, which the composer's spend limit
@@ -224,66 +241,112 @@ const openFixture = async () => {
   await page.reload()
   await page.locator('.session').filter({ hasText: 'Review the sample project' }).click()
   await page.waitForTimeout(1200)
-  if (await page.locator('.app.right-folded').count()) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
+  if (unfold && (await folded(page))) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
   await page.waitForTimeout(600)
   return { app, page }
 }
 
+let before
 {
   const { app, page } = await openFixture()
 
+  // Move the column off its default width, so the relaunch has a width of its own to keep.
+  const start = await width(page)
+  await gutter(page).focus()
+  await page.keyboard.press('Shift+ArrowLeft')
+  await page.waitForTimeout(300)
+  check((await width(page)) !== start, `the context column's width moves from ${start} to ${await width(page)}`)
+
   check(await sections(page).isVisible(), 'the context head has a Choose sections button')
-  check(await shown(page, 'writes'), 'Changes shows before anything is turned off')
+  check(await shown(page, 'notes'), 'Notes shows before anything is turned off')
   await sections(page).click()
   await page.waitForTimeout(400)
-  check(await row(page, 'writes').isVisible(), 'the button opens the checklist')
+  check(await row(page, 'notes').isVisible(), 'the button opens the checklist')
   await theme(page, 'light')
   await page.screenshot({ path: `${SHOTS_DIR}/14-sections-menu-light.png` })
   await theme(page, 'dark')
   await page.screenshot({ path: `${SHOTS_DIR}/14-sections-menu-dark.png` })
   await theme(page, 'light')
 
-  await row(page, 'writes').click()
+  await row(page, 'notes').click()
   await page.waitForTimeout(300)
-  check(!(await shown(page, 'writes')), 'unticking Changes hides the Changes panel at once')
+  check(await hidden(page, 'notes'), 'unticking Notes hides #panel-notes at once')
+  check(!(await shown(page, 'notes')), 'and Notes is no longer drawn')
   check(await row(page, 'plan').isVisible(), 'and the checklist stays open')
-  check((await row(page, 'writes').getAttribute('aria-checked')) === 'false', 'and Changes reads as unticked')
-  await page.screenshot({ path: `${SHOTS_DIR}/15-sections-changes-off-light.png` })
+  check((await row(page, 'notes').getAttribute('aria-checked')) === 'false', 'and Notes reads as unticked')
+  await page.screenshot({ path: `${SHOTS_DIR}/15-sections-notes-off-light.png` })
   await theme(page, 'dark')
-  await page.screenshot({ path: `${SHOTS_DIR}/15-sections-changes-off-dark.png` })
+  await page.screenshot({ path: `${SHOTS_DIR}/15-sections-notes-off-dark.png` })
   await theme(page, 'light')
 
   await page.keyboard.press('Escape')
   await page.waitForTimeout(400)
   check(!(await row(page, 'plan').isVisible()), 'Escape closes the checklist')
-  check(!(await shown(page, 'writes')), 'and keeps Changes hidden')
+  check(await hidden(page, 'notes'), 'and keeps Notes hidden')
+  before = {
+    start,
+    width: await width(page),
+    folded: await folded(page),
+    box: (await page.locator('#context-column').boundingBox()).width,
+  }
   await page.waitForTimeout(500)
   await app.close()
 }
 
-const stored = JSON.parse(readFileSync(join(userData, 'bravebot-ui.json'), 'utf8'))
-check(JSON.stringify(stored.hidden) === '["writes"]', `bravebot-ui.json holds "hidden": ${JSON.stringify(stored.hidden)}`)
+check(JSON.stringify(stored().hidden) === '["notes"]', `bravebot-ui.json holds "hidden": ${JSON.stringify(stored().hidden)}`)
 
 {
-  const { app, page } = await openFixture()
-  check(!(await shown(page, 'writes')), 'after a relaunch Changes is still hidden')
-  check(await shown(page, 'plan'), 'and Plan still shows')
+  const { app, page } = await openFixture({ unfold: false })
+  check(await hidden(page, 'notes'), 'after a relaunch Notes is still hidden')
+  check(await shown(page, 'plan'), 'and Plan shows')
+  check((await folded(page)) === before.folded, `and the column's fold is as it was (folded: ${before.folded})`)
+  check((await width(page)) === before.width, `and the column's width is as it was (${await width(page)} of ${before.width})`)
+  const box = (await page.locator('#context-column').boundingBox()).width
+  check(Math.abs(box - before.box) < 1, `and the column is drawn as wide as before (${Math.round(box)}px of ${Math.round(before.box)}px)`)
 
   // Every section off: the column keeps its head, the button and one line saying so.
   await sections(page).click()
   await page.waitForTimeout(400)
-  for (const name of ['plan', 'read', 'confined', 'notes', 'asides']) {
+  for (const name of HIDEABLE.filter((n) => n !== 'notes')) {
     await row(page, name).click()
     await page.waitForTimeout(150)
   }
   await page.keyboard.press('Escape')
   await page.waitForTimeout(400)
-  check(await page.locator('#context-all-off').isVisible(), 'every section off draws the line saying so')
+  check((await page.locator('.panel:not(.off)').count()) === 0, 'every section off leaves no panel drawn')
+  check(await page.locator('.context-head').isVisible(), 'and keeps the column head')
+  check(await page.locator('#context-all-off').isVisible(), 'and draws the line saying every section is off')
   check(await sections(page).isVisible(), 'and keeps the Choose sections button')
   check(await page.locator('#context-column').isVisible(), 'and the column stays drawn')
+  check(!(await folded(page)), 'and the column is not folded')
   await page.screenshot({ path: `${SHOTS_DIR}/16-sections-all-off-light.png` })
   await theme(page, 'dark')
   await page.screenshot({ path: `${SHOTS_DIR}/16-sections-all-off-dark.png` })
+  await theme(page, 'light')
+
+  // Put the profile back as it started: every section on and the column at its default width.
+  await sections(page).click()
+  await page.waitForTimeout(400)
+  for (const name of HIDEABLE) {
+    await row(page, name).click()
+    await page.waitForTimeout(150)
+  }
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(400)
+  await gutter(page).focus()
+  await page.keyboard.press('Home')
+  await page.waitForTimeout(500)
+  const back = []
+  for (const name of HIDEABLE) if (await hidden(page, name)) back.push(name)
+  check(back.length === 0, `ticking every section again turns every panel back on (still off: ${back.join(', ') || 'none'})`)
+  check(!(await page.locator('#context-all-off').isVisible()), 'and takes away the every-section-off line')
+  await page.waitForTimeout(500)
   await app.close()
 }
+
+check(JSON.stringify(stored().hidden) === '[]', `the restored bravebot-ui.json holds "hidden": ${JSON.stringify(stored().hidden)}`)
+check(
+  stored().layout.right === before.start && stored().layout.collapsed.right === false,
+  `and the column back at ${stored().layout.right}px of ${before.start}px, unfolded`,
+)
 }

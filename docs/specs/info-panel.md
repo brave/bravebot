@@ -882,10 +882,9 @@ nor writes that file, and the terminal does not read `hidden`.
 across launches, as [PANEL-5](#PANEL-5) keeps the terminal's. The section choice is the part it
 lacked. The desktop's panels are not the terminal's sections, so one file for both would let each
 erase the other's choice under [PANEL-17](#PANEL-17)'s rule that a name it does not know turns every
-section on. The tests are node tests in `ui/scripts`, added with the code they hold, and are cited
-here as they land.
+section on.
 
-`verified-by: none`
+`verified-by: by-construction (the desktop renderer and main process are not crates this workspace compiles, so ui/scripts/panels-hidden.test.mjs holds that parseHidden keeps the six Overview names in column order with no repeats and turns any other name or a value that is not a list into every panel on, that parseState defaults hidden and keeps it through a write of another key, that the state a first launch inherits lists hidden, that a hidden panel takes the off class, that every panel hidden leaves the column, its head, the checklist and the line saying so, that toggling a row keeps column order, and that the menu lists the six panels by their headings, Calls made included, each row leaving the menu open; ui/scripts/drive-panels.mjs drives a real window on a profile of its own: it unticks Notes and finds #panel-notes hidden at once with the checklist still open, closes it with Escape, finds hidden in bravebot-ui.json, relaunches and finds Notes still hidden, Plan shown and the column's width and fold as they were, turns every panel off and finds the head, the checklist's button and the line, then turns every panel back on and puts the width back; make check-ui runs the tests)`
 
 ## Known costs
 

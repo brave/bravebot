@@ -36,7 +36,6 @@ docs/specs/commits.md:COMMIT-8: the person is told what was committed and what w
 docs/specs/commits.md:COMMIT-9: taking a turn back takes its commit back, as one unbroken run the branch still stands on
 docs/specs/commits.md:COMMIT-10: a rewind point holds the commit its turn made, and a resume brings it back
 docs/specs/commits.md:COMMIT-11: every front end commits and rewinds through one shared implementation
-docs/specs/info-panel.md:PANEL-20: the desktop context column's checklist turns each Overview panel on or off, and the choice is kept
 docs/specs/references.md:REFER-5: a `repository` entry is fetched once, with the person's yes, into `~/.bravebot/references`
 docs/specs/retrieval.md:RETRIEVE-11: the key goes only to the host it was issued for
 docs/specs/sandboxing.md:SANDBOX-32: a person may remember a reviewed prefix for an unconfined line, for programs on a hand-written list only
