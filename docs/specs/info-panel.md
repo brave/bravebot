@@ -14,6 +14,7 @@ governs:
   - ui/src/shared/window-title.ts
   - ui/src/renderer/window-title.ts
   - ui/src/renderer/components/Context.tsx
+  - ui/src/shared/panels.ts
 documented-by: docs/website/docs/using/sessions.md
 ---
 

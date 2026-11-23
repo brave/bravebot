@@ -21,7 +21,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseState, type StoredState } from '../shared/state'
+import { parseState, type PanelName, type StoredState } from '../shared/state'
 import { parseLayout, type StoredLayout } from '../shared/layout'
 import { parseView, type StoredView } from '../shared/view'
 import { parseRecents } from '../shared/recents'
@@ -101,6 +101,8 @@ function inherited(): StoredState {
     // the same rather than left to `parseState` to default, because `update` writes this literal's
     // shape: a key missing here is a key erased from disk by the next write of any other one.
     summons: [],
+    // Newer than the inherited files as well, and listed for the same reason: every panel on.
+    hidden: [],
   }
 }
 
@@ -129,6 +131,11 @@ function update(change: Partial<StoredState>): void {
 /** Remember where the columns were. */
 export function putLayout(layout: StoredLayout): void {
   update({ layout })
+}
+
+/** Remember which context-column panels are turned off. */
+export function putHidden(hidden: PanelName[]): void {
+  update({ hidden })
 }
 
 /** Remember how the session list is arranged. */
