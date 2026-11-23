@@ -112443,3 +112443,79 @@ fn a_commit_message_carrying_a_credential_stops_the_line_and_commits_nothing() {
         "a commit was made with a credential in its message"
     );
 }
+
+/// CRED-11 says no turn writes a credential or anything derived from one that would authenticate in
+/// its place. A Basic-authorization header over the declared key and a URL with the key percent-escaped
+/// authenticate as the key does and hold none of its characters, so write_file leaves each out of the
+/// tree as it leaves out the key. The controls are the same two forms over words that are not a key,
+/// which are written, so the refusal is of what the forms decode to and not of an encoding as such.
+///
+/// Rejects a scan that reads only the characters a line holds, which lets the encoded form through.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_credential_written_in_a_form_that_would_authenticate_in_its_place_is_kept_out_of_the_tree() {
+    let wrote = |name: &str, contents: &str| {
+        let scratch = Scratch::new(name);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "write_file",
+                &serde_json::json!({"path": "client.conf", "contents": contents}).to_string(),
+            ),
+            reply_with("understood"),
+        ]);
+        turns::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("set the client up"),
+            // Approving every write, so the refusal is the only thing that can stop this one.
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut RecordingSink::new(),
+        )
+        .expect("turn runs");
+        std::fs::read_to_string(scratch.path.join("client.conf")).ok()
+    };
+    let basic = |user_and_password: &str| {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(user_and_password);
+        format!("Authorization: Basic {encoded}\n")
+    };
+    let escaped =
+        |text: &str| -> String { text.bytes().map(|byte| format!("%{byte:02X}")).collect() };
+
+    assert_eq!(
+        wrote(
+            "credential-basic-header",
+            &basic(&format!("deploy:{DECLARED_KEY}"))
+        ),
+        None,
+        "a Basic header over a credential was written to the tree"
+    );
+    assert_eq!(
+        wrote(
+            "credential-percent-escaped",
+            &format!(
+                "endpoint=https://api.internal/v1?key={}\n",
+                escaped(DECLARED_KEY)
+            ),
+        ),
+        None,
+        "a percent-escaped credential was written to the tree"
+    );
+    let control = basic("deploy:a-plain-word-and-nothing-more");
+    assert_eq!(
+        wrote("credential-basic-control", &control).as_deref(),
+        Some(control.as_str()),
+        "the Basic control was not written, so the refusal above proves nothing"
+    );
+    let control = format!(
+        "endpoint=https://api.internal/v1?name={}\n",
+        escaped("two words")
+    );
+    assert_eq!(
+        wrote("credential-escaped-control", &control).as_deref(),
+        Some(control.as_str()),
+        "the percent-escaped control was not written, so the refusal above proves nothing"
+    );
+}

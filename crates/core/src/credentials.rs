@@ -257,6 +257,13 @@ pub fn scan(path: &str, text: &str, salt: u64) -> Vec<Finding> {
         // Comparing fingerprints would call those two different credentials and report both.
         let mut on_this_line: Vec<(Kind, String)> = shaped(line);
         on_this_line.extend(url_password(line).map(|value| (Kind::UrlPassword, value)));
+        // A credential written in a form that authenticates in its place (CRED-11): the same
+        // two declared layers read what the line decodes to, so a finding is of the credential
+        // and fingerprints as the plain value does.
+        for decoded in decoded_forms(line) {
+            on_this_line.extend(shaped(&decoded));
+            on_this_line.extend(url_password(&decoded).map(|value| (Kind::UrlPassword, value)));
+        }
         if let Some(value) = assigned(line) {
             on_this_line.push((Kind::Assigned, value));
         }
@@ -467,6 +474,93 @@ fn url_password(line: &str) -> Option<String> {
         return None;
     }
     Some(password.to_string())
+}
+
+/// The shortest run of base64 characters read as an encoding of something. Twenty characters
+/// is the shortest key a layer here matches, and its encoding is longer.
+const LEAST_ENCODED: usize = 20;
+
+/// What a line says when its encodings are undone once: the line with its percent escapes
+/// decoded, and each long run of base64 characters decoded to text.
+///
+/// A header carrying `Basic` and the encoding of a key and a URL with a key percent-escaped
+/// authenticate as the key does, and neither holds the key's own characters. One level only: an
+/// encoding of an encoding is not undone, and a value that decodes to bytes that are not text is
+/// not a credential any layer here reads.
+fn decoded_forms(line: &str) -> Vec<String> {
+    let mut forms = Vec::new();
+    if line.contains('%') {
+        forms.extend(percent_decoded(line));
+    }
+    for run in
+        line.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '-' | '_')))
+    {
+        if run.len() >= LEAST_ENCODED {
+            forms.extend(base64_decoded(run));
+        }
+    }
+    forms
+}
+
+/// The line with each `%` and two hex digits replaced by the byte they name, or nothing where no
+/// escape was there or the result is not text.
+fn percent_decoded(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut changed = false;
+    let mut at = 0;
+    while at < bytes.len() {
+        let escaped = (bytes[at] == b'%')
+            .then(|| bytes.get(at + 1..at + 3))
+            .flatten()
+            .and_then(|pair| std::str::from_utf8(pair).ok())
+            .filter(|pair| pair.bytes().all(|digit| digit.is_ascii_hexdigit()))
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                changed = true;
+                at += 3;
+            }
+            None => {
+                out.push(bytes[at]);
+                at += 1;
+            }
+        }
+    }
+    changed.then(|| String::from_utf8(out).ok()).flatten()
+}
+
+/// A run of base64 characters, in either alphabet and with or without its padding, as the text it
+/// encodes, or nothing where it is not valid or the bytes are not printable text.
+fn base64_decoded(run: &str) -> Option<String> {
+    if run.len() % 4 == 1 {
+        return None;
+    }
+    let mut bits: u32 = 0;
+    let mut held: u32 = 0;
+    let mut bytes = Vec::with_capacity(run.len() / 4 * 3);
+    for c in run.bytes() {
+        let sextet = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        };
+        bits = (bits << 6) | u32::from(sextet);
+        held += 6;
+        if held >= 8 {
+            held -= 8;
+            bytes.push(u8::try_from((bits >> held) & 0xff).ok()?);
+            bits &= (1 << held) - 1;
+        }
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    text.chars()
+        .all(|c| !c.is_control() || c.is_whitespace())
+        .then_some(text)
 }
 
 /// The names that say the value beside them is a secret.
@@ -1514,6 +1608,114 @@ mod tests {
             let piece = std::str::from_utf8(window).unwrap();
             assert!(!said.contains(piece), "{piece} of the value is in {said}");
         }
+    }
+
+    /// `pieces` joined. The encoded fixtures below are written in pieces shorter than a run the
+    /// scan decodes, so this file holds none of them whole.
+    fn glued(pieces: &[&str]) -> String {
+        pieces.concat()
+    }
+
+    /// The tail of every encoding of `x>?` or `x?>` followed by the key, after its first four
+    /// characters, in the pieces `glued` joins. Its characters are the same in both alphabets.
+    const THE_KEY_ENCODED_AFTER_ITS_HEAD: [&str; 4] = ["QUtJQUlP", "U0ZPRE5O", "N0VYQU1Q", "TEU"];
+
+    /// CRED-11: a run of base64 characters is read in either alphabet, padded or not. The heads
+    /// differ in the sextets 62 and 63 (`+` and `/` against `-` and `_`), so a reader that knows
+    /// one alphabet alone misses the key in the other and a reader that insists on the padding
+    /// misses the unpadded forms. Each encoded line fingerprints as the plain key does.
+    #[test]
+    fn a_key_in_either_base64_alphabet_padded_or_not_is_found_as_the_key_is() {
+        let plain = scan("t.txt", "the key is AKIAIOSFODNN7EXAMPLE\n", 7);
+        assert_eq!(plain.len(), 1, "{plain:?}");
+        for head in ["eD4/", "eD4_", "eD8+", "eD8-"] {
+            for padding in ["=", ""] {
+                let tail = glued(&THE_KEY_ENCODED_AFTER_ITS_HEAD);
+                let encoded = format!("{head}{tail}{padding}");
+                let found = scan("t.txt", &format!("Authorization: Basic {encoded}\n"), 7);
+                assert_eq!(found.len(), 1, "{head}{padding}: {found:?}");
+                assert_eq!(
+                    found[0].fingerprint, plain[0].fingerprint,
+                    "{head}{padding}: the finding is of another value than the key"
+                );
+            }
+        }
+    }
+
+    /// CRED-11: a percent escape is read in either case of its hex digits, and a `+` or a sign
+    /// is no digit. `%4b` and `%4B` both name `K`, and the finding is the key the escape spells.
+    #[test]
+    fn a_percent_escape_in_lower_or_upper_case_hex_is_read_as_the_byte_it_names() {
+        let spelled = glued(&["AKIA", "KOSFODNN7", "EXAMPLE"]);
+        let plain = scan("t.txt", &format!("the key is {spelled}\n"), 7);
+        assert_eq!(plain.len(), 1, "{plain:?}");
+        for escape in ["%4b", "%4B"] {
+            let line = glued(&["https://h/?k=AKIA", escape, "OSFODNN7EXAMPLE\n"]);
+            let found = scan("t.txt", &line, 7);
+            assert_eq!(found.len(), 1, "{escape}: {found:?}");
+            assert_eq!(found[0].fingerprint, plain[0].fingerprint, "{escape}");
+        }
+        assert_eq!(percent_decoded("a%4bb%4Bc").as_deref(), Some("aKbKc"));
+        assert_eq!(percent_decoded("a%+4b"), None, "a sign is not a hex digit");
+    }
+
+    /// CRED-11: bytes that are not text are not a credential any layer reads, whichever encoding
+    /// they arrive in. A percent escape of a byte that is not UTF-8 and a base64 run of high bytes
+    /// decode to nothing, and so does a base64 run holding a control character other than
+    /// whitespace; whitespace is kept.
+    #[test]
+    fn a_decoding_that_is_not_text_or_holds_a_control_byte_is_dropped() {
+        assert_eq!(percent_decoded("a%ffb"), None);
+        assert_eq!(percent_decoded("%c3%28"), None);
+        assert_eq!(base64_decoded("//////////////////////////////8"), None);
+        // `abcdefghijklm`, a control character, `nopqrstu`.
+        let control = glued(&["YWJjZGVmZ2hp", "amtsbQFub3Bx", "cnN0dQ"]);
+        assert_eq!(base64_decoded(&control), None);
+        assert!(decoded_forms(&format!("x {control} y")).is_empty());
+        // The same length with a newline in the place of the control character.
+        let spaced = glued(&["YWJjZGVmZ2hp", "agprbG1ub3Bx", "cnN0"]);
+        assert_eq!(
+            base64_decoded(&spaced).as_deref(),
+            Some("abcdefghij\nklmnopqrst")
+        );
+    }
+
+    /// CRED-11: the edges of a run. Under twenty characters nothing is decoded and at twenty it
+    /// is. A run of one to four characters decodes to what it can hold, a run one past a multiple
+    /// of four holds no whole byte and is nothing, and a `%` cut off at the end of the text or
+    /// followed by one digit, a non-digit or a multi-byte character is left as it is, with no read
+    /// past the end of the text.
+    #[test]
+    fn a_run_or_an_escape_cut_short_is_read_as_far_as_it_goes_and_never_past_the_text() {
+        assert!(decoded_forms("").is_empty());
+        assert!(decoded_forms("%").is_empty());
+        assert!(decoded_forms("YWJjZGVmZ2hpamtsbW4").is_empty());
+        assert_eq!(
+            decoded_forms("YWJjZGVmZ2hpamtsbW5v"),
+            ["abcdefghijklmno".to_string()]
+        );
+
+        assert_eq!(base64_decoded("Q"), None);
+        assert_eq!(base64_decoded("QQ").as_deref(), Some("A"));
+        assert_eq!(base64_decoded("QUI").as_deref(), Some("AB"));
+        assert_eq!(base64_decoded("QUJD").as_deref(), Some("ABC"));
+        assert_eq!(base64_decoded("QUJDR"), None);
+        assert_eq!(base64_decoded("QU=I"), None);
+
+        for cut in [
+            "abc%",
+            "abc%4",
+            "abc%g1",
+            "abc%4g",
+            "abc%\u{e9}",
+            "%4\u{e9}",
+        ] {
+            assert_eq!(percent_decoded(cut), None, "{cut:?}");
+        }
+        assert_eq!(percent_decoded("abc%41").as_deref(), Some("abcA"));
+        assert_eq!(percent_decoded("a%41%").as_deref(), Some("aA%"));
+        assert_eq!(percent_decoded("a%41%4").as_deref(), Some("aA%4"));
+        assert_eq!(percent_decoded("%%41").as_deref(), Some("%A"));
     }
 
     /// CRED-18: the classifier reaches nothing outside the process. Asking a hosted model whether
