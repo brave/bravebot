@@ -12,7 +12,9 @@
 //!
 //! The crate holds no `declassify` and no `Labelled::new`. A second comparison of an answer's text
 //! anywhere in it is found by reading the diff, and a second reader of an answer anywhere is a
-//! moved count in `docs/specs/labels.md`.
+//! moved count in `docs/specs/labels.md`. It keeps nothing between calls, so it holds no `static`,
+//! no `thread_local!` and no interior mutability, and a test in `crates/cli/tests/layering.rs`
+//! reads its source for them.
 #![forbid(unsafe_code)]
 
 mod number;

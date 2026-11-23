@@ -39,6 +39,7 @@ import type {
   VetRequest,
 } from '../shared/protocol'
 import type { ExportTurn } from '../shared/export'
+import type { AsideDone } from '../shared/aside'
 
 export type Entry = (
   | { kind: 'turn-start'; id: string; number: number }
@@ -336,7 +337,23 @@ export const scheduleAnswered = (answer: { lines: string[]; refused: boolean }):
   text: answer.lines.join('\n'),
   ...(answer.refused ? { refused: true as const } : {}),
 })
-export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
+/** That a `/btw` asked beside the running turn is out (CMD-8). A narration, never part of the conversation. */
+export const asideOut = (question: string): Entry => narrated(`/btw ${question}: asked beside the turn. The answer goes in the Asides panel when it is in, and the turn goes on.`, '/btw')
+/**
+ * What a `/btw` or `/recap` came back with, drawn as a narration: for the person to read and never
+ * part of the conversation (CMD-8, CMD-16). An answer the record does not keep says so (WATCH-20).
+ */
+export const asideAnswered = (done: AsideDone): Entry => {
+  const command = done.recap ? '/recap' : '/btw'
+  const asked = done.recap ? '/recap' : `/btw ${done.question}`
+  if (done.status === 'answered') {
+    const unkept = done.kept === false ? '\n(Not written down: the exchange met something untrusted, so the record does not keep this answer.)' : ''
+    return { kind: 'narration', id: nextId(), text: `${asked}\n${done.answer ?? ''}${unkept}`, command }
+  }
+  if (done.status === 'stopped') return { kind: 'narration', id: nextId(), text: `${asked}: stopped.`, command }
+  return { kind: 'narration', id: nextId(), text: `${asked}: ${done.message ?? 'the question failed'}`, command, refused: true }
+}
+export const watchFired =(number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
 export const started = (activity: Activity): Entry => ({
@@ -370,6 +387,28 @@ export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server',
 export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
 
 /**
+ * The entries without the agent's narration of a plan's steps, once the plan's card lists them.
+ *
+ * The agent says the plan, a heading line and then one line per step, before it asks about it.
+ * The card shows the same steps, so a narration whose step lines are the card's, in order, is
+ * dropped and the card is the one place the plan is read. Only the run's own narration is looked
+ * at: the search stops at the run's task row or an earlier plan's card.
+ */
+export function withoutNarratedPlan(entries: Entry[], steps: string[]): Entry[] {
+  if (!steps.length) return entries
+  for (let at = entries.length - 1; at >= 0; at--) {
+    const entry = entries[at]!
+    if (entry.kind === 'plan-task' || entry.kind === 'manifest') break
+    if (entry.kind !== 'narration') continue
+    const lines = entry.text.split('\n').map((line) => line.trim()).filter(Boolean).slice(1)
+    if (lines.length === steps.length && lines.every((line, index) => line === steps[index]!.trim())) {
+      return [...entries.slice(0, at), ...entries.slice(at + 1)]
+    }
+  }
+  return entries
+}
+
+/**
  * Whether a rule is about a server's tool, which is the one family a plan run applies (MANIFEST-15).
  * The family is the text before the first `(`, as the agent reads it.
  */
@@ -387,11 +426,11 @@ export const narrowing = (rules: SettingsRules | null | undefined): string[] => 
 
 /**
  * Whether a settings file wrote something that is not in force, which the person is told: a rule
- * not granted, a directory not open, or one that could not be opened (`refused`, from the bridge's
- * `foldersRefused`).
+ * not granted, a directory not open, one that could not be opened (`refused`, from the bridge's
+ * `foldersRefused`), or a key that was not read as written (`droppedKeys`).
  */
 export const notInForce = (rules: SettingsRules | null | undefined, refused: readonly unknown[] = []): boolean =>
-  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0 || refused.length > 0 || refusedPaths(rules).length > 0 || (rules.filesystemIgnored?.length ?? 0) > 0 || !!rules.namedWithheld)
+  !!rules && (rules.unreadable.length > 0 || rules.proposed.length > 0 || rules.directories.length > 0 || refused.length > 0 || refusedPaths(rules).length > 0 || (rules.filesystemIgnored?.length ?? 0) > 0 || !!rules.namedWithheld || (rules.droppedKeys?.length ?? 0) > 0)
 
 /** Whether a yes to the rules question granted checkout rules this conversation holds, which the person is also told. */
 export const grantedRules = (rules: SettingsRules | null | undefined): boolean => (rules?.granted?.length ?? 0) > 0

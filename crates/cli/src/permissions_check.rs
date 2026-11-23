@@ -1,104 +1,73 @@
 //! `bravebot permissions check <Family> <specifier>`: which rule decides a call (CLI-30).
 //!
 //! The rules are loaded the way a session in this directory loads them, and the call is only
-//! matched against them: nothing is opened, started or fetched. The specifier is what a person
-//! typed, so the match is on routing alone (PERM-1).
+//! matched against them by [`bravebot_agent::rule_check`]: nothing is opened, started or fetched.
+//! The specifier is what a person typed, so the match is on routing alone (PERM-1).
 
 use crate::exit::{Ending, fail};
 use crate::progress::{printable, printable_path};
 use bravebot_agent::granted::Proposed;
+use bravebot_agent::rule_check::{Call, Decision, Explained, Origin};
 use bravebot_config::Settings;
-use bravebot_core::permissions::{Permissions, Rule, Ruling, Subject};
+use bravebot_core::permissions::Ruling;
 use bravebot_i18n::t;
 use std::process::ExitCode;
 
-/// The call a person asked about, in the one spelling each family is matched in.
-enum Call {
-    Path(Subject, String),
-    Command(Vec<String>),
-    Host(String),
-    Tool(String, String),
-}
-
-impl Call {
-    /// What the arguments after `check` name, or `None` where they name no call.
-    fn read(words: &[String]) -> Option<Self> {
-        let (family, rest) = words.split_first()?;
-        match (Subject::parse(family)?, rest) {
-            (subject @ (Subject::Read | Subject::Edit), [path]) => {
-                Some(Self::Path(subject, path.clone()))
-            }
-            (Subject::Bash, argv) if !argv.is_empty() => Some(Self::Command(argv.to_vec())),
-            // A URL is reduced to its host, as a fetch is (PERM-1); anything that is not one is
-            // taken as the host it spells.
-            (Subject::WebFetch, [target]) => Some(Self::Host(
-                bravebot_core::url::host_of(target).unwrap_or_else(|| target.clone()),
-            )),
-            (Subject::Mcp, [target]) => {
-                let (alias, tool) = target.split_once(':')?;
-                Some(Self::Tool(alias.to_string(), tool.to_string()))
-            }
-            _ => None,
-        }
-    }
-
-    /// Whether a session would refuse this call as an 8.3 short name while a command rule
-    /// restricts (PERM-5). Only a command can be.
-    fn reads_a_short_name(&self, permissions: &Permissions) -> bool {
-        match self {
-            Self::Command(argv) => permissions.reads_a_short_name(argv),
-            _ => false,
-        }
-    }
-
-    /// The rule of `permissions` that decides this call, and the list it is in.
-    fn decided_by<'a>(&self, permissions: &'a Permissions) -> Option<(Ruling, &'a Rule)> {
-        match self {
-            Self::Path(subject, path) => permissions.rule_for_path(*subject, path),
-            Self::Command(argv) => permissions.rule_for_command(argv),
-            Self::Host(host) => permissions.rule_for_host(host),
-            Self::Tool(alias, tool) => permissions.rule_for_mcp(alias, tool),
-        }
-    }
-}
-
-/// Print the decision `rule` makes, the rule as written, where it came from and why.
-fn print_decision(settings: &Settings, granted: &[Proposed], ruling: Ruling, rule: &Rule) {
-    println!(
-        "{}: {}",
-        t!(permissions_check_decision),
-        match ruling {
-            Ruling::Deny => t!(permissions_check_deny),
-            Ruling::Ask => t!(permissions_check_ask),
-            Ruling::Allow => t!(permissions_check_allow),
-        }
-    );
-    // The file's own spelling where a layer wrote the rule, and the grant's where the person
-    // granted a checkout's rule at the question (PERM-15).
-    match settings.rule_source(ruling.as_str(), rule.written()) {
-        Some((file, written)) => {
-            println!("{}: {}", t!(permissions_check_rule), printable(written));
-            println!("{}: {}", t!(permissions_check_file), printable_path(file));
-        }
-        None => {
+/// Print what `explained` says decides the call.
+fn print(explained: &Explained) {
+    match &explained.decision {
+        Decision::ShortName => println!(
+            "{}: {}",
+            t!(permissions_check_decision),
+            t!(permissions_check_short_name)
+        ),
+        Decision::NoRule => println!(
+            "{}: {}",
+            t!(permissions_check_decision),
+            t!(permissions_check_none)
+        ),
+        Decision::Rule {
+            ruling,
+            written,
+            origin,
+            reason,
+        } => {
             println!(
                 "{}: {}",
-                t!(permissions_check_rule),
-                printable(rule.written())
+                t!(permissions_check_decision),
+                match ruling {
+                    Ruling::Deny => t!(permissions_check_deny),
+                    Ruling::Ask => t!(permissions_check_ask),
+                    Ruling::Allow => t!(permissions_check_allow),
+                }
             );
-            if let Some(from) = granted.iter().find(|g| g.rule.trim() == rule.written()) {
-                println!(
+            println!("{}: {}", t!(permissions_check_rule), printable(written));
+            match origin {
+                Some(Origin::File(file)) => {
+                    println!("{}: {}", t!(permissions_check_file), printable_path(file));
+                }
+                Some(Origin::Granted(file)) => println!(
                     "{}: {}",
                     t!(permissions_check_file),
-                    t!(permissions_check_granted, path = printable_path(&from.path))
-                );
+                    t!(permissions_check_granted, path = printable_path(file))
+                ),
+                None => {}
+            }
+            // Display text only, and present only where the person's own file wrote one (PERM-1).
+            if let Some(reason) = reason {
+                println!("{}: {reason}", t!(permissions_check_reason));
             }
         }
     }
-    // Only the person's own file carries a reason, and only where they wrote one, so this line is
-    // absent for every other rule (PERM-1). It is display text and decides nothing.
-    if let Some(reason) = settings.rule_reason(ruling.as_str(), rule.written()) {
-        println!("{}: {reason}", t!(permissions_check_reason));
+    if let Some(waiting) = &explained.not_in_force {
+        println!(
+            "{}",
+            t!(
+                permissions_check_not_in_force,
+                rule = printable(&waiting.rule),
+                path = printable_path(&waiting.file)
+            )
+        );
     }
 }
 
@@ -138,47 +107,18 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
         profile.as_deref(),
         &workspace,
     );
-    let decided = call.decided_by(&permissions);
-    // A session refuses an 8.3 short name before any rule is read (PERM-5), so the report says
-    // that rather than "no rule matches". The decision is core's, not a second copy of it.
-    if call.reads_a_short_name(&permissions) {
-        println!(
-            "{}: {}",
-            t!(permissions_check_decision),
-            t!(permissions_check_short_name)
-        );
-        return ExitCode::SUCCESS;
-    }
-    match decided {
-        None => println!(
-            "{}: {}",
-            t!(permissions_check_decision),
-            t!(permissions_check_none)
-        ),
-        Some((ruling, rule)) => print_decision(&settings, &granted, ruling, rule),
-    }
-    // A rule that restricts decides before any grant, so one that could not grant yet is only
-    // worth naming where nothing restricted the call.
-    if !matches!(decided, Some((Ruling::Deny | Ruling::Ask, _))) {
-        let waiting: Vec<Proposed> = proposed
-            .into_iter()
-            .filter(|rule| !granted.contains(rule))
-            .collect();
-        let would_allow =
-            bravebot_agent::permissions::as_allow_list(&waiting, profile.as_deref(), &workspace);
-        if let Some((_, rule)) = call.decided_by(&would_allow) {
-            let from = waiting.iter().find(|w| w.rule.trim() == rule.written());
-            println!(
-                "{}",
-                t!(
-                    permissions_check_not_in_force,
-                    rule = printable(rule.written()),
-                    path = from
-                        .map(|from| printable_path(&from.path))
-                        .unwrap_or_default()
-                )
-            );
-        }
-    }
+    let waiting: Vec<Proposed> = proposed
+        .into_iter()
+        .filter(|rule| !granted.contains(rule))
+        .collect();
+    print(&bravebot_agent::rule_check::explain(
+        &call,
+        &permissions,
+        &settings.rule_sources(),
+        &granted,
+        &waiting,
+        profile.as_deref(),
+        &workspace,
+    ));
     ExitCode::SUCCESS
 }

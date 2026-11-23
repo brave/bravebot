@@ -17,10 +17,11 @@ import { Bridge, BridgeError } from './bridge'
 import type { BridgeEvent } from '../shared/protocol'
 import { parseLayout } from '../shared/layout'
 import { parseView } from '../shared/view'
+import { parseHidden } from '../shared/panels'
 import { parseContextRef, parseWindowState } from '../shared/commands'
-import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
+import { commandsReady, installMenu, popupContext, rebuildMenu, refreshMenu, useWindowOpener, windowClosed as menuWindowClosed } from './menu'
 import { noteProject, recents } from './recents'
-import { putLayout, putTheme, putView, readState } from './state'
+import { putHidden, putLayout, putTheme, putView, readState } from './state'
 import { Caffeinate, trackTurns } from './caffeinate'
 import { botsProblem, firstBotsRead, noteBotsFailure, useBotsBridge } from './bot-store'
 import { eventQueue } from './event-queue'
@@ -88,6 +89,15 @@ import { faultReporter } from './window-fault'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 import { forgetSummons, noteTurnEnded, summons } from './summons'
 import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
+import { raiseMainWindow, takeSingleInstance } from './single-instance'
+
+/**
+ * One instance per user-data profile, taken before anything makes a window, reads state or starts
+ * the agent. A launch that does not get the lock quits and the code below starts nothing for it:
+ * `whenReady` is only waited on when `primary` is true. A later launch raises the main window and
+ * nothing it passed is read.
+ */
+const primary = takeSingleInstance(app, () => raiseMainWindow(app, window, createWindow))
 
 /**
  * Which live session belongs to which bot, for the length of this run.
@@ -248,9 +258,10 @@ async function sendBotTurn(
     attachments?: unknown
     composed?: 'consolidation'
     staged?: { drops?: unknown; pastes?: unknown }
+    shown?: unknown
   },
 ): Promise<Answer> {
-  const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
+  const { grounded, nudge = false, recall = true, model, attachments, composed, staged, shown } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
   // The folder the agent confirmed this session runs in, never one the window named. A bot only
@@ -281,6 +292,9 @@ async function sendBotTurn(
   // Left off entirely for the ordinary case, for the same reason `recall` is: a person typed it,
   // and the agent's default for an absent tag says exactly that.
   if (composed) params.composed = composed
+  // The line as the window's box showed it, where the bridge reads the `@` names (NAME-12). It can
+  // only narrow them: the bridge keeps no name the prompt does not also give.
+  if (typeof shown === 'string') params.shown = shown
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
   if (held.definition !== null) {
@@ -335,7 +349,7 @@ function summonedTurn(
   session: string,
   summoned: Bot,
   prompt: string,
-  options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown } },
+  options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown }; shown?: unknown },
 ): Promise<Answer> {
   return sendSummonedTurn(
     {
@@ -368,7 +382,7 @@ function summonedTurn(
     session,
     summoned,
     prompt,
-    { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes },
+    { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes, shown: options.shown },
   )
 }
 
@@ -512,6 +526,9 @@ const deliver = eventQueue({
 })
 
 function createWindow(): void {
+  // The main window's title follows the page title, which the renderer sets from the session on
+  // screen (`useWindowTitle`). Do not prevent `page-title-updated` here as small-window.ts does,
+  // or the title stops changing.
   window = new BrowserWindow({
     ...(devIcon && process.platform !== 'darwin' ? { icon: devIcon } : {}),
     width: 1280,
@@ -536,6 +553,7 @@ function createWindow(): void {
       webviewTag: false,
     },
   })
+  const created = window
 
   window.once('ready-to-show', () => window?.show())
   // The renderer quiets its accents while the window is in the background, as native windows do.
@@ -571,7 +589,11 @@ function createWindow(): void {
     pollingWatches = true
     void bridge.request('watches.poll').catch(() => {}).finally(() => { pollingWatches = false })
   }, 1000)
-  window.on('closed', () => { if (watchClock) clearInterval(watchClock); watchClock = null })
+  window.on('closed', () => {
+    if (window !== created) return
+    if (watchClock) clearInterval(watchClock)
+    watchClock = null
+  })
 
   // The first read of the bots moves any held in `bravebot-ui.json` to the bots file, and this
   // app's next write of that file drops them from it. The page is loaded after that read, or after
@@ -583,7 +605,10 @@ function createWindow(): void {
     else void window?.loadFile(join(__dirname, '../renderer/index.html'))
   })
 
+  // A window built after this one owns the state below, so a late close of this one leaves it.
   window.on('closed', () => {
+    menuWindowClosed(created)
+    if (window !== created) return
     signIn.abandon()
     keyEntry.abandon()
     bridge?.dispose()
@@ -597,9 +622,8 @@ function createWindow(): void {
 
   // Built here rather than once at startup, because the menu holds the window it delivers a
   // chosen item to. On macOS closing the last window does not quit the app, and clicking the
-  // dock icon builds a new one — with the menu installed once, every item would still be
-  // pointing at the window that was closed, and the whole menu would go quiet with nothing
-  // on screen to say why.
+  // dock icon or choosing File > New Chat builds a new one. The menu is told when a window
+  // closes, so no item points at a window that is gone.
   applyNativeAppearance(parseAppearance(readState().theme))
   installMenu(window)
 }
@@ -615,6 +639,7 @@ const ALLOWED = new Set([
   'agent.info',
   'models.list',
   'session.list',
+  'background.list',
   'session.open',
   'session.new',
   'session.fork',
@@ -624,6 +649,8 @@ const ALLOWED = new Set([
   'session.close',
   'session.mode',
   'session.sandbox',
+  'session.limit',
+  'session.variant',
   'session.rewind',
   'session.note',
   // The folders a chat has open beside its project, and closing one (TRUST-9). Opening one is not
@@ -631,11 +658,35 @@ const ALLOWED = new Set([
   // native picker returned, so the window cannot name a folder for the agent to open and trust.
   'session.folders.list',
   'session.folders.close',
+  // What a chat has spent, what its last request was made of, and the request itself (CMD-15,
+  // CMD-19, TRACE-9), and the status of the chat (CMD-8). Read-only, and answered while a turn
+  // runs.
+  'session.report.cost',
+  'session.report.context',
+  'session.report.request',
+  'session.report.status',
+  // What recorded sessions spent, overall or for one project (CLI-37). Read-only. A directory it
+  // names is held to the folders this app offered, in the handler below.
+  'session.stats',
   'turn.send',
   'turn.cancel',
   'turn.interject',
   'session.enhance',
   'session.enhance.cancel',
+  // Shortening the conversation from the Chat menu, and stopping that (CMD-34).
+  'session.compact',
+  'session.compact.cancel',
+  // Asking for a brief to start a new chat from, and stopping that (SESSION-34, CMD-34).
+  'session.handoff',
+  'session.handoff.cancel',
+  // Handing an open chat to a background session, which closes it here (BG-2, CMD-34).
+  'session.background',
+  // Stopping a background session from a chat row's right-click menu, which keeps its record (BG-11).
+  'session.background.stop',
+  // A typed `/btw` or `/recap` (CMD-8, CMD-16): a question over the exchange, never a turn.
+  'session.btw',
+  'session.recap',
+  'session.aside.cancel',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',
@@ -659,10 +710,13 @@ const ALLOWED = new Set([
   'rules.reply',
   'folder.reply',
   'permissions.list',
+  'permissions.check',
   'permissions.revoke',
   'doctor',
   'changelog.read',
   'schedule.command',
+  // The text of the window's own title, for the name and state the window gives (PANEL-19).
+  'window.title',
   'hooks.inspect',
   'effort.get',
   'effort.set',
@@ -674,7 +728,10 @@ const ALLOWED = new Set([
   // Whether the one-time notice about it is due, and recording that it was shown.
   'usage_ping.notice_due',
   'usage_ping.mark_notice_shown',
-  // Whether the one-time crash-report notice is due, and recording that it was shown.
+  // The crash reports switch, kept in the settings file of the person who runs this, and the
+  // one-time notice about them with the record that it was shown.
+  'crash_reports.get',
+  'crash_reports.set',
   'crash_reports.notice_due',
   'crash_reports.mark_notice_shown',
   'connectors.list',
@@ -739,7 +796,7 @@ function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
   noteRoot(answer.session, directory)
 }
 
-app.whenReady().then(() => {
+if (primary) app.whenReady().then(() => {
   if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(DEV_ICON_DIR, 'icon.png'))
   caffeinate = new Caffeinate(powerSaveBlocker)
   ipcMain.handle('bravebot:request', async (_event, method: unknown, params: unknown) => {
@@ -758,6 +815,14 @@ app.whenReady().then(() => {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
       }
     }
+    // A spend report that names no directory totals every project (CLI-37). One that names a
+    // directory is held to the same folders.
+    if (method === 'session.stats') {
+      const directory = (params as { directory?: unknown } | null)?.directory
+      if (directory !== undefined && directory !== null && !mayOpenSessionIn(directory)) {
+        return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
+      }
+    }
     // A bot's home is made when a conversation is started or reopened in it, not when the bots are listed.
     if (method === 'session.new' || method === 'session.open') {
       const directory = (params as { directory?: unknown } | null)?.directory
@@ -771,9 +836,12 @@ app.whenReady().then(() => {
       const ok = method === 'models.list'
         ? await listModels(rootForSession(typeof session === 'string' ? session : ''))
         // The level a checkout's settings name outranks a pick there (BACKEND-43), so the picker is
-        // told about the folder its session works in, which the window names by session alone.
+        // told about the folder its session works in, which the window names by session alone. The
+        // handle goes too, so the bridge can name the level that session began with (CHATGPT-10).
         : method === 'effort.get'
-          ? await bridge.request(method, { directory: rootForSession(typeof session === 'string' ? session : '') })
+          ? await bridge.request(method, typeof session === 'string'
+            ? { directory: rootForSession(session), session }
+            : { directory: rootForSession('') })
         : method === 'language.get'
           // The system's languages answer only where nothing else names one (LOCALE-8), and are
           // read here, since the window cannot ask the system and the bridge has no other way to.
@@ -936,6 +1004,10 @@ app.whenReady().then(() => {
     putLayout(layout)
   })
 
+  ipcMain.handle('bravebot:panels:read', () => readState().hidden)
+
+  ipcMain.handle('bravebot:panels:write', (_event, value: unknown) => putHidden(parseHidden(value)))
+
   ipcMain.handle('bravebot:view:read', () => readState().view)
 
   ipcMain.handle('bravebot:view:write', (_event, value: unknown) => putView(parseView(value)))
@@ -1053,7 +1125,7 @@ app.whenReady().then(() => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, grounded, model, attachments, drops, pastes } = value as Record<string, unknown>
+      const { session, slug, prompt, shown, grounded, model, attachments, drops, pastes } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -1081,6 +1153,7 @@ app.whenReady().then(() => {
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },
+        shown,
       })
     },
   )
@@ -1096,7 +1169,7 @@ app.whenReady().then(() => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, model, attachments, drops, pastes } = value as Record<string, unknown>
+      const { session, slug, prompt, shown, model, attachments, drops, pastes } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -1110,6 +1183,7 @@ app.whenReady().then(() => {
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },
+        shown,
       })
     },
   )
@@ -1281,7 +1355,10 @@ app.whenReady().then(() => {
   app.on('child-process-gone', (_event, details) =>
     reportFault({ kind: 'child_gone', process: details.type, reason: details.reason, exit: details.exitCode }))
 
-  ipcMain.on('bravebot:menu:state', (_event, value: unknown) => {
+  ipcMain.on('bravebot:menu:state', (event, value: unknown) => {
+    // Only the current window's own top frame is heard, so a message from a window that has
+    // closed cannot enable items after the menu was reset.
+    if (!window || event.senderFrame !== window.webContents.mainFrame) return
     const state = parseWindowState(value)
     if (!state) return
     refreshMenu(state)
@@ -1308,6 +1385,13 @@ app.whenReady().then(() => {
     if (reference) popupContext(reference)
   })
 
+  // The page has subscribed to commands. Carries nothing: the menu delivers a command it held
+  // itself, so the page cannot choose which one runs.
+  ipcMain.on('bravebot:commands:ready', (event) => {
+    if (window && event.senderFrame === window.webContents.mainFrame) commandsReady()
+  })
+
+  useWindowOpener(createWindow)
   createWindow()
 
   app.on('activate', () => {

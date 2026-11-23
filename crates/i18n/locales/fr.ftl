@@ -57,7 +57,7 @@ cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
 cli-usage-shell-init = Afficher le hook de shell qui donne à @bravebot les commandes que vous avez lancées
 cli-usage-permissions = Indiquer quelle règle de permission décide d'un appel d'outil
-permissions-check-usage = permissions check attend une famille et ce sur quoi s'informer : Read <chemin>, Edit <chemin>, Bash <programme> [arguments], WebFetch <hôte ou URL>, ou Mcp <serveur:outil>
+permissions-check-usage = permissions check attend une famille et ce sur quoi s'informer : Read <chemin>, Edit <chemin>, Bash <programme> [arguments], WebFetch <hôte ou URL>, WebSearch, ou Mcp <serveur:outil>
 permissions-check-decision = décision
 permissions-check-deny = refuser
 permissions-check-ask = demander
@@ -442,6 +442,11 @@ cli-resume-heading = Reprenez cette session avec :
 # Quand /cd a déplacé la session, le shell où ceci s'affiche n'est pas là où se trouve
 # l'enregistrement, et --resume cherche un identifiant sous le répertoire où il est lancé.
 cli-resume-moved = Cette session s'est déplacée vers { $directory }. Reprenez-la depuis là avec :
+# Après la ligne, une pour chaque entrée --sandbox-* que la ligne ne reprend pas. Une entrée relative
+# se lit depuis le répertoire où la session a commencé, et lorsqu'un nom de ce répertoire contient
+# un * ou un ?, le même chemin écrit en entier lit ce caractère comme un joker, ce qu'aucune écriture
+# ne peut empêcher.
+cli-resume-entry-not-carried = Non reprise : { $flag } { $value }, car le répertoire où cette session a commencé contient un * ou un ? dans son nom, et aucune écriture de l'entrée ne désigne le même endroit depuis un autre répertoire.
 
 
 ## L'état de la configuration et du confinement
@@ -473,7 +478,7 @@ doctor-ends-aws-session =
 doctor-ends-premium-key =
     la clé premium : émise par le service premium de Brave, qui est aussi la seule surface qui la révoque ; `bravebot auth logout brave` met fin à la garde de cette machine et laisse la clé active là-bas
 doctor-ends-gateway-token =
-    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
+    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, supprimer le fichier que nomme le réglage `options.keyFile`, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-chatgpt-account =
     une connexion ChatGPT : émise par OpenAI pour le compte qui s'est connecté, et le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne, de sorte que l'expiration du jeton d'accès met fin à cette copie et non à l'accès de ce programme ; on y met fin chez OpenAI en se déconnectant du compte ou en retirant l'accès de ce programme dans ses réglages, car `bravebot auth logout chatgpt` met fin à la garde de cette machine et laisse les jetons actifs là-bas
 doctor-ends-xai-account =
@@ -906,7 +911,7 @@ permission-rule-unreadable-in = '{ $rule }' dans { $path } { $problem }
 permission-rule-not-a-line = n'est pas une règle ; une règle est une ligne de texte
 permission-rule-empty = est vide
 permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
-permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch ou Mcp
+permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch, WebSearch ou Mcp
 permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
 permission-rule-empty-quoted-name = a des guillemets doubles autour de rien, et aucun fichier n'a un nom vide ; enlevez les parenthèses pour viser toute utilisation, ou mettez le nom du fichier entre les guillemets
 permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la fin de son chemin, qui ferait partie du nom d'un fichier ; enlevez-le, ou mettez tout le chemin entre guillemets doubles pour viser le nom tel qu'il est écrit
@@ -1927,8 +1932,11 @@ config-usage-ping-hint-on = un décompte par jour envoyé à Brave, qui n'identi
 config-usage-ping-hint-off = rien n'est envoyé
 config-usage-ping-hint-locked = désactivé hors de ce panneau, donc non modifiable ici
 
-effort-picker-title = effort
-effort-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
+effort-picker-heading-every-session = effort · toutes les sessions
+effort-picker-heading-this-session = effort · cette session seulement
+effort-picker-scope-every-session = Entrée : toutes les sessions · Tab : cette session
+effort-picker-scope-this-session = Entrée : cette session · Tab : toutes les sessions
+effort-picker-keys = ↑↓ choisir  ·  Échap garder l'actuel
 effort-unset = par défaut
 effort-hint-unset = laissé au service qui répond
 effort-hint-low = réflexion minimale, pour le travail simple
@@ -2491,9 +2499,11 @@ status-agent-every-turn = chaque tour lui est adressé, désigné avec --agent
 status-agent-by-setting = chaque tour lui est adressé, choisi par le réglage agent
 status-effort = Effort
 status-effort-chosen = choisi avec /effort
+status-effort-chosen-this-session = choisi avec /effort session, pour cette session seulement
 status-effort-default = ce que le service fait de lui-même
 status-effort-not-read = choisi avec /effort, mais ce modèle n'en lit aucun
 status-effort-kept-for-account = le niveau avec lequel cette session ChatGPT a commencé ; { $chosen }, choisi avec /effort, s'applique à partir de la session suivante
+status-effort-kept-for-account-this-session = le niveau avec lequel cette session ChatGPT a commencé ; { $chosen }, choisi avec /effort session, n'est pas enregistré et s'applique à partir de /clear
 status-theme = Thème
 status-theme-chosen = choisi avec /theme
 status-served = Répondu par
@@ -2892,6 +2902,7 @@ session-mode-resumed = cette session était dans le mode { $skill }, qui est de 
 input-skill-mode = mode : { $skill }
 command-config = Choisir le mode d'édition de la zone de saisie
 command-language = Choisir la langue de l'interface au prochain démarrage, ou abandonner le choix
+command-crash-reports = Dire si les rapports de plantage sont activés et pourquoi, ou les changer au prochain démarrage
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
 command-reach = Retenir un répertoire ou un identifiant pour une commande, ou les lister et les retirer
 command-sandbox = Afficher le mode du bac à sable, ou le changer
@@ -3245,9 +3256,25 @@ session-language-set = l'interface sera en { $language } à partir du prochain d
 session-language-auto = l'interface suivra le fichier de réglages et l'environnement à partir du prochain démarrage
 session-language-not-saved = cette session ne peut pas conserver de choix, la langue reste donc inchangée
 session-no-such-language = aucun catalogue pour { $language } ; les catalogues sont { $available }
+session-crash-reports-on = les rapports de plantage sont activés : si bravebot plante, un rapport est envoyé à Brave au démarrage suivant ; /crash-reports off les désactive à partir du prochain démarrage
+session-crash-reports-off-by-person = les rapports de plantage sont désactivés dans votre fichier de réglages ; /crash-reports on les active à partir du prochain démarrage
+session-crash-reports-off-by-environment = les rapports de plantage sont désactivés par { $variable } dans l'environnement, qui répond avant votre fichier de réglages
+session-crash-reports-off-by-admin = les rapports de plantage sont désactivés par les réglages gérés de votre administrateur, qui répondent avant votre fichier de réglages
+session-crash-reports-incognito = les rapports de plantage sont désactivés : cette session n'a pas de répertoire d'état (session privée) où garder un rapport
+session-crash-reports-refused-environment = rien n'a été enregistré : { $variable } dans l'environnement désactive les rapports de plantage et répond avant votre fichier de réglages
+session-crash-reports-refused-admin = rien n'a été enregistré : les réglages gérés de votre administrateur désactivent les rapports de plantage et répondent avant votre fichier de réglages
+session-crash-reports-refused-incognito = rien n'a été enregistré : cette session n'a pas de répertoire d'état (session privée) où garder un choix
+session-crash-reports-saved-on = enregistré : les rapports de plantage sont activés à partir du prochain démarrage
+session-crash-reports-saved-off = enregistré : les rapports de plantage sont désactivés à partir du prochain démarrage ; cette session peut encore écrire un rapport jusqu'à sa fin
+session-crash-reports-unsaved = rien n'a été conservé : votre fichier de réglages n'est pas un document de réglages, crashReports n'a donc pas été écrit
+session-crash-reports-no-directory = rien n'a été conservé : il n'y a pas de répertoire où garder votre fichier de réglages
+session-crash-reports-usage = /crash-reports prend on ou off, ou rien pour dire si les rapports sont activés ; { $word } ne change rien
+session-crash-reports-sending = cette session envoie des rapports de plantage
+session-crash-reports-not-sending = cette session n'envoie aucun rapport de plantage : cette version n'a pas d'adresse où les envoyer, ou ils étaient désactivés à son démarrage
 session-no-such-effort = aucun niveau d'effort nommé { $effort } ; essayez /effort pour la liste
 session-effort-not-read = ce modèle ne lit aucun niveau d'effort ; les requêtes n'en portent pas
 session-effort-kept-for-account = une session ChatGPT garde le niveau d'effort avec lequel elle a commencé, { $began }, donc { $chosen } s'applique à partir de la session suivante, que /clear commence
+session-effort-kept-for-account-this-session = une session ChatGPT garde le niveau d'effort avec lequel elle a commencé, { $began }, donc { $chosen } s'applique à partir de /clear, qui commence la session ChatGPT suivante, et n'est pas enregistré
 session-variant-set = les requêtes vers ce modèle portent la variante { $variant } dès le prochain tour
 session-variant-dropped = aucune variante ; les requêtes ne portent que les options propres du modèle
 session-variant-in-force = la variante { $variant } est active ; ce modèle propose { $names }
@@ -3311,8 +3338,8 @@ update-not-installed-by-us =
 crash-reports-notice =
     si bravebot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version,
     votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos
-    invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre
-    fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
+    invites, vos fichiers ni vos clés. Pour l'éviter, lancez /crash-reports off, mettez crashReports
+    à false dans votre fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
 usage-ping-notice =
     une fois par jour, bravebot envoie à Brave un signal d'utilisation anonyme : la version, votre
     système d'exploitation, la façon dont bravebot a été installé, l'interface et le type de service
@@ -4816,14 +4843,25 @@ ui-usage-ping-notice-more = Plus…
 ui-usage-ping-notice-less = Moins
 ui-usage-ping-notice-settings = Ouvrir les réglages
 ui-usage-ping-notice-dismiss = Fermer l'avis sur le signal d'utilisation
-ui-crash-reports-notice = Si BraveBot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version, votre système d'exploitation et la ligne du code source de BraveBot qui a échoué, jamais vos invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
-ui-crash-reports-notice-short = Si BraveBot plante, un rapport est envoyé à Brave au lancement suivant. Il ne contient jamais vos invites, vos fichiers ni vos clés.
+ui-crash-reports-notice = Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Le rapport contient la version, votre système d'exploitation et la ligne du code source de BraveBot qui a échoué. Il ne contient jamais vos invites, vos fichiers ni vos clés. Vous pouvez le désactiver dans les réglages, sous Général, ou en définissant BRAVEBOT_CRASH_REPORTS=0 dans l'environnement.
+ui-crash-reports-notice-short = Si BraveBot plante, il envoie à Brave un rapport au démarrage suivant. Il ne contient jamais vos invites, vos fichiers ni vos clés.
 ui-crash-reports-notice-more = Plus…
 ui-crash-reports-notice-less = Moins
+ui-crash-reports-notice-settings = Ouvrir les réglages
 ui-crash-reports-notice-dismiss = Fermer l'avis sur les rapports de plantage
+ui-settings-crash-reports = Envoyer les rapports de plantage à Brave
+ui-settings-crash-reports-explained = Si BraveBot plante, un rapport avec la version, votre système d'exploitation et la ligne de code source qui a échoué est envoyé au démarrage suivant. Rien n'est envoyé tant que cette option est désactivée.
+ui-settings-crash-reports-locked-environment = Désactivé par { $variable } dans l'environnement.
+ui-settings-crash-reports-locked-admin = Désactivé par votre administrateur.
+ui-settings-crash-reports-locked-incognito = Désactivé dans une session privée, qui ne garde aucun rapport.
+ui-settings-crash-reports-unread = Impossible de lire le réglage des rapports de plantage.
+ui-settings-crash-reports-unsaved = Impossible d'enregistrer le réglage des rapports de plantage. Réessayez.
 ui-folders-heading = Dossiers
 ui-folders-about = Dossiers ouverts à côté du projet dans cette conversation. L'agent peut lire et modifier leurs fichiers jusqu'à ce que vous les fermiez.
 ui-folders-empty = Seul le projet est ouvert.
+ui-context-all-off = Toutes les sections sont désactivées. Utilisez Choisir les sections pour en afficher une.
+ui-context-sections = Choisir les sections
+ui-context-sections-heading = Sections
 ui-folders-add = Ajouter un dossier…
 ui-folders-close = Fermer { $name }
 ui-folders-close-explained = Fermer { $name } · L'agent ne peut plus y accéder
@@ -4877,6 +4915,7 @@ ui-rules-note-granted-this-chat = Elles ne sont accordées que pour cette conver
 ui-rules-note-proposed = Ces règles d'autorisation que proposent les réglages du projet n'ont pas été accordées. Une règle d'autorisation répond à une question à votre place : seule une règle que vous accordez, ou une de votre propre fichier de réglages, est en vigueur. On vous demandera encore :
 ui-rules-note-directories = Un fichier de réglages nomme ces dossiers, et ils ne sont pas ouverts :
 ui-rules-note-refused = Ces dossiers qu'un fichier de réglages nomme ne peuvent pas être ouverts :
+ui-rules-note-dropped = Ces clés n'ont pas été lues telles qu'elles sont écrites :
 gcloud-not-installed = La CLI Google Cloud (`gcloud`) est introuvable. Installez-la et lancez `gcloud auth application-default login`, ou définissez GOOGLE_API_KEY pour utiliser Google Vertex AI avec une clé.
 gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail }). Lancez `gcloud auth application-default login`.
 gcloud-no-token = la réponse n'était pas un jeton

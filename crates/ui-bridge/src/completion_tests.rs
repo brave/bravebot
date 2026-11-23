@@ -77,9 +77,11 @@ fn check_completion(ending: &str) -> (bool, bool) {
             session: "test".into(),
             project,
             state,
+            reports: Default::default(),
             config,
             attribution: Default::default(),
             effort: None,
+            variant: None,
             output_cap: None,
             download_cap: None,
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
@@ -108,6 +110,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             finished,
             interjections: Default::default(),
             actors: Default::default(),
+            published: Default::default(),
         })
     });
     let result = received.recv_timeout(Duration::from_secs(10));

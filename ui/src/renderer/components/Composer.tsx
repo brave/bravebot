@@ -3,14 +3,18 @@ import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
-import type { Staged, SummonedBot } from '../staging'
+import { markerAt, type Staged, type SummonedBot } from '../staging'
 import type { Enhancement } from '../enhancing'
+import type { Handoff } from '../handoff'
+import type { Queued } from '../live'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { SessionControlsMenu } from './SessionControlsMenu'
+import { SpendLimit } from './SpendLimit'
+import { VariantPicker } from './VariantPicker'
 import { typing } from '../avatar/clock'
 import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
@@ -21,6 +25,29 @@ async function askOffer(session: string, line: string, cursor: number): Promise<
     ? { typed: ok.typed, word: typeof ok.word === 'string' ? ok.word : null, entries: ok.entries, completes: ok.completes === true }
     : { typed: null, word: null, entries: [], completes: false }
 }
+
+/**
+ * A line waiting for the turn to end, as typed. `plan` marks a `/manifest` line, which starts a
+ * plan run, and `command` marks any line that starts something other than a turn.
+ */
+export interface QueuedRow {
+  text: string
+  plan?: boolean
+  command?: boolean
+}
+
+/** How a waiting message is drawn in the queue: the line as typed, and what it starts. */
+export const queuedRow = (message: Queued): QueuedRow => ({
+  text: message.prompt,
+  plan: message.manifest !== undefined,
+  command: message.manifest !== undefined || message.schedule !== undefined || message.aside !== undefined,
+})
+
+/** The queue's caption. A command starts something other than a turn, so it is not called one. */
+export const queueNote = (rows: QueuedRow[], paused: boolean): string =>
+  paused
+    ? 'Held until you resume'
+    : rows.some((row) => row.command) ? 'Each starts after this one' : 'Each starts a turn of its own after this one'
 
 /** How many lines the field grows to before it starts to scroll. */
 const FIELD_MAX_ROWS = 6
@@ -79,11 +106,15 @@ export interface ComposerProps {
   staged: Staged[]
   /** Take a staged file or picture off, by taking its marker out of the draft. */
   onRemoveStaged: (marker: string) => void
+  /** A text paste: fold it behind a marker where it is long. False where the browser should insert it. */
+  onPasteText?: (text: string) => boolean
   /** The bots the `@` list offers to answer a message, which never includes this chat's own (MEMORY-14). */
   summonable?: SummonedBot[]
   /** Stage a bot picked from the list, replacing the half-typed `word`. */
   onSummon?: (bot: SummonedBot, word: string | null) => void
   onPreview: (path: string) => void
+  /** Open a folded paste whole, read-only, by its marker. Changes nothing in the draft (PASTE-13). */
+  onPeek: (marker: string) => void
   /** The rewrite of the box that is out or standing in it, and what the person was last told of it (INPUT-50). */
   enhancement?: Enhancement
   /** Ask for the box to be made more specific, which puts the rewrite in the box and sends nothing. */
@@ -92,9 +123,16 @@ export interface ComposerProps {
   /** Escape over a rewrite: put back what was written. Says whether there was a rewrite to put back. */
   onRestoreEnhanced: () => boolean
   onDismissEnhancement: () => void
+  /** A Hand Off to New Chat… request that is out, or a brief in the box that Send starts a new chat from (SESSION-34). */
+  handoff?: Handoff | null
+  onStopHandoff: () => void
+  /** Escape over an armed brief: drop it and put back what the box held. Says whether there was one. */
+  onEscapeHandoff: () => boolean
+  /** Drop the armed brief where the box is empty, or always where `force` is set. */
+  onDropHandoff: (force?: boolean) => void
   /** Lines sent into the running turn that it has not read yet. */
   interjected: string[]
-  queued: string[]
+  queued: QueuedRow[]
   queuePaused: boolean
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
@@ -139,10 +177,11 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
+    draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview, onPeek,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, notice, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
+    handoff, onStopHandoff, onDropHandoff,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
   const latest = useRef(props)
@@ -266,6 +305,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   // come back, and Escape in a later message must not bring it.
   const holdsRewrite = !!enhancement?.rewritten
   useEffect(() => { if (holdsRewrite && !draft.trim()) onDismissEnhancement() }, [holdsRewrite, draft, onDismissEnhancement])
+  // A box emptied drops an armed handoff (SESSION-34): the next message is an ordinary one.
+  const holdsBrief = !!handoff?.armed
+  useEffect(() => { if (holdsBrief && !draft.trim()) onDropHandoff() }, [holdsBrief, draft, onDropHandoff])
 
   const blocked = askingTrust || backendReady === false || starting
   const canSend = !blocked && draft.trim().length > 0
@@ -294,14 +336,15 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
           <div className="composer-tray queued-messages" role="group" aria-label="Queued messages">
             <div className="tray-head">
               <span className="tray-title">{queuePaused ? 'Queue paused' : 'Queued'} <span className="num">· {queued.length}</span></span>
-              <span className="tray-note">{queuePaused ? 'Held until you resume' : 'Each starts a turn of its own after this one'}</span>
+              <span className="tray-note">{queueNote(queued, queuePaused)}</span>
               {queuePaused && (
                 <Button kind="plain" size="tiny" className="tray-action" aria-label="Resume queue"
                   isDisabled={running || backendReady === false} onClick={onResumeQueued}>Resume</Button>
               )}
             </div>
-            {queued.map((text, index) => (
+            {queued.map(({ text, plan }, index) => (
               <div className="tray-row" key={index}>
+                {plan && <span className="tray-mark plan-task-mark">Plan</span>}
                 <span className="tray-text" data-tooltip={text}>{text}</span>
                 <IconButton icon="close" size="tiny" label={`Remove queued message ${index + 1}`} tooltip="Remove"
                   onClick={() => onRemoveQueued(index)} />
@@ -324,6 +367,20 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               <Button size="tiny" kind="plain" data-test="enhance-put-back" onClick={() => { props.onRestoreEnhanced() }}>Put back mine</Button>
             )}
             <IconButton icon="close" size="tiny" label="Dismiss" tooltip="Dismiss" onClick={onDismissEnhancement} />
+          </div>
+        )}
+        {handoff?.asking && (
+          <div className="composer-tray composer-notice handing-off" role="status" data-test="handing-off">
+            <Icon name="message-bubble" />
+            <span className="notice-text">Writing a brief for a new chat…</span>
+            <Button size="tiny" kind="plain" onClick={onStopHandoff}>Stop</Button>
+          </div>
+        )}
+        {!handoff?.asking && handoff?.armed && (
+          <div className="composer-tray composer-notice handoff-armed" role="status" data-test="handoff-armed">
+            <Icon name="message-bubble" />
+            <span className="notice-text">Sending starts a new chat with this brief. Escape puts back your message.</span>
+            <IconButton icon="close" size="tiny" label="Keep the brief in this chat" tooltip="Send in this chat instead" onClick={() => onDropHandoff(true)} />
           </div>
         )}
         {askingTrust && props.waiting && (
@@ -356,6 +413,21 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 // A summoned bot is not a chip: its marker stays in the message and is drawn as
                 // the bot's label once the message is sent.
                 if (item.via === 'summon') return null
+                if (item.via === 'text') {
+                  return (
+                    <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">
+                      <FileGlyph name="pasted.txt" />
+                      {/* The label names the paste once; the marker it stands for in the draft is in
+                          the controls' accessible names. */}
+                      <button type="button" className="attachment-name words" aria-label={`View ${item.marker}`}
+                        data-tooltip="View pasted text" data-tooltip-shortcut="⌥V" aria-keyshortcuts="Alt+V"
+                        data-test="pasted-text-peek" onClick={() => onPeek(item.marker)}>{`Pasted text #${item.pasted.number}`}</button>
+                      <span className="attachment-meta">{`${item.pasted.lines} ${item.pasted.lines === 1 ? 'line' : 'lines'}`}</span>
+                      <IconButton icon="close" size="tiny" label={`Remove ${item.marker} Pasted text`} tooltip="Remove"
+                        onClick={() => onRemoveStaged(item.marker)} />
+                    </span>
+                  )
+                }
                 const name = item.via === 'drop' ? item.file.name : 'Pasted image'
                 const thumbnail = item.via === 'drop' ? item.file.thumbnail : item.picture.thumbnail
                 return (
@@ -370,7 +442,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   </span>
                 )
               })}
-              {(attachments.length > 0 || staged.some((item) => item.via !== 'summon')) && (
+              {(attachments.length > 0 || staged.some((item) => item.via === 'drop' || item.via === 'paste')) && (
                 <span className="attachment-trust" tabIndex={0}
                   data-tooltip="Attached files and pasted pictures are sent with your message as trusted context: the model reads them as you wrote them.">
                   <Icon name="warning-triangle-outline" />Sent as trusted context
@@ -382,6 +454,13 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             placeholder={pending ? 'Draft your next message while you review…' : 'Let’s do something great'}
             // The open bot's face watches the field while a person types in it.
             onInput={({ value }) => { onDraft(value); typing() }}
+            onPaste={({ innerEvent }) => {
+              const event = innerEvent as unknown as ClipboardEvent
+              // The preload's capture listener has already taken a picture paste (PASTE-7).
+              if (event.defaultPrevented) return
+              const text = event.clipboardData?.getData('text/plain') ?? ''
+              if (latest.current.onPasteText?.(text)) event.preventDefault()
+            }}
             onKeyDown={({ innerEvent }) => {
               const event = innerEvent as unknown as KeyboardEvent
               const now = latest.current
@@ -410,6 +489,19 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 })
                 return
               }
+              // Alt-V opens a folded paste whole when the caret is on its marker. It is matched on the
+              // physical key because Option-V types a character on macOS, and that character still
+              // types when the caret is anywhere else.
+              if (event.code === 'KeyV' && event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey && !composing) {
+                const field = event.target as HTMLTextAreaElement | null
+                const caret = field?.selectionStart ?? now.draft.length
+                const found = markerAt({ made: 0, staged: now.staged }, now.draft, caret)
+                if (found) {
+                  event.preventDefault()
+                  if (!event.repeat) now.onPeek(found.marker)
+                  return
+                }
+              }
               // Make the message more specific (INPUT-50). It only rewrites the box, so it is free to
               // use where Enter is not: it never sends anything.
               if (event.key.toLowerCase() === 'e' && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.altKey && !composing) {
@@ -425,6 +517,16 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   return
                 }
                 if (now.enhancement?.rewritten && now.onRestoreEnhanced()) {
+                  event.preventDefault()
+                  return
+                }
+                // Escape over a brief drops the handoff and puts back what the box held (SESSION-34).
+                if (now.handoff?.asking) {
+                  event.preventDefault()
+                  now.onStopHandoff()
+                  return
+                }
+                if (now.handoff?.armed && now.onEscapeHandoff()) {
                   event.preventDefault()
                   return
                 }
@@ -464,8 +566,10 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 onClick={props.onQueue}>Queue for after</Button>
             )}
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
+            {onMode && <SpendLimit key={`limit-${session}`} session={session} running={running} pending={pending} />}
             <SessionControlsMenu key={`controls-${session}`} permissionMode={permissionMode} onPermissionMode={onMode}
               sandboxMode={sandboxMode} onSandboxMode={onSandbox} />
+            <VariantPicker key={`variant-${session}`} session={session} model={model} running={running} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
               shortcut={running ? '⌘.' : '⌘↩'}

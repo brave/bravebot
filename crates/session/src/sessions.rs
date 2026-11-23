@@ -1574,18 +1574,24 @@ fn drop_checkouts(record: &mut Record) {
 
 /// Load weaker decisions last so equivalent path spellings cannot hide them.
 fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
+    restored_rules_with(root, rules, bravebot_agent::workspace::BACKSLASH_SEPARATES)
+}
+
+/// [`restored_rules`], with the host's answer about what separates supplied, so the Windows one
+/// can be asked for where the tests run.
+fn restored_rules_with(root: &Path, rules: &[StoredRule], backslash_separates: bool) -> TrustStore {
     let mut trust = bravebot_agent::workspace::trust_store(root);
     for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
-        trust.trust(&replayed(&rule.path));
+        trust.trust(&replayed(&rule.path, backslash_separates));
     }
     for rule in rules.iter().filter(|rule| rule.integrity == "undecided") {
-        trust.undecide(&replayed(&rule.path));
+        trust.undecide(&replayed(&rule.path, backslash_separates));
     }
     for rule in rules
         .iter()
         .filter(|rule| rule.integrity != TRUSTED && rule.integrity != "undecided")
     {
-        trust.distrust(&replayed(&rule.path));
+        trust.distrust(&replayed(&rule.path, backslash_separates));
     }
     trust
 }
@@ -1866,9 +1872,8 @@ pub struct StoredRule {
 /// the rule keyed under a name nothing asks about, so a file somebody recorded as untrusted comes
 /// back decided by the answer given about the project, which is the direction that fails open
 /// (TRUST-18).
-fn replayed(path: &str) -> String {
-    bravebot_core::spelling::to_key(path, bravebot_agent::workspace::BACKSLASH_SEPARATES)
-        .into_owned()
+fn replayed(path: &str, backslash_separates: bool) -> String {
+    bravebot_core::spelling::to_key(path, backslash_separates).into_owned()
 }
 
 /// The word for a trusted rule. Anything else reads as untrusted.
@@ -6274,6 +6279,61 @@ mod tests {
         );
     }
 
+    /// A rule recorded under the host's own spelling of a drive-letter name is replayed under the
+    /// key spelled from `/` where a backslash separates, and under the name it was written with
+    /// where it does not (TRUST-18).
+    ///
+    /// A trusted, an undecided and an untrusted rule each decide a different name below the same
+    /// directory, so a replay that leaves any one of the three under the spelling it was recorded
+    /// in changes that name's answer: an untrusted rule left as `C:\fetched` reads as a file under
+    /// the project, and the file below it is decided by the answer given about the project.
+    #[test]
+    fn a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash() {
+        let rule = |path: &str, integrity: &str| StoredRule {
+            path: path.to_string(),
+            integrity: integrity.to_string(),
+        };
+        let rules = [
+            rule(r"C:\work\notes", TRUSTED),
+            rule(r"C:\work\notes\draft", "undecided"),
+            rule(r"\\?\C:\fetched", UNTRUSTED),
+        ];
+        let root = tempfile::tempdir().expect("a directory to stand for the project");
+
+        let spelled_from_slash = restored_rules_with(root.path(), &rules, true);
+
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/work/notes/x"),
+            Some(Integrity::Trusted),
+            "a trusted drive-letter rule did not reach the file below it"
+        );
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/work/notes/draft/y"),
+            None,
+            "an undecided drive-letter rule did not hold back what the trusted one above it vouches for"
+        );
+        assert_eq!(
+            spelled_from_slash.integrity_of("/C:/fetched/page.html"),
+            Some(Integrity::Untrusted),
+            "an untrusted drive-letter rule did not reach the file below it"
+        );
+
+        // Where a backslash does not separate, `\\?\C:\fetched` is one file name in the project, and
+        // the rule about it reaches that name and nothing on a drive.
+        let a_file_name = restored_rules_with(root.path(), &rules, false);
+
+        assert_eq!(
+            a_file_name.integrity_of(r"\\?\C:\fetched"),
+            Some(Integrity::Untrusted),
+            "a name with a backslash in it was not kept as a name in the project"
+        );
+        assert_eq!(
+            a_file_name.integrity_of("/C:/fetched/page.html"),
+            None,
+            "a rule about a file name was read as one about a directory on a drive"
+        );
+    }
+
     /// A resumed session asks about writes, whatever the session that wrote the record was doing when
     /// it ended. The trust map and the vouched commands come back because the person resuming is the
     /// person who granted them; a mode is a standing answer somebody gave while watching one piece of
@@ -8131,6 +8191,79 @@ mod tests {
         let root = fake_checkout("detached", "9fceb02d0ae598e95dc970b74767f19372d61af8\n");
         assert_eq!(branch_of(&root), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// PANEL-9. The branch of a session is read from the checkout when the session starts, when it
+    /// resumes and when it moves to another directory, and it is not read again between those, so
+    /// a checkout made during a turn shows from the next of them. The faults it rejects are a
+    /// session that starts with no branch, a resume that keeps the branch the record holds, and a
+    /// move that keeps the branch of the directory it left.
+    #[test]
+    fn the_branch_is_read_when_a_session_starts_resumes_and_moves_and_not_between() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let first = fake_checkout("branch-first", "ref: refs/heads/main\n");
+        let second = fake_checkout("branch-second", "ref: refs/heads/other\n");
+        let mut session = Handle::begin(&first, Front::Terminal, A_BUILD);
+        assert_eq!(
+            session.branch(),
+            Some("main"),
+            "a new session has no branch"
+        );
+
+        std::fs::write(first.join(".git").join("HEAD"), "ref: refs/heads/later\n")
+            .expect("write HEAD");
+        assert_eq!(
+            session.branch(),
+            Some("main"),
+            "the branch was read again between a start and the next resume or move"
+        );
+
+        let mut record =
+            a_record_left_by_a_session(&an_empty_project("bravebot-session-branch-resume"));
+        record.branch = Some("recorded".to_string());
+        let resumed = Handle::resuming(&first, &record, Front::Terminal, A_BUILD)
+            .expect("nothing holds a record that is not on disk under the checkout");
+        assert_eq!(
+            resumed.branch(),
+            Some("later"),
+            "a resumed session shows the branch its record holds, not the one checked out now"
+        );
+
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let trust = a_vouched_root(&second);
+        session.move_to(
+            &second,
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 0,
+                tokens: 0,
+                split: Default::default(),
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &trust,
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
+            },
+        );
+        assert_eq!(
+            session.branch(),
+            Some("other"),
+            "a session that moved shows the branch of the directory it left"
+        );
+
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
     }
 
     /// Not every directory is a checkout, and that is not a failure to report.

@@ -36,6 +36,12 @@ fn main() {
         );
     }
 
+    // The directories an earlier process let a stage write are left out of the search for the
+    // programs this one starts, and each directory a session here opens is added to that record
+    // for the next. Before a program is looked up. See SANDBOX-30.
+    bravebot_agent::stage_record::load();
+    bravebot_agent::stage_record::follow();
+
     // The desktop window is in English only, so the notes this process builds for it are too,
     // whatever the machine's language: a French note in an English window reads as a fault. The
     // terminal chooses from the environment instead (LOCALE-7). This is the one choice, made before

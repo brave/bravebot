@@ -75,6 +75,8 @@ The host answers the methods in `allowlist::OFFERED` with the parameters listed 
 
 Every method the bridge answers is either offered or listed in `allowlist::DENIED`. A test reads the bridge's dispatch and fails while it answers a method that neither list names, and while either list names one it does not answer, so a method added to the bridge is not reachable through the host until someone classifies it.
 
+`session.limit` is the desktop window's `/limit` ([TURN-8](turns.md#TURN-8)). It takes `session` and, optionally, `limit`. Given `limit`, it sets the session's limit: a string read as the `limit` setting is read, or `null` for no limit. Given only `session`, it reads the limit and changes nothing. Either way the result is `{limit, spent}`, where `limit` is `{unit, count}` with `unit` `tokens` or `credits`, or `null` when the session has no limit, and `spent` is what the session has spent in that unit, or in tokens when there is no limit. A limit that is not a string or `null`, or a string that is not a limit, is refused with `bad_request` and changes nothing. A handle that names no open session is refused with `no_such_session`. A limit set while a turn runs applies to that turn's next request. The host denies the method with `session.mode`, because a person at the host decides how its sessions behave, so a host client can neither clear the limit nor raise it. A host session still carries the limit from the person's settings, and its question is the `ask` kind ([HOST-10](#HOST-10)): a session with no attached client given `ask` has the question refused, which ends the turn as a stop.
+
 The replies that widen what a session may do or read (`output.reply`, `vouch.reply`, `vet.reply`, `server.reply`, `exposure.reply`, `host.reply`, the MCP replies and `manifest.reply`) are denied. A question of one of those kinds cannot be answered through the host, so it is refused when it is asked and is not shown ([HOST-10](#HOST-10)).
 
 `verified-by: bravebot_ui_bridge::host::a_method_the_host_does_not_offer_is_refused_and_does_nothing`
@@ -88,6 +90,8 @@ The replies that widen what a session may do or read (`output.reply`, `vouch.rep
 `verified-by: bravebot_ui_bridge::host_process::a_reply_of_the_wrong_kind_is_refused_and_the_question_stays_answerable`
 `verified-by: bravebot_ui_bridge::host_allowlist::the_allowlist_classifies_every_method_the_bridge_answers`
 `verified-by: bravebot_ui_bridge::host_allowlist::the_scan_reads_arms_with_several_names`
+`verified-by: bravebot_ui_bridge::spend_limit::session_limit_sets_clears_and_reads`
+`verified-by: bravebot_ui_bridge::spend_limit::a_limit_set_while_a_turn_runs_holds_its_next_request`
 
 <a id="HOST-4"></a>
 ### HOST-4: the host's records are in a directory of its own

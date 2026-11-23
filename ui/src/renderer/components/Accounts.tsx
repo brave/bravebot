@@ -20,6 +20,7 @@ function standingText(row: AccountRow): string {
   if (row.standing === 'misconfigured') return t.uiAccountsMisconfigured()
   if (row.way !== 'brave' && row.way !== 'gateway') return t.uiAccountsSignedIn()
   if (row.keyFrom === 'environment') return t.uiAccountsKeyFromEnvironment()
+  if (row.keyFrom === 'file') return t.uiAccountsKeyFromFile()
   if (row.keyFrom === 'none') return t.uiAccountsNoKeyNeeded()
   return t.uiAccountsKeyStored()
 }

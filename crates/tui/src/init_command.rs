@@ -76,23 +76,40 @@ mod tests {
     }
 
     /// The turn is only as good as the words it is given: each part of what the clause says the
-    /// prompt asks for has to be in it, or the planner drafts something else.
+    /// prompt asks for has to be in it, or the planner drafts something else. Each part is its own
+    /// test, so a prompt that loses one fails that test and no other (CMD-13).
     #[test]
-    fn the_prompt_asks_for_the_title_the_length_the_five_areas_and_the_tools() {
-        for part in [
-            "write_file",
-            "AGENTS.md in the working directory",
-            "\"Repository Guidelines\"",
-            "between 200 and 400 words",
+    fn the_prompt_asks_for_the_file_to_be_written_to_agents_md_with_write_file() {
+        assert!(PROMPT.contains("AGENTS.md in the working directory"));
+        assert!(PROMPT.contains("with write_file"));
+    }
+
+    #[test]
+    fn the_prompt_asks_for_the_title_repository_guidelines() {
+        assert!(PROMPT.contains("\"Repository Guidelines\""));
+    }
+
+    #[test]
+    fn the_prompt_asks_for_between_200_and_400_words() {
+        assert!(PROMPT.contains("between 200 and 400 words"));
+    }
+
+    #[test]
+    fn the_prompt_asks_for_each_of_the_five_areas() {
+        for area in [
             "project structure",
             "build, test and development commands",
             "coding style",
             "testing guidelines",
             "commit and pull request conventions",
-            "ask_user",
-            "a reference instead of the lines",
         ] {
-            assert!(PROMPT.contains(part), "the prompt lost {part:?}");
+            assert!(PROMPT.contains(area), "the prompt lost the area {area:?}");
         }
+    }
+
+    #[test]
+    fn the_prompt_tells_the_planner_to_ask_the_person_with_ask_user_where_it_cannot_see() {
+        assert!(PROMPT.contains("ask the person short questions with ask_user"));
+        assert!(PROMPT.contains("a reference instead of the lines"));
     }
 }

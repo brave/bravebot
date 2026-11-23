@@ -1,0 +1,1055 @@
+//! The flags a session was started with, as the line printed on the way out repeats them
+//! ([SESSION-8](../../../docs/specs/sessions.md#SESSION-8)).
+//!
+//! A record keeps neither the permission mode nor the sandbox mode, the network setting, the lists
+//! of paths, the settings file, the strictness, the log level nor the system prompt a run was given,
+//! so a resume that omits a flag runs under the rules its settings and defaults give and asks
+//! again. The line the person copies therefore carries the flags they typed.
+//!
+//! Everything here is the person's own command line, read by `settle_flags` and never taken from a
+//! record, a checkout or a model. What is recorded is what each scanner in [`crate::flags`] took,
+//! so a flag typed twice is the value the scanner resolved to, and nothing is read back from the
+//! settings or the environment to decide what to print.
+
+use bravebot_i18n::t;
+use bravebot_sandbox::SandboxMode;
+use bravebot_sandbox::network::Network;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+const ALLOW_READ: &str = "--sandbox-allow-read";
+const DENY_READ: &str = "--sandbox-deny-read";
+const ALLOW_WRITE: &str = "--sandbox-allow-write";
+const DENY_WRITE: &str = "--sandbox-deny-write";
+
+/// The process-wide flags a command line carried, in the form [`Typed::words`] repeats them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is one flag the person typed or did not"
+)]
+pub(crate) struct Typed {
+    /// The spelling of the flag that answers every question, where one was typed.
+    pub(crate) bypass: Option<&'static str>,
+    pub(crate) auto: bool,
+    /// The `--sandbox` mode as typed, the last of several.
+    pub(crate) sandbox: Option<SandboxMode>,
+    /// The `--run-network` setting as typed, the last of several.
+    pub(crate) run_network: Option<Network>,
+    pub(crate) allow_read: Vec<String>,
+    pub(crate) deny_read: Vec<String>,
+    pub(crate) allow_write: Vec<String>,
+    pub(crate) deny_write: Vec<String>,
+    /// The `--settings` file, the last of several.
+    pub(crate) settings: Option<PathBuf>,
+    pub(crate) safe: bool,
+    pub(crate) locked: bool,
+    pub(crate) vet: bool,
+    pub(crate) incognito: bool,
+    /// The tools `--tools` named, the last list of several.
+    pub(crate) tools: Option<Vec<String>>,
+    pub(crate) no_shell: bool,
+    /// The level `--log-level` named, the last of several.
+    pub(crate) log_level: Option<bravebot_diag::Level>,
+    /// The words `--system-prompt` gave, the last of several.
+    pub(crate) system_prompt: Option<String>,
+    /// The words `--append-system-prompt` gave, the last of several.
+    pub(crate) append_system_prompt: Option<String>,
+    /// The directory the process was in when the flags were read, which a relative `--settings`
+    /// path was read from. The paths of the four `--sandbox-*` flags are read from the session's
+    /// directory instead, which the line is given where it is built.
+    pub(crate) read_in: Option<PathBuf>,
+}
+
+impl Typed {
+    /// The words of the flags, unquoted, one flag and its value after another.
+    ///
+    /// Empty where none was typed. Each list flag is repeated once per path, in the order the
+    /// paths were typed, and every other flag appears once.
+    pub(crate) fn words(&self) -> Vec<String> {
+        let mut words: Vec<String> = Vec::new();
+        if let Some(flag) = self.bypass {
+            words.push(flag.to_string());
+        }
+        if self.auto {
+            words.push(crate::flags::AUTO.to_string());
+        }
+        if let Some(mode) = self.sandbox {
+            words.extend(["--sandbox".to_string(), mode.name().to_string()]);
+        }
+        if let Some(network) = self.run_network {
+            words.extend(["--run-network".to_string(), network.name().to_string()]);
+        }
+        for (flag, paths) in [
+            (ALLOW_READ, &self.allow_read),
+            (DENY_READ, &self.deny_read),
+            (ALLOW_WRITE, &self.allow_write),
+            (DENY_WRITE, &self.deny_write),
+        ] {
+            for path in paths {
+                words.extend([flag.to_string(), path.clone()]);
+            }
+        }
+        if let Some(path) = &self.settings {
+            words.extend([
+                "--settings".to_string(),
+                path.to_string_lossy().into_owned(),
+            ]);
+        }
+        for (given, flag) in [
+            (self.safe, crate::flags::SAFE),
+            (self.locked, "--locked"),
+            (self.vet, crate::flags::VET),
+            (self.incognito, crate::flags::INCOGNITO),
+        ] {
+            if given {
+                words.push(flag.to_string());
+            }
+        }
+        if let Some(tools) = &self.tools {
+            words.extend(["--tools".to_string(), tools.join(",")]);
+        }
+        if self.no_shell {
+            words.push("--no-shell".to_string());
+        }
+        if let Some(level) = self.log_level {
+            words.extend(["--log-level".to_string(), level.as_str().to_string()]);
+        }
+        if let Some(text) = &self.system_prompt {
+            words.extend(["--system-prompt".to_string(), text.clone()]);
+        }
+        if let Some(text) = &self.append_system_prompt {
+            words.extend(["--append-system-prompt".to_string(), text.clone()]);
+        }
+        words
+    }
+
+    /// These flags for a session that moved, with each relative value of `--settings` and of the
+    /// four `--sandbox-*` path flags written as the absolute path it was read as when the session
+    /// started.
+    ///
+    /// A relative value is read from a directory: the process's own, for `--settings`
+    /// ([`settings_path_from`]), and the session's, for a sandbox path ([`sandbox_path_from`]). The
+    /// line a moved session prints is run from the session's new directory, where the same words
+    /// would name another file or confine another place. `session_directory` is the directory the
+    /// session started in. A `--settings` value stays as typed where the process's directory was not
+    /// read.
+    ///
+    /// A sandbox entry that [`sandbox_path_from`] cannot write out is not in the lists of the flags
+    /// returned and is in [`Moved::left_off`], with the flag it was typed after, for the line to say
+    /// so. `--settings` is a file the operating system opens, so a `*` or `?` in the name of a
+    /// directory does not change what its joined path names, and it is always carried.
+    pub(crate) fn with_paths_made_absolute(&self, session_directory: &Path) -> Moved {
+        let mut left_off = Vec::new();
+        let mut from_the_session = |flag: &'static str, paths: &[String]| -> Vec<String> {
+            let mut carried = Vec::new();
+            for path in paths {
+                match sandbox_path_from(path, session_directory) {
+                    Some(written) => carried.push(written),
+                    None => left_off.push(LeftOff {
+                        flag,
+                        value: path.clone(),
+                    }),
+                }
+            }
+            carried
+        };
+        let allow_read = from_the_session(ALLOW_READ, &self.allow_read);
+        let deny_read = from_the_session(DENY_READ, &self.deny_read);
+        let allow_write = from_the_session(ALLOW_WRITE, &self.allow_write);
+        let deny_write = from_the_session(DENY_WRITE, &self.deny_write);
+        Moved {
+            flags: Typed {
+                allow_read,
+                deny_read,
+                allow_write,
+                deny_write,
+                settings: match (&self.settings, &self.read_in) {
+                    (Some(path), Some(directory)) => Some(PathBuf::from(settings_path_from(
+                        &path.to_string_lossy(),
+                        directory,
+                    ))),
+                    _ => self.settings.clone(),
+                },
+                ..self.clone()
+            },
+            left_off,
+        }
+    }
+
+    /// What follows `bravebot --resume <id>` on the line: each word as one word of a shell, drawn
+    /// so that no character of it moves the cursor, each with a space in front. Empty where no
+    /// flag was typed.
+    ///
+    /// A map from the person's own words to words. The quoting is [`bravebot_tui::dropped::shell_word`],
+    /// which a path pasted into a shell line already goes through, and the drawing is the one every
+    /// path on the terminal goes through (LAYER-3).
+    pub(crate) fn suffix(&self) -> String {
+        self.words()
+            .iter()
+            .map(|word| format!(" {}", drawn(word)))
+            .collect()
+    }
+}
+
+/// A `--sandbox-*` flag and the value typed after it that the line of a session that moved leaves
+/// off, because no spelling of the entry names the same place from another directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeftOff {
+    pub(crate) flag: &'static str,
+    /// The value as it was typed.
+    pub(crate) value: String,
+}
+
+/// What the line of a session that moved holds in place of the flags as typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Moved {
+    /// The flags to repeat, with each relative path written as the absolute path it was read as.
+    /// An entry in `left_off` is not in them.
+    pub(crate) flags: Typed,
+    /// The entries the line cannot carry, in the order of the line.
+    pub(crate) left_off: Vec<LeftOff>,
+}
+
+impl Moved {
+    /// One sentence for each entry in `left_off`, naming the flag and the value typed after it and
+    /// saying why the line cannot carry it. The value is drawn as it is on the line.
+    pub(crate) fn notes(&self) -> Vec<String> {
+        self.left_off
+            .iter()
+            .map(|entry| {
+                t!(
+                    cli_resume_entry_not_carried,
+                    flag = entry.flag,
+                    value = drawn(&entry.value)
+                )
+            })
+            .collect()
+    }
+}
+
+/// `word` as one word of a shell, drawn so that no character of it moves the cursor: the quoting of
+/// [`bravebot_tui::dropped::shell_word`], which a path pasted into a shell line already goes
+/// through, and the drawing every path on the terminal goes through (LAYER-3).
+fn drawn(word: &str) -> String {
+    bravebot_agent::confirm::printable_spelled_with_tab_pictured(
+        &bravebot_tui::dropped::shell_word(word),
+    )
+}
+
+/// The entry `value` of a `--sandbox-*` list as the sandbox reads it from `directory`, written as
+/// an absolute entry, or as typed where it reads the same from every directory, or `None` where no
+/// spelling names the same place from another directory.
+///
+/// The reading is `bravebot_sandbox::rules::read_entry`, the function the sandbox judges an entry
+/// with, so what is printed is what the sandbox would read: a `.` is dropped, a trailing slash adds
+/// no name, and a `..` removes the name before it, so `sub/../x` is printed `<directory>/x`. The
+/// sandbox refuses an absolute entry that holds `..`, so a relative entry joined to `directory`
+/// with its `..` left in place would be refused where it was in force, and a deny entry that is
+/// refused is lost.
+///
+/// Written as typed: an entry that starts at the home directory (`~`, `~/` or `~\`, which
+/// `read_entry` reads from a home directory this function does not name), one that starts with a
+/// variable, which the sandbox refuses before it reads a path, an absolute entry, and one whose `..`
+/// removes the only name that holds a wildcard (`a/*/../x`). The sandbox judges that one as a
+/// pattern with no wildcard left, which a write list refuses and a read list matches nothing with,
+/// whichever directory it is read from, so no other spelling means the same.
+///
+/// An entry that climbs out of the directory (`..`, `../x`, `sub/../../x`) is joined to `directory`
+/// with its `..` left in place: the sandbox refused it as typed, so it was never in force, and the
+/// absolute entry holding a `..` is refused the same way, before a wildcard is looked at, from every
+/// directory. Resolving it would turn an entry that was refused into one that is in force.
+///
+/// `None` for any other relative entry where a name of `directory` holds `*` or `?`
+/// ([`bravebot_sandbox::rules::can_anchor_an_absolute_entry`]). The sandbox reads the names of the
+/// directory a relative entry is read from as names, so the entry means what it said only from
+/// there. Written out as an absolute entry the same `*` or `?` is a wildcard, which a write list
+/// refuses and a read list meets siblings with, and the matcher has no spelling for a wildcard
+/// character as a plain one. The decision is made from `directory` and not by reading the written
+/// entry back, since a typed pattern (`g/*/x`) read from such a directory is judged with the
+/// directory as names and cannot be read back from another.
+///
+/// A pure function of its arguments: nothing is read from the filesystem and no link is followed.
+pub(crate) fn sandbox_path_from(value: &str, directory: &Path) -> Option<String> {
+    use bravebot_sandbox::rules::{Reason, can_anchor_an_absolute_entry, read_entry};
+    let spelled = value.trim();
+    if spelled.is_empty() {
+        return Some(value.to_string());
+    }
+    match read_entry(spelled, None, directory) {
+        // No home directory is named here, so a home entry is refused for want of one and is
+        // printed as typed, which names the same place from every directory.
+        Err(Reason::NoHome | Reason::NamesAVariable) => Some(value.to_string()),
+        // Reading refuses nothing else but a `..` with no name to remove. Joined to the directory
+        // as any path is, an absolute entry is its own spelling and is printed as typed.
+        Err(_) => {
+            let joined = directory.join(spelled);
+            Some(if joined == Path::new(spelled) {
+                value.to_string()
+            } else {
+                joined.to_string_lossy().into_owned()
+            })
+        }
+        Ok(read) if read.absolute || read.lost_its_wildcard() => Some(value.to_string()),
+        Ok(_) if !can_anchor_an_absolute_entry(directory) => None,
+        Ok(read) => Some(read.path.to_string_lossy().into_owned()),
+    }
+}
+
+/// The `--settings` file `value` as the absolute path it names when read from `directory`, or as
+/// typed where it is absolute.
+///
+/// Settings loading expands no `~`, so `~/x` that a shell did not expand is a relative file named
+/// `~` in `directory`, and is joined to it as any other relative value is. The `..` of a joined
+/// value is left in place: the operating system resolves a settings path against the directory
+/// physically, and the joined path names the same file. A pure function of its arguments.
+pub(crate) fn settings_path_from(value: &str, directory: &Path) -> String {
+    let spelled = value.trim();
+    if spelled.is_empty() || Path::new(spelled).is_absolute() {
+        return value.to_string();
+    }
+    directory.join(spelled).to_string_lossy().into_owned()
+}
+
+static TYPED: OnceLock<Typed> = OnceLock::new();
+
+/// Remember the flags the command line carried, for the rest of this process.
+///
+/// Called once by `settle_flags`, after every scanner has run. The first call wins, as with the
+/// other process-wide settings the entry point settles.
+pub(crate) fn record(typed: Typed) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the first call wins, as with the other process-wide settings"
+    )]
+    let _ = TYPED.set(typed);
+}
+
+/// The flags [`record`] was given, or none where `settle_flags` did not run to its end.
+pub(crate) fn typed() -> Typed {
+    TYPED.get().cloned().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn only(typed: Typed) -> Vec<String> {
+        typed.words()
+    }
+
+    fn spelled(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| word.to_string()).collect()
+    }
+
+    /// The flag that answers every question and the sandbox mode are the two the person asked for
+    /// by name. Each is repeated as typed, so a line that repeated the other spelling, or the
+    /// default mode, would resume under rules that were not the session's.
+    #[test]
+    fn the_bypass_flag_as_typed_and_the_sandbox_mode_are_repeated() {
+        assert_eq!(
+            only(Typed {
+                bypass: Some(crate::flags::SKIP_PERMISSIONS),
+                sandbox: Some(SandboxMode::Strict),
+                ..Typed::default()
+            }),
+            spelled(&["--dangerously-skip-permissions", "--sandbox", "strict"])
+        );
+        assert_eq!(
+            only(Typed {
+                bypass: Some(crate::flags::BYPASS_APPROVALS_AND_SANDBOX),
+                ..Typed::default()
+            }),
+            spelled(&["--dangerously-bypass-approvals-and-sandbox"])
+        );
+        for mode in SandboxMode::ALL {
+            assert_eq!(
+                only(Typed {
+                    sandbox: Some(mode),
+                    ..Typed::default()
+                }),
+                spelled(&["--sandbox", mode.name()])
+            );
+        }
+    }
+
+    /// Each flag a resume does not take back is repeated with its value, each path of a list flag
+    /// once per path, and no flag stands in for another. The regression it rejects is a builder
+    /// that leaves one of them out or moves a value to the wrong flag.
+    #[test]
+    fn every_flag_a_resume_does_not_take_back_is_repeated_with_its_value() {
+        let cases: Vec<(Typed, Vec<String>)> = vec![
+            (
+                Typed {
+                    auto: true,
+                    ..Typed::default()
+                },
+                spelled(&["--auto"]),
+            ),
+            (
+                Typed {
+                    run_network: Some(Network::Closed),
+                    ..Typed::default()
+                },
+                spelled(&["--run-network", "closed"]),
+            ),
+            (
+                Typed {
+                    run_network: Some(Network::Open),
+                    ..Typed::default()
+                },
+                spelled(&["--run-network", "open"]),
+            ),
+            (
+                Typed {
+                    allow_read: vec!["/r1".into(), "/r2".into()],
+                    ..Typed::default()
+                },
+                spelled(&["--sandbox-allow-read", "/r1", "--sandbox-allow-read", "/r2"]),
+            ),
+            (
+                Typed {
+                    deny_read: vec!["/dr".into()],
+                    ..Typed::default()
+                },
+                spelled(&["--sandbox-deny-read", "/dr"]),
+            ),
+            (
+                Typed {
+                    allow_write: vec!["/aw".into()],
+                    ..Typed::default()
+                },
+                spelled(&["--sandbox-allow-write", "/aw"]),
+            ),
+            (
+                Typed {
+                    deny_write: vec!["/dw1".into(), "/dw2".into()],
+                    ..Typed::default()
+                },
+                spelled(&[
+                    "--sandbox-deny-write",
+                    "/dw1",
+                    "--sandbox-deny-write",
+                    "/dw2",
+                ]),
+            ),
+            (
+                Typed {
+                    settings: Some(PathBuf::from("/s/settings.json")),
+                    ..Typed::default()
+                },
+                spelled(&["--settings", "/s/settings.json"]),
+            ),
+            (
+                Typed {
+                    safe: true,
+                    ..Typed::default()
+                },
+                spelled(&["--safe"]),
+            ),
+            (
+                Typed {
+                    locked: true,
+                    ..Typed::default()
+                },
+                spelled(&["--locked"]),
+            ),
+            (
+                Typed {
+                    vet: true,
+                    ..Typed::default()
+                },
+                spelled(&["--vet"]),
+            ),
+            (
+                Typed {
+                    incognito: true,
+                    ..Typed::default()
+                },
+                spelled(&["--incognito"]),
+            ),
+            (
+                Typed {
+                    tools: Some(vec!["read_file".into(), "search".into()]),
+                    no_shell: true,
+                    ..Typed::default()
+                },
+                spelled(&["--tools", "read_file,search", "--no-shell"]),
+            ),
+            (
+                Typed {
+                    system_prompt: Some("be brief".into()),
+                    append_system_prompt: Some("end politely".into()),
+                    ..Typed::default()
+                },
+                spelled(&[
+                    "--system-prompt",
+                    "be brief",
+                    "--append-system-prompt",
+                    "end politely",
+                ]),
+            ),
+        ];
+        for (typed, expected) in cases {
+            assert_eq!(typed.words(), expected, "{typed:?}");
+        }
+    }
+
+    /// `--log-level` is repeated with the word `--log-level` parses, for each level, so a line that
+    /// is pasted back is accepted. The regression it rejects is a spelling the scanner does not
+    /// parse, which refuses the pasted line.
+    #[test]
+    fn the_log_level_is_repeated_in_the_spelling_the_flag_parses() {
+        for level in [
+            bravebot_diag::Level::Error,
+            bravebot_diag::Level::Info,
+            bravebot_diag::Level::Debug,
+        ] {
+            let words = Typed {
+                log_level: Some(level),
+                ..Typed::default()
+            }
+            .words();
+
+            assert_eq!(words.len(), 2, "{words:?}");
+            assert_eq!(words[0], "--log-level");
+            assert_eq!(bravebot_diag::Level::parse(&words[1]), Some(level));
+        }
+    }
+
+    /// A sandbox entry is read from a directory, and the line of a session that moved is run from
+    /// another. An entry that starts at the home directory, is absolute or starts with a variable
+    /// names the same place from every directory and is left as typed. Any other is the absolute
+    /// entry the sandbox reads it as: the directory with the entry's `.` and `..` resolved by name,
+    /// leading white space dropped and a trailing slash adding nothing. The sandbox refuses an
+    /// absolute entry that holds a `..`, so a `..` that is left in place keeps the refusal an entry
+    /// that climbs out of the directory already had. An entry whose `..` removes the only name that
+    /// holds a wildcard is left as typed: the sandbox judges it as a pattern with no wildcard left,
+    /// which a write list refuses and a read list matches nothing with, from every directory, so
+    /// resolving it would name a path where the entry named none. The regressions it rejects are a
+    /// relative value left as typed, a home value or an absolute one joined to a directory, a `..`
+    /// left in the middle of an entry the sandbox accepted (the entry is then refused and a deny
+    /// entry lost), a `..` of an entry that climbs resolved away, and a wildcard entry resolved to a
+    /// path.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_sandbox_entry_is_written_as_the_absolute_entry_the_sandbox_reads_it_as() {
+        let from = Path::new("/work");
+        for (typed, expected) in [
+            ("x.json", "/work/x.json"),
+            ("./y", "/work/y"),
+            ("sub/../x", "/work/x"),
+            ("a/b/../../c", "/work/c"),
+            ("x/", "/work/x"),
+            ("  padded ", "/work/padded"),
+            ("  sub/../x ", "/work/x"),
+            ("a/./b", "/work/a/b"),
+            ("g/*/x", "/work/g/*/x"),
+            ("..", "/work/.."),
+            ("../up", "/work/../up"),
+            ("sub/../../x", "/work/sub/../../x"),
+            ("a/*/../x", "a/*/../x"),
+            ("~user/x", "/work/~user/x"),
+            ("%dir/x", "/work/%dir/x"),
+            ("/abs/p", "/abs/p"),
+            ("/abs/../p", "/abs/../p"),
+            ("~", "~"),
+            ("~/notes", "~/notes"),
+            ("~\\notes", "~\\notes"),
+            ("$HOME/x", "$HOME/x"),
+            ("${HOME}/x", "${HOME}/x"),
+            ("%USERPROFILE%/x", "%USERPROFILE%/x"),
+        ] {
+            assert_eq!(
+                sandbox_path_from(typed, from).as_deref(),
+                Some(expected),
+                "{typed:?}"
+            );
+        }
+    }
+
+    /// A directory with a `*` or `?` in a name cannot anchor an absolute spelling of a relative
+    /// entry: the sandbox reads the names of the directory a relative entry is read from as names,
+    /// and the written-out entry reads the same characters as a wildcard, which a write list refuses
+    /// and a read list meets siblings with. So from such a directory a relative entry is not written
+    /// out, whatever it holds (a plain name, a `..` that resolves, a typed pattern). An entry that
+    /// reads the same from every directory is printed as typed there: absolute, starting with `~` or
+    /// a variable, and one whose `..` removes the only wildcard name. From a plain directory each
+    /// entry is written as before, a directory such as `/work/ok` included. The regressions it rejects
+    /// are a wildcard directory joined to a relative entry, a check that looks at `*` and not `?` (the
+    /// directories `/work/a?b` and `/work/a*` are each in the table), a check on the last name only
+    /// (`/work/a?b/sub`), a check on the entry and not the directory (the entry `g/*/x` is a pattern
+    /// and `x` is not, and both are left off), and an entry that is left off from every directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_sandbox_entry_is_left_off_where_a_name_of_the_directory_holds_a_wildcard() {
+        let entries = [
+            "x", "sub/../x", "g/*/x", "/abs/p", "~/n", "$HOME/x", "a/*/../x",
+        ];
+        // The three that are relative and read the same from no other directory, the rest as typed.
+        for (directory, written) in [
+            ("/work", ["/work/x", "/work/x", "/work/g/*/x"]),
+            ("/work/ok", ["/work/ok/x", "/work/ok/x", "/work/ok/g/*/x"]),
+        ] {
+            let expected: Vec<Option<&str>> = written
+                .iter()
+                .copied()
+                .map(Some)
+                .chain([
+                    Some("/abs/p"),
+                    Some("~/n"),
+                    Some("$HOME/x"),
+                    Some("a/*/../x"),
+                ])
+                .collect();
+            let carried: Vec<Option<String>> = entries
+                .iter()
+                .map(|entry| sandbox_path_from(entry, Path::new(directory)))
+                .collect();
+            assert_eq!(
+                carried.iter().map(Option::as_deref).collect::<Vec<_>>(),
+                expected,
+                "{directory}"
+            );
+        }
+        for directory in [
+            "/work/a?b",
+            "/work/a*",
+            "/work/a?b/sub",
+            "/work/a*/sub",
+            "/?/work",
+        ] {
+            let carried: Vec<Option<String>> = entries
+                .iter()
+                .map(|entry| sandbox_path_from(entry, Path::new(directory)))
+                .collect();
+            assert_eq!(
+                carried.iter().map(Option::as_deref).collect::<Vec<_>>(),
+                vec![
+                    None,
+                    None,
+                    None,
+                    Some("/abs/p"),
+                    Some("~/n"),
+                    Some("$HOME/x"),
+                    Some("a/*/../x"),
+                ],
+                "{directory}"
+            );
+        }
+    }
+
+    /// A moved session whose directory holds a wildcard carries every other flag, leaves off each
+    /// relative `--sandbox-*` entry with the flag it was typed after, in the order of the line, and
+    /// writes the entries that read the same from every directory as they were typed. `--settings` is
+    /// a file the operating system opens, so it is joined to the directory it was read from whatever
+    /// that directory's name holds. The regressions it rejects are a flag lost with its entry (`--safe`
+    /// is gone with the entry), a note for an entry that was carried, a note naming another flag
+    /// than the one typed, `--settings` dropped for the wildcard, and a value drawn as typed (the
+    /// hostile value holds an escape, a line break and quotes).
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_session_names_each_entry_it_leaves_off_with_the_flag_it_was_typed_after() {
+        let typed = Typed {
+            allow_read: vec!["a".into(), "/abs".into()],
+            deny_read: vec!["~/h".into()],
+            allow_write: vec!["w".into()],
+            deny_write: vec!["out\n\u{1b}[31m'x".into(), "~".into()],
+            settings: Some(PathBuf::from("s.json")),
+            read_in: Some(PathBuf::from("/process")),
+            safe: true,
+            ..Typed::default()
+        };
+
+        let moved = typed.with_paths_made_absolute(Path::new("/session/a?b"));
+
+        assert_eq!(
+            moved.flags.words(),
+            spelled(&[
+                "--sandbox-allow-read",
+                "/abs",
+                "--sandbox-deny-read",
+                "~/h",
+                "--sandbox-deny-write",
+                "~",
+                "--settings",
+                "/process/s.json",
+                "--safe",
+            ])
+        );
+        assert_eq!(
+            moved.left_off,
+            vec![
+                LeftOff {
+                    flag: "--sandbox-allow-read",
+                    value: "a".into()
+                },
+                LeftOff {
+                    flag: "--sandbox-allow-write",
+                    value: "w".into()
+                },
+                LeftOff {
+                    flag: "--sandbox-deny-write",
+                    value: "out\n\u{1b}[31m'x".into()
+                },
+            ]
+        );
+        let notes = moved.notes();
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        for (note, flag) in notes.iter().zip([
+            "--sandbox-allow-read a",
+            "--sandbox-allow-write w",
+            "--sandbox-deny-write 'out\u{240a}\u{241b}[31m'\\''x'",
+        ]) {
+            assert!(note.contains(flag), "{flag} is not in {note:?}");
+        }
+        assert_eq!(
+            notes.concat().chars().find(|c| c.is_control()),
+            None,
+            "{notes:?}"
+        );
+        // From a directory with no wildcard in a name, nothing is left off.
+        let plain = typed.with_paths_made_absolute(Path::new("/session/ab"));
+        assert!(plain.left_off.is_empty(), "{:?}", plain.left_off);
+        assert!(plain.notes().is_empty());
+    }
+
+    /// The sandbox reads the entry a moved session prints as it read the entry that was typed. Each
+    /// value is given to the resolver the sandbox uses (`bravebot_sandbox::rules::resolve`) twice, as
+    /// typed from the session's directory and as printed from the directory the session moved to,
+    /// in each of the four lists, and the two come to the same path or the same refusal. The table
+    /// holds the values that decide it: a `..` that removes a name the entry holds, one that has no
+    /// name to remove and so climbs, a `.`, a trailing slash, white space, a glob, a `..` that
+    /// removes the only name holding a wildcard (judged as a pattern, so a write list refuses it and
+    /// a read list matches nothing), a variable, a home entry and an absolute one. The regression it
+    /// rejects is a printed entry the sandbox reads as another path or refuses where the typed one
+    /// was in force, which is a restriction lost for a deny entry and a grant lost for an allow
+    /// entry.
+    ///
+    /// The table is run twice, from a plain directory and from a real one named `a?b`, which the
+    /// sandbox reads as a name from the session and reads as a wildcard once an entry is written out
+    /// in full: a write list refuses the written entry where the typed one is in force, and a read
+    /// list also meets the sibling `aXb`. From that directory a relative entry is not written out at
+    /// all, so either the printed entry reads as the typed one did or there is no printed entry, and
+    /// an entry that reads the same from every directory is still carried. The regression it rejects
+    /// is a relative entry joined to a directory with a wildcard in a name.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_sandbox_entry_means_to_the_sandbox_what_the_typed_entry_meant() {
+        use bravebot_sandbox::rules::{Entry, List, Lists, Reason, State, resolve};
+        use std::path::Component;
+
+        let scratch = crate::test_support::Scratch::new("resume-flags-sandbox-entries");
+        let moved_to = scratch.directory("moved");
+        let home = scratch.directory("home");
+        let absolute = scratch.path.join("abs/p");
+        let sessions = [scratch.directory("session"), scratch.directory("wild/a?b")];
+        std::fs::create_dir_all(scratch.path.join("wild/aXb/x"))
+            .expect("a sibling the wildcard meets");
+        let state = |list: List, spelled: &str, base: &Path| -> State {
+            let entry = Entry {
+                path: spelled.to_string(),
+                by: None,
+                pinned: false,
+                from_a_checkout: false,
+            };
+            let mut lists = Lists::default();
+            match list {
+                List::AllowRead => lists.allow_read.push(entry),
+                List::DenyRead => lists.deny_read.push(entry),
+                List::AllowWrite => lists.allow_write.push(entry),
+                List::DenyWrite => lists.deny_write.push(entry),
+            }
+            resolve(&lists, Some(&home), None, base).items()[0]
+                .state
+                .clone()
+        };
+        let in_force = |path: PathBuf| State::InForce(vec![path]);
+        let climbs = State::Refused(Reason::Climbs);
+        for session in &sessions {
+            std::fs::create_dir_all(session.join("g/one/x")).expect("a directory a glob names");
+            let wildcard_directory = session.to_string_lossy().contains('?');
+            // What the sandbox reads each typed value as from the session, whether the printed
+            // value keeps a `..` (it does for an entry that climbs, which keeps the `..` it was
+            // refused for, and for an entry whose `..` removes the only wildcard name, which is left
+            // as typed), and whether the entry is carried from a directory with a wildcard in a
+            // name, which only an entry that reads the same from every directory is.
+            let typed_values: Vec<(String, State, bool, bool)> = vec![
+                ("sub/../x".into(), in_force(session.join("x")), false, false),
+                ("./x".into(), in_force(session.join("x")), false, false),
+                (
+                    "a/b/../../c".into(),
+                    in_force(session.join("c")),
+                    false,
+                    false,
+                ),
+                ("x/".into(), in_force(session.join("x")), false, false),
+                (
+                    "  sub/../x ".into(),
+                    in_force(session.join("x")),
+                    false,
+                    false,
+                ),
+                (
+                    "g/*/x".into(),
+                    in_force(session.join("g/one/x")),
+                    false,
+                    false,
+                ),
+                ("a/*/../x".into(), State::InForce(Vec::new()), true, true),
+                ("..".into(), climbs.clone(), true, true),
+                ("../x".into(), climbs.clone(), true, true),
+                ("sub/../../x".into(), climbs.clone(), true, true),
+                (
+                    "$HOME/x".into(),
+                    State::Refused(Reason::NamesAVariable),
+                    false,
+                    true,
+                ),
+                ("~/x".into(), in_force(home.join("x")), false, true),
+                (
+                    absolute.display().to_string(),
+                    in_force(absolute.clone()),
+                    false,
+                    true,
+                ),
+                (
+                    format!("{}/../p", absolute.display()),
+                    climbs.clone(),
+                    true,
+                    true,
+                ),
+            ];
+
+            for (typed, expected, keeps_a_parent, carried_from_a_wildcard_directory) in typed_values
+            {
+                let printed = sandbox_path_from(&typed, session);
+                // The write lists first: a written-out entry from a directory with a wildcard in a
+                // name is refused there (`GlobOnAWrite`) where the typed one is in force.
+                for list in [
+                    List::DenyWrite,
+                    List::AllowWrite,
+                    List::AllowRead,
+                    List::DenyRead,
+                ] {
+                    let as_typed = state(list, &typed, session);
+                    if let Some(printed) = &printed {
+                        assert_eq!(
+                            state(list, printed, &moved_to),
+                            as_typed,
+                            "{list:?} {typed:?} from {session:?} printed as {printed:?}"
+                        );
+                    }
+                    // Wildcards in a write list are refused whichever way they are spelled, so what
+                    // an entry names is checked in the list that reads.
+                    if list == List::DenyRead {
+                        assert_eq!(as_typed, expected, "{typed:?} from {session:?}");
+                    }
+                }
+                assert_eq!(
+                    printed.is_some(),
+                    !wildcard_directory || carried_from_a_wildcard_directory,
+                    "{typed:?} from {session:?} printed as {printed:?}"
+                );
+                if let Some(printed) = &printed {
+                    let holds_a_parent = Path::new(printed)
+                        .components()
+                        .any(|part| part == Component::ParentDir);
+                    // An entry in force is written with no `..`, which the sandbox refuses in an
+                    // absolute one, and an entry it refused as climbing keeps the `..` it was
+                    // refused for.
+                    assert_eq!(
+                        holds_a_parent, keeps_a_parent,
+                        "{typed:?} printed as {printed:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A `--settings` file is read by the operating system, from the directory the process was in,
+    /// and settings loading expands no `~`, so a value is joined to that directory unless it is
+    /// absolute, with a `..` left in place, which names the same file physically. A `~/x` that the
+    /// shell did not expand is a relative file named `~` there. The regressions it rejects are a
+    /// `~` value printed as typed, which names another file from the new directory, and a `..`
+    /// resolved by name, which names another file where a link is involved.
+    #[cfg(unix)]
+    #[test]
+    fn a_settings_path_is_joined_to_the_directory_it_was_read_from() {
+        let from = Path::new("/process");
+        for (typed, expected) in [
+            ("x.json", "/process/x.json"),
+            ("./y", "/process/./y"),
+            ("sub/../z", "/process/sub/../z"),
+            ("../up", "/process/../up"),
+            ("  padded ", "/process/padded"),
+            ("~/x", "/process/~/x"),
+            ("~", "/process/~"),
+            ("/abs/p", "/abs/p"),
+            ("/abs/../p", "/abs/../p"),
+        ] {
+            assert_eq!(settings_path_from(typed, from), expected, "{typed:?}");
+        }
+    }
+
+    /// The line a session that moved prints is run from the directory it moved to, so each relative
+    /// value of `--settings` and of the four `--sandbox-*` path flags is the absolute path it was read
+    /// as at the start, and no other flag changes. `--settings` is read from the directory the
+    /// process was in and a sandbox path from the session's, which are two directories, and each flag
+    /// uses its own. The regressions it rejects are the session's directory used for `--settings`, the
+    /// process's directory used for a sandbox path, a flag left relative, a path flag dropped from
+    /// the rewrite, and a `--settings` value joined where the process's directory was not read.
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_session_names_each_relative_path_as_it_was_read_when_it_started() {
+        let typed = Typed {
+            allow_read: vec!["a".into(), "/abs".into()],
+            deny_read: vec!["~/h".into(), "sub/../k".into()],
+            allow_write: vec!["./w".into()],
+            deny_write: vec!["../d".into(), "~".into()],
+            settings: Some(PathBuf::from("s.json")),
+            read_in: Some(PathBuf::from("/process")),
+            safe: true,
+            tools: Some(vec!["search".into()]),
+            system_prompt: Some("relative words".into()),
+            ..Typed::default()
+        };
+
+        assert_eq!(
+            typed
+                .with_paths_made_absolute(Path::new("/session"))
+                .flags
+                .words(),
+            spelled(&[
+                "--sandbox-allow-read",
+                "/session/a",
+                "--sandbox-allow-read",
+                "/abs",
+                "--sandbox-deny-read",
+                "~/h",
+                "--sandbox-deny-read",
+                "/session/k",
+                "--sandbox-allow-write",
+                "/session/w",
+                "--sandbox-deny-write",
+                "/session/../d",
+                "--sandbox-deny-write",
+                "~",
+                "--settings",
+                "/process/s.json",
+                "--safe",
+                "--tools",
+                "search",
+                "--system-prompt",
+                "relative words",
+            ])
+        );
+        // Left as typed where the session did not move.
+        assert_eq!(
+            typed.words(),
+            spelled(&[
+                "--sandbox-allow-read",
+                "a",
+                "--sandbox-allow-read",
+                "/abs",
+                "--sandbox-deny-read",
+                "~/h",
+                "--sandbox-deny-read",
+                "sub/../k",
+                "--sandbox-allow-write",
+                "./w",
+                "--sandbox-deny-write",
+                "../d",
+                "--sandbox-deny-write",
+                "~",
+                "--settings",
+                "s.json",
+                "--safe",
+                "--tools",
+                "search",
+                "--system-prompt",
+                "relative words",
+            ])
+        );
+        // No directory was read for the settings file, so there is none to join it to.
+        let unread = Typed {
+            read_in: None,
+            ..typed
+        };
+        assert!(
+            unread
+                .with_paths_made_absolute(Path::new("/session"))
+                .flags
+                .words()
+                .ends_with(&spelled(&[
+                    "--settings",
+                    "s.json",
+                    "--safe",
+                    "--tools",
+                    "search",
+                    "--system-prompt",
+                    "relative words",
+                ]))
+        );
+    }
+
+    /// A session started with none of these flags repeats none, so the line is what it was before
+    /// flags were carried.
+    #[test]
+    fn a_session_started_with_no_flag_repeats_none() {
+        assert!(Typed::default().words().is_empty());
+        assert_eq!(Typed::default().suffix(), "");
+    }
+
+    /// The line is for a person to paste into a shell, so a value is one word of it whatever it
+    /// holds, and the terminal draws it without a character that moves the cursor or reorders the
+    /// text. Every flag that takes a value is checked, not only the paths and the system prompt: a
+    /// `--settings` path and the text of `--append-system-prompt` are as free as those, and the
+    /// scanner refuses only a blank value or one that opens with `-` and holds no space. A tool name
+    /// is checked against the tools there are, so no scan lets a hostile one through, and the
+    /// printer does not rely on that. `--run-network` and `--log-level` take one of a few words the
+    /// scanner parses, so a hostile value cannot reach them. The regressions it rejects are a value
+    /// joined with a space (a path with a space reads as two words), a quote or `$` left active in
+    /// the shell, a control character or a bidirectional control written to the terminal as it is,
+    /// and quoting for some flags and not for others.
+    #[test]
+    fn a_hostile_value_is_one_shell_word_and_is_drawn_without_a_control_character() {
+        let typed = Typed {
+            deny_write: vec![
+                "/my dir/it's $(id) `id`".into(),
+                "/x\u{1b}]0;T\u{7}\r\n\ty\u{202e}z".into(),
+            ],
+            settings: Some(PathBuf::from("/s dir/it's $(id) `id`\nx.json")),
+            tools: Some(vec!["read file".into(), "a'b".into()]),
+            system_prompt: Some("line one\nline\ttwo".into()),
+            append_system_prompt: Some("end it's $(id) `id`\nok".into()),
+            ..Typed::default()
+        };
+        let suffix = typed.suffix();
+
+        assert!(
+            suffix.contains(r#" --sandbox-deny-write '/my dir/it'\''s $(id) `id`'"#),
+            "{suffix}"
+        );
+        assert_eq!(suffix.chars().find(|c| c.is_control()), None, "{suffix:?}");
+        assert!(!suffix.contains('\u{202e}'), "{suffix:?}");
+        assert!(suffix.contains("\u{241b}]0;T\u{2407}"), "{suffix:?}");
+        assert!(suffix.contains("\u{2039}U+202E\u{203A}"), "{suffix:?}");
+        // The two values stayed two words of two flags.
+        assert_eq!(suffix.matches(" --sandbox-deny-write ").count(), 2);
+        // Text that holds a line break is drawn as a picture of it, so the system prompt is one word
+        // of the line and the line is one line.
+        assert!(
+            suffix.contains(" --system-prompt 'line one\u{240a}line"),
+            "{suffix:?}"
+        );
+        // Each of the other three is one quoted word with the quote and `$` inert in it.
+        for word in [
+            " --settings '/s dir/it'\\''s $(id) `id`\u{240a}x.json'",
+            " --tools 'read file,a'\\''b'",
+            " --append-system-prompt 'end it'\\''s $(id) `id`\u{240a}ok'",
+        ] {
+            assert!(suffix.contains(word), "{word} is not in {suffix:?}");
+        }
+    }
+}

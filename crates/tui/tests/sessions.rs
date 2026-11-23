@@ -1521,6 +1521,136 @@ fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
     assert_eq!(record.directory, elsewhere.display().to_string());
 }
 
+/// A move splits the trail and leaves the conversation whole, and a resume shows the gate decisions
+/// of the directory it resumes from and no others.
+///
+/// The trail is appended a turn at a time beside whichever record is current, so the turn taken
+/// before the move stays under the old directory and the turn taken after it lands under the new
+/// one. The two turns leave different events so a trail read from the wrong directory is told from
+/// the right one. Every save writes the whole conversation, so the record under the new directory
+/// holds the turn from before the move as well. The faults this rejects are a move that carries
+/// the trail along with the session, a resume that reads another directory's trail, and a save
+/// after a move that keeps only the turns taken since.
+#[test]
+fn a_move_splits_the_trail_and_a_resume_shows_only_the_directory_resumed_from() {
+    let scratch = Scratch::new("moved-trail");
+    let elsewhere = scratch.project.parent().expect("a root").join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create elsewhere");
+
+    let first = a_conversation();
+    let snapshot_one = first.snapshot();
+    let mut both = a_conversation();
+    both.push(Message::user("now add a score"));
+    both.push(Message::assistant("added"));
+    let snapshot_two = both.snapshot();
+    let spend = BTreeMap::new();
+    let timing = BTreeMap::new();
+    let todos = BTreeMap::new();
+    let programs = TrustedPrograms::new();
+    let trust = TrustStore::new("/work");
+    let standing = |second_turn: bool| Standing {
+        history: None,
+        conversation: if second_turn {
+            &snapshot_two
+        } else {
+            &snapshot_one
+        },
+        turns: if second_turn { 2 } else { 1 },
+        tokens: 0,
+        split: Default::default(),
+        spend: &spend,
+        timing: &timing,
+        model: None,
+        todos: &todos,
+        asides: &[],
+        trust: &trust,
+        programs: &programs,
+        directories: &[],
+        manifest: None,
+        rewind: &[],
+        checkouts: &[],
+        touched: None,
+        answered_by_mode: false,
+    };
+    let keys = |trails: &BTreeMap<usize, Vec<bravebot_session::audit::TrailLine>>| {
+        trails.keys().copied().collect::<Vec<_>>()
+    };
+
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save("start here", standing(false));
+    handle.append_audit(
+        1,
+        &stamped(vec![Event::Observed {
+            capability: Capability::FileRead,
+            label: Label::untrusted_private(),
+        }]),
+    );
+
+    handle.move_to(&elsewhere, standing(false));
+    handle.append_audit(
+        2,
+        &stamped(vec![Event::GateBlocked {
+            gate: "trusted-read",
+            detail: "edit_file".to_string(),
+            reason: "content is untrusted".to_string(),
+            principle: bravebot_core::event::Principle::IntegrityGate,
+        }]),
+    );
+    handle.save("start here", standing(true));
+
+    // The turn taken before the move stays under the directory it was taken in, and the turn taken
+    // after it is not found there.
+    let before = sessions::audit_of(&scratch.project, handle.id());
+    assert_eq!(keys(&before), vec![1], "the trail did not stay behind");
+    assert!(before[&1][0].text.contains("(U,priv)"), "{:?}", before[&1]);
+    let after = sessions::audit_of(&elsewhere, handle.id());
+    assert_eq!(
+        keys(&after),
+        vec![2],
+        "the trail followed the session or the next turn was appended behind it"
+    );
+    assert!(after[&2][0].blocked, "{:?}", after[&2]);
+
+    // A resume from either directory shows that directory's decisions and none of the other's.
+    let moved = sessions::load(&elsewhere, handle.id()).expect("the record loads");
+    assert_eq!(
+        keys(&sessions::recall(&elsewhere, &moved).trails),
+        vec![2],
+        "a resume from the new directory showed a trail from elsewhere"
+    );
+    let left = sessions::load(&scratch.project, handle.id()).expect("the record loads");
+    assert_eq!(
+        keys(&sessions::recall(&scratch.project, &left).trails),
+        vec![1],
+        "a resume from the old directory showed a trail from elsewhere"
+    );
+
+    // The conversation does not split: the record under the new directory holds the turn taken
+    // before the move, and the one left behind holds what it held when the session left.
+    let texts = |record: &sessions::Record| -> Vec<String> {
+        Conversation::restored(record.conversation.clone())
+            .messages()
+            .iter()
+            .filter_map(|message| message.message.content.as_text().map(str::to_string))
+            .collect()
+    };
+    assert_eq!(
+        texts(&moved),
+        vec![
+            "make a space invaders game",
+            "here it is",
+            "now add a score",
+            "added"
+        ],
+        "the record written after the move did not carry the whole conversation"
+    );
+    assert_eq!(
+        texts(&left),
+        vec!["make a space invaders game", "here it is"],
+        "the record left behind was rewritten by the move"
+    );
+}
+
 /// Session records, temporary files, and audit trails must be private to the current user (mode 0600),
 /// and the session directory must not be readable by others (mode 0700).
 #[cfg(unix)]
@@ -1856,6 +1986,73 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
     assert!(
         !said.iter().any(|text| text.contains("grammar nests")),
         "the answer reached the conversation on a resume: {said:?}"
+    );
+}
+
+/// SESSION-20: a record written before the asides were kept has no `asides` key, and reads as a
+/// session with no questions beside it, which is what such a session was. The key is taken out of a
+/// record that holds one, so the file read back is the one an older build wrote.
+///
+/// Rejects an `asides` field with no default: the older record would not load, and it would drop out
+/// of the resume list although its conversation is intact.
+#[test]
+fn a_record_from_before_asides_were_kept_reads_as_a_session_with_no_questions() {
+    let scratch = Scratch::new("asides-absent");
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "make a space invaders game",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1_200,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &a_plan(),
+            asides: &[bravebot_session::sessions::Aside {
+                question: "why is the parser recursive?".to_string(),
+                answer: Some("because the grammar nests".to_string()),
+                kept: true,
+            }],
+            trust: &a_trust_map(),
+            programs: &a_program_list(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
+        },
+    );
+    let path = sessions::project_directory(&scratch.project)
+        .expect("directory")
+        .join(format!("{}.json", handle.id()));
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(
+        body.as_object_mut().unwrap().remove("asides").is_some(),
+        "the record written with a question beside the work holds no `asides` key to take out"
+    );
+    std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    let record = sessions::load(&scratch.project, handle.id())
+        .expect("a record without the key still loads");
+    assert!(record.asides.is_empty());
+    assert!(
+        sessions::recall(&scratch.project, &record)
+            .asides
+            .is_empty(),
+        "a record written before the asides were kept recalled some"
+    );
+    assert_eq!(
+        Conversation::restored(record.conversation.clone())
+            .messages()
+            .len(),
+        conversation.messages().len(),
+        "the record's conversation was not read back whole"
     );
 }
 
@@ -5291,7 +5488,12 @@ mod preserved_history {
         session.complete("done", vec![], 0);
         let before = session.history.entries().to_vec();
         let prompt = session
-            .start_loop(loop_request("1m check again"), Vec::new(), Vec::new())
+            .start_loop(
+                loop_request("1m check again"),
+                Vec::new(),
+                Vec::new(),
+                bravebot_tui::state::NamesFrom::nothing(),
+            )
             .unwrap();
         session.stopped(Some(0));
         session.restore(prompt);
@@ -5312,7 +5514,12 @@ mod preserved_history {
             None,
         ));
         let prompt = session
-            .start_loop(loop_request("1m check again"), Vec::new(), Vec::new())
+            .start_loop(
+                loop_request("1m check again"),
+                Vec::new(),
+                Vec::new(),
+                bravebot_tui::state::NamesFrom::nothing(),
+            )
             .unwrap();
         session.stopped(Some(0));
         session.restore(prompt);

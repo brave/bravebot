@@ -110,6 +110,7 @@ __bravebot_file="${__bravebot_dir}/$$"
 __bravebot_record() {
     [[ -n $BRAVEBOT_INCOGNITO ]] && return 0
     local line=${1//$'\n'/ }
+    line=${line#"${line%%[![:space:]]*}"}
     case $line in
         ''|'@bravebot'|'@bravebot'[[:space:]]*) ;;
         *)
@@ -152,6 +153,7 @@ end
 function __bravebot_record --on-event fish_preexec
     test -n "$BRAVEBOT_INCOGNITO"; and return 0
     set -l line (string join ' ' (string split \n -- $argv[1]))
+    set line (string trim --left -- "$line")
     switch $line
         case '' '@bravebot' '@bravebot *'
             return 0

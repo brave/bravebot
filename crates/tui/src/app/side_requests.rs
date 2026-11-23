@@ -596,18 +596,14 @@ pub(super) fn commit_message_answered(
 
 /// Why `/handoff` asks for nothing, as the line to tell the person, where it does not.
 ///
-/// SESSION-34: with no goal there is nothing for the brief to be written for, and before a turn
-/// has ended the session has no record for the new one to link back to. `recorded` is whether the
-/// session has one. Nothing here reads the conversation, so a refusal is decided before any
-/// request is made.
+/// SESSION-34: the decision is [`bravebot_agent::aside::handoff_refusal`], the one the desktop's
+/// Hand Off item makes; only the words are the terminal's.
 pub(super) fn handoff_refusal(goal: &str, turns: usize, recorded: bool) -> Option<&'static str> {
-    if goal.is_empty() {
-        Some(t!(handoff_needs_a_goal))
-    } else if turns == 0 || !recorded {
-        Some(t!(handoff_nothing_to_hand_off))
-    } else {
-        None
-    }
+    use bravebot_agent::aside::HandoffRefusal;
+    bravebot_agent::aside::handoff_refusal(goal, turns, recorded).map(|refusal| match refusal {
+        HandoffRefusal::NoGoal => t!(handoff_needs_a_goal),
+        HandoffRefusal::NothingToHandOff => t!(handoff_nothing_to_hand_off),
+    })
 }
 
 /// Take what the request for a `/handoff` brief came back with.

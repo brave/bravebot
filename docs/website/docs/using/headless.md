@@ -64,7 +64,9 @@ An `allow` rule that a checkout's own settings file proposed is in force only wh
 granted it in that workspace in a session, since nobody can be asked to grant it here. A line
 remembered past a session with `r` or `s` is not read by a one-shot run; write an `allow` rule for a
 line you want such a run to start. A rule that names a tool bravebot does not have, such as `Glob` or
-`WebSearch`, is named on stderr and the rules beside it stay in force.
+`NotebookEdit`, is named on stderr and the rules beside it stay in force. So is each settings key
+bravebot does not read, each key a settings file wrote twice and a managed `retrieval` value that pins
+nothing, by key and file and never by value, before the task starts.
 
 ## Reaching a second checkout
 

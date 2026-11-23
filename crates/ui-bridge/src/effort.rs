@@ -11,14 +11,23 @@ use serde_json::{Value, json};
 /// The level recorded, the level a turn would ask for, and whether a checkout's settings name an
 /// effort that outranks any pick. A word that names no level still outranks the pick, and a turn
 /// then asks for none, so `inForce` is null while `outranked` is true.
-pub fn get(settings: &Settings) -> Value {
+///
+/// `began` is the level the window's open session began with, which a model of the ChatGPT account
+/// is sent for the whole session ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+/// Where one is given it is reported as `sessionBegan`, null for a session that began with no level.
+/// Where no open session is known, `None`, the report has no `sessionBegan` key.
+pub fn get(settings: &Settings, began: Option<Option<Effort>>) -> Value {
     let recorded = store::load_effort();
     let in_force = store::effort(recorded, settings);
-    json!({
+    let mut report = json!({
         "recorded": recorded.map(Effort::as_str),
         "inForce": in_force.map(Effort::as_str),
         "outranked": settings.effort_outranks_a_pick(),
-    })
+    });
+    if let Some(level) = began {
+        report["sessionBegan"] = json!(level.map(Effort::as_str));
+    }
+    report
 }
 
 /// Record the level named by `level`, or remove the record for `null`. A word that names no level is
@@ -45,4 +54,32 @@ pub fn set(request: &Request) -> Result<Value, Failure> {
         ));
     }
     Ok(json!({ "recorded": recorded.map(Effort::as_str) }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::test_profile;
+
+    /// A report with no open session has no `sessionBegan` key, and one for a session that began
+    /// with no level says null rather than leaving the key out.
+    #[test]
+    fn the_starting_level_is_reported_only_for_a_known_session() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let settings = Settings::default();
+        assert!(get(&settings, None).get("sessionBegan").is_none());
+        assert_eq!(get(&settings, Some(None))["sessionBegan"], Value::Null);
+        assert!(
+            get(&settings, Some(None))
+                .as_object()
+                .unwrap()
+                .contains_key("sessionBegan")
+        );
+        assert_eq!(
+            get(&settings, Some(Some(Effort::High)))["sessionBegan"],
+            "high"
+        );
+    }
 }

@@ -28,6 +28,13 @@
  * `productName`. If the menu bar ever says "Electron" again, that script has been undone by
  * an `pnpm install` and `pnpm run name-dev-app` puts it back.
  *
+ * ## With no window
+ *
+ * On macOS closing the last window leaves the app and its menu bar running. The menu is told
+ * when its window closes: the items that need a window go grey, and a command chosen anyway is
+ * dropped. File > New Chat and Open Recent build a window and deliver their command once its
+ * page has subscribed. Nothing here reads a window that has been destroyed.
+ *
  * ## The roles are load-bearing
  *
  * `editMenu` and `windowMenu` are not decoration. The default menu already provided them,
@@ -69,8 +76,37 @@ const NAME = 'Brave Bot'
  */
 let state: WindowState = NOTHING_OPEN
 
-/** Where a chosen command is delivered. Set once the window exists. */
+/** Where a chosen command is delivered. Set when a window is built and cleared when it closes. */
 let target: BrowserWindow | null = null
+
+/** Builds a window when a command that starts a chat is chosen with none open. */
+let openWindow: (() => void) | null = null
+
+type Chosen = { id: CommandId | ContextCommandId; context: ContextRef | null }
+
+/**
+ * The command that opened the current window, held until its page has subscribed. A page loads
+ * after the window exists, and a command sent before it listens is lost.
+ */
+let waiting: Chosen | null = null
+
+/**
+ * The commands that make sense with no window: the ones that start a chat. Every other command
+ * acts on something a window shows, so with none open it does nothing.
+ */
+const OPENS_A_WINDOW = new Set<CommandId | ContextCommandId>(['session.new', 'session.new-here'])
+
+/**
+ * Reading `webContents` of a destroyed window throws, so the window is asked first. A closed
+ * window stays referenced by whatever held it, which is why the answer is checked at each use.
+ */
+function alive(window: BrowserWindow | null): window is BrowserWindow {
+  return window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()
+}
+
+function deliver(window: BrowserWindow, chosen: Chosen): void {
+  window.webContents.send('bravebot:command', chosen.id, chosen.context)
+}
 
 /**
  * Tell the renderer a command was chosen.
@@ -78,9 +114,50 @@ let target: BrowserWindow | null = null
  * The id crosses and nothing else. The main process does not know what "new session" means
  * — the renderer owns every piece of state a command touches — so this is a notification,
  * not a call, and there is nothing to wait for.
+ *
+ * With no window, a command that starts a chat builds one and is delivered when its page has
+ * subscribed (see [`commandsReady`]); any other command is dropped.
  */
 function choose(id: CommandId | ContextCommandId, context?: ContextRef): void {
-  target?.webContents.send('bravebot:command', id, context ?? null)
+  const chosen: Chosen = { id, context: context ?? null }
+  if (waiting) {
+    if (OPENS_A_WINDOW.has(id)) waiting = chosen
+    return
+  }
+  if (alive(target)) {
+    deliver(target, chosen)
+    return
+  }
+  if (!OPENS_A_WINDOW.has(id) || !openWindow) return
+  waiting = chosen
+  openWindow()
+}
+
+/** Register what builds a window, for a chat started from the menu while none is open. */
+export function useWindowOpener(open: () => void): void {
+  openWindow = open
+}
+
+/**
+ * The page of the window the app built has subscribed to commands, so the one that asked for
+ * the window can be delivered now. Carries nothing from the page.
+ */
+export function commandsReady(): void {
+  const chosen = waiting
+  waiting = null
+  if (chosen && alive(target)) deliver(target, chosen)
+}
+
+/**
+ * A window has closed. Items that need a window go grey, and the commands that were waiting for
+ * it are dropped. A window that is not the current one changes nothing: a late close of the
+ * previous window must not unset a window built since.
+ */
+export function windowClosed(window: BrowserWindow): void {
+  if (target !== window) return
+  target = null
+  waiting = null
+  apply(NOTHING_OPEN)
 }
 
 /** One menu item, built from the shared declaration. */
@@ -134,14 +211,17 @@ function openRecent(): MenuItemConstructorOptions {
 }
 
 /**
- * Build the menu and make it the application's.
+ * Make a window the one chosen commands are delivered to, and build the menu.
  *
- * Called once. Afterwards the menu is mutated in place rather than rebuilt — see
- * [`refreshMenu`].
+ * Called for each window the app builds. Afterwards the menu is mutated in place rather than
+ * rebuilt; see [`refreshMenu`].
  */
 export function installMenu(window: BrowserWindow): void {
   target = window
+  buildMenu()
+}
 
+function buildMenu(): void {
   // Reload and DevTools only where there is a developer. `app.isPackaged` is the same test
   // `Bridge.binaryPath` already uses to tell a release from a checkout.
   const developing: MenuItemConstructorOptions[] = app.isPackaged
@@ -199,6 +279,7 @@ export function installMenu(window: BrowserWindow): void {
       submenu: [
         item('view.fold-left'),
         item('view.fold-right'),
+        item('app.sections'),
         item('view.reset-columns'),
         { type: 'separator' },
         item('view.find'),
@@ -212,12 +293,22 @@ export function installMenu(window: BrowserWindow): void {
       label: 'Chat',
       submenu: [
         item('turn.send'),
+        item('turn.plan'),
         item('turn.cancel'),
         SEPARATOR,
         item('mode.cycle'),
         SEPARATOR,
         item('turn.rewind'),
         item('session.note'),
+        SEPARATOR,
+        item('session.status'),
+        item('session.cost'),
+        item('session.context'),
+        item('session.request'),
+        item('spend.report'),
+        item('session.compact'),
+        item('session.handoff'),
+        item('session.background'),
       ],
     },
     { role: 'windowMenu' },
@@ -239,10 +330,19 @@ export function installMenu(window: BrowserWindow): void {
  * the id it was built with, so nothing here has to know the shape of the template.
  */
 export function rebuildMenu(): void {
-  if (target) installMenu(target)
+  buildMenu()
 }
 
+/**
+ * Heard only while a window is the target. A message from a window that is closing arrives after
+ * the reset in [`windowClosed`], and applying it would enable items for a window that is gone.
+ */
 export function refreshMenu(next: WindowState): void {
+  if (!alive(target)) return
+  apply(next)
+}
+
+function apply(next: WindowState): void {
   state = next
   const menu = Menu.getApplicationMenu()
   if (!menu) return
@@ -275,7 +375,7 @@ export function openExternal(url: string): void {
  * VoiceOver to get back to where AppKit starts.
  */
 export function popupContext(reference: ContextRef): void {
-  if (!target) return
+  if (!alive(target)) return
   const items = CONTEXT[reference.target]
   if (items.length === 0) return
   const menu = Menu.buildFromTemplate(

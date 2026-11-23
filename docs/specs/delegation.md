@@ -151,7 +151,10 @@ A delegate naming a tool that reaches the network anyway is answered the way any
 name is. The capability is held, so no gate refuses that call, which is why the absence from the
 tool list is written out a second time as a refusal. The planner is told in the `spawn_agent`
 description that a delegate cannot call `fetch_url` or `download_url`
-([AGENT-1](tools/spawn-agent.md#AGENT-1)).
+([AGENT-1](tools/spawn-agent.md#AGENT-1)). The description does not name `web_search`, which a
+planner is offered only where a key source is configured, a variable `webSearch.env` names that holds
+text or a key file ([WEBSEARCH-4](tools/web-search.md#WEBSEARCH-4)); a delegate that is told to call
+it is answered as for any unknown name ([WEBSEARCH-8](tools/web-search.md#WEBSEARCH-8)).
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
@@ -161,6 +164,7 @@ description that a delegate cannot call `fetch_url` or `download_url`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
+`verified-by: bravebot_agent::web_search::a_delegate_naming_web_search_is_answered_as_an_unknown_name_and_sends_nothing`
 `verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 `verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
@@ -626,6 +630,11 @@ Confidentiality goes both ways ([LABEL-8](labels.md#LABEL-8)). A delegate starts
 whatever private content its parent's context held, so what it writes is private from its first
 round. A parent shown a private report holds it from then on.
 
+Today no run hands the planner a reference to a delegate's report, because a delegate starts from a
+trusted conversation and nothing it does lowers that. Were a report quarantined, the planner would
+be told the reference and none of the words, and the person would be shown a preview marked as kept
+from the planner.
+
 A delegate that starts out holding private content can start a processor as one that holds none
 can ([PROC-4](processors.md#PROC-4)). It is offered `spawn_processor` and told it may hand files to
 processors where its list holds the tool, and what it writes is private, so the answer it gets is
@@ -639,6 +648,7 @@ processors where its list holds the tool, and what it writes is private, so the 
 `verified-by: bravebot_agent::tools::no_description_says_that_private_content_closes_processors`
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
+`verified-by: bravebot_agent::turn::a_report_the_planner_was_handed_a_reference_to_is_kept_from_it_and_drawn_marked`
 
 <a id="DELEGATE-9"></a>
 ### DELEGATE-9: nothing but the report crosses back
@@ -655,17 +665,27 @@ The driver's own record of whether a delegate changed a file and whether it ran 
 back too, and a parent whose workspace the delegate worked in counts both as its own for
 [TURN-4](turns.md#TURN-4)'s question and closing line.
 
-The driver's own count of the delegate's rounds and time, and the fixed cause of its end, go to the
-trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRACE-8)).
+The driver's own record of how long the delegate ran, how many rounds it made and how it ended goes
+to the trail and to the person's note ([trace.md](trace.md)). The planner is told none of the time
+and none of the rounds made. It is told only: the sentence naming the round bound or the token
+budget a delegate reached ([DELEGATE-26](#DELEGATE-26), [DELEGATE-29](#DELEGATE-29)); that the
+person stopped the delegate before it reported; that a delegate that did not finish did not finish,
+and for a rate-limited, unavailable, transport or incomplete ending the driver's own sentence for
+that category and no other word of the cause ([backends.md](backends.md)); for a delegate that ran
+in a checkout, the checkout's id and either that it was removed because nothing was done in it, or
+its commit and path, with the advice to apply the files of a kept one ([checkouts.md](checkouts.md));
+and how many commands it ran and writes it made ([grounding.md](grounding.md)).
 
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.
 
-The parent is told beside each report how many commands the delegate ran and writes it made
-([GROUND-2](grounding.md#GROUND-2)).
-
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_delegates_rounds_time_and_cause_in_the_trail_never_reach_the_planner`
+`verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
+`verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person`
+`verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_bound`
+`verified-by: bravebot_agent::turn::a_delegates_report_is_put_beside_how_many_commands_it_ran_and_writes_it_made`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -683,8 +703,12 @@ came from a planner ([SERVERS-21](mcp-servers.md#SERVERS-21)).
 Delegation saves context. It never saves an approval.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
+`verified-by: bravebot_agent::turn::a_delegates_run_is_put_to_the_person_and_runs_only_on_a_yes`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
+`verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`
+`verified-by: bravebot_agent::mcp::a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked`
+`verified-by: bravebot_agent::mcp::an_approval_given_to_a_turn_or_a_worker_decides_no_other_call`
 
 <a id="DELEGATE-11"></a>
 ### DELEGATE-11: what a person vouched for outlives the delegate
@@ -867,6 +891,8 @@ something unrelated to it.
 `verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
 `verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
 `verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
+`verified-by: bravebot_agent::shared::two_delegates_reporting_at_once_are_taken_one_call_at_a_time`
+`verified-by: bravebot_agent::shared::two_delegates_recording_at_once_are_taken_one_call_at_a_time`
 
 <a id="DELEGATE-17"></a>
 ### DELEGATE-17: a delegate does not outlive the turn that spawned it
@@ -1069,6 +1095,8 @@ or write files.
 `verified-by: bravebot_agent::agents::one_restriction_nothing_applies_is_named_alone`
 `verified-by: bravebot_agent::agents::a_respelt_restriction_is_found_and_an_unrelated_key_is_not`
 `verified-by: bravebot_agent::agents::the_notice_repeats_a_key_and_never_its_value`
+`verified-by: bravebot_agent::turn::a_turn_tells_the_reporter_once_that_a_definitions_restriction_keys_are_not_applied`
+`verified-by: bravebot_agent::turn::a_delegates_turn_does_not_repeat_the_restriction_notice_of_the_turn_that_started_it`
 `verified-by: bravebot_agent::agents::every_key_this_reads_is_read`
 `verified-by: bravebot_cli::running::doctor_names_the_keys_a_definition_declares_that_nothing_reads`
 `verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`

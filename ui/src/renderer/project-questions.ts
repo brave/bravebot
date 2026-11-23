@@ -194,5 +194,5 @@ export function unopened(rules: SettingsRules | null | undefined, refused: Refus
 export function notInForceCount(rules: SettingsRules, refused: RefusedFolder[] = []): number {
   const { closed, refused: unlisted } = unopened(rules, refused)
   const paths = (rules.filesystem ?? []).filter((entry) => entry.refused !== null).length
-  return rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + paths + (rules.filesystemIgnored?.length ?? 0)
+  return rules.unreadable.length + rules.proposed.length + closed.length + unlisted.length + paths + (rules.filesystemIgnored?.length ?? 0) + (rules.droppedKeys?.length ?? 0)
 }

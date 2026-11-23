@@ -1202,6 +1202,7 @@ pub(super) fn held(task: &Task) -> CapabilitySet {
         None => CapabilitySet::from_iter(
             [
                 Capability::WebFetch,
+                Capability::WebSearch,
                 Capability::FileRead,
                 Capability::FileWrite,
                 Capability::ShellExec,

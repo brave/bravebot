@@ -984,6 +984,69 @@ fn a_session_asks_about_trust_once() {
     assert_eq!(questions, 1);
 }
 
+/// BACKEND-36, RETRIEVE-23: a session an editor opens is told, before the answer to its first
+/// prompt, which keys of the settings were not read or were written twice, in the sentences
+/// `doctor` uses, once each, and no value. The editor has no terminal and no `doctor`, so a
+/// misspelled key in the file `--settings` names reads to its writer as a setting in force.
+///
+/// Rejects a session that forwards the named-withheld sentence and leaves the keys out, one that
+/// says a key once for each prompt, and one that prints what a key was set to. The model's
+/// reply follows the notes, which a note sent after the reply would fail.
+#[test]
+fn a_session_an_editor_opens_is_told_the_keys_its_settings_dropped() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("dropped-keys");
+    let (config, _requests, server) =
+        endpoint::endpoint(vec![endpoint::answer(), endpoint::answer()], None);
+    let mut editor = Editor::on_settings(
+        json!({
+            "model": "acp-test/test",
+            "statusLine": "a-command-nobody-prints",
+            "permissions": {"denyy": ["Read(a-rule-nobody-prints)"]}
+        }),
+        &config.endpoint,
+        &project,
+    );
+    let session = editor.session(&project);
+    for words in ["one", "two"] {
+        let prompt = editor.prompt(&session, text(words));
+        if words == "one" {
+            editor.answer_next(selected("allow-once"));
+        }
+        let done = editor.response(prompt);
+        assert_eq!(done["result"]["stopReason"], "end_turn", "{words}: {done}");
+    }
+    server.join().unwrap();
+
+    let told = editor.texts();
+    let named = |needle: &str| told.iter().filter(|said| said.contains(needle)).count();
+    assert_eq!(named("statusLine in "), 1, "{told:?}");
+    assert_eq!(named("permissions.denyy in "), 1, "{told:?}");
+    assert!(
+        told.iter()
+            .filter(|said| said.contains(" in "))
+            .all(|said| said.contains("-test-settings.json")),
+        "a note does not name the file that wrote the key: {told:?}"
+    );
+    let reply = told
+        .iter()
+        .position(|said| said == "done")
+        .expect("the model's reply");
+    let last_note = told
+        .iter()
+        .rposition(|said| said.contains("statusLine in ") || said.contains("permissions.denyy in "))
+        .expect("a note");
+    assert!(last_note < reply, "a note followed the reply: {told:?}");
+    assert!(
+        told.iter().all(|said| {
+            !said.contains("a-command-nobody-prints") && !said.contains("a-rule-nobody-prints")
+        }),
+        "a value is said: {told:?}"
+    );
+}
+
 /// The question says what a yes keeps and the file it is written to before the editor is asked for
 /// it, a yes writes that file, and a later session in the directory is not asked.
 #[test]

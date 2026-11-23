@@ -27,3 +27,24 @@ export interface Paste {
   session: string
   outcome: PasteOutcome
 }
+
+/**
+ * The longest text a folded paste may hold, the most the preferences file keeps of one. A longer
+ * paste is not folded and lands whole, so every folded paste a draft names survives a reopen.
+ */
+export const FOLDED_TEXT_MAX = 200000
+
+/**
+ * A long text a person pasted, folded behind a marker in the composer, as the terminal's
+ * `PastedText` (PASTE-1). The words stay in the page: text is presentation, so no grant is minted.
+ */
+export interface PastedText {
+  /** The text standing for it in the draft, as `[Pasted text #1 +12 lines]`. */
+  marker: string
+  /** What was pasted, with its line endings already normalised. */
+  text: string
+  /** The number the marker carries, from the counter drops and pictures share. */
+  number: number
+  /** How many lines the text is, as `linesIn` counts them. */
+  lines: number
+}

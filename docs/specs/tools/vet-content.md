@@ -19,9 +19,9 @@ carries an `expects`. The other two come with a read the planner made for its ow
 [read-output.md](read-output.md) and the vouch offer in [trust-map.md](../trust-map.md#TRUST-8).
 [CHECK-10](../vetting.md#CHECK-10) covers all three.
 
-A call to `fetch_url`, `search`, `list_files` or a server's tool may also ask for this release in its
-own result, with `read: true`, so that the round a `vet_content` call would take is not spent
-([VET-6](#VET-6)).
+A call to `fetch_url`, `web_search`, `search`, `list_files` or a server's tool may also ask for this
+release in its own result, with `read: true`, so that the round a `vet_content` call would take is not
+spent ([VET-6](#VET-6)).
 
 ## Clauses
 
@@ -365,16 +365,18 @@ never in a result, which a planner could aim at.
 `verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
 
 <a id="VET-6"></a>
-### VET-6: a fetch, a search, a listing or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
+### VET-6: a fetch, a web search, a search, a listing or a server's tool may ask for its result to be released in the same result, and gets it where the mode or a check answers
 
-`read: true` on a `fetch_url`, `search` or `list_files` call, or on a call to a server's tool, asks
-for what the call returned in the result that returned it. For `search` and `list_files` that is a
+`read: true` on a `fetch_url`, `web_search`, `search` or `list_files` call, or on a call to a server's
+tool, asks for what the call returned in the result that returned it. For `search` and `list_files` that is a
 result quarantined because the walk reached a path nobody vouched for
 ([SEARCH-2](search.md#SEARCH-2), [LIST-2](list-files.md#LIST-2)); a result the planner may already
 read is shown as it would be without the argument. It is offered only on a list that holds `vet_content`, so a delegate
 and a definition that leaves the tool out are not offered it. A `read` given to `fetch_url`, `search` or `list_files` there
 is still checked to be a boolean and releases nothing, and one given to a server's tool is sent as
-written, since this process did not offer it. A server's tool is offered it only where the server
+written, since this process did not offer it. A `web_search` call is released as a `fetch_url` call is,
+on the same path, and a `read` on it that is not a boolean is refused before a question is put or a
+request is sent ([WEBSEARCH-9](web-search.md#WEBSEARCH-9)). A server's tool is offered it only where the server
 lists no argument named `read` itself ([MCP-16](../mcp.md#MCP-16)).
 
 The content is quarantined as [FETCH-1](fetch-url.md#FETCH-1), [SEARCH-2](search.md#SEARCH-2),
@@ -484,5 +486,7 @@ as outside the workspace ([PATHREQ-7](request-path.md#PATHREQ-7)). The reference
 `verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_says_why`
 `verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
 `verified-by: bravebot_agent::turn::a_fetch_whose_read_is_not_a_boolean_is_refused_before_anything_is_fetched`
+`verified-by: bravebot_agent::web_search::a_search_that_asks_to_read_is_released_as_a_fetch_is_and_one_that_does_not_is_not`
+`verified-by: bravebot_agent::web_search::a_search_whose_read_is_not_a_boolean_is_refused_before_a_question_or_a_request`
 `verified-by: bravebot_agent::turn::a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same_fetch`
 `verified-by: bravebot_agent::turn::vet_content_does_not_check_again_a_page_the_fetchs_read_found_unsafe`

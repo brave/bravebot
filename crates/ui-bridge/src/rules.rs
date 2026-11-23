@@ -22,7 +22,7 @@
 //!   reported with the file that wrote it and, where it is not in force, why. The window shows
 //!   them and edits nothing.
 
-use bravebot_config::{Managed, Settings};
+use bravebot_config::{Managed, RuleSources, Settings};
 use bravebot_core::permissions::Permissions;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -33,6 +33,9 @@ pub struct SettingsRules {
     /// What a turn and a run are given. Empty where no file wrote a rule, which changes nothing
     /// about what a session asks (PERM-12).
     pub permissions: Permissions,
+    /// The file that wrote each rule in `permissions`, and the reason given for it, as the
+    /// settings said when the session opened (PERM-12).
+    pub sources: RuleSources,
     /// The rules in force, as the files spelled them, for a front end to show.
     pub deny: Vec<String>,
     pub ask: Vec<String>,
@@ -54,6 +57,11 @@ pub struct SettingsRules {
     /// The agent's sentence for the file `--settings` named where it is read as a checkout's file
     /// because this platform cannot hold it back from a directory a stage may write (#2599).
     pub named_withheld: Option<String>,
+    /// The keys of the settings and managed values that were not read as written: an unread key, a
+    /// key a file wrote twice and a managed `retrieval` value that pins nothing, each as the agent
+    /// says it in `doctor` and in a terminal session, spelled as the window shows a name (PROMPT-1,
+    /// BACKEND-36, RETRIEVE-23).
+    pub dropped_keys: Vec<String>,
     /// Whether the file tools are held to the project (PERM-16), as the files said when the
     /// session opened. A file edited afterwards changes nothing about this session (PERM-12).
     pub reads_stay_in_workspace: bool,
@@ -173,6 +181,7 @@ impl SettingsRules {
         let proposed = bravebot_agent::permissions::proposed(settings, profile.as_deref());
         Self {
             permissions,
+            sources: settings.rule_sources(),
             deny: readable(&lists.deny),
             ask: readable(&lists.ask),
             allow,
@@ -218,6 +227,10 @@ impl SettingsRules {
                 .map(|(file, key)| (key.to_string(), file.to_path_buf()))
                 .collect(),
             named_withheld: bravebot_agent::permissions::named_withheld_said(settings),
+            dropped_keys: bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+                settings,
+                bravebot_agent::dropped_keys::Spelling::Shown,
+            ),
             reads_stay_in_workspace: reads_stay_in_workspace(settings, &Managed::load()),
         }
     }
@@ -292,6 +305,7 @@ impl SettingsRules {
                 }))
                 .collect::<Vec<_>>(),
             "namedWithheld": self.named_withheld,
+            "droppedKeys": self.dropped_keys,
         })
     }
 }
@@ -387,7 +401,83 @@ mod tests {
         assert!(rules.permissions.is_empty());
         assert_eq!(
             rules.json(),
-            json!({ "deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [], "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null, "shownGrantedRecord": null, "directories": [], "shownDirectories": [], "filesystem": [], "filesystemIgnored": [], "namedWithheld": null })
+            json!({ "deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [], "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null, "shownGrantedRecord": null, "directories": [], "shownDirectories": [], "filesystem": [], "filesystemIgnored": [], "namedWithheld": null, "droppedKeys": [] })
+        );
+    }
+
+    /// BACKEND-36: a key no reader reads, and a key a file wrote twice, are reported to the front
+    /// end as the sentences `doctor` says, spelled as the window shows a name, and no value is in
+    /// them. A report that left the keys out reads the file as taken whole.
+    #[test]
+    fn a_key_nothing_reads_and_a_key_written_twice_are_reported_to_the_front_end() {
+        let (dir, settings) = layers(
+            Some(
+                r#"{"permissions": {"denyy": ["Read(a-rule-nobody-prints)"], "deny": [], "deny": []}}"#,
+            ),
+            None,
+        );
+        let rules = SettingsRules::read(&settings, dir.path());
+
+        let said = rules.json()["droppedKeys"].clone();
+        let said: Vec<&str> = said
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|sentence| sentence.as_str().expect("a sentence"))
+            .collect();
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(
+            said.iter()
+                .any(|sentence| sentence.starts_with("permissions.denyy in ")),
+            "{said:?}"
+        );
+        assert!(
+            said.iter()
+                .any(|sentence| sentence
+                    .starts_with("permissions.deny is written more than once in ")),
+            "{said:?}"
+        );
+        assert!(
+            said.iter()
+                .all(|sentence| !sentence.contains("a-rule-nobody-prints")),
+            "a value is said: {said:?}"
+        );
+    }
+
+    /// BACKEND-36, RETRIEVE-23: the report carries what the managed layer the machine holds dropped,
+    /// the key the managed file wrote twice and the `retrieval` value that pins nothing, spelled as
+    /// the window shows a name, once each, and no value.
+    ///
+    /// Rejects a report that reads the keys without the machine's managed layer, which leaves every
+    /// managed key to `doctor`. The test above reads under a machine that holds no managed file, so
+    /// it cannot tell the two apart.
+    #[test]
+    fn what_a_managed_layer_dropped_is_reported_to_the_front_end() {
+        let (dir, settings) = layers(None, None);
+        let file = dir.path().join("managed.json");
+        std::fs::write(
+            &file,
+            r#"{"retrieval": "false", "models": {"deny": ["a-model-nobody-prints"]}, "models": {}}"#,
+        )
+        .unwrap();
+        let _machine = bravebot_config::managed_file_on_this_thread(&file);
+
+        let rules = SettingsRules::read(&settings, dir.path());
+
+        let expected = bravebot_agent::dropped_keys::at_session_start_of_this_machine(
+            &settings,
+            bravebot_agent::dropped_keys::Spelling::Shown,
+        );
+        assert_eq!(expected.len(), 2, "{expected:?}");
+        assert_eq!(rules.dropped_keys, expected);
+        assert_eq!(rules.json()["droppedKeys"], json!(expected));
+        assert!(
+            rules
+                .dropped_keys
+                .iter()
+                .all(|sentence| !sentence.contains("a-model-nobody-prints")),
+            "a value is said: {:?}",
+            rules.dropped_keys
         );
     }
 
@@ -424,6 +514,37 @@ mod tests {
         assert_eq!(held_back.named_withheld, None);
         assert_eq!(held_back.json()["namedWithheld"], json!(null));
         assert_eq!(fetching(&held_back, "example.com"), Some(Ruling::Allow));
+    }
+
+    /// The rules keep the file that wrote each one, so a question about a rule later in the
+    /// session is answered from what the session opened with (PERM-12).
+    #[test]
+    fn the_rules_keep_the_file_that_wrote_a_deny_rule() {
+        let (dir, settings) = layers(
+            Some(r#"{"permissions": {"allow": ["WebFetch(domain:example.com)"]}}"#),
+            Some(r#"{"permissions": {"deny": ["Bash(git push:*)"]}}"#),
+        );
+        let rules = SettingsRules::read(&settings, dir.path());
+        let (file, written) = rules
+            .sources
+            .source("deny", "Bash(git push:*)")
+            .expect("the deny rule's file");
+        assert!(
+            file.ends_with("project/.bravebot/settings.json"),
+            "{}",
+            file.display()
+        );
+        assert_eq!(written, "Bash(git push:*)");
+        let (file, _) = rules
+            .sources
+            .source("allow", "WebFetch(domain:example.com)")
+            .expect("the allow rule's file");
+        assert!(file.ends_with("home/settings.json"), "{}", file.display());
+        assert_eq!(
+            rules.sources.source("deny", "WebFetch(domain:example.com)"),
+            None
+        );
+        assert_eq!(rules.sources, settings.rule_sources());
     }
 
     /// An `allow` rule in the person's own file holds, since there is a person at this front end.

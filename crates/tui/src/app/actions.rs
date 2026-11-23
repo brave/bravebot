@@ -29,7 +29,7 @@ use super::records::{
 use super::side_requests::{
     compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
 };
-use super::turns::{Continued, Wrote, next_after_a_turn, run_turn_animated};
+use super::turns::{Continued, next_after_a_turn, run_turn_animated, whose_line};
 use super::{
     BACKGROUND_LOSES, Ended, RunSettings, Suggesting, Switch, branch_session,
     handed_to_the_background, left_behind, opened_scratch, record_to_resume, run_command,
@@ -897,15 +897,8 @@ impl Held<'_> {
         // going back round the outer loop keeps a queued prompt from waiting on a key
         // press that nobody is there to make.
         // Whose line each one is, which decides whether a `@path` in it vouches for a
-        // file. Everything the person typed or queued is theirs; the sentence a goal
-        // carries the work on with is this program's, and so is the one a watch fires
-        // with. A fire also must not leave a loop behind repeating itself, which is the
-        // other thing this answers.
-        let whose = if self.session.watch_is_firing() {
-            Wrote::TheDriver
-        } else {
-            Wrote::ThePerson
-        };
+        // file.
+        let whose = whose_line(self.session);
         // Whatever was offered is not the next prompt any more. An answer still on its way
         // is for a state that has passed, and is dropped when the chain's own request
         // replaces it below.

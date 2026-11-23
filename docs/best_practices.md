@@ -13,16 +13,17 @@ checks is a bug against this directory rather than an entry in it.
 | Read | For |
 |---|---|
 | [best-practices/specs.md](best-practices/specs.md) | prose a clause is allowed to be, and a change agreeing with the specs that govern it |
-| [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, and proving it fails first |
+| [best-practices/tests.md](best-practices/tests.md) | what a test is named, what it covers, proving it fails first, a test waiting for the condition it asserts on, and a flaky-test fix naming the race |
 | [best-practices/verification.md](best-practices/verification.md) | which code gets a Verus contract, and a contract saying what the code is for and being shown to fail |
-| [best-practices/writing.md](best-practices/writing.md) | what a comment is for |
+| [best-practices/writing.md](best-practices/writing.md) | what a comment is for, and a comment describing the code as it is |
 | [best-practices/dependencies.md](best-practices/dependencies.md) | what a dependency has to be worth across package managers |
 | [best-practices/shared-implementation.md](best-practices/shared-implementation.md) | where shared client behavior lives and how callers reuse it |
 | [best-practices/paths.md](best-practices/paths.md) | carrying paths, programs and arguments as bytes so a lossy rendering never decides what is approved, granted or started, a fix for a spelling that got past a rule covering the file's other names, and a step that turns a name into a key saying which different files it joins, and a program bravebot starts itself being tested for the names it starts, with a fix to one such program checked against the others, and a program bravebot starts for itself with the person's environment either having each variable that chooses code to run removed unless its value is a safe file, directory or program name, or stating why it keeps the environment |
 | [best-practices/comparisons.md](best-practices/comparisons.md) | a host, socket or path that decides a rule, grant, label or destination being read with its helper before it is compared, and no substring test on the whole string |
 | [best-practices/compatibility.md](best-practices/compatibility.md) | persisted data that earlier versions wrote still reading, or being migrated |
+| [best-practices/errors.md](best-practices/errors.md) | a value from outside the process being checked and refused with an error before an `expect`, `unreachable!`, `panic!` or `assert!` can reach it |
 | [best-practices/carried-grants.md](best-practices/carried-grants.md) | a trust answer, vouch or permission kept for a resume or a later session being restored only for the checkout it was given for, with identity recorded or the cost named in the sessions spec |
-| [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands, and where its logic lives |
+| [best-practices/ui.md](best-practices/ui.md) | what a change to the desktop UI is held to before it lands, where its logic lives, and an effect ignoring a late result after its dependencies change |
 | [best-practices/portability.md](best-practices/portability.md) | a fix or addition making sense for other people on other computers, with no workaround for one setup |
 | [best-practices/usability.md](best-practices/usability.md) | a change asking the person for no command, answer or setup that the feature does not need and no spec clause requires |
 | [best-practices/gaps.md](best-practices/gaps.md) | a pull request or issue that says a defect is left unfixed naming the issue that tracks it, or the spec clause that records it as an accepted cost, and a description edited when a later commit changes what it states |

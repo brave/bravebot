@@ -80,6 +80,10 @@ pub struct State {
     /// checkout proposed, which names the session the yes was given in as the terminal's does
     /// (PERM-15). `None` once the handle exists, or where nothing has named the session yet.
     pub named: Option<String>,
+    /// The id of the record this session was handed off from (SESSION-34), given to the handle
+    /// the first turn makes. Taken by the bridge from a chat it holds open, never from text the
+    /// window sent. `None` once the handle exists, or for a session nobody handed work to.
+    pub handed_off_from: Option<String>,
     pub turns: usize,
     /// Where each turn began and ended, and what came of it (SESSION-23).
     ///
@@ -89,6 +93,12 @@ pub struct State {
     /// and extended by every turn taken here, so a save writes back the history it was given.
     pub history: Option<Vec<bravebot_session::sessions::StoredTurn>>,
     pub tokens: u64,
+    /// The most the session may spend before a turn asks the person whether to go on (TURN-8).
+    ///
+    /// Shared with each turn, so a figure given at the question is the session's afterwards. Not
+    /// saved: a session opened, resumed or forked here reads it from the `limit` setting, as the
+    /// terminal does.
+    pub spend_limit: bravebot_agent::SpendLimit,
     /// How many of `tokens` the model read and how many it wrote, for the turns that reported it.
     pub split: bravebot_session::sessions::Split,
     /// What each turn cost, by turn number.
@@ -208,12 +218,21 @@ pub enum Mcp {
 }
 
 /// A handle for a fresh session in `project`, under the id it was `named` by already if it was
-/// ([`State::named`]).
-pub fn begin_named(named: Option<String>, project: &Path) -> Handle {
-    match named {
+/// ([`State::named`]), linked to the session it was `handed_off_from` if it was
+/// ([`State::handed_off_from`]).
+pub fn begin_named(
+    named: Option<String>,
+    handed_off_from: Option<String>,
+    project: &Path,
+) -> Handle {
+    let mut handle = match named {
         Some(id) => Handle::begin_as(id, project, crate::FRONT, crate::agent_build()),
         None => Handle::begin(project, crate::FRONT, crate::agent_build()),
+    };
+    if let Some(source) = handed_off_from {
+        handle.hand_off_from(&source);
     }
+    handle
 }
 
 impl State {
@@ -236,8 +255,9 @@ impl State {
     /// by already if it was.
     pub fn handle_or_begin(&mut self, project: &Path) -> &mut Handle {
         let named = self.named.take();
+        let handed_off_from = self.handed_off_from.take();
         self.handle
-            .get_or_insert_with(|| begin_named(named, project))
+            .get_or_insert_with(|| begin_named(named, handed_off_from, project))
     }
 
     pub fn fresh(trust: TrustStore) -> Self {
@@ -262,9 +282,13 @@ impl State {
             kept: None,
             handle: None,
             named: None,
+            handed_off_from: None,
             turns: 0,
             history: Some(Vec::new()),
             tokens: 0,
+            // The bridge replaces this with the project's `limit` setting when it opens the
+            // session.
+            spend_limit: Default::default(),
             split: Default::default(),
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),

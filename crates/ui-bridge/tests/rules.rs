@@ -445,7 +445,7 @@ fn with_no_rule_a_fetch_is_put_to_the_window() {
         json!({"deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [],
             "unreadable": [], "proposed": [], "granted": [], "grantedRecord": null,
             "shownGrantedRecord": null, "directories": [], "shownDirectories": [],
-            "filesystem": [], "filesystemIgnored": [], "namedWithheld": null})
+            "filesystem": [], "filesystemIgnored": [], "namedWithheld": null, "droppedKeys": []})
     );
 
     let question = run.front.ask(&session);
@@ -683,6 +683,141 @@ fn a_rule_written_after_a_session_opened_governs_the_next_one() {
         "{listed}"
     );
     assert!(!run.reached_the_site());
+}
+
+/// Ask the session which rule decides the call `family` and `words` name (CLI-30).
+fn check(front: &mut FrontEnd, session: &str, family: &str, words: &[&str]) -> Value {
+    front.call(
+        "permissions.check",
+        json!({"session": session, "family": family, "words": words}),
+    )
+}
+
+/// The decision, rule and file of an answer to `permissions.check`.
+fn decided(answer: &Value) -> (Value, Value, Value) {
+    (
+        answer["decision"].clone(),
+        answer["rule"].clone(),
+        answer["file"].clone(),
+    )
+}
+
+/// CLI-30: `permissions.check` names the rule that decides a call and the file that wrote it, in
+/// the order a session applies them across two layers: deny, then ask, then allow.
+#[test]
+fn permissions_check_names_the_rule_and_the_file_that_decide() {
+    let scratch = Scratch::new("bridge-rules-check");
+    scratch.the_person_writes(json!({
+        "deny": ["Bash(git push *)"],
+        "allow": ["Bash(git *)"],
+    }));
+    scratch.the_checkout_writes(json!({"ask": ["Bash(git commit *)", "Read(./.env)"]}));
+    let home = scratch
+        .home()
+        .join(".bravebot/settings.json")
+        .display()
+        .to_string();
+    let project = scratch.checkout_file().display().to_string();
+    let (endpoint, _rounds) = a_model_service(|_, _| says("done"));
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _rules) = front.session(&scratch);
+
+    let push = check(
+        &mut front,
+        &session,
+        "Bash",
+        &["git", "push", "origin", "main"],
+    );
+    assert_eq!(
+        decided(&push),
+        (json!("deny"), json!("Bash(git push *)"), json!(home)),
+        "{push}"
+    );
+    assert_eq!(push["granted"], json!(false), "{push}");
+    assert_eq!(push["notInForce"], Value::Null, "{push}");
+    let commit = check(&mut front, &session, "Bash", &["git", "commit", "-m", "x"]);
+    assert_eq!(
+        decided(&commit),
+        (json!("ask"), json!("Bash(git commit *)"), json!(project)),
+        "{commit}"
+    );
+    let status = check(&mut front, &session, "Bash", &["git", "status"]);
+    assert_eq!(
+        decided(&status),
+        (json!("allow"), json!("Bash(git *)"), json!(home)),
+        "{status}"
+    );
+    let env = check(&mut front, &session, "Read", &[".env"]);
+    assert_eq!(
+        decided(&env),
+        (json!("ask"), json!("Read(./.env)"), json!(project)),
+        "{env}"
+    );
+}
+
+/// CLI-30: a call no rule covers says so and names no rule or file.
+#[test]
+fn permissions_check_says_when_no_rule_decides() {
+    let scratch = Scratch::new("bridge-rules-check-none");
+    scratch.the_person_writes(json!({"allow": ["Bash(git *)"]}));
+    let (endpoint, _rounds) = a_model_service(|_, _| says("done"));
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _rules) = front.session(&scratch);
+
+    let answer = check(&mut front, &session, "Bash", &["ls", "-l"]);
+    assert_eq!(
+        decided(&answer),
+        (json!("none"), Value::Null, Value::Null),
+        "{answer}"
+    );
+    assert_eq!(answer["notInForce"], Value::Null, "{answer}");
+}
+
+/// CLI-30: words that name no call are refused, as the terminal refuses them.
+#[test]
+fn permissions_check_refuses_words_that_name_no_call() {
+    let scratch = Scratch::new("bridge-rules-check-refused");
+    let (endpoint, _rounds) = a_model_service(|_, _| says("done"));
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _rules) = front.session(&scratch);
+    // A call the words do name is answered, so the refusals below are of the words.
+    assert_eq!(
+        check(&mut front, &session, "WebSearch", &[])["decision"],
+        "none"
+    );
+
+    for (family, words) in [
+        ("Bash", json!([])),
+        ("Mcp", json!(["no-colon"])),
+        ("WebSearch", json!(["extra"])),
+        ("Read", json!(["a", "b"])),
+        ("Fetchh", json!(["example.com"])),
+        ("Read", json!([3])),
+        ("Read", json!("not-a-list")),
+    ] {
+        let answered = front.answered(
+            "permissions.check",
+            json!({"session": session, "family": family, "words": words}),
+        );
+        assert_eq!(
+            answered["error"]["code"], "bad_request",
+            "{family} {words} was not refused: {answered}"
+        );
+    }
+}
+
+/// PERM-12: the answer is about the rules the session opened under, so a file edited afterwards
+/// does not change it.
+#[test]
+fn permissions_check_answers_against_the_rules_the_session_holds() {
+    let scratch = Scratch::new("bridge-rules-check-held");
+    let (endpoint, _rounds) = a_model_service(|_, _| says("done"));
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let (session, _rules) = front.session(&scratch);
+    scratch.the_person_writes(json!({"deny": ["Bash(git push *)"]}));
+
+    let answer = check(&mut front, &session, "Bash", &["git", "push"]);
+    assert_eq!(answer["decision"], "none", "{answer}");
 }
 
 /// PERM-11: an entry that is not a rule is reported as the session opens, and the rule beside

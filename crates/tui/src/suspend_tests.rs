@@ -184,7 +184,7 @@ fn the_offer_to_leave_does_not_survive_a_stop() {
 #[test]
 fn the_terminal_is_given_back_before_the_stop_and_taken_again_after_it() {
     let log = std::cell::RefCell::new(Vec::new());
-    terminal::around_a_stop(
+    terminal::handed_over(
         &mut (),
         |_| {
             log.borrow_mut().push("given back");
@@ -244,7 +244,7 @@ fn a_call_that_failed_for_another_reason_is_not_made_again() {
 #[test]
 fn a_terminal_that_cannot_be_given_back_is_not_stopped_over() {
     let log = std::cell::RefCell::new(Vec::new());
-    let result = terminal::around_a_stop(
+    let result = terminal::handed_over(
         &mut (),
         |_| {
             Err(std::io::Error::other(
@@ -289,7 +289,7 @@ fn a_mode_over_the_box_reads_ctrl_z_itself_and_does_not_suspend() {
 
     let mut session = a_box_with_something_in_it();
     let before = what_the_box_holds(&session);
-    open_effort_picker(&mut session);
+    open_effort_picker(&mut session, crate::model_prompt::Scope::EverySession);
     assert!(session.picking().is_some(), "the fixture opened no picker");
     assert_ne!(handle_key(&mut session, ctrl('z')), Action::Suspend);
     assert!(session.picking().is_some(), "the key closed the picker");

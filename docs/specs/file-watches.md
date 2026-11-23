@@ -198,6 +198,8 @@ the one prompt in this system nobody can label would be the one carrying bytes o
 `verified-by: bravebot_agent::watch::a_fire_for_each_change_says_one_of_three_fixed_things_about_the_path`
 `verified-by: bravebot_tui::state::a_removal_and_an_appearance_are_each_reported_as_what_they_were`
 `verified-by: bravebot_tui::state::a_fires_prompt_carries_the_watch_and_the_path_and_nothing_else`
+`verified-by: bravebot_tui::app::a_path_named_in_a_fires_prompt_vouches_for_nothing`
+`verified-by: bravebot_tui::app::a_line_typed_with_no_fire_in_flight_is_the_persons_and_names_its_files`
 
 <a id="FSWATCH-5"></a>
 ### FSWATCH-5: a fire waits for an idle session and never interrupts, and changes while a turn runs are one fire

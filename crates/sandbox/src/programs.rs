@@ -10,10 +10,11 @@
 //! entries that lie outside every directory a session may write, and a program found only in one
 //! of the others is not installed, as far as bravebot is concerned.
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// The name a program is known by, from the file it resolved to: the file's name with a Windows
 /// executable extension (`.exe` or `.com`) removed and the rest folded to lower case, so
@@ -39,7 +40,8 @@ pub fn program_name(resolved: &Path) -> Option<String> {
     Some(stem.unwrap_or_else(|| name.to_string()))
 }
 
-/// Directories a confined stage may write, for the life of the process.
+/// Directories a confined stage may write, for the life of the process, with the directories an
+/// earlier process recorded ([`load_record`]).
 ///
 /// Only ever added to. Closing a directory does not remove a file already written into it, and
 /// the lookup runs far from the code that opens one.
@@ -55,16 +57,279 @@ static WRITABLE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 /// [SANDBOX-28]: ../../../docs/specs/sandboxing.md
 static WRITABLE_WHERE_THE_ACCOUNT_CAN: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+/// Directories of the first kind that a record read by [`load_record`] held, as that record named
+/// them and as they resolve now.
+///
+/// What a process that opens no session knows of the directories an earlier process let a stage
+/// write. Kept apart from [`WRITABLE`] so a caller that compares paths with those directories and
+/// not with a `PATH` can ask for them alone ([`recorded_earlier`]).
+static EARLIER: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// What a stage may write, which the record keeps apart for the two ways a row is held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Held {
+    /// A row a stage may write whatever the account can do ([`keep_out`]).
+    Anywhere,
+    /// A row that came with the whole machine, which counts only where the account can write what
+    /// it holds ([`keep_out_where_writable`], [SANDBOX-28]).
+    ///
+    /// [SANDBOX-28]: ../../../docs/specs/sandboxing.md
+    WhereTheAccountCan,
+}
+
+impl Held {
+    /// The word a line of the record begins with.
+    const fn word(self) -> &'static str {
+        match self {
+            Held::Anywhere => "directory",
+            Held::WhereTheAccountCan => "where-the-account-can",
+        }
+    }
+}
+
+/// The lines this process knows are in the record, whether it read them or handed them on.
+///
+/// A directory is handed on once, however often it is recorded, so a stage that is planned again
+/// for every step adds no line.
+static KNOWN_TO_THE_RECORD: Mutex<BTreeSet<(Held, PathBuf)>> = Mutex::new(BTreeSet::new());
+
+/// What a caller does with a line of the record: it appends the line's bytes, and reports an error
+/// where it could not. A line is bytes and not text because a path on Unix is bytes.
+type Sink<'a> = &'a dyn Fn(&[u8]) -> std::io::Result<()>;
+
+/// The function [`follow_record`] takes, which appends a line of the record.
+type Append = fn(&[u8]) -> std::io::Result<()>;
+
+/// What a caller does with a line of the record, set once by [`follow_record`].
+static HAND_ON: OnceLock<Append> = OnceLock::new();
+
+/// The sink [`follow_record`] set, if it has been called.
+fn the_record() -> Option<Sink<'static>> {
+    HAND_ON.get().map(|sink| sink as Sink<'static>)
+}
+
+/// The most bytes of a record that are read, and the size at which a caller stops adding to it.
+///
+/// A line is one directory, so a record that reaches this holds more than any session has opened.
+/// The bound keeps a record that grew, or was filled, from being read whole at every start.
+pub const RECORD_MOST_BYTES: usize = 256 * 1024;
+
+/// The most lines of a record that are read.
+pub const RECORD_MOST_LINES: usize = 2048;
+
+/// The directories of a record, by the kind of row each is.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Record {
+    anywhere: Vec<PathBuf>,
+    where_the_account_can: Vec<PathBuf>,
+}
+
+/// The line that records `directory` as a row of this kind, with its end of line, or `None` for a
+/// directory the record does not hold.
+///
+/// A line is `<word>`, a tab and the bytes of the path, and is written in one call so two
+/// processes appending at once leave whole lines. The record holds an absolute path with no line
+/// break in it, which a line can carry, and no directory within the system temporary directory,
+/// which every lookup leaves out already and which holds each session's scratch directory, so a
+/// record would grow by one line for every session otherwise.
+///
+/// On Unix a path is bytes and is written as they are, so a directory whose name is not UTF-8 is
+/// recorded and a later process leaves it out as this one does. Where a path is not bytes
+/// (Windows) the record can only carry text, so a path that is not text is not recorded
+/// ([`path_bytes`]).
+fn record_line(held: Held, directory: &Path) -> Option<Vec<u8>> {
+    let path = path_bytes(directory)?;
+    if !directory.is_absolute() || path.iter().any(|byte| matches!(byte, b'\n' | b'\r')) {
+        return None;
+    }
+    // Nothing is created here: the path only names a directory the record leaves out.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let temporary = std::env::temp_dir();
+    if forms(&temporary)
+        .iter()
+        .any(|temporary| within(directory, temporary))
+    {
+        return None;
+    }
+    let mut line = Vec::with_capacity(held.word().len() + path.len() + 2);
+    line.extend_from_slice(held.word().as_bytes());
+    line.push(b'\t');
+    line.extend_from_slice(path);
+    line.push(b'\n');
+    Some(line)
+}
+
+/// The bytes a line of the record carries for `path`: the bytes of the path on Unix.
+#[cfg(unix)]
+fn path_bytes(path: &Path) -> Option<&[u8]> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(path.as_os_str().as_bytes())
+}
+
+/// The bytes a line of the record carries for `path`, or `None` for a path that is not text.
+///
+/// A path is not bytes here, so the only bytes that name it are its text. A refusal is the choice
+/// where a boundary can only carry text (PATH-002): a lossy rendering would name a directory
+/// nobody recorded.
+#[cfg(not(unix))]
+fn path_bytes(path: &Path) -> Option<&[u8]> {
+    path.to_str().map(str::as_bytes)
+}
+
+/// The path the bytes of a line of the record name: the path of those bytes on Unix.
+///
+/// The caller that appends a line ([`follow_record`]) reads the directory back with this, so it
+/// judges the path the record will name and not a rendering of it.
+#[cfg(unix)]
+#[must_use]
+pub fn record_path(bytes: &[u8]) -> Option<&Path> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(Path::new(OsStr::from_bytes(bytes)))
+}
+
+/// The path the bytes of a line of the record name, or `None` where they are not text, which this
+/// platform's writer never wrote and a record written elsewhere may hold.
+#[cfg(not(unix))]
+#[must_use]
+pub fn record_path(bytes: &[u8]) -> Option<&Path> {
+    std::str::from_utf8(bytes).ok().map(Path::new)
+}
+
+/// The directories a record holds, read as far as [`RECORD_MOST_BYTES`] and [`RECORD_MOST_LINES`]
+/// allow.
+///
+/// A line that is not a known word, a tab and an absolute path is skipped, so a record that is
+/// malformed, cut short or written by a later version adds only what can be read from it. Lines
+/// end at a line feed, and the path is the bytes after the tab, which are not read as text on Unix
+/// ([`record_path`]).
+fn parse_record(contents: &[u8]) -> Record {
+    let mut record = Record::default();
+    let mut read = 0usize;
+    // A final line feed ends the last line and does not start another, as with `str::lines`.
+    let contents = contents.strip_suffix(b"\n").unwrap_or(contents);
+    for line in contents
+        .split(|byte| *byte == b'\n')
+        .take(RECORD_MOST_LINES)
+    {
+        // A line break written as a carriage return and a line feed ends the line as well.
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        read = read.saturating_add(line.len()).saturating_add(1);
+        if read > RECORD_MOST_BYTES {
+            break;
+        }
+        let mut parts = line.splitn(2, |byte| *byte == b'\t');
+        let (Some(word), Some(path)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Some(path) = record_path(path) else {
+            continue;
+        };
+        if !path.is_absolute() {
+            continue;
+        }
+        if word == Held::Anywhere.word().as_bytes() {
+            record.anywhere.push(path.to_path_buf());
+        } else if word == Held::WhereTheAccountCan.word().as_bytes() {
+            record.where_the_account_can.push(path.to_path_buf());
+        }
+    }
+    record
+}
+
+/// Take the directories an earlier process let a stage write from a record, so a lookup in this
+/// process leaves them out ([SANDBOX-30]).
+///
+/// `contents` is the file the caller keeps the record in, as bytes. This crate has no dependency to
+/// find or read it with, so the caller reads it, from a place a stage cannot write, and hands it
+/// here. Calling it again adds what the new contents hold and removes nothing. A record that cannot
+/// be read adds nothing: the caller passes an empty slice, and the directories this process records
+/// itself still apply.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
+pub fn load_record(contents: &[u8]) {
+    let record = parse_record(contents);
+    // Taken as written. The record holds each spelling of a directory that was recorded, because
+    // `keep_out` hands on both, so nothing is resolved here and a start reads no directory.
+    for directory in record.anywhere {
+        add(&WRITABLE, &directory);
+        add(&EARLIER, &directory);
+        know_in_record(Held::Anywhere, directory);
+    }
+    for directory in record.where_the_account_can {
+        add(&WRITABLE_WHERE_THE_ACCOUNT_CAN, &directory);
+        know_in_record(Held::WhereTheAccountCan, directory);
+    }
+}
+
+/// The directories of the first kind that [`load_record`] took from a record, which a stage of an
+/// earlier process could write.
+///
+/// A row that came with the whole machine is not among them: it holds a directory such as `/usr`
+/// that a stage cannot write, and is judged where the account can write.
+#[must_use]
+pub fn recorded_earlier() -> Vec<PathBuf> {
+    EARLIER.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// From now on hand each directory recorded here to `sink` as a line of the record, once.
+///
+/// The caller appends the line to its record. It is not told of a directory recorded before this
+/// call, so a command that opens no session, which only records where it ran, leaves nothing in
+/// the record. Only the first call has an effect.
+///
+/// A sink that returns an error did not write the line, so the next time the directory is
+/// recorded the line is handed on again.
+pub fn follow_record(sink: Append) {
+    HAND_ON.get_or_init(|| sink);
+}
+
+/// Push `form` onto `list` unless it is there.
+fn add(list: &Mutex<Vec<PathBuf>>, form: &Path) {
+    let mut held = list.lock().unwrap_or_else(|e| e.into_inner());
+    if !held.iter().any(|known| known == form) {
+        held.push(form.to_path_buf());
+    }
+}
+
+fn know_in_record(held: Held, form: PathBuf) {
+    KNOWN_TO_THE_RECORD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((held, form));
+}
+
+/// Hand `form` to `sink` as a line of the record unless the record has it or cannot hold it. A
+/// line the sink could not write is forgotten again, so the next recording of `form` hands it on.
+fn hand_on(held: Held, form: &Path, sink: Option<Sink<'_>>) {
+    let (Some(sink), Some(line)) = (sink, record_line(held, form)) else {
+        return;
+    };
+    let new = KNOWN_TO_THE_RECORD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((held, form.to_path_buf()));
+    if new && sink(&line).is_err() {
+        KNOWN_TO_THE_RECORD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(held, form.to_path_buf()));
+    }
+}
+
 /// Record a directory a confined stage may write.
 ///
 /// Both the path as given and its resolved form are kept, because a `PATH` entry may reach the
-/// same directory by either: `/var` and `/private/var` are one place.
+/// same directory by either: `/var` and `/private/var` are one place. Each is also handed to the
+/// record ([`follow_record`]), so a later process knows it.
 pub fn keep_out(directory: &Path) {
-    let mut writable = WRITABLE.lock().unwrap_or_else(|e| e.into_inner());
+    keep_out_handing_on(directory, the_record());
+}
+
+/// [`keep_out`] with the sink the record's lines go to, so a test names one of its own.
+fn keep_out_handing_on(directory: &Path, sink: Option<Sink<'_>>) {
     for form in forms(directory) {
-        if !writable.contains(&form) {
-            writable.push(form);
-        }
+        add(&WRITABLE, &form);
+        hand_on(Held::Anywhere, &form, sink);
     }
 }
 
@@ -94,21 +359,36 @@ pub fn with_checkout(directory: &Path) -> Vec<PathBuf> {
 ///
 /// A session calls this for the directory it opens, adds or moves to, and a command that opens
 /// no session calls it for the directory it ran in, so both leave out the same directories.
+///
+/// Only `directory` is handed to the record ([`follow_record`]). The checkout above it is left out
+/// because a contributor can add a file to its `bin`, which a later process that runs in the
+/// checkout leaves out again by its own record of where it ran. A stage wrote nothing there, so
+/// recording it would leave the `bin` of a checkout that holds the account's home (a dotfiles
+/// repository) out of every later search.
 pub fn keep_out_with_checkout(directory: &Path) {
-    for held in with_checkout(directory) {
-        keep_out(&held);
+    keep_out_with_checkout_handing_on(directory, the_record());
+}
+
+/// [`keep_out_with_checkout`] with the sink the record's lines go to, so a test names one of its own.
+fn keep_out_with_checkout_handing_on(directory: &Path, sink: Option<Sink<'_>>) {
+    for (index, held) in with_checkout(directory).into_iter().enumerate() {
+        keep_out_handing_on(&held, if index == 0 { sink } else { None });
     }
 }
 
 /// Record a path a stage may write wherever the account can, in both of its spellings.
+///
+/// The record keeps it as a row of that kind ([`follow_record`]), so a later process judges it
+/// where the account can write too, and `/usr/bin` is still searched.
 pub fn keep_out_where_writable(directory: &Path) {
-    let mut held = WRITABLE_WHERE_THE_ACCOUNT_CAN
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    keep_out_where_writable_handing_on(directory, the_record());
+}
+
+/// [`keep_out_where_writable`] with the sink the record's lines go to, so a test names one of its own.
+fn keep_out_where_writable_handing_on(directory: &Path, sink: Option<Sink<'_>>) {
     for form in forms(directory) {
-        if !held.contains(&form) {
-            held.push(form);
-        }
+        add(&WRITABLE_WHERE_THE_ACCOUNT_CAN, &form);
+        hand_on(Held::WhereTheAccountCan, &form, sink);
     }
 }
 
@@ -1421,7 +1701,7 @@ mod tests {
             .collect();
         let mut expected: Vec<OsString> = std::env::vars_os()
             .map(|(name, _)| name)
-            .filter(|name| name != "PATH")
+            .filter(|name| !is_variable(name, "PATH"))
             .collect();
         removed.sort();
         expected.sort();
@@ -1592,10 +1872,20 @@ mod tests {
         file
     }
 
+    /// A file the lookup finds under the bare `name`. Windows tries a bare name with each extension
+    /// of `PATHEXT`, as the lookup reads it, and returns the path with the extension spelled that
+    /// way, so the file is made with the same spelling and the path returned is the lookup's.
     #[cfg(windows)]
     fn executable(directory: &Path, name: impl AsRef<OsStr>) -> PathBuf {
         std::fs::create_dir_all(directory).unwrap();
-        let file = directory.join(name.as_ref());
+        let held = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        let extension = held
+            .split(';')
+            .find(|extension| extension.eq_ignore_ascii_case(".exe"))
+            .unwrap_or(".EXE");
+        let mut file_name = name.as_ref().to_os_string();
+        file_name.push(extension);
+        let file = directory.join(file_name);
         std::fs::write(&file, "").unwrap();
         file
     }
@@ -2329,6 +2619,7 @@ mod tests {
     /// `/vol/Project`, which no volume need hold files to show. A path is within a recorded
     /// directory when it, or a directory above it, is that directory, and not when it is above it,
     /// beside it or elsewhere.
+    #[cfg(unix)]
     #[test]
     fn a_path_is_within_a_directory_a_volume_opens_under_another_name() {
         let volume = |path: &Path| -> Option<Identity> {
@@ -3543,6 +3834,7 @@ mod tests {
     /// `firefox %s` or `a:b` is refused, or judged only by its first entry or its first word, so
     /// `firefox:/stage/x`, `firefox --new-window`, `sh -c x` or `$(x)` is kept and `xdg-open` runs
     /// it as shell text.
+    #[cfg(unix)]
     #[test]
     fn a_list_of_commands_holds_only_when_every_entry_is_one_program_alone_or_with_a_placeholder() {
         let outside = |path: &Path| path.starts_with("/safe");
@@ -3752,5 +4044,483 @@ mod tests {
 
         assert!(sets_it(&session));
         assert!(!sets_it(&safe));
+    }
+}
+
+/// The record of directories a stage may write, which a later process reads (SANDBOX-30): what is
+/// handed to it, what is read from it, and what each way of reading it gives the lookups.
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// An empty directory of its own under the scratch root, canonical so the line a test expects
+    /// is the line that is written.
+    fn fresh(name: &str) -> PathBuf {
+        let directory = crate::testutil::scratch_dir(&format!("programs-record-{name}"));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory.canonicalize().unwrap()
+    }
+
+    /// The lines the closure hands to the sink it is given, as the bytes the sink receives.
+    fn handed_on_as_bytes(record: impl FnOnce(Sink<'_>)) -> Vec<Vec<u8>> {
+        let lines = RefCell::new(Vec::new());
+        record(&|line: &[u8]| {
+            lines.borrow_mut().push(line.to_vec());
+            Ok(())
+        });
+        lines.into_inner()
+    }
+
+    /// [`handed_on_as_bytes`] for a test whose paths are text, so a line that is not text fails it.
+    fn handed_on(record: impl FnOnce(Sink<'_>)) -> Vec<String> {
+        handed_on_as_bytes(record)
+            .into_iter()
+            .map(|line| String::from_utf8(line).expect("a line of text"))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn executable(directory: &Path, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(directory).unwrap();
+        let file = directory.join(name);
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        file
+    }
+
+    /// A directory is one line however often it is recorded. Rejects a record that appends on
+    /// every call, which grows the file by a line for every plan a session starts.
+    #[test]
+    fn a_directory_is_handed_to_the_record_once_however_often_it_is_recorded() {
+        let directory = fresh("once");
+
+        let lines = handed_on(|sink| {
+            keep_out_handing_on(&directory, Some(sink));
+            keep_out_handing_on(&directory, Some(sink));
+        });
+
+        assert_eq!(lines, [format!("directory\t{}\n", directory.display())]);
+    }
+
+    /// The directory a session opens is handed on and the checkout above it is left out of this
+    /// process's lookups and not handed on. Rejects a record that holds the checkout, which would
+    /// leave the `bin` of a checkout that holds the account's home out of every later search.
+    #[test]
+    fn the_checkout_holding_a_directory_is_left_out_but_not_handed_to_the_record() {
+        let repo = fresh("checkout");
+        let here = repo.join("sub");
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+        let lines = handed_on(|sink| keep_out_with_checkout_handing_on(&here, Some(sink)));
+
+        assert_eq!(lines, [format!("directory\t{}\n", here.display())]);
+        assert!(registered().contains(&repo), "this process left it out");
+    }
+
+    /// A row that came with the whole machine is handed on in a class of its own, and a record of
+    /// that class leaves `/usr/bin` searched where a plain row for `/usr` leaves it out. Rejects a
+    /// record that holds machine rows as plain rows, which leaves the system's programs out of
+    /// every later search under bypass.
+    #[cfg(unix)]
+    #[test]
+    fn a_row_that_came_with_the_machine_is_handed_on_in_its_own_class_and_judged_where_the_account_can_write()
+     {
+        let row = fresh("machine");
+        let lines = handed_on(|sink| keep_out_where_writable_handing_on(&row, Some(sink)));
+        assert_eq!(
+            lines,
+            [format!("where-the-account-can\t{}\n", row.display())]
+        );
+
+        // A system where the account owns part of this tree has no program to test with.
+        if the_account_owns_or_can_write(Path::new("/usr/bin"))
+            || the_account_owns_or_can_write(Path::new("/usr/bin/env"))
+        {
+            return;
+        }
+        let env = OsStr::new("env");
+        let path = OsStr::new("/usr/bin");
+        let machine = parse_record(b"where-the-account-can\t/usr\n");
+        let plain = parse_record(b"directory\t/usr\n");
+        assert_eq!(
+            find_in_with(env, path, &machine.anywhere, &machine.where_the_account_can),
+            Some(PathBuf::from("/usr/bin/env")),
+            "a machine row left the system's programs out"
+        );
+        assert_eq!(
+            find_in_with(env, path, &plain.anywhere, &plain.where_the_account_can),
+            None,
+            "the control: a plain row for /usr leaves /usr/bin out"
+        );
+    }
+
+    /// The system temporary directory and what is in it are not handed on, where a directory
+    /// outside it is. Rejects a record that grows by a line for every session's scratch directory.
+    #[test]
+    fn nothing_in_the_system_temporary_directory_is_handed_on() {
+        let temporary = std::env::temp_dir();
+        let inside = temporary.join(format!("bravebot-record-{}", std::process::id()));
+
+        let lines = handed_on(|sink| {
+            keep_out_handing_on(&temporary, Some(sink));
+            keep_out_handing_on(&inside, Some(sink));
+        });
+
+        assert_eq!(lines, Vec::<String>::new());
+    }
+
+    /// A path a line cannot carry is not handed on: a relative one and one with a line break in it,
+    /// whether a line feed or a carriage return. Each is still left out of this process's lookups,
+    /// so the process that opened it is the only one that leaves it out. Rejects a record that
+    /// holds a name split in two by a line break, and an in-process list that drops what the record
+    /// cannot hold. A name that is not UTF-8 is not among them on Unix, where a line carries its
+    /// bytes (`a_directory_whose_path_is_not_text_is_handed_on_as_its_bytes`).
+    #[test]
+    fn a_path_a_line_cannot_carry_is_not_handed_on() {
+        let kept = fresh("carried");
+        let refused = [
+            PathBuf::from("relative/directory"),
+            kept.join("line\nbreak"),
+            kept.join("carriage\rreturn"),
+        ];
+        let lines = handed_on(|sink| {
+            for directory in &refused {
+                keep_out_handing_on(directory, Some(sink));
+            }
+            keep_out_handing_on(&kept, Some(sink));
+        });
+
+        assert_eq!(lines, [format!("directory\t{}\n", kept.display())]);
+        let left_out = registered();
+        for directory in &refused {
+            assert!(
+                left_out.contains(directory),
+                "{} was not left out of this process's lookups",
+                directory.display()
+            );
+        }
+    }
+
+    /// A directory whose path is not UTF-8 is handed on as its bytes, apart from the directory
+    /// whose name is the replacement-character rendering of it, and a record that holds the bytes
+    /// leaves the first out and not the second. Rejects a record written with `to_str()` or a lossy
+    /// rendering, which leaves a directory a stage wrote into searched by every later process or
+    /// names a directory nobody recorded. The names are built in memory, so this runs where the
+    /// file system cannot hold them.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_whose_path_is_not_text_is_handed_on_as_its_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = PathBuf::from(OsStr::from_bytes(b"/bravebot-record-bytes/tool-\xff"));
+        let lookalike = PathBuf::from("/bravebot-record-bytes/tool-\u{FFFD}");
+        assert_ne!(invalid, lookalike);
+
+        let lines = handed_on_as_bytes(|sink| {
+            keep_out_handing_on(&invalid, Some(sink));
+            keep_out_handing_on(&lookalike, Some(sink));
+        });
+
+        assert_eq!(
+            lines,
+            [
+                b"directory\t/bravebot-record-bytes/tool-\xff\n".to_vec(),
+                "directory\t/bravebot-record-bytes/tool-\u{FFFD}\n"
+                    .as_bytes()
+                    .to_vec(),
+            ]
+        );
+        assert_ne!(lines[0], lines[1]);
+        assert_eq!(
+            parse_record(&lines.concat()).anywhere,
+            [invalid, lookalike],
+            "the lines do not read back as the two directories"
+        );
+    }
+
+    /// A record that holds the bytes of a path that is not UTF-8 reads back as that path and not as
+    /// the one its lossy rendering spells. Rejects a reader that takes the line through
+    /// `from_utf8`, which skips the directory, and one that reads it lossily, which leaves out the
+    /// lookalike and not the directory. Another record line that is text is read beside it.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_with_a_path_that_is_not_text_loads_that_path_and_not_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = PathBuf::from(OsStr::from_bytes(
+            b"/bravebot-record-loaded-bytes/tool-\xff",
+        ));
+        let lookalike = PathBuf::from("/bravebot-record-loaded-bytes/tool-\u{FFFD}");
+        let text = PathBuf::from("/bravebot-record-loaded-bytes/text");
+        let mut contents = b"directory\t/bravebot-record-loaded-bytes/tool-\xff\n".to_vec();
+        contents
+            .extend_from_slice(b"where-the-account-can\t/bravebot-record-loaded-bytes/tool-\xff\n");
+        contents.extend_from_slice(b"directory\t/bravebot-record-loaded-bytes/text\n");
+
+        let record = parse_record(&contents);
+        assert_eq!(record.anywhere, [invalid.clone(), text.clone()]);
+        assert_eq!(record.where_the_account_can, std::slice::from_ref(&invalid));
+
+        load_record(&contents);
+        let left_out = registered();
+        assert!(left_out.contains(&invalid), "{left_out:?}");
+        assert!(left_out.contains(&text), "{left_out:?}");
+        assert!(
+            !left_out.contains(&lookalike),
+            "the lookalike was left out: {left_out:?}"
+        );
+        let earlier = recorded_earlier();
+        assert!(earlier.contains(&invalid) && !earlier.contains(&lookalike));
+    }
+
+    /// A program a stage planted in a directory whose path is not UTF-8 is not found after the
+    /// record that names the directory is loaded, and the program in the directory whose name is
+    /// the replacement-character rendering of it still is. Rejects a record that cannot hold the
+    /// directory, which leaves the planted program found by every later process, and a loader that
+    /// leaves out the lookalike. The file system must hold the name, so this runs on Linux only.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_program_planted_in_a_directory_that_is_not_text_is_not_found_once_it_is_recorded() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = fresh("lookup-bytes");
+        let invalid = root.join(OsStr::from_bytes(b"tools-\xff"));
+        let lookalike = root.join("tools-\u{FFFD}");
+        let planted = executable(&invalid.join("bin"), "bravebot-bytes-probe");
+        let installed = executable(&lookalike.join("bin"), "bravebot-bytes-probe");
+        let program = OsStr::new("bravebot-bytes-probe");
+        let path = std::env::join_paths([invalid.join("bin"), lookalike.join("bin")]).unwrap();
+        assert_eq!(find_on(program, &path), Some(planted), "nothing loaded yet");
+
+        let lines = handed_on_as_bytes(|sink| hand_on(Held::Anywhere, &invalid, Some(sink)));
+        assert_eq!(lines.len(), 1, "the directory was not handed on");
+        load_record(&lines.concat());
+
+        assert_eq!(find_on(program, &path), Some(installed));
+    }
+
+    /// A line that is not a known word, has no tab or names a relative path is skipped when it
+    /// holds bytes that are not text, as it is when it is text, and the lines after it are read.
+    /// Rejects a reader that stops at the first line that is not text.
+    #[cfg(unix)]
+    #[test]
+    fn a_bad_line_that_is_not_text_does_not_stop_the_lines_after_it() {
+        let mut contents = b"\xff\xfe\ndirectory\t\xff\xfe\nunknown\t/x-\xff\n".to_vec();
+        contents.extend_from_slice(b"directory\t/after-the-bad-lines\n");
+
+        let record = parse_record(&contents);
+
+        assert_eq!(record.anywhere, [PathBuf::from("/after-the-bad-lines")]);
+        assert_eq!(record.where_the_account_can, Vec::<PathBuf>::new());
+    }
+
+    /// A record that is malformed adds only the lines that can be read, in the class each names.
+    /// Rejects a reader that stops at the first bad line, one that reads a relative path, and one
+    /// that reads a line with a word it does not know. The paths begin with a drive on Windows,
+    /// where `/a` is not absolute.
+    #[test]
+    fn a_record_adds_only_the_lines_that_can_be_read() {
+        let root = if cfg!(windows) { "C:" } else { "" };
+        let record = parse_record(
+            format!(
+                "garbage\n\ndirectory\t\ndirectory\trelative\nunknown\t{root}/x\ndirectory\t{root}/a\n\
+                 where-the-account-can\t{root}/b\ndirectory {root}/with-a-space\n"
+            )
+            .as_bytes(),
+        );
+
+        assert_eq!(record.anywhere, [PathBuf::from(format!("{root}/a"))]);
+        assert_eq!(
+            record.where_the_account_can,
+            [PathBuf::from(format!("{root}/b"))]
+        );
+        assert_eq!(parse_record(b""), Record::default());
+    }
+
+    /// A record is read to its line bound and its byte bound. Rejects a reader with no bound, which
+    /// reads a file that grew or was filled whole at the start of every command.
+    #[test]
+    fn a_record_is_read_to_its_bounds() {
+        let root = if cfg!(windows) { "C:" } else { "" };
+        let many: String = (0..RECORD_MOST_LINES + 10)
+            .map(|index| format!("directory\t{root}/d{index}\n"))
+            .collect();
+        assert_eq!(
+            parse_record(many.as_bytes()).anywhere.len(),
+            RECORD_MOST_LINES
+        );
+
+        let path = format!("{root}/{}", "a".repeat(1000));
+        let long: String = (0..RECORD_MOST_BYTES / 1000 + 50)
+            .map(|_| format!("directory\t{path}\n"))
+            .collect();
+        let read = parse_record(long.as_bytes()).anywhere.len();
+        assert!(read > 0 && read * 1000 <= RECORD_MOST_BYTES, "{read}");
+        assert!(read < long.lines().count(), "every line was read");
+    }
+
+    /// A directory reached through a link is handed on under both of its spellings, the one it was
+    /// given and the one it resolves to, because a `PATH` entry may reach it by either. Rejects a
+    /// record that holds the first spelling alone, which a later process leaves the other spelling
+    /// of the same directory searched by.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_reached_through_a_link_is_handed_on_under_both_spellings() {
+        let real = fresh("spelled-real");
+        let link = fresh("spelled-parent").join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let lines = handed_on(|sink| keep_out_handing_on(&link, Some(sink)));
+
+        assert_eq!(
+            lines,
+            [
+                format!("directory\t{}\n", link.display()),
+                format!("directory\t{}\n", real.display()),
+            ]
+        );
+    }
+
+    /// A line the record could not write is handed on again the next time the directory is
+    /// recorded, and a line it wrote is not. Rejects a record that counts a failed write as made,
+    /// which leaves a directory out of the record for as long as the process lives.
+    #[test]
+    fn a_line_the_record_could_not_write_is_handed_on_again() {
+        let directory = fresh("retried");
+        let attempts = RefCell::new(Vec::new());
+        let sink = |line: &[u8]| {
+            attempts.borrow_mut().push(line.to_vec());
+            if attempts.borrow().len() == 1 {
+                Err(std::io::Error::other("the record could not be written"))
+            } else {
+                Ok(())
+            }
+        };
+
+        keep_out_handing_on(&directory, Some(&sink));
+        keep_out_handing_on(&directory, Some(&sink));
+        keep_out_handing_on(&directory, Some(&sink));
+
+        let line = format!("directory\t{}\n", directory.display()).into_bytes();
+        assert_eq!(*attempts.borrow(), [line.clone(), line]);
+    }
+
+    /// A recorded directory that no longer exists leaves out what is in it and nothing else.
+    /// Rejects a lookup that fails or panics on it, and one that drops the `PATH` entries behind
+    /// it.
+    #[cfg(unix)]
+    #[test]
+    fn a_recorded_directory_that_no_longer_exists_costs_the_lookup_nothing_else() {
+        let root = fresh("gone");
+        let gone = root.join("gone");
+        let installed = executable(&root.join("installed"), "bravebot-record-probe");
+        let record = parse_record(format!("directory\t{}\n", gone.display()).as_bytes());
+        let path = std::env::join_paths([gone.join("bin"), root.join("installed")]).unwrap();
+
+        assert_eq!(
+            find_in_with(
+                OsStr::new("bravebot-record-probe"),
+                &path,
+                &record.anywhere,
+                &[]
+            ),
+            Some(installed)
+        );
+    }
+
+    /// A record that names a machine row, loaded by a later process, leaves the system's programs
+    /// searched where a plain row for the same directory leaves them out. Rejects a loader that
+    /// files a machine row with the plain rows, which a later process under bypass would read as a
+    /// directory a stage wrote and leave `/usr/bin` out of every search by. The program in
+    /// `/usr/bin` is the control that the search finds it before the record is read.
+    #[cfg(unix)]
+    #[test]
+    fn a_loaded_machine_row_leaves_the_system_programs_searched() {
+        // A system where the account owns part of this tree has no program to test with.
+        if the_account_owns_or_can_write(Path::new("/usr/bin"))
+            || the_account_owns_or_can_write(Path::new("/usr/bin/env"))
+        {
+            return;
+        }
+        let env = OsStr::new("env");
+        let path = OsStr::new("/usr/bin");
+        assert_eq!(
+            find_on(env, path),
+            Some(PathBuf::from("/usr/bin/env")),
+            "the control: nothing is loaded yet"
+        );
+
+        load_record(b"where-the-account-can\t/usr\n");
+
+        assert_eq!(
+            find_on(env, path),
+            Some(PathBuf::from("/usr/bin/env")),
+            "a loaded machine row left the system's programs out"
+        );
+        assert!(
+            !registered().contains(&PathBuf::from("/usr")),
+            "a machine row was filed with the plain rows"
+        );
+    }
+
+    /// Loading a record leaves its directories out of every lookup and removes none this process
+    /// recorded. Rejects a load that replaces the process's own record, and one that adds the
+    /// directory to a record the lookup does not read. The program a stage planted in the loaded
+    /// directory is not found where the installed one behind it is, and where nothing was loaded
+    /// the planted one is found, which shows the lookup would take it.
+    #[cfg(unix)]
+    #[test]
+    fn loading_a_record_leaves_its_directories_out_and_removes_none_this_process_recorded() {
+        let tools = fresh("loaded-tools");
+        let own = fresh("loaded-own");
+        let installed = executable(
+            &fresh("loaded-installed").join("bin"),
+            "bravebot-loaded-probe",
+        );
+        let planted = executable(&tools.join("bin"), "bravebot-loaded-probe");
+        let program = OsStr::new("bravebot-loaded-probe");
+        let path =
+            std::env::join_paths([tools.join("bin"), installed.parent().unwrap().into()]).unwrap();
+        keep_out(&own);
+
+        assert_eq!(find_on(program, &path), Some(planted), "nothing loaded yet");
+
+        load_record(format!("directory\t{}\n", tools.display()).as_bytes());
+        load_record(b"");
+
+        assert_eq!(find_on(program, &path), Some(installed));
+        assert!(
+            registered().contains(&own),
+            "a load removed a recorded directory"
+        );
+    }
+
+    /// A directory taken from the record is not handed on again, and only the plain class is among
+    /// the directories an earlier process let a stage write. Rejects a process that appends every
+    /// directory it read to the record it read it from, and a machine row counted as a directory a
+    /// stage wrote.
+    #[test]
+    fn a_loaded_directory_is_not_handed_on_again_and_a_machine_row_is_not_one_a_stage_wrote() {
+        let plain = fresh("loaded-plain");
+        let machine = fresh("loaded-machine");
+
+        load_record(
+            format!(
+                "directory\t{}\nwhere-the-account-can\t{}\n",
+                plain.display(),
+                machine.display()
+            )
+            .as_bytes(),
+        );
+
+        let lines = handed_on(|sink| {
+            keep_out_handing_on(&plain, Some(sink));
+            keep_out_where_writable_handing_on(&machine, Some(sink));
+        });
+        assert_eq!(lines, Vec::<String>::new());
+        let earlier = recorded_earlier();
+        assert!(earlier.contains(&plain));
+        assert!(!earlier.contains(&machine));
     }
 }

@@ -33,6 +33,7 @@ export async function callBot(request: {
   session: string
   slug: string
   prompt: string
+  shown?: string
   grounded: boolean
   model: string | null
   attachments?: string[]
@@ -47,6 +48,7 @@ export async function callSummon(request: {
   session: string
   slug: string
   prompt: string
+  shown?: string
   model?: string | null
   attachments?: string[]
   drops?: string[]

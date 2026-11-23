@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal } from './Modal'
-import type { FilesystemKey, KeptTrust, SettingsRules } from '../../shared/protocol'
-import { Alert, Button, Icon } from '../nala'
+import type { FilesystemKey, KeptTrust, RuleCheck as RuleChecked, RuleCheckFamily, SettingsRules } from '../../shared/protocol'
+import { Alert, Button, Dropdown, Icon, Input } from '../nala'
 import { IconButton } from './IconButton'
 import { ago } from './Sessions'
 import { middleTruncate } from '../truncate'
@@ -64,7 +64,116 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
       {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />Nothing is kept for this directory.</p>}
     </section>
     <RulesInForce rules={grants?.settingsRules ?? null} />
+    <RuleCheck session={session} onProblem={setProblem} />
   </Modal>
+}
+
+/** The families `permissions.check` reads, each with what its field asks for. WebSearch takes no words. */
+export const RULE_CHECK_FAMILIES: [RuleCheckFamily, string][] = [
+  ['Read', 'path'],
+  ['Edit', 'path'],
+  ['Bash', 'program args'],
+  ['WebFetch', 'host or URL'],
+  ['WebSearch', 'No words for a web search'],
+  ['Mcp', 'server:tool'],
+]
+
+/** The words sent for what was typed: a command split on runs of whitespace, a web search none, and anything else the field as one word. */
+export function ruleCheckWords(family: RuleCheckFamily, text: string): string[] {
+  if (family === 'WebSearch') return []
+  if (family === 'Bash') return text.split(/\s+/).filter((word) => word !== '')
+  return [text]
+}
+
+/** Asks the bridge which of the session's rules decides the call. A refusal comes back as the bridge's own words. */
+export async function checkRule(session: string, family: RuleCheckFamily, text: string): Promise<{ answer: RuleChecked } | { problem: string }> {
+  try {
+    const answer = await window.bravebot.request<RuleChecked>('permissions.check', { session, family, words: ruleCheckWords(family, text) })
+    if (answer.error) return { problem: answer.error.message }
+    if (answer.ok) return { answer: answer.ok }
+    return { problem: 'The rule check got no answer. Try again.' }
+  } catch { return { problem: 'The rule could not be checked. Try again.' } }
+}
+
+/**
+ * Which rule from the conversation's settings decides a call, asked of the rules the
+ * conversation holds (CLI-30, PERM-12). It checks and changes nothing.
+ */
+export function RuleCheck({ session, onProblem }: { session: string; onProblem: (problem: string) => void }): React.JSX.Element {
+  const [family, setFamily] = useState<RuleCheckFamily>('Bash')
+  const [text, setText] = useState('')
+  const [answer, setAnswer] = useState<RuleChecked | null>(null)
+  const [busy, setBusy] = useState(false)
+  // A click on a Leo button reaches both its inner control and the host, so the second is ignored.
+  const checking = useRef(false)
+  const check = async () => {
+    if (checking.current) return
+    checking.current = true
+    setBusy(true); onProblem('')
+    const result = await checkRule(session, family, text)
+    if ('answer' in result) setAnswer(result.answer)
+    else { setAnswer(null); onProblem(result.problem) }
+    setBusy(false)
+    checking.current = false
+  }
+  return <RuleCheckForm family={family} text={text} busy={busy} answer={answer}
+    onFamily={(next) => { setFamily(next); setAnswer(null) }} onText={setText} onCheck={() => void check()} />
+}
+
+export function RuleCheckForm({ family, text, busy, answer, onFamily, onText, onCheck }: {
+  family: RuleCheckFamily; text: string; busy: boolean; answer: RuleChecked | null
+  onFamily: (family: RuleCheckFamily) => void; onText: (text: string) => void; onCheck: () => void
+}): React.JSX.Element {
+  const noWords = family === 'WebSearch'
+  const placeholder = RULE_CHECK_FAMILIES.find(([name]) => name === family)?.[1] ?? ''
+  return <section className="grant-section rule-check" data-test="rule-check">
+    <h3>Check a call</h3>
+    <p className="grant-note">Shows which rule from the settings files decides a call, using the rules this conversation opened under. Nothing is run or granted.</p>
+    <div className="rule-check-form">
+      <Dropdown value={family} size="small" disabled={busy} data-test="rule-check-family"
+        onChange={(detail) => { const next = RULE_CHECK_FAMILIES.find(([name]) => name === String(detail.value)); if (next) onFamily(next[0]) }}>
+        <span slot="label">Tool</span>
+        {RULE_CHECK_FAMILIES.map(([name]) => <leo-option key={name} value={name}>{name}</leo-option>)}
+      </Dropdown>
+      <Input value={noWords ? '' : text} size="small" placeholder={placeholder} disabled={busy || noWords} data-test="rule-check-words"
+        onInput={(event) => {
+          const detail = event as { value?: unknown; target?: EventTarget | null }
+          const value = typeof detail.value === 'string' ? detail.value
+            : detail.target && typeof detail.target === 'object' && 'value' in detail.target && typeof detail.target.value === 'string' ? detail.target.value
+              : null
+          if (value !== null) onText(value)
+        }}>Call</Input>
+      <Button size="small" kind="outline" onClick={onCheck} isDisabled={busy || (!noWords && !text.trim())} data-test="rule-check-submit">Check</Button>
+    </div>
+    {answer && <RuleCheckAnswer answer={answer} />}
+  </section>
+}
+
+const DECISIONS: Record<RuleChecked['decision'], string> = {
+  deny: 'Refused',
+  ask: 'Always asked',
+  allow: 'Not asked',
+  none: 'No rule matches, so the usual questions decide',
+  shortName: 'Refused: a command rule is in force, and an 8.3 short name cannot be matched against it',
+}
+
+/** The answer as rows: the decision, the rule as its file spelled it, the file or grant it came from, the person's reason, and a checkout rule that is not in force. */
+export function RuleCheckAnswer({ answer }: { answer: RuleChecked }): React.JSX.Element {
+  const rule = answer.shownRule ?? answer.rule
+  const file = answer.shownFile ?? answer.file
+  const away = answer.notInForce
+  return <div className="rule-check-answer" data-test="rule-check-answer" aria-live="polite">
+    <ul className="grant-list">
+      <li className="grant-row"><span className="rule-check-label">Decision</span><span className="rule-check-value" data-test="rule-check-decision" data-decision={answer.decision}>{DECISIONS[answer.decision] ?? answer.decision}</span></li>
+      {rule !== null && <li className="grant-row"><span className="rule-check-label">Rule</span><GrantName name={rule} /></li>}
+      {file !== null && <li className="grant-row" data-test="rule-check-file"><span className="rule-check-label">File</span>
+        {answer.granted ? <span className="rule-check-value">Granted for this workspace, written in <GrantName name={file} /></span> : <GrantName name={file} />}</li>}
+      {answer.reason !== null && <li className="grant-row"><span className="rule-check-label">Reason</span><span className="rule-check-value" data-test="rule-check-reason">{answer.reason}</span></li>}
+    </ul>
+    {away && <Alert type="warning" data-test="rule-check-not-in-force">
+      Not in force: <code>{away.shownRule ?? away.rule}</code> in <code>{away.shownFile ?? away.file}</code> would allow this once it is granted at the question.
+    </Alert>}
+  </div>
 }
 
 /**

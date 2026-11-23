@@ -123,6 +123,30 @@ pub(super) fn say_prompt_notices<R: Reporter + ?Sized>(
     said
 }
 
+/// The sentence for each plugin whose directory was found, since the last call, not to match the
+/// digest its install recorded (PLUGIN-7), said to the reporter and handed back like the sentences
+/// for a hook that went wrong. A plugin is named once in a session: [`Answers::take_stopped`]
+/// yields it the first time only.
+///
+/// The name is the plugin's own and was checked to hold only letters, digits and hyphens before it
+/// was ever joined to a path, so it carries no line break or escape. The notice is a sentence in the
+/// transcript, which has no margin to draw it in; a front end that draws plugin-authored text in
+/// the margin does so for the questions, which show words the plugin chose freely.
+pub(super) fn say_stopped_plugins<R: Reporter + ?Sized>(
+    answers: &crate::plugin_hooks::Answers,
+    reporter: &mut R,
+) -> Vec<String> {
+    let said: Vec<String> = answers
+        .take_stopped()
+        .into_iter()
+        .map(|plugin| t!(plugin_hook_stopped_changed, plugin = plugin))
+        .collect();
+    for one in &said {
+        reporter.notice(one.clone());
+    }
+    said
+}
+
 /// What went wrong, in a sentence each, for the hooks that did not run and end well.
 pub(crate) fn trouble_sentences(fired_all: Vec<crate::hooks::Fired>) -> Vec<String> {
     let mut said = Vec::new();

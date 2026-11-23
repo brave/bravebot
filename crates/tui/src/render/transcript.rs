@@ -2704,22 +2704,18 @@ mod tests {
         }
     }
 
-    /// LAYER-3: a note that quotes an alias with an escape in it, as `/mcp disable` does, is drawn
-    /// with the escape made visible, so no rendered row holds a control character. Rejects a note
-    /// row that wraps the entry's text as it stands.
+    /// LAYER-3: a note that quotes an alias with an escape in it is drawn with the escape made
+    /// visible, so no rendered row holds a control character. The note is given the raw alias, since
+    /// the renderer has to draw it safely whether or not the command that wrote the note wrote the
+    /// alias out first. Rejects a note row that wraps the entry's text as it stands.
     #[test]
     fn a_mcp_note_quoting_an_alias_with_an_escape_is_drawn_with_the_escape_made_visible() {
         let _held = crate::theme::exclusive();
         let mut session = Session::new("kernel-enforced");
-        let settings = bravebot_config::Settings::default();
-        crate::mcp_command::run(
-            &mut session,
-            &settings,
-            std::path::Path::new("."),
-            "disable a\u{1b}[2Jbc",
-            bravebot_agent::servers::Asking::Person,
-            &mut crate::mcp_command::tests::Never,
-        );
+        session.note(bravebot_i18n::t!(
+            mcp_command_not_requested,
+            alias = "a\u{1b}[2Jbc"
+        ));
         let rows: Vec<String> = transcript_lines(&session, 90, 40)
             .iter()
             .map(text)
@@ -2735,22 +2731,18 @@ mod tests {
         );
     }
 
-    /// LAYER-3: a note quoting an alias with a right-to-left override in it, as `/mcp disable`
-    /// does, is drawn with the override written out, so it cannot reorder the rest of the row.
-    /// Rejects a `printable` that pictures control characters only, which leaves U+202E raw.
+    /// LAYER-3: a note quoting an alias with a right-to-left override in it is drawn with the
+    /// override written out, so it cannot reorder the rest of the row. The note is given the raw
+    /// alias, as in the escape test above. Rejects a `printable` that pictures control characters
+    /// only, which leaves U+202E raw.
     #[test]
     fn a_mcp_note_quoting_an_alias_with_a_bidirectional_control_is_drawn_with_it_written_out() {
         let _held = crate::theme::exclusive();
         let mut session = Session::new("kernel-enforced");
-        let settings = bravebot_config::Settings::default();
-        crate::mcp_command::run(
-            &mut session,
-            &settings,
-            std::path::Path::new("."),
-            "disable a\u{202e}bc",
-            bravebot_agent::servers::Asking::Person,
-            &mut crate::mcp_command::tests::Never,
-        );
+        session.note(bravebot_i18n::t!(
+            mcp_command_not_requested,
+            alias = "a\u{202e}bc"
+        ));
         let rows: Vec<String> = transcript_lines(&session, 90, 40)
             .iter()
             .map(text)

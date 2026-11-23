@@ -1532,6 +1532,9 @@ behind, and there is no ordering to get right between removing it and still bein
 `verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
 `verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
+`verified-by: bravebot_tui::app::branching_replaces_the_sessions_directory_only_where_a_copy_was_made`
+`verified-by: bravebot_tui::app::clearing_and_a_handoff_each_replace_the_sessions_directory`
+`verified-by: bravebot_tui::app::a_session_begun_from_a_record_is_given_a_directory_of_its_own`
 
 <a id="TRUST-16"></a>
 ### TRUST-16: the session's directory is reachable, and its reach grants no trust
@@ -1606,10 +1609,14 @@ untouched. A directory reachable without a rule is also why `/status` has a line
 says out loud is reach somebody discovers by accident.
 
 `verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path`
+`verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_listed_by_its_absolute_path`
+`verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_searched_by_its_absolute_path`
 `verified-by: bravebot_agent::workspace::the_temporary_directory_around_it_stays_unreachable`
+`verified-by: bravebot_agent::workspace::the_directories_around_the_sessions_own_can_be_added_by_name`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_the_sessions_own_directory_is_refused`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_is_not_one_the_user_added`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_cannot_be_added_by_name`
+`verified-by: bravebot_agent::workspace::a_directory_inside_the_sessions_own_directory_cannot_be_added_by_name`
 `verified-by: bravebot_agent::workspace::the_working_directory_cannot_be_moved_into_the_sessions_own_directory`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_rule`
 `verified-by: bravebot_core::policy::a_write_in_the_sessions_own_directory_asks_what_a_write_in_the_project_asks`
@@ -1760,6 +1767,17 @@ thing stays outside both: the prompt before a write asks under the
 spelling it was given, since it also matches the rules a person wrote in advance and those are
 matched on the path as written, so it asks where a reduced name would not have.
 
+Whether a name is below the working directory is decided in one spelling of both. On a host where a
+backslash separates, the platform resolves the working directory to `\\?\C:\proj` and a person, a
+command line or a language server names a file in it as `C:\proj\x`. `Path` reads those as two
+different prefixes, so a comparison by components finds nothing below the directory, and a lookup
+that is made under the relative name is made under an absolute one instead, which
+`Workspace::resolve` refuses inside the root. `bravebot_core::spelling::below` compares both as keys,
+with the drive letter in one case, and is what takes a name below the working directory for its
+relative spelling in the operands of a `run` line ([CMDLINE-8](tools/command-line.md#CMDLINE-8)) and
+in the locations a language server reports ([LSP-3](tools/lsp.md#LSP-3)). Where a slash is the only
+separator `C:\proj\x` is a file at the top of the project and is below nothing.
+
 **Why.** Without the reduction a directory reached by a second spelling of its own name is covered
 by nothing, so a file the user vouched for is quarantined under half its names; on macOS that is
 the ordinary case rather than a corner, since `/tmp` and `$TMPDIR` are both links. And the refusal
@@ -1774,6 +1792,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_trust_rule_covers_the_file_below_it_wherever_a_backslash_separates`
 `verified-by: bravebot_agent::workspace::a_name_and_its_key_are_spelled_the_way_the_host_separates`
 `verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_agent::workspace::each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key`
 `verified-by: bravebot_agent::workspace::a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash`
 `verified-by: bravebot_agent::workspace::a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else`
 `verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
@@ -1781,6 +1800,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::spelling::a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::policy::a_listing_of_a_distrusted_directory_on_a_drive_letter_is_untrusted`
 `verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_on_a_drive_letter_is_untrusted`
+`verified-by: bravebot_core::policy::an_operand_on_a_drive_letter_is_also_named_relative_to_the_project`
 `verified-by: bravebot_core::policy::the_sessions_own_directory_on_a_drive_letter_is_answered_as_the_workspace`
 `verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
@@ -1788,6 +1808,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
 `verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
+`verified-by: bravebot_session::sessions::a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
@@ -1795,6 +1816,10 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::policy::a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed`
 `verified-by: bravebot_agent::workspace::files_in_an_added_directory_named_through_a_link_are_labelled_as_a_read_labels_them`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_vouched_directory_reached_through_a_link_holds_its_files`
+`verified-by: bravebot_core::spelling::a_name_is_below_a_verbatim_root_whichever_way_the_drive_path_is_spelled`
+`verified-by: bravebot_core::spelling::a_drive_spelling_is_not_below_a_root_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_agent::workspace::a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path`
+`verified-by: by-construction (each door that opens or moves to a directory by name passes the host's answer about what separates to its inner function in one expression, BACKSLASH_SEPARATES, which is cfg!(windows): Workspace::resolve_directory to admit_resolved_directory and Workspace::move_root to move_root_to in crates/agent/src/workspace/reach.rs, and restored_rules in crates/session/src/sessions.rs for a saved rule. The tests above give that answer to the inner functions directly, so a wrapper that passed a literal false is not detected on a host where a backslash is not a separator, since a canonical name there is always rooted at a slash. The code that picks a trust key gets no test seam for it, as docs/development/verification.md requires, and no CI job runs these wrappers on a Windows host: the Windows jobs run named tests, and none of them calls these doors or restored_rules. The wrappers are held by their being one expression each and are not demonstrated by a test that fails)`
 
 ## What a rewind puts back
 
@@ -1812,6 +1837,11 @@ without blocking restoration of other files.
 
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
+`verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other`
+`verified-by: bravebot_agent::workspace::a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap`
+`verified-by: bravebot_agent::workspace::an_untrusted_file_in_the_sessions_own_directory_stays_untrusted_after_an_undo`
+`verified-by: bravebot_agent::workspace::an_explicit_distrust_on_either_side_survives_an_undo_and_the_snapshot_grants_nothing`
+`verified-by: bravebot_agent::workspace::keeping_the_lower_decision_for_a_scratch_file_does_not_stop_the_other_files_being_restored`
 
 ## The session's directory in an incognito session
 
@@ -2158,7 +2188,7 @@ directory as well, once. A directory reaches that mode only once
 its lock is held, so one still being made is left, and a program a session starts does not inherit
 the lock. A link under such a name is judged as a link rather than as what it points at. A local MCP
 server's home is removed on the same terms. On Windows nothing is removed.
-[CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds, sweeps delegates' checkouts under
+On Unix, [CHECKOUT-16](checkouts.md#CHECKOUT-16) sweeps delegates' checkouts under
 the state directory with a lock of the same kind, taken as each is created, removing one that no
 session record for its workspace lists and no running session holds.
 
@@ -2211,6 +2241,11 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_program_a_session_starts_does_not_hold_its_directory`
 `verified-by: bravebot_agent::scratch::a_claim_held_for_a_moment_is_waited_out`
 `verified-by: bravebot_agent::scratch::a_claim_held_by_something_else_does_not_stall_the_session`
+`verified-by: bravebot_agent::scratch::the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it`
+`verified-by: bravebot_agent::git::the_sweep_takes_only_an_unlisted_checkout_nobody_holds`
+`verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`
+`verified-by: bravebot_tui::sessions::the_opening_sweep_leaves_a_checkout_a_record_lists_and_removes_the_other`
+`verified-by: bravebot_ui_bridge::checkouts::a_checkout_stays_locked_between_turns`
 
 ## Known costs
 

@@ -1,13 +1,16 @@
 import { SettingsView, type SettingsPage } from './components/SettingsView'
 import { BotDetails } from './components/BotDetails'
-import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
+import { queuedRow, type ComposerFooterProps, type ProjectChoice } from './components/Composer'
 import { botHistory, homeConversation } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PanelName } from '../shared/state'
 import type {
   BridgeEvent,
   ForkedSession,
   NotedSession,
+  BackgroundedSession,
+  StoppedBackground,
   OpenedSession,
   PermissionMode,
   SandboxMode,
@@ -22,7 +25,7 @@ import { SessionInfo, firstChat } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
-import { shown } from './columns'
+import { FOLD_MS, shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { FolderPrompt, RulesPrompt } from './components/ProjectQuestions'
 import { Unconfigured } from './components/Unconfigured'
@@ -33,11 +36,13 @@ import { About, type AboutInfo } from './components/About'
 import { BugReport } from './components/BugReport'
 import { UpdateBanner } from './components/UpdateBanner'
 import { UsagePingNotice } from './components/UsagePingNotice'
-import { CrashReportNotice } from './components/CrashReportNotice'
+import { CrashReportsNotice } from './components/CrashReportsNotice'
 import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
 import { pickModel, pickedModel, rememberPickedModel, reopenedModel } from './models'
-import { canSend } from './can-send'
+import { canSend, canStart } from './can-send'
+import { planPrefill } from '../shared/manifest'
 import { useCommandRouter, usePublishedState } from './commands'
+import { useWindowTitle } from './window-title'
 import { type Fork, forkedSessions } from '../shared/forks'
 import { activeBots, type Bot } from '../shared/bots'
 import type { Summon } from '../shared/summons'
@@ -51,21 +56,31 @@ import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
 import { useEnhance } from './use-enhance'
+import { useCompact } from './use-compact'
+import { type HandingOff, useHandoff } from './use-handoff'
+import { armed, sourceOf } from './handoff'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, setExperience, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
+import { contextNotice, costNotice, statusNotice, type ContextReport, type CostReport, type RequestReport, type StatusReport } from './reports'
+import { RequestDialog } from './components/RequestDialog'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
+import { SpendReport } from './components/SpendReport'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
+import { AskDialog } from './components/AskDialog'
+import { BackgroundConfirm } from './components/BackgroundConfirm'
+import { continueInBackground, stopBackground as askStopBackground } from './backgrounding'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy, thinking } from './live'
+import { foldedIn, restaged } from './staging'
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
@@ -119,6 +134,7 @@ export function App(): React.JSX.Element {
   }, [live?.handle])
   useEffect(() => { void checkBackend() }, [checkBackend])
   const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string } | null>(null)
+  const [requestReport, setRequestReport] = useState<RequestReport | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   const [bugReportOpen, setBugReportOpen] = useState(false)
   /** What the last update check found (UPDATE-12). Asked once at start and again when About opens. */
@@ -127,6 +143,18 @@ export function App(): React.JSX.Element {
     try { setUpdateStatus(parseUpdateStatus(await call('update.status'))) } catch { setUpdateStatus(null) }
   }, [])
   useEffect(() => { void readUpdateStatus() }, [readUpdateStatus])
+  /** The context-column panels turned off in `bravebot-ui.json` (PANEL-20), read once at start. */
+  const [hiddenPanels, setHiddenPanels] = useState<PanelName[]>([])
+  useEffect(() => {
+    window.bravebot.readHiddenPanels().then(setHiddenPanels, () => setHiddenPanels([]))
+  }, [])
+  /** Show a ticked or unticked section at once and save it at once, so closing the window loses nothing. */
+  const changeHiddenPanels = useCallback((hidden: PanelName[]) => {
+    setHiddenPanels(hidden)
+    window.bravebot.writeHiddenPanels(hidden)
+  }, [])
+  /** Counts View > Choose Sections, which opens the context column's checklist each time it rises. */
+  const [sectionsAsked, setSectionsAsked] = useState(0)
   const dismissedUpdate = preferences.dismissedUpdate
   const download = useCallback(() => { void window.bravebot.openPage('releases') }, [])
   const updateNotice = useMemo(() => {
@@ -145,12 +173,16 @@ export function App(): React.JSX.Element {
       void call('usage_ping.mark_notice_shown').catch(() => {})
     }).catch(() => {})
   }, [])
-  /** Whether to say that crash reports are sent. The bridge records it in the file the terminal also reads. */
-  const [crashNoticeShown, setCrashNoticeShown] = useState(false)
+  /**
+   * Whether to say that crash reports are sent. Due only for a launch that is reporting and that no
+   * front end has told yet; the bridge records it, in the marker the terminal reads, as soon as it
+   * is drawn.
+   */
+  const [crashReportsNoticeShown, setCrashReportsNoticeShown] = useState(false)
   useEffect(() => {
     void call<{ due?: boolean }>('crash_reports.notice_due').then((answer) => {
       if (answer.due !== true) return
-      setCrashNoticeShown(true)
+      setCrashReportsNoticeShown(true)
       void call('crash_reports.mark_notice_shown').catch(() => {})
     }).catch(() => {})
   }, [])
@@ -160,7 +192,11 @@ export function App(): React.JSX.Element {
   const draft = preferences.conversations[draftKey]?.draft ?? ''
   const setDraft = useCallback((text: string) => {
     const current = liveRef.current
-    if (current) setConversation(liveKey(current), { draft: text })
+    if (!current) return
+    // The staging lives only in memory, so the folded pastes the draft names are saved with it
+    // for a reopened draft to unfold.
+    const folded = foldedIn(current.staging, text)
+    setConversation(liveKey(current), { draft: text, folded: folded.length > 0 ? folded : undefined })
   }, [])
   useEffect(() => {
     // Only a pick: a default the backend supplied is not the person's choice, and storing it
@@ -169,10 +205,11 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model, live?.modelPicked])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
-  const { answerTrust, answerRules, answerFolder, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+  const { answerTrust, answerRules, answerFolder, send, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
+  const compaction = useCompact({ openedLives, updateSession, setProblem })
   const { chosen, writeAppearance } = useAppearance()
 
   // Read inside `showSession`, which is installed once for the same reason. The list lives in the
@@ -216,6 +253,8 @@ export function App(): React.JSX.Element {
     void readSummons()
     const stop = window.bravebot.onEvent((message: BridgeEvent) => {
       if (message.event === 'enhance.done' && message.session) enhancement.receive(message.session, message.data)
+      else if (message.event === 'compact.done' && message.session) compaction.receive(message.session, message.data)
+      else if (message.event === 'handoff.done' && message.session) handoffs.receive(message.session, message.data)
       else if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
       // The list holds two things this window did not write — the session behind a bot and how
@@ -308,6 +347,7 @@ export function App(): React.JSX.Element {
       const picked = bot ? null : pickedModel(summary.directory, summary.id)
       setLive(newLive({
         handle: opened.session,
+        staging: restaged(undefined, conversationPreferences(conversationKey(summary.directory, summary.id)).folded),
         ...reopenedModel(bot?.model, picked, opened.model),
         summary: {
           id: summary.id,
@@ -319,6 +359,8 @@ export function App(): React.JSX.Element {
         entries: t.fromSaid(opened.said),
         todos: Object.values(opened.todos).flat(),
         notes: opened.notes ?? [],
+        // CMD-8, CMD-16: the /btw and /recap answers the record kept, for the Asides panel.
+        asides: opened.asides ?? [],
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
         contextTokens: opened.contextTokens,
@@ -329,6 +371,8 @@ export function App(): React.JSX.Element {
         // Looked up rather than carried: this session may have been forked in another launch
         // entirely, and the file the main process keeps is where that is written down.
         forkedFrom: cameFrom(forksRef.current, summary.directory, summary.id, sessionsRef.current),
+        // From the record, which the list row carries (SESSION-34).
+        handedOffFrom: sourceOf(summary.handedOffFrom, sessionsRef.current),
         focus: focus ?? null,
         // Ungrounded on purpose, even though this session has said the briefing before. What was
         // said before is in the conversation only until compaction takes it, and a resumed session
@@ -348,7 +392,7 @@ export function App(): React.JSX.Element {
     [],
   )
 
-  const create = useCallback(async (directory?: string, bot?: { slug: string; model: string | null }, draftId = `draft:${crypto.randomUUID()}`): Promise<string | null> => {
+  const create = useCallback(async (directory?: string, bot?: { slug: string; model: string | null }, draftId = `draft:${crypto.randomUUID()}`, from?: HandingOff): Promise<string | null> => {
     // A directory only ever arrives here from a list somebody else handed over: File > Open
     // Recent, the recents the composer's project menu and New chat read, which the main process
     // keeps, a group heading in the chat list, whose path came off a session the bridge reported,
@@ -364,11 +408,14 @@ export function App(): React.JSX.Element {
         shownDirectory: string
       }>('session.new', {
         directory: chosen,
+        // The open chat's handle, from which the bridge reads the source record's id (SESSION-34).
+        ...(from ? { handedOffFrom: from.handle } : {}),
       })
       setConversation(conversationKey(chosen, draftId), { botSlug: bot?.slug ?? null })
       setLive(newLive({
         handle: made.session,
         draftId,
+        staging: restaged(undefined, conversationPreferences(conversationKey(chosen, draftId)).folded),
         model: bot?.model ?? made.model,
         summary: {
           id: null,
@@ -383,6 +430,7 @@ export function App(): React.JSX.Element {
         askingTrust: made.remembered ? null : made.shownDirectory,
         ...settledBy(made),
         forkedFrom: null,
+        handedOffFrom: from ? { id: from.id ?? from.handle, title: from.title } : null,
         focus: null,
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
@@ -394,6 +442,20 @@ export function App(): React.JSX.Element {
       return null
     }
   }, [])
+
+  // Hand Off to New Chat… (SESSION-34, CMD-34). The new chat opens in the source's directory, linked
+  // to it by the handle the bridge holds it under.
+  const createHandedOff = useCallback(
+    (directory: string, from: HandingOff) => create(directory, undefined, undefined, from),
+    [create],
+  )
+  const handoffs = useHandoff({ openedLives, updateSession, setProblem, create: createHandedOff, send })
+  /** Send, or, where the box holds an armed brief, start the new chat from it. */
+  const submitOrHandOff = useCallback(() => {
+    const current = liveRef.current
+    if (current && armed(current.handoff, draft) && canSend(current, backendReady, draft)) void handoffs.take(current.handle)
+    else submit()
+  }, [draft, backendReady, handoffs.take, submit])
 
   const pending = useMemo(
     () => (live ? t.outstanding(live.entries) : null),
@@ -543,13 +605,21 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [closeSession, refresh, readForks, readBots, readSummons])
 
-  /** The project whose group menu asked to delete all its chats or to import some, while it asks. */
-  const [projectAction, setProjectAction] = useState<{ kind: 'purge' | 'import'; directory: string; opened: ReadonlySet<string> } | null>(null)
+  /**
+   * The project whose group menu asked to delete all its chats, to import some or to show what
+   * they spent, while it asks. A spend report with no directory covers every project.
+   */
+  const [projectAction, setProjectAction] = useState<
+    | { kind: 'purge' | 'import'; directory: string; opened: ReadonlySet<string> }
+    | { kind: 'stats'; directory: string | null }
+    | null
+  >(null)
   const askPurge = useCallback((directory: string) => {
     const opened = new Set([...openedLives.current.values()].flatMap((item) => item.summary.directory === directory && item.summary.id ? [item.summary.id] : []))
     setProjectAction({ kind: 'purge', directory, opened })
   }, [])
   const askImport = useCallback((directory: string) => setProjectAction({ kind: 'import', directory, opened: new Set() }), [])
+  const askStats = useCallback((directory: string | null) => setProjectAction({ kind: 'stats', directory }), [])
   const leaveProjectAction = useCallback(() => setProjectAction(null), [])
 
   /**
@@ -600,6 +670,48 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // The desktop's /cost and /context (CMD-15, CMD-19). Both answer while a turn runs, since the
+  // bridge reads them from the session's report store and not from the state the turn holds.
+  const cost = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(costNotice(await call<CostReport>('session.report.cost', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+  const contextBreakdown = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(contextNotice(await call<ContextReport>('session.report.context', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+  // The desktop's /status (CMD-8). Mid-turn the bridge answers with rulesHeldByTurn set and no
+  // rules, and the notice says they are held by the running turn.
+  const status = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setNotice(statusNotice(await call<StatusReport>('session.report.status', { session })))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+  // The desktop's /request (TRACE-9), answered from the same store.
+  const lastRequest = useCallback(async () => {
+    const session = liveRef.current?.handle
+    if (!session) return
+    try {
+      setRequestReport(await call<RequestReport>('session.report.request', { session }))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+
   // Plain text, not Markdown: the notes link every issue, and the agent has already written each
   // link as its label, so nothing in this dialog opens anything.
   const changelog = useCallback(async () => {
@@ -624,6 +736,43 @@ export function App(): React.JSX.Element {
   // The open chat's handle while its note dialog is up.
   const [noting, setNoting] = useState<string | null>(null)
   const askNote = useCallback(() => { if (liveRef.current) setNoting(liveRef.current.handle) }, [])
+  // The open chat's handle while the dialog asking for a compaction's focus is up (CMD-34).
+  const [compacting, setCompacting] = useState<string | null>(null)
+  const askCompact = useCallback(() => { if (liveRef.current) setCompacting(liveRef.current.handle) }, [])
+  const compact = useCallback(
+    (focus: string) => (compacting ? compaction.compact(compacting, focus) : Promise.resolve(true)),
+    [compacting, compaction.compact],
+  )
+  // The open chat's handle while the dialog asking for the next goal is up (SESSION-34, CMD-34).
+  const [handingOff, setHandingOff] = useState<string | null>(null)
+  const askHandoff = useCallback(() => { if (liveRef.current) setHandingOff(liveRef.current.handle) }, [])
+  const handOff = useCallback(
+    (goal: string) => (handingOff ? handoffs.ask(handingOff, goal) : Promise.resolve(true)),
+    [handingOff, handoffs.ask],
+  )
+  // The open chat's handle while Continue in Background… asks to confirm, and whether the bridge is
+  // starting the background session (BG-2, CMD-34).
+  const [backgrounding, setBackgrounding] = useState<{ handle: string; busy: boolean } | null>(null)
+  const askBackground = useCallback(() => {
+    if (liveRef.current) setBackgrounding({ handle: liveRef.current.handle, busy: false })
+  }, [])
+  const background = useCallback(async () => {
+    if (!backgrounding || backgrounding.busy) return
+    const handle = backgrounding.handle
+    setBackgrounding({ handle, busy: true })
+    const came = await continueInBackground(
+      (session) => call<BackgroundedSession>('session.background', { session }), handle)
+    setBackgrounding(null)
+    // The bridge has let go of the chat, so the window does too, as closing it does.
+    if (came.closed) {
+      openedLives.current.delete(handle)
+      if (handleRef.current === handle) setLive(null)
+      void refresh()
+    }
+    if ('toast' in came) showToast(came.toast.title, came.toast.body)
+    else setProblem(came.problem)
+  }, [backgrounding, refresh])
+
   const addNote = useCallback(async (text: string) => {
     if (!noting) return true
     try {
@@ -699,6 +848,33 @@ export function App(): React.JSX.Element {
       if (found) copy(found.directory)
     },
     [sessions, copy],
+  )
+
+  /**
+   * Stop the background session holding a chat a right-click named (BG-11).
+   *
+   * The bridge waits for the process to end, for up to the stop grace period, so a second choice
+   * while one stop is pending does nothing. The record is kept, so after the refresh the row is an
+   * ordinary chat that opens here.
+   */
+  const stopping = useRef(false)
+  const stopBackground = useCallback(
+    async (id: string) => {
+      if (stopping.current) return
+      const found = sessions.find((session) => session.id === id)
+      if (!found) return
+      stopping.current = true
+      try {
+        const came = await askStopBackground(
+          (id) => call<StoppedBackground>('session.background.stop', { id }), found.id)
+        if ('toast' in came) showToast(came.toast.title, came.toast.body)
+        else setProblem(came.problem)
+        await refresh()
+      } finally {
+        stopping.current = false
+      }
+    },
+    [sessions, refresh],
   )
 
   /**
@@ -897,10 +1073,12 @@ export function App(): React.JSX.Element {
     if (!handle) return
     await call('session.close', { session: current.handle }).catch(() => undefined)
     openedLives.current.delete(current.handle)
-    setConversation(oldKey, { draft: '', botSlug: null })
+    setConversation(oldKey, { draft: '', botSlug: null, folded: undefined })
+    const folded = foldedIn(current.staging, text)
+    if (folded.length > 0) updateSession(handle, (old) => old ? { ...old, staging: restaged(old.staging, folded) } : old)
     if (text) setDraft(text)
     refreshLives((n) => n + 1)
-  }, [create, setDraft])
+  }, [create, setDraft, updateSession])
 
   const openSettingsPage = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)
@@ -911,18 +1089,25 @@ export function App(): React.JSX.Element {
     ? <UsagePingNotice onSettings={() => { setUsagePingNoticeShown(false); openSettingsPage('general') }}
       onDismiss={() => setUsagePingNoticeShown(false)} />
     : null, [usagePingNoticeShown, openSettingsPage])
-  const crashReportNotice = useMemo(() => crashNoticeShown
-    ? <CrashReportNotice onDismiss={() => setCrashNoticeShown(false)} />
-    : null, [crashNoticeShown])
+  const crashReportsNotice = useMemo(() => crashReportsNoticeShown
+    ? <CrashReportsNotice onSettings={() => { setCrashReportsNoticeShown(false); openSettingsPage('general') }}
+      onDismiss={() => setCrashReportsNoticeShown(false)} />
+    : null, [crashReportsNoticeShown, openSettingsPage])
   // `Transcript` has one notice slot, so the first-launch banners share it.
-  const startupNotices = useMemo(() => usagePingNotice || crashReportNotice
-    ? <>{usagePingNotice}{crashReportNotice}</>
-    : null, [usagePingNotice, crashReportNotice])
+  const startupNotices = useMemo(() => usagePingNotice || crashReportsNotice
+    ? <>{usagePingNotice}{crashReportsNotice}</>
+    : null, [usagePingNotice, crashReportsNotice])
 
   useCommandRouter({
     create: (directory) => { void (directory ? create(directory) : newChat()) },
     closeSession: () => void closeSession(),
-    send: submit,
+    send: submitOrHandOff,
+    // Only writes the line. The run starts when the person sends it (CMD-1).
+    plan: () => {
+      if (!liveRef.current) return
+      setDraft(planPrefill(draft))
+      document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT))
+    },
     cancel: () => void cancel(),
     cycleMode: () => { if (liveRef.current) void chooseMode(nextPermissionMode(liveRef.current.permissionMode)) },
     toggle,
@@ -931,13 +1116,30 @@ export function App(): React.JSX.Element {
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
     caffeinate: () => void caffeinate(),
+    // A folded column is unfolded first and the checklist opened once it has finished growing, so
+    // the menu is placed against the button where it comes to rest.
+    sections: () => {
+      const ask = () => setSectionsAsked((n) => n + 1)
+      if (!collapsed.right) return ask()
+      toggle('right')
+      setTimeout(ask, FOLD_MS + 40)
+    },
     changelog: () => void changelog(),
     note: askNote,
+    compact: askCompact,
+    handoff: askHandoff,
+    background: askBackground,
     doctor: () => void doctor(),
+    status: () => void status(),
+    cost: () => void cost(),
+    context: () => void contextBreakdown(),
+    request: () => void lastRequest(),
+    spend: () => askStats(null),
     bugReport: () => setBugReportOpen(true),
     openSession,
     closeNamed,
     copyProjectPath,
+    stopBackground: (id) => void stopBackground(id),
     copyEntry,
     forkEntry: (id) => void forkFrom(id),
     rewindEntry,
@@ -954,6 +1156,7 @@ export function App(): React.JSX.Element {
       hasSession: live !== null,
       running: live?.running ?? false,
       canSend: canSend(live, backendReady, draft),
+      canStart: canStart(live, backendReady),
       canExport,
       includeTools,
       canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
@@ -963,6 +1166,7 @@ export function App(): React.JSX.Element {
     [live, draft, collapsed, canExport, includeTools, backendReady, caffeinated],
   )
   usePublishedState(menuState)
+  useWindowTitle(live)
 
   // Stable, so the memoised columns either side of the transcript are not re-drawn by typing.
   const stableShowSession = useEvent(showSession)
@@ -1045,6 +1249,7 @@ export function App(): React.JSX.Element {
         onNew={stableCreate}
         onPurge={askPurge}
         onImport={askImport}
+        onStats={askStats}
         onNewChat={stableNewChat}
         onTab={stableSwitchTab}
         bots={bots}
@@ -1096,12 +1301,15 @@ export function App(): React.JSX.Element {
         onStaging={(handle, staging) => updateSession(handle, (old) => old ? { ...old, staging } : old)}
         queuePaused={live?.queuePaused ?? false}
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
-        queued={live?.queued?.map((message) => message.prompt) ?? []}
+        queued={live?.queued?.map(queuedRow) ?? []}
         onInterject={interjectDraft}
         onEnhance={() => { const handle = handleRef.current; if (handle) void enhancement.enhance(handle) }}
         onStopEnhance={() => { const handle = handleRef.current; if (handle) enhancement.stop(handle) }}
         onRestoreEnhanced={() => { const handle = handleRef.current; return !!handle && enhancement.restore(handle) }}
         onDismissEnhancement={() => { const handle = handleRef.current; if (handle) enhancement.dismiss(handle) }}
+        onStopHandoff={() => { const handle = handleRef.current; if (handle) handoffs.stop(handle) }}
+        onEscapeHandoff={() => { const handle = handleRef.current; return !!handle && handoffs.escape(handle) }}
+        onDropHandoff={(force) => { const handle = handleRef.current; if (handle) handoffs.drop(handle, force) }}
         onQueue={queueDraft}
         interjected={live?.interjected?.map((line) => line.prompt) ?? []}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}
@@ -1120,7 +1328,7 @@ export function App(): React.JSX.Element {
         onModel={(model) => void chooseModel(model)}
         onMode={(mode) => void chooseMode(mode)}
         onSandbox={(mode) => void chooseSandbox(mode)}
-        onSubmit={submit}
+        onSubmit={submitOrHandOff}
         reading={reading}
         onCancel={cancel}
         canExport={canExport}
@@ -1156,7 +1364,7 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote}
+      <Context live={live} audit={auditPanel} details={details} hidden={hiddenPanels} onHidden={changeHiddenPanels} sectionsAsked={sectionsAsked} onAddNote={askNote}
         onAddFolder={addFolderFromPanel} onCloseFolder={closeFolderFromPanel} />
       </div>
       </div>
@@ -1176,8 +1384,11 @@ export function App(): React.JSX.Element {
           onPage={setSettingsPage}
           onBack={() => {
             setSettings(false)
-            // Back to the control that opened the page, once the chat view is no longer inert.
-            requestAnimationFrame(() => document.querySelector('.agent-settings-open')?.shadowRoot?.querySelector<HTMLElement>('button')?.focus())
+            // Back to the control that opened the page, once the chat view is no longer inert. That
+            // takes a second frame with reduced motion: base.css gives every property a 0.01ms
+            // transition there, so for the first frame the sidebar is still `visibility: hidden`
+            // from `in-settings` and refuses focus.
+            requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector('.agent-settings-open')?.shadowRoot?.querySelector<HTMLElement>('button')?.focus()))
           }}
           session={live?.handle}
           chosen={chosen}
@@ -1192,6 +1403,7 @@ export function App(): React.JSX.Element {
       {notice && (
         <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} onClose={() => setNotice(null)} />
       )}
+      {requestReport && <RequestDialog report={requestReport} onClose={() => setRequestReport(null)} />}
       {projectAction?.kind === 'purge' && (
         <PurgeProject directory={projectAction.directory} opened={projectAction.opened} onClose={leaveProjectAction}
           onConfirm={(ids) => void purgeProject(projectAction.directory, ids)} />
@@ -1199,8 +1411,23 @@ export function App(): React.JSX.Element {
       {projectAction?.kind === 'import' && (
         <ImportSessions directory={projectAction.directory} onClose={leaveProjectAction} onImported={() => void refresh()} />
       )}
+      {projectAction?.kind === 'stats' && <SpendReport directory={projectAction.directory} onClose={leaveProjectAction} />}
       {noting && live?.handle === noting && (
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
+      )}
+      {compacting && live?.handle === compacting && (
+        <AskDialog title="Compact conversation" subtitle="Summarises earlier messages so less is sent to the model."
+          label="Focus (optional)" action="Compact" optional rows={2} test="compact" className="compact-dialog"
+          running={live.running} onCancel={() => setCompacting(null)} onConfirm={compact} />
+      )}
+      {handingOff && live?.handle === handingOff && (
+        <AskDialog title="Hand off to a new chat" subtitle="Writes a brief from this chat for you to read and edit. Sending it starts a new chat."
+          label="Next goal" action="Write brief" rows={2} test="handoff" className="handoff-dialog"
+          running={live.running} onCancel={() => setHandingOff(null)} onConfirm={handOff} />
+      )}
+      {backgrounding && live?.handle === backgrounding.handle && (
+        <BackgroundConfirm name={live.summary.title} busy={backgrounding.busy}
+          onCancel={() => { if (!backgrounding.busy) setBackgrounding(null) }} onConfirm={() => void background()} />
       )}
       {keepAwake.asking && (
         <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />

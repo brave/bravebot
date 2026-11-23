@@ -42,6 +42,7 @@ was, and the conversation budget stays where it was too.
 | | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
 | | `setCacheKey` | `true` to send a `prompt_cache_key` in each chat-completions request, the same value for every request of a session and another value in the next session, for a service that routes by it to serve a session's prompt cache. Off where unstated, since it lets the host tie a session's requests together (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
+| | `keyFile` | the absolute path of a file that holds the token and nothing else, as [The credential](#the-credential) says (bravebot's own field) |
 | | `headers` | extra request headers, keyed by header name |
 | a model | `limit.context` | that model's context window, in prompt tokens |
 | | `options` | anything extra to put in the request body |
@@ -142,7 +143,7 @@ the name is sent as written.
 
 An account id is letters and digits, and a gateway id is letters, digits, `-` and `_`. An entry whose
 id is missing or holds any other character configures no service, and the gateway has no default id.
-Where the entry names no `env`, states no `apiKey` and states no `baseURL`, the key is read from
+Where the entry names no `env`, states no `apiKey` or `keyFile` and states no `baseURL`, the key is read from
 `CLOUDFLARE_API_KEY` for Workers AI and `CLOUDFLARE_API_TOKEN` for AI Gateway. The ids are read from
 `options` only, so `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_GATEWAY_ID` are not used. A gateway that
 requires authentication takes its `cf-aig-authorization` header in `options.headers`. A `baseURL` the
@@ -160,26 +161,89 @@ bravebot auth login gateway openrouter
 asks for the key with nothing shown as you type it, and keeps it in `~/.bravebot/gateway-keys.json`,
 readable only by your account, under the block's id. `openrouter`, `openai` and `anthropic` need no
 block first: for one that no block names, the sign-in adds an entry that holds no field. [Signing
-in](../signing-in.md#gateway) has the details. `options.apiKey` is read too, because it is
-opencode's field. Where more than one is present a variable wins, then the stored key, then
-`options.apiKey`. A long-lived token in a settings file is a token in a file people paste into
-issues.
+in](../signing-in.md#gateway) has the details. Or keep the token in a file of your own and name the
+file in `options.keyFile`:
+
+```json
+{
+  "provider": {
+    "acme-gateway": {
+      "options": {
+        "baseURL": "https://gateway.acme.internal/v1",
+        "keyFile": "/Users/you/.config/gateway-key.txt"
+      }
+    }
+  }
+}
+```
+
+`options.keyFile` is the absolute path of a file that holds the token and nothing else. Make the file
+readable by your account only. The file must be a regular file of at most 4,096 bytes, written in
+UTF-8. Its whole content, without the whitespace at either end, is the key, so a final newline is
+fine. The key must be non-empty ASCII with no whitespace or control character inside it. A value that
+is blank or is not a string is read as not written, as a blank `apiKey` is. A value that is not
+blank and is not an absolute path, `~/key` included, is refused as [below](#the-credential):
+`~` is not expanded, and the text of the value is kept nowhere and printed nowhere.
+
+`options.apiKey` is read too, because it is opencode's field. It is read as written: `{env:NAME}` and
+`{file:path}` written inside it are not substituted
+([#3003](https://github.com/brave/bravebot/issues/3003)). Where more than one source is present, a
+variable the block's `env` names wins (the first one that holds text), then the stored key, then
+`options.keyFile`, then `options.apiKey`. The first source that gives a token is used, and a source
+later in the order is not read. A long-lived token in a settings file is a token in a file people
+paste into issues, which is why the file and the stored key come before it.
 
 A variable is read at the point a request needs it rather than once at startup, so exporting a new
-one takes effect in a session already open. A stored key is read when a session starts, so one
+one takes effect in a session already open. The key file is read at that point too, so replacing the
+file takes effect in a session already open. A stored key is read when a session starts, so one
 stored while a session is open reaches the next one. A block that names somewhere for a credential
 to live and finds nothing there is a stale or missing token, and its requests are refused with the
 remedy named rather than sent. `bravebot doctor` says whether a credential was found, and whether it
-was a stored one, and never what it was. It prints an `ends` line for the block too, naming the host
-the token is presented to: that host is the only surface that revokes it, and deleting the value
-from this file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's
-custody and leaves the token live there.
+was a stored one or came from the key file, and never what it was. It prints an `ends` line for the
+block too, naming the host the token is presented to: that host is the only surface that revokes it,
+and deleting the value from this file, removing the file `options.keyFile` names, unsetting the
+variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token
+live there until it is revoked there.
+
+**A key file that gives no key refuses the request.** A block that names `options.keyFile` has said where its credential lives. Where no variable and no
+stored key gives a token, and the file cannot give one, the request is refused and nothing is sent.
+The file cannot give a key when any of these holds:
+
+- the value is not an absolute path, or the file is missing;
+- the file is not a regular file, or cannot be read as text;
+- the file holds more than 4,096 bytes;
+- the file holds nothing but whitespace;
+- the key holds whitespace, a control character or a character outside ASCII.
+
+The refusal reads ``no credential for the <gateway> gateway: the file its `options.keyFile` names <reason>,
+so nothing was sent; fix the path, or put the key alone in that file``, with the id of the gateway in
+place of `<gateway>` and one of those reasons in place of `<reason>`. It names no path and holds no byte
+of the file.
+
+`options.apiKey` is not used in the file's place. A token left behind in `apiKey` after the key moved
+to a file would otherwise be sent, and it is the stale one. A variable or a stored key that gives a
+token is used before the file, and the file is then not read, so a file that is broken does not
+matter while one of them is present.
+
+`bravebot doctor` says in the block's `key` line that the key was found in the file `options.keyFile`
+names, or, for a file that gives none, that no key could be used and which of the reasons above
+applies. It does not print the path or any text of the file, since the setting is a string you wrote and
+one pasted into the wrong field is the key itself. `bravebot auth status` and the desktop accounts list say that the
+file gives no key. Storing a key with `bravebot auth login gateway <id>` makes the stored key win over
+the file. A block that names `options.keyFile` names a credential, so the next paragraph does not
+apply to it.
+
+**The managed layer drops `options.keyFile`.** The file the administrator keeps
+([managed settings](../managed-settings.md)) drops `options.apiKey`, and drops `options.keyFile` in
+the same place, since everyone on the machine can read that file and the layer already names the host
+a token goes to. Its host, models, variable names and headers are kept, and the credential comes from a
+variable `env` names or a stored key.
 
 **A block naming no credential at all is a different statement, and a supported one.** No `env`, no
-`options.apiKey` and no stored key is you saying this gateway wants none: its requests carry no
-`authorization` header and its roster is asked for without one. `doctor` reports it as needing none
-rather than as missing one. A dummy `apiKey` would just teach people to write fake credentials into a
-file they paste into issues.
+`options.apiKey`, no `options.keyFile` and no stored key is you saying this gateway wants none: its
+requests carry no `authorization` header and its roster is asked for without one. `doctor` reports it
+as needing none rather than as missing one. A dummy `apiKey` would just teach people to write fake
+credentials into a file they paste into issues.
 
 **One exception: a known name with no `baseURL` of its own.** A block for `openai`, `openrouter` or
 `anthropic` that states no `baseURL` is reached at a service that refuses every request without a key,

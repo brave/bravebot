@@ -187,8 +187,9 @@ impl Session {
         task: &str,
         pasted: Vec<AttachedImage>,
         attached: Vec<Attached>,
+        names: NamesFrom,
     ) -> String {
-        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+        self.begin_turn(task.to_string(), (attached, pasted), Vec::new(), names)
     }
 
     /// Load history from disk and keep writing to it.
@@ -453,12 +454,42 @@ impl Session {
     ///
     /// `None` is a choice too: it puts the session back to sending no level at all, which is what
     /// somebody who has never picked one is already doing. Written through to disk only for a
-    /// session that persists, the same rule the model follows and for the same reason.
+    /// session that persists, the same rule the model follows and for the same reason. A recorded
+    /// choice ends the mark a level chosen for this session only left.
     pub fn choose_effort(&mut self, effort: Option<Effort>) {
         if self.persist {
             bravebot_session::store::save_effort(effort);
         }
         self.effort = effort;
+        self.effort_is_for_this_session = false;
+    }
+
+    /// Put `effort` in force for this session only, over every saved pick and file, and record
+    /// nothing: `/effort session` and Tab in the effort picker (CMD-35).
+    ///
+    /// Like [`Session::name_effort`] it leaves the level the next session opens on alone, and
+    /// `None` is a choice too: this session sends no level and the recorded one stays. It also
+    /// notes that the level in force is not the recorded one, for the info panel and `/status`
+    /// to say so.
+    pub fn choose_effort_for_this_session(&mut self, effort: Option<Effort>) {
+        self.effort = effort;
+        self.effort_is_for_this_session = true;
+    }
+
+    /// Whether the level in force was chosen for this session only, and so is not the one the
+    /// next session opens on.
+    pub fn effort_is_for_this_session(&self) -> bool {
+        self.effort_is_for_this_session
+    }
+
+    /// Whether the level [`Session::effort_in_force`] names is the one chosen for this session
+    /// only, which is what a row under that level in the info panel says (PANEL-9).
+    ///
+    /// A model of the ChatGPT account is sent the level its session began with, so after
+    /// `/effort session` the level in force can be another one. That level is the account's and
+    /// is not the session-only one, so it is not marked.
+    pub fn effort_in_force_is_for_this_session(&self) -> bool {
+        self.effort_is_for_this_session && self.effort_in_force() == self.effort
     }
 
     /// The language `/language` last saved, for saying so.
@@ -483,8 +514,12 @@ impl Session {
 
     /// Put `effort` in force for this session over every saved pick and file, and record nothing,
     /// for the reason [`Session::name_model`] records no model.
+    ///
+    /// The command line's own choice (CLI-31), so unlike [`Session::choose_effort_for_this_session`]
+    /// it is not marked: the info panel says nothing of a level `--effort` named.
     pub fn name_effort(&mut self, effort: Effort) {
         self.effort = Some(effort);
+        self.effort_is_for_this_session = false;
     }
 
     /// Settle the style of editing for this session, given what a settings file said.
@@ -563,7 +598,8 @@ impl Session {
     /// [`Session::effort_in_force`], and is still not forgotten.
     ///
     /// Nothing is written: a level a file named is not a pick, and recording one would make reading
-    /// a settings file once enough to outlive it.
+    /// a settings file once enough to outlive it. The level settled is the one a new session opens
+    /// on, so it is not a level chosen for this session only.
     ///
     /// The recorded pick is read only for a session that persists, the rule
     /// [`Session::adopt_editing`] follows: a test must not be handed the developer's own choice, or
@@ -574,6 +610,7 @@ impl Session {
             .then(bravebot_session::store::load_effort)
             .flatten();
         self.effort = bravebot_session::store::effort(recorded, settings);
+        self.effort_is_for_this_session = false;
     }
 
     /// Settle whether a check that finds nothing may promote a slot without anybody being asked.

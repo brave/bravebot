@@ -608,6 +608,58 @@ fn withholds_early(text: &str) -> bool {
         .is_some_and(|code| code.contains("withhold_inherited_descriptors("))
 }
 
+/// Each binary here starts programs on its own account (an editor, a hook, a clipboard tool), so
+/// each reads the record of directories an earlier process let a stage write before it looks any
+/// program up, and only then starts appending to it (SANDBOX-30). A binary without the calls
+/// finds a program a stage planted in such a directory as the system's.
+#[test]
+fn every_binary_here_reads_the_record_of_stage_writes_before_it_appends_to_it() {
+    let binaries = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin");
+    let mut seen = 0;
+    let mut without = Vec::new();
+    visit(&binaries, &mut |path, text| {
+        seen += 1;
+        if !reads_the_record_then_follows_it(text) {
+            without.push(path.display().to_string());
+        }
+    });
+    assert!(seen > 0, "no binaries found under {binaries:?}");
+    assert!(
+        without.is_empty(),
+        "these binaries do not call stage_record::load() and then stage_record::follow() in main:\n{}",
+        without.join("\n")
+    );
+}
+
+/// Whether `main` in `text` calls `stage_record::load()` and, after it, `stage_record::follow()`.
+/// Comments are not read.
+fn reads_the_record_then_follows_it(text: &str) -> bool {
+    let mut lines = text.lines();
+    if !lines.any(|line| line.trim_start().starts_with("fn main()")) {
+        return false;
+    }
+    let code: Vec<&str> = lines
+        .map(|line| line.split("//").next().unwrap_or("").trim())
+        .collect();
+    let at = |call: &str| code.iter().position(|line| line.contains(call));
+    matches!(
+        (at("stage_record::load();"), at("stage_record::follow();")),
+        (Some(load), Some(follow)) if load < follow
+    )
+}
+
+#[test]
+fn a_binary_that_follows_the_record_before_reading_it_or_never_reads_it_is_refused() {
+    let both = "fn main() {\n    bravebot_agent::stage_record::load();\n    bravebot_agent::stage_record::follow();\n}\n";
+    assert!(reads_the_record_then_follows_it(both));
+    let backwards = "fn main() {\n    bravebot_agent::stage_record::follow();\n    bravebot_agent::stage_record::load();\n}\n";
+    assert!(!reads_the_record_then_follows_it(backwards));
+    let one = "fn main() {\n    bravebot_agent::stage_record::follow();\n}\n";
+    assert!(!reads_the_record_then_follows_it(one));
+    let commented = "fn main() {\n    // bravebot_agent::stage_record::load();\n    bravebot_agent::stage_record::follow();\n}\n";
+    assert!(!reads_the_record_then_follows_it(commented));
+}
+
 #[test]
 fn withholding_after_other_work_is_too_late() {
     let early = "fn main() {\n    let outcome = refuse_same_user_inspection();\n    let _ = disable_core_dumps();\n    if let Err(e) = withhold_inherited_descriptors() {\n        eprintln!(\"{e}\");\n    }\n    serve();\n}\n";

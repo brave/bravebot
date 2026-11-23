@@ -592,6 +592,7 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::a_session_index_directory_is_created_never_adopted`
 `verified-by: bravebot_lsp::server::a_session_with_a_state_directory_indexes_under_it`
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
+`verified-by: bravebot_lsp::server::nothing_the_driver_does_with_an_index_reads_a_file_inside_it`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`
 `verified-by: bravebot_lsp::server::starting_a_server_on_an_index_keeps_it_from_being_removed`
 
@@ -724,6 +725,7 @@ always a net positive; the cost here is a wait of at most the bound per write.
 `verified-by: bravebot_agent::lsp::a_write_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::a_write_starts_no_language_server`
 `verified-by: bravebot_agent::lsp::a_write_of_quarantined_bytes_reports_no_diagnostics`
+`verified-by: bravebot_agent::lsp::quarantined_bytes_written_over_a_vouched_path_report_no_diagnostics`
 `verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`
 

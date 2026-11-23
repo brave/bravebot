@@ -1253,6 +1253,346 @@ fn a_stage_in_a_subdirectory_reads_the_enclosing_git_directory_and_writes_none_o
     }
 }
 
+/// The lines that make git run, from a subdirectory, a program the enclosing `.git` names: the
+/// `core.fsmonitor` program runs for `git status`, and the `pre-commit` hook for `git hook run`.
+///
+/// The person's global configuration is left out. A `strict` stage does not read it, and git stops
+/// on it before it looks for a repository, so a refusal to read the enclosing checkout would not
+/// show.
+#[cfg(target_os = "macos")]
+const ENCLOSING_TRIGGERS: [(&str, &str); 2] = [
+    (
+        "fsmonitor",
+        "GIT_CONFIG_GLOBAL=/dev/null git status --short",
+    ),
+    (
+        "hook",
+        "GIT_CONFIG_GLOBAL=/dev/null git hook run pre-commit",
+    ),
+];
+
+/// A checkout that holds the session directory, whose `.git` names two programs that git runs: the
+/// script `core.fsmonitor` names, which is outside the session, and a `pre-commit` hook. Each tries
+/// three writes and appends the status of each to a file in the session directory, the one place
+/// a stage can always write, so a run shows what each attempt returned.
+#[cfg(target_os = "macos")]
+struct EnclosingPrograms {
+    places: Places,
+    checkout: PathBuf,
+}
+
+/// What one run of a line left: what the programs recorded, as `<program> <attempt>` and the
+/// status of the write, and the attempts whose file exists afterwards.
+#[cfg(target_os = "macos")]
+struct Left {
+    ran: exec::Ran,
+    recorded: Vec<(String, i32)>,
+    on_disk: Vec<&'static str>,
+}
+
+#[cfg(target_os = "macos")]
+impl Left {
+    fn attempted(&self) -> Vec<&str> {
+        self.recorded
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
+    fn succeeded(&self) -> Vec<&str> {
+        let wrote = self.recorded.iter().filter(|(_, status)| *status == 0);
+        wrote.map(|(name, _)| name.as_str()).collect()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl EnclosingPrograms {
+    /// The three writes: into the enclosing `.git`, beside the session directory, and into the home
+    /// directory's `.ssh`.
+    const ATTEMPTS: [&'static str; 3] = ["enclosing-git", "beside", "ssh"];
+
+    /// `None` where git cannot make the repository.
+    fn new(name: &str) -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        let places = Places::new(name);
+        let checkout = places.session.parent().expect("a parent").to_path_buf();
+        let initialised = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&checkout)
+            .status();
+        if !initialised.is_ok_and(|status| status.success()) {
+            return None;
+        }
+        let this = Self { places, checkout };
+        let install = |file: &Path, program: &str| {
+            std::fs::write(file, this.script(program)).expect("a script");
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755))
+                .expect("an executable script");
+        };
+        let monitor = this.places.beside.join("fsmonitor.sh");
+        install(&monitor, "fsmonitor");
+        std::fs::create_dir_all(this.checkout.join(".git/hooks")).expect("a hooks directory");
+        install(&this.checkout.join(".git/hooks/pre-commit"), "hook");
+        let configured = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&this.checkout)
+            .args(["config", "core.fsmonitor"])
+            .arg(&monitor)
+            .status();
+        assert!(
+            configured.is_ok_and(|status| status.success()),
+            "git did not take the configuration"
+        );
+        Some(this)
+    }
+
+    fn record(&self) -> PathBuf {
+        self.places.session.join("ran.txt")
+    }
+
+    /// A `strict` confinement opened on the checkout as well as the session directory.
+    fn strict_on_the_checkout(&self) -> Confinement {
+        Confinement::here(
+            vec![self.places.session.clone(), self.checkout.clone()],
+            None,
+            Some(&self.places.home),
+        )
+        .expect("a platform with a base")
+        .with_mode(bravebot_sandbox::SandboxMode::Strict)
+    }
+
+    fn attempts(&self) -> [(&'static str, PathBuf); 3] {
+        [
+            ("enclosing-git", self.checkout.join(".git/fsmonitor-probe")),
+            ("beside", self.places.beside.join("outside-probe")),
+            ("ssh", self.places.home.join(".ssh/fsmonitor-probe")),
+        ]
+    }
+
+    /// The script: each write is a separate `sh -c`, so its status is the status of that write.
+    /// It exits 0 so that git does not hide the run.
+    fn script(&self, program: &str) -> String {
+        let body: String = self
+            .attempts()
+            .iter()
+            .map(|(attempt, path)| {
+                format!(
+                    "sh -c 'printf x > \"$0\"' '{}' 2>/dev/null; echo \"{program} {attempt} $?\" >> '{}'\n",
+                    path.display(),
+                    self.record().display()
+                )
+            })
+            .collect();
+        format!("#!/bin/sh\n{body}exit 0\n")
+    }
+
+    /// The names a run of `program` records when it makes every attempt.
+    fn every_attempt(program: &str) -> Vec<String> {
+        Self::ATTEMPTS
+            .iter()
+            .map(|attempt| format!("{program} {attempt}"))
+            .collect()
+    }
+
+    /// `line` with the files of an earlier run removed first.
+    fn run(&self, line: &str, confinement: Option<&Confinement>) -> Left {
+        let attempts = self.attempts();
+        for file in attempts
+            .iter()
+            .map(|(_, path)| path.clone())
+            .chain([self.record()])
+        {
+            let _ = std::fs::remove_file(file);
+        }
+        let ran = self.places.run(line, confinement);
+        let recorded = std::fs::read_to_string(self.record())
+            .unwrap_or_default()
+            .lines()
+            .map(|line| {
+                let (name, status) = line.rsplit_once(' ').expect("a name and a status");
+                (name.to_string(), status.parse().expect("a status"))
+            })
+            .collect();
+        let on_disk = attempts
+            .iter()
+            .filter(|(_, path)| path.exists())
+            .map(|(name, _)| *name)
+            .collect();
+        Left {
+            ran,
+            recorded,
+            on_disk,
+        }
+    }
+
+    /// The control for every case: without the sandbox, `line` runs the program and all three
+    /// writes succeed, so a refusal in a confined run is the profile's.
+    fn assert_unconfined_run_writes_everything(&self, program: &str, line: &str) {
+        let control = self.run(line, None);
+        assert!(
+            control.ran.ended_well
+                && control.attempted() == Self::every_attempt(program)
+                && control.succeeded() == control.attempted()
+                && control.on_disk == Self::ATTEMPTS,
+            "`{line}` does not run the program or does not write without the sandbox, so a \
+             refusal below means nothing: {:?}, recorded {:?}, on disk {:?}",
+            control.ran,
+            control.recorded,
+            control.on_disk
+        );
+    }
+
+    /// A confined stage can write the session directory, so no record below is missing for want of
+    /// a row.
+    fn assert_session_is_writable(&self, confinement: &Confinement) {
+        let made = self.places.run(&touch("made.txt"), Some(confinement));
+        assert!(
+            made.ended_well && self.places.session.join("made.txt").exists(),
+            "the stage could not write the session, so a refusal below means nothing: {made:?}"
+        );
+    }
+}
+
+/// SANDBOX-18, #3901: a program git runs for a stage opened in a subdirectory of a checkout, the
+/// `core.fsmonitor` program and a hook of the enclosing `.git`, runs in the profile of that stage
+/// and writes neither that `.git` nor anything beside the session directory. A child inherits the
+/// confinement, so the repository's own program gets no more than the stage that started git. The
+/// regression it rejects is a write row for the enclosing checkout, which lets that program change
+/// the configuration or plant a hook that runs outside the confinement the next time anybody runs
+/// git. The unconfined run of each line is the control that the program runs and every write
+/// succeeds. The programs write their result into the session directory, so a refused write is
+/// recorded and a program that did not run leaves no record.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_program_the_enclosing_git_directory_names_runs_confined_and_writes_nothing_outside_the_session()
+ {
+    if !can_confine() {
+        return;
+    }
+    let Some(enclosing) = EnclosingPrograms::new("git-enclosing-programs") else {
+        return;
+    };
+    let confinement = enclosing.places.confinement();
+    enclosing.assert_session_is_writable(&confinement);
+
+    for (program, line) in ENCLOSING_TRIGGERS {
+        enclosing.assert_unconfined_run_writes_everything(program, line);
+        let confined = enclosing.run(line, Some(&confinement));
+        assert!(
+            confined.ran.ended_well,
+            "`{line}` failed confined: {:?}",
+            confined.ran
+        );
+        assert_eq!(
+            confined.attempted(),
+            EnclosingPrograms::every_attempt(program),
+            "the {program} program did not run confined: {:?}",
+            confined.ran
+        );
+        assert!(
+            confined.succeeded().is_empty() && confined.on_disk.is_empty(),
+            "the {program} program wrote {:?}, on disk {:?}",
+            confined.succeeded(),
+            confined.on_disk
+        );
+    }
+}
+
+/// SANDBOX-18, SANDBOX-22, #3901: under `strict` a stage reads only its listed rows, which do not
+/// include the enclosing checkout, so git does not read the repository and runs none of the
+/// programs its `.git` names. The regression it rejects is a read row for the enclosing checkout
+/// in a `strict` stage, which lets git run the repository's configuration and hooks. The
+/// unconfined run is the control that the program runs, and the same line under a `strict` stage
+/// opened on the checkout is the control that the fixture shows a program that is allowed to run.
+/// The session write is the control that a missing record is not a missing row.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_strict_stage_in_a_subdirectory_runs_no_program_the_enclosing_git_directory_names() {
+    if !strict_runs_here() {
+        return;
+    }
+    let Some(enclosing) = EnclosingPrograms::new("git-enclosing-programs-strict") else {
+        return;
+    };
+    let strict = enclosing
+        .places
+        .confinement()
+        .with_mode(bravebot_sandbox::SandboxMode::Strict);
+    enclosing.assert_session_is_writable(&strict);
+    let opened_on_the_checkout = enclosing.strict_on_the_checkout();
+
+    for (program, line) in ENCLOSING_TRIGGERS {
+        enclosing.assert_unconfined_run_writes_everything(program, line);
+        let allowed = enclosing.run(line, Some(&opened_on_the_checkout));
+        assert_eq!(
+            allowed.attempted(),
+            EnclosingPrograms::every_attempt(program),
+            "the {program} program does not run under strict with a row for the checkout, so its \
+             absence below means nothing: {:?}",
+            allowed.ran
+        );
+        let confined = enclosing.run(line, Some(&strict));
+        assert!(
+            confined.attempted().is_empty() && confined.on_disk.is_empty(),
+            "the {program} program ran under strict: recorded {:?}, on disk {:?}",
+            confined.recorded,
+            confined.on_disk
+        );
+    }
+}
+
+/// SANDBOX-22, #3901: under bypass the rows a request would be granted cover the enclosing
+/// checkout and the directories beside the session, so the program a `.git` names writes there. It
+/// does not write a credential location. The writes into the enclosing `.git` are a documented
+/// cost (Known costs in sandboxing.md), so a change that refuses them has to change this test and
+/// the spec. The regression it rejects is a grant that covers a credential location, or a refusal
+/// list that is not applied, which lets a program that git starts write the `.ssh` directory. The
+/// unconfined run is the control that every write can succeed.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_bypass_stage_in_a_subdirectory_lets_a_program_the_enclosing_git_directory_names_write_that_directory_and_no_credential()
+ {
+    if !can_confine() {
+        return;
+    }
+    let Some(enclosing) = EnclosingPrograms::new("git-enclosing-programs-bypass") else {
+        return;
+    };
+    let bypass = enclosing.places.confinement().with_unasked_writes(true);
+    enclosing.assert_session_is_writable(&bypass);
+
+    for (program, line) in ENCLOSING_TRIGGERS {
+        enclosing.assert_unconfined_run_writes_everything(program, line);
+        let confined = enclosing.run(line, Some(&bypass));
+        assert!(
+            confined.ran.ended_well,
+            "`{line}` failed under bypass: {:?}",
+            confined.ran
+        );
+        assert_eq!(
+            confined.attempted(),
+            EnclosingPrograms::every_attempt(program),
+            "the {program} program did not run under bypass: {:?}",
+            confined.ran
+        );
+        assert_eq!(
+            confined.succeeded(),
+            [
+                format!("{program} enclosing-git"),
+                format!("{program} beside")
+            ],
+            "under bypass the program writes the enclosing .git and beside the session, and not \
+             .ssh: recorded {:?}",
+            confined.recorded
+        );
+        assert_eq!(
+            confined.on_disk,
+            ["enclosing-git", "beside"],
+            "the files on disk do not match the statuses recorded"
+        );
+    }
+}
+
 /// SANDBOX-22 under bypass: a stage writes beside the working directory with no request, which is
 /// where a run failed before the planner could ask. The regression it rejects is the flag never
 /// reaching the profile, so the write is refused as it is without bypass; the stage without the
@@ -2180,6 +2520,142 @@ fn a_denied_read_is_refused_by_name_and_by_glob_and_its_neighbour_is_not() {
     }
     let neighbour = places.run("cat sub/plain.txt", Some(&listed));
     assert_eq!(neighbour.stdout, "held\n", "{neighbour:?}");
+}
+
+/// The regression it rejects: a `denyRead` glob compared with names by exact case, so that
+/// `**/*.pem` does not name `SERVER.PEM` and a stage reads the file the person meant to hold back
+/// (SANDBOX-25). A second wrong implementation is a refusal that holds for the spelling the listing
+/// returned and not for the spelling a program opens the file under. `cat` opens the file under the
+/// stored spelling and under the other case, and the stage without the list reads the file, which
+/// is the control that the refusal is the list's.
+///
+/// A volume that folds case opens `server.pem` as `SERVER.PEM`, so the stage is refused that
+/// read. On a volume that does not fold, `server.pem` is a different name that is not there, which
+/// the glob does not need to name, and the read fails in the control as well. The test asks the
+/// volume which it is and holds the other spelling only to what is true on both: the contents are
+/// not printed.
+#[cfg(unix)]
+#[test]
+fn a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_case() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("filesystem-deny-read-case");
+    for (file, contents) in [("SERVER.PEM", "held-pem\n"), ("notes.txt", "kept-notes\n")] {
+        std::fs::write(places.session.join(file), contents).expect("a file");
+    }
+    let folds_case = std::fs::read_to_string(places.session.join("server.pem"))
+        .is_ok_and(|read| read == "held-pem\n");
+    let listed = places
+        .confinement()
+        .with_filesystem(&written(&[], &["**/*.pem"], &[], &[]));
+
+    for spelling in ["SERVER.PEM", "server.pem"] {
+        let line = format!("cat {spelling}");
+        let opens = spelling == "SERVER.PEM" || folds_case;
+        let control = places.run(&line, None);
+        assert_eq!(
+            control.ended_well, opens,
+            "{spelling} without the list: {control:?}"
+        );
+        if opens {
+            assert_eq!(
+                control.stdout, "held-pem\n",
+                "{spelling} is there to be read"
+            );
+        }
+        let ran = places.run(&line, Some(&listed));
+        assert!(
+            !ran.ended_well && !ran.stdout.contains("held-pem"),
+            "{spelling} was read: {ran:?}"
+        );
+        if opens {
+            assert!(
+                !ran.stderr.contains("No such file"),
+                "{spelling} was refused as missing and not by the list: {ran:?}"
+            );
+        }
+    }
+    let neighbour = places.run("cat notes.txt", Some(&listed));
+    assert_eq!(neighbour.stdout, "kept-notes\n", "{neighbour:?}");
+}
+
+/// The regression it rejects: a `denyRead` glob compared with names as written, so that
+/// `R\u{e9}sum\u{e9}*` does not name a file stored as `Re\u{301}sume\u{301}.txt` and the reverse,
+/// and a stage reads a file the person meant to hold back (SANDBOX-25). The file is read under both
+/// spellings of its name, and the stage without the list reads it, which is the control that the
+/// refusal is the list's. A file with the unaccented name `Resume.txt` is not named by either glob
+/// and is still read, which rejects a refusal that drops the accents and holds back more than the
+/// glob names.
+///
+/// A volume that opens a name under every canonically equivalent form (APFS) opens the other
+/// spelling of the stored name, so the stage is refused that read. On a volume that holds the two
+/// forms apart, the other spelling is a different name that is not there, which the glob does not
+/// need to name, and the read fails in the control as well. The test asks the volume which it is and
+/// holds the other spelling only to what is true on both: the contents are not printed.
+#[cfg(unix)]
+#[test]
+fn a_denied_read_glob_refuses_a_confined_read_of_a_file_under_another_unicode_form() {
+    if !can_confine() {
+        return;
+    }
+    const COMPOSED: &str = "R\u{e9}sum\u{e9}";
+    const DECOMPOSED: &str = "Re\u{301}sume\u{301}";
+    let places = Places::new("filesystem-deny-read-form");
+    // The directory, the form the file is stored under, the form the glob is written in, and the
+    // contents. The two cases have their own directories, since a volume that opens either form
+    // holds one file for both.
+    let cases = [
+        ("decomposed-file", DECOMPOSED, COMPOSED, "held-decomposed\n"),
+        ("composed-file", COMPOSED, DECOMPOSED, "held-composed\n"),
+    ];
+    for (directory, stored, globbed, contents) in cases {
+        let folder = places.session.join(directory);
+        std::fs::create_dir_all(&folder).expect("a directory");
+        std::fs::write(folder.join(format!("{stored}.txt")), contents).expect("a file");
+        std::fs::write(folder.join("Resume.txt"), "kept-plain\n").expect("a file");
+        let other = if stored == COMPOSED {
+            DECOMPOSED
+        } else {
+            COMPOSED
+        };
+        let normalises = std::fs::read_to_string(folder.join(format!("{other}.txt")))
+            .is_ok_and(|read| read == contents);
+        let glob = format!("{directory}/{globbed}*");
+        let listed =
+            places
+                .confinement()
+                .with_filesystem(&written(&[], &[glob.as_str()], &[], &[]));
+
+        for spelling in [COMPOSED, DECOMPOSED] {
+            let line = format!("cat '{directory}/{spelling}.txt'");
+            let opens = spelling == stored || normalises;
+            let control = places.run(&line, None);
+            assert_eq!(
+                control.ended_well, opens,
+                "{directory} {spelling} without the list: {control:?}"
+            );
+            if opens {
+                assert_eq!(
+                    control.stdout, contents,
+                    "{directory} {spelling} is there to be read"
+                );
+            }
+            let ran = places.run(&line, Some(&listed));
+            assert!(
+                !ran.ended_well && !ran.stdout.contains(contents.trim_end()),
+                "{directory} {spelling} was read: {ran:?}"
+            );
+            if opens {
+                assert!(
+                    !ran.stderr.contains("No such file"),
+                    "{directory} {spelling} was refused as missing and not by the list: {ran:?}"
+                );
+            }
+        }
+        let plain = places.run(&format!("cat {directory}/Resume.txt"), Some(&listed));
+        assert_eq!(plain.stdout, "kept-plain\n", "{directory}: {plain:?}");
+    }
 }
 
 /// The regression it rejects: a refusal that holds only where the table already did. The `gh`

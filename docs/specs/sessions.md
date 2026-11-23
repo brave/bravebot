@@ -24,6 +24,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
+  - crates/cli/src/resume_flags.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/background.rs
   - crates/agent/src/aside.rs
@@ -317,16 +318,122 @@ the directory the command is run in and the shell reading this line never moved.
 ended where it started, the directory goes unsaid: naming the one somebody is standing in reads as
 though something had happened to it.
 
+The command carries the process-wide flags the session was started with, after the id, in the form
+`bravebot --resume <id> <flags>`: `--dangerously-skip-permissions` or
+`--dangerously-bypass-approvals-and-sandbox`, whichever was typed, `--auto`, `--sandbox <mode>`,
+`--run-network <word>`, each `--sandbox-allow-read`, `--sandbox-deny-read`,
+`--sandbox-allow-write` and `--sandbox-deny-write` path, `--settings <path>`, `--safe`, `--locked`,
+`--vet`, `--incognito`, `--tools <list>`, `--no-shell`, `--log-level <level>`,
+`--system-prompt <text>` and `--append-system-prompt <text>`. A record keeps none of them, and keeps
+no system prompt ([INSTR-5](instructions.md#INSTR-5)), so a resume without one runs under what the
+settings and defaults give, and a resume without the bypass flag asks again. A resumed session takes
+each of them on `--resume <id>` ([CLI-19](cli.md#CLI-19), [CLI-26](cli.md#CLI-26)), so the line is
+accepted when it is pasted. A flag typed twice is carried once, with the value the scan of the
+command line resolved it to (the last of two `--sandbox`, `--run-network`, `--settings`, `--tools`,
+`--log-level`, `--system-prompt` or `--append-system-prompt` values), and a path flag typed twice is
+carried once per path, in the order typed, an identical path twice included. Each value is printed
+in the spelling its flag parses and without the white space the scan drops, so it is the value the
+session ran with and not always the bytes typed (see Known costs). A session started with none of
+them prints the id and nothing after it. The flags are the process's own, as it started: a mode left
+with the mode key and a `/sandbox` change after the start are not in the line (see Known costs). They
+are the person's own arguments, recorded by `settle_flags` as each is taken from the command line,
+so what is printed is never decided from a record, a checkout or a setting: the paths of the four
+lists are the ones typed, and none that a settings file or the managed file holds. `--incognito` is
+carried because a session started with it prints a line where it resumed a record an ordinary
+session wrote, and prints none where it wrote no record. `-i` and its prompt, `--resume <old id>`,
+`--fork` and `--from-pr` start the session and are not repeated, since the id is the session's own.
+`--agent`, `--issue` and `--pr` are not carried because the record keeps them. `--accept-edits` is
+not carried because it is refused for an interactive session and is never one this line is printed
+for. Both places that print the line carry the flags, the one printed when the interface is left and
+the one printed to stderr when handing the session to the background fails.
+
+A relative value is read from a directory, and the line of a session that moved is run from
+another. Where the session stayed, each value is printed as scanned. Where it moved, each relative
+value of the four path flags is printed as the absolute entry the sandbox reads it as from the
+directory the session started in ([SANDBOX-25](sandboxing.md#SANDBOX-25)): the directory joined to
+the value with `.` and `..` resolved by name, nothing read from the filesystem. The sandbox reads a
+relative entry that way and refuses an absolute entry that holds `..`, so `sub/../x` is printed as
+`<directory>/x`. An entry that climbs out of the directory (`..`, `../x`, `sub/../../x`) is refused
+when typed and so was never in force. It is joined with its `..` in place and is refused again. An
+entry whose `..` removes the only name that holds a wildcard (`a/*/../x`) is judged by the sandbox as
+a pattern with no wildcard left, which a write list refuses and a read list matches nothing with
+whichever directory it is read from, and is printed as typed. An absolute value and one that starts
+with `~` names the same place from every directory and is printed as typed. One that starts with a
+variable is refused when typed, is printed as typed and is refused again. The reading is
+`bravebot_sandbox::rules::read_entry`, the function the sandbox judges an entry with, so the line
+holds no second copy of it.
+
+A relative entry is not carried where a name of the session's directory holds `*` or `?`. The
+sandbox reads the names of the directory a relative entry is read from as names, so the entry means
+what it said only from there. Written out in full the same character is a wildcard, which a write
+list refuses and a read list widens to sibling names, and the matcher has no spelling for a wildcard
+character as a plain one, so no absolute entry names the same place from another directory
+(`bravebot_sandbox::rules::can_anchor_an_absolute_entry`, [SANDBOX-25](sandboxing.md#SANDBOX-25)).
+The line of a session that moved from such a directory leaves each such entry off and is followed by
+one note line for each, naming the flag and the value typed and saying why. The decision is made
+from the directory, so a typed pattern (`g/*/x`) is left off as well as a plain name. An entry that
+reads the same from every directory is carried as before: an absolute one, one that starts with `~`
+or a variable, one whose `..` removes the only wildcard name, and one that climbs, which is refused
+when typed and refused again. `--settings` is carried, since the operating system opens it as a
+file and a `*` or `?` in a directory name does not change which file the joined path names. A
+session that stayed prints each entry as typed and no note. Both places that print the line print
+the notes.
+
+A relative `--settings` value is read from the directory the process was in when the flags were
+read. Where the session moved it is joined to that directory with any `..` in place, which names the
+same file. A `~` that a shell did not expand is joined the same way: settings loading expands no
+`~`, so `~/x` names a file called `~` in that directory, and it is not printed as typed.
+
+The line is read and run by the person who typed the flags, so it carries the ones that loosen the
+session as well as the ones that narrow it. [HERDR-10](herdr.md#HERDR-10) differs because herdr
+types its command with nobody asking.
+
+Each value is one word of a shell: left as it is where it holds only letters, digits and `_@+:,./-`,
+and otherwise in single quotes with a quote written `'\''`. A control character, a bidirectional
+control and a character that draws as nothing in a value are drawn as pictures or `‹U+XXXX›`
+([LAYER-3](layering.md#LAYER-3)), so the line never moves the cursor. The value pasted back is
+therefore not the value typed (see Known costs).
+
 **Why.** A session is worth resuming far more often than anybody thinks to write its name down
 beforehand, and the Sessions screen is no use to someone who has already closed the window. Naming a
 session with no record behind it would be worse than saying nothing: the command would answer "no
 session by that name". Naming one in the wrong directory is worse again, because it does not fail:
 the same id in the directory left behind is the same session as it was before the move, so the line
-would quietly resume work that stops partway.
+would quietly resume work that stops partway. A resume under other flags than the session ran under
+is a different session to the person who typed `--dangerously-skip-permissions`, because the record
+keeps no mode ([MODE-10](permission-modes.md#MODE-10)), so the line says the flags too.
 
 `verified-by: bravebot_tui::sessions::a_session_is_named_once_there_is_a_record_to_name`
 `verified-by: bravebot_cli::main::a_session_that_stayed_put_is_named_by_its_id_alone`
 `verified-by: bravebot_cli::main::a_session_that_moved_says_where_to_resume_it`
+`verified-by: bravebot_cli::main::the_line_names_the_flags_the_session_was_started_with_where_it_stayed_and_where_it_moved`
+`verified-by: bravebot_cli::main::a_moved_session_names_relative_paths_as_they_were_read_and_one_that_stayed_as_typed`
+`verified-by: bravebot_cli::main::the_two_places_that_print_the_line_say_it_with_the_flags_the_process_recorded`
+`verified-by: bravebot_cli::main::a_moved_session_from_a_directory_with_a_wildcard_leaves_off_the_entry_and_says_so`
+`verified-by: bravebot_cli::main::the_line_is_written_to_the_stream_it_is_given_with_the_flags_it_is_given`
+`verified-by: bravebot_cli::resume_flags::the_bypass_flag_as_typed_and_the_sandbox_mode_are_repeated`
+`verified-by: bravebot_cli::resume_flags::every_flag_a_resume_does_not_take_back_is_repeated_with_its_value`
+`verified-by: bravebot_cli::resume_flags::the_log_level_is_repeated_in_the_spelling_the_flag_parses`
+`verified-by: bravebot_cli::resume_flags::a_relative_sandbox_entry_is_written_as_the_absolute_entry_the_sandbox_reads_it_as`
+`verified-by: bravebot_cli::resume_flags::a_moved_sandbox_entry_means_to_the_sandbox_what_the_typed_entry_meant`
+`verified-by: bravebot_cli::resume_flags::a_relative_sandbox_entry_is_left_off_where_a_name_of_the_directory_holds_a_wildcard`
+`verified-by: bravebot_cli::resume_flags::a_moved_session_names_each_entry_it_leaves_off_with_the_flag_it_was_typed_after`
+`verified-by: bravebot_cli::resume_flags::a_settings_path_is_joined_to_the_directory_it_was_read_from`
+`verified-by: bravebot_cli::resume_flags::a_moved_session_names_each_relative_path_as_it_was_read_when_it_started`
+`verified-by: bravebot_cli::resume_flags::a_session_started_with_no_flag_repeats_none`
+`verified-by: bravebot_cli::resume_flags::a_hostile_value_is_one_shell_word_and_is_drawn_without_a_control_character`
+`verified-by: bravebot_cli::resume_line::a_session_started_with_no_flag_prints_the_id_and_nothing_after_it`
+`verified-by: bravebot_cli::resume_line::the_bypass_flag_and_the_sandbox_mode_typed_on_the_command_line_reach_the_line`
+`verified-by: bravebot_cli::resume_line::every_flag_that_shapes_the_session_reaches_the_line_as_the_scan_resolved_it`
+`verified-by: bravebot_cli::resume_line::a_resumed_session_prints_its_own_id_once_with_the_flags_it_was_resumed_with`
+`verified-by: bravebot_cli::resume_line::the_bypass_flag_that_unconfines_is_carried_as_typed_beside_the_flags_that_go_with_it`
+`verified-by: bravebot_cli::resume_line::a_settings_file_typed_is_carried_and_the_sandbox_paths_a_settings_file_holds_are_not`
+`verified-by: bravebot_cli::resume_line::auto_locked_and_no_shell_are_carried_and_a_path_typed_twice_is_carried_twice`
+`verified-by: bravebot_cli::resume_line::a_session_moved_with_cd_names_the_relative_paths_it_was_started_with_as_they_were_read`
+`verified-by: bravebot_cli::resume_line::a_session_moved_with_cd_from_a_directory_with_a_wildcard_leaves_off_the_relative_entry_and_says_so`
+`verified-by: bravebot_cli::resume_line::a_continued_or_forked_session_prints_its_own_id_once_and_not_the_way_it_was_started`
+`verified-by: bravebot_cli::resume_line::an_incognito_session_prints_no_line_unless_it_resumed_a_record_and_then_carries_the_flag`
+`verified-by: bravebot_cli::resume_line::a_hand_over_to_the_background_that_fails_says_the_line_with_the_flags_on_standard_error`
 
 <a id="SESSION-9"></a>
 ### SESSION-9: the theme name is stored globally, like the model
@@ -405,14 +512,26 @@ The status panel does not read them back. It reports the last turn run in this p
 resumed session shows no cache until a turn has run in it
 ([PANEL-8](info-panel.md#PANEL-8)).
 
-The record also keeps the reasoning effort the terminal sent with the last turn it ran, as the word
-of [SESSION-15](#SESSION-15), under `effort`. It is left out where no level was sent, as with a model
-that reads none, and a record written before it was kept has none. The list reads the word through
+The record also keeps the reasoning effort in force when the last turn it ran finished, as the word
+of [SESSION-15](#SESSION-15), under `effort`. It is left out where no level was in force, as with a
+model that reads none, and a record written before it was kept has none. The list reads the word through
 the fixed set of levels, so a word that names none of them is listed as no effort and the record is
 still listed. The list also reads the record's counts of the calls that changed a file and that ran a
 program and whether the last program ended badly, and the cache figures of the split, so that the
 Sessions screen can say them ([SCREEN-3](sessions-screen.md#SCREEN-3)). A resume keeps the word until
 its next turn replaces it.
+
+The word is the level in force when the last turn finished, however that level came to be in force:
+`/effort`, `/effort session`, `--effort` or a settings file. That is the level the turn was sent with
+unless `/effort` or `/effort session` was carried out while the turn ran. A turn that finished while
+a level chosen with `/effort session` was in force therefore leaves that level in the record and in
+the copy `/branch` writes from it, as it does for a level recorded with `/effort`, except on a
+ChatGPT account, where the level in force is the one the account's session began with
+([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). A level chosen with `/effort session` after the last
+turn finished is in neither. Nothing reads the word back into a running session, so a resumed
+session takes no level from the record and opens on the level a new session opens on, the recorded
+one or the settings file's ([BACKEND-43](backends.md#BACKEND-43)). `/effort session` never writes
+the effort file.
 
 A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
 like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
@@ -450,6 +569,9 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
 `verified-by: bravebot_session::sessions::a_session_records_the_effort_of_its_last_turn_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_tui::app::the_effort_a_turn_was_sent_with_is_what_the_record_is_given`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
 `verified-by: bravebot_session::listing::a_record_lists_its_effort_its_work_and_its_cache_and_an_older_one_lists_none`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
 `verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
@@ -564,6 +686,7 @@ resumable in its new home at all: until it is saved there, there is nothing ther
 `verified-by: bravebot_tui::sessions::a_session_that_changes_directory_is_recorded_where_it_moved_to`
 `verified-by: bravebot_tui::sessions::a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to`
 `verified-by: bravebot_tui::sessions::a_record_written_before_the_first_turn_follows_the_session_when_it_moves`
+`verified-by: bravebot_tui::sessions::a_move_splits_the_trail_and_a_resume_shows_only_the_directory_resumed_from`
 
 <a id="SESSION-14"></a>
 ### SESSION-14: the session someone was just in can be picked up without naming it
@@ -600,6 +723,10 @@ file may name one, which outranks whatever is recorded here, and the person's ow
 which answers only where nothing is recorded. With either written, somebody back where they were
 before they ever chose is somebody a file answers for.
 
+`/effort session` records no choice. The level it puts in force belongs to the running session, so
+it does not write, rewrite or remove this record, including where it asks for no level, and the next
+session opens on the level it would have had ([commands.md](commands.md#CMD-35)).
+
 **Why.** Asking again in every project for the same preference is answering it repeatedly, and a
 project whose work does call for a level of its own says so in its settings rather than in a record
 that cannot tell one checkout from another. Refusing to store a word this program does not define is
@@ -607,6 +734,9 @@ what keeps an edited file from putting an unrecognised level into a request fiel
 
 `verified-by: bravebot_tui::persist::a_chosen_effort_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::asking_for_no_effort_is_read_back_as_no_choice`
+`verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_level_named_with_effort_session_is_in_force_and_recorded_nowhere`
+`verified-by: bravebot_tui::app::a_level_picked_in_the_this_session_scope_is_not_recorded`
 `verified-by: bravebot_session::store::a_stored_effort_is_read_back_without_its_newline`
 `verified-by: bravebot_session::store::a_file_naming_no_level_is_not_a_choice`
 `verified-by: bravebot_session::store::only_the_first_effort_line_is_read`
@@ -944,6 +1074,10 @@ run to arrive.
 `verified-by: bravebot_tui::state::a_resumed_session_brings_its_asides_back`
 `verified-by: bravebot_agent::turn::an_answer_over_a_trusted_exchange_may_be_written_down`
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
+`verified-by: bravebot_tui::app::a_btw_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
+`verified-by: bravebot_tui::app::a_btw_asked_beside_a_turn_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
+`verified-by: bravebot_tui::sessions::a_record_from_before_asides_were_kept_reads_as_a_session_with_no_questions`
+`verified-by: bravebot_tui::state::a_resume_puts_the_asides_in_the_view_and_neither_half_in_the_transcript`
 
 
 <a id="SESSION-21"></a>
@@ -1357,6 +1491,7 @@ place it genuinely is.
 `verified-by: bravebot_ui_bridge::rewind::undoing_a_desktop_turn_puts_back_its_file_and_its_conversation`
 `verified-by: bravebot_ui_bridge::rewind::undoing_two_desktop_turns_puts_a_file_back_to_before_the_first`
 `verified-by: bravebot_ui_bridge::rewind::a_session_with_no_turns_has_nothing_to_undo`
+`verified-by: bravebot_ui_bridge::manifest::a_plan_run_marks_every_rewind_point_the_session_holds_as_uncovered_by_the_desktop`
 `verified-by: bravebot_ui_bridge::bridge::undoing_a_turn_does_not_hand_back_a_revoked_command`
 `verified-by: bravebot_ui_bridge::interop::a_record_written_here_is_read_back_by_the_agents_own_reader`
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
@@ -1660,6 +1795,17 @@ saying why and nothing requested, with no goal, and before a turn has ended, bec
 record to link back to. A brief is not offered where the exchange has met something untrusted
 ([SESSION-20](#SESSION-20)): the planner could not have held it.
 
+The desktop window's Chat › Hand Off to New Chat… ([CMD-34](commands.md#CMD-34)) asks for the goal
+and makes the same request through the bridge's `session.handoff`, with the same refusals. The brief
+is put in the message box in the same way, the draft that was there is kept to bring back, and the
+window says that sending starts a new chat. Send then opens a new chat with `session.new` given the
+open chat's handle as `handedOffFrom`, and sends what the box holds as a message the person typed.
+Escape, or emptying the box, drops the handoff. The bridge takes the id of the source record from
+the chat it holds open under that handle, never from text the window sends, and refuses a handle it
+does not hold, a chat with no record, and a chat with a turn or a compaction running, before it
+creates anything. The new chat is given nothing
+else from the source.
+
 **Why.** A long session is worth leaving for the next piece of work without carrying all of it
 ([COMPACT](compaction.md)). Writing the brief from the planner's own context adds nothing the
 planner had not been shown, and the person's reading of it is what makes it a prompt. The permissions
@@ -1674,9 +1820,22 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_tui::app::a_handoff_with_no_goal_or_no_ended_turn_is_refused_with_a_line_saying_why`
 `verified-by: bravebot_tui::app::a_brief_from_an_exchange_that_met_something_untrusted_is_not_offered`
 `verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
+`verified-by: bravebot_tui::app::a_handoff_links_the_new_record_to_the_session_it_came_from_and_a_clear_does_not`
 `verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
 `verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
 `verified-by: bravebot_tui::render::sessions_screen::the_details_give_the_id_size_agent_links_and_where_it_was_handed_off_from`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_with_no_goal_or_before_a_turn_ended_is_refused_and_asks_nothing`
+`verified-by: bravebot_ui_bridge::handing_off::a_ready_brief_holds_the_brief_and_ends_with_the_goal`
+`verified-by: bravebot_ui_bridge::handing_off::a_brief_from_an_exchange_that_met_something_untrusted_is_withheld`
+`verified-by: bravebot_ui_bridge::handing_off::a_chat_started_from_a_handoff_records_where_it_was_handed_off_from`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_from_a_chat_the_bridge_does_not_hold_is_refused_and_starts_nothing`
+`verified-by: bravebot_ui_bridge::handing_off::a_handoff_from_a_chat_with_a_turn_running_is_refused_and_the_bridge_goes_on_answering`
+`verified-by: bravebot_agent::aside::a_handoff_is_refused_without_a_goal_an_ended_turn_or_a_record`
+`verified-by: bravebot_ui_bridge::handoff::a_brief_is_offered_only_where_the_exchange_kept_it`
+`verified-by: bravebot_agent::turn::a_handoff_brief_past_four_thousand_characters_is_cut_to_four_thousand`
+`verified-by: bravebot_tui::app::the_brief_is_sent_as_a_line_the_person_typed_and_is_recalled_as_one`
+`verified-by: bravebot_tui::app::the_record_a_handoff_came_from_is_untouched_by_the_new_one_and_still_resumes`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/handoff.test.mjs asserts that a handoff is armed with the brief, keeps the draft it replaced, is dropped by Escape or an emptied box and is taken on send; make check-ui runs it)`
 
 ## Known costs
 
@@ -1824,6 +1983,49 @@ stay behind because they were given for work that the brief describes only in wo
   something it is not.
 - **Only Claude Code is read.** opencode keeps its sessions in a database file and no reader for
   one is built.
+- **The other places that tell the person how to resume a session print no flags.** The Sessions
+  screen reopens a session from another directory by starting the program again with `--resume
+  <id>` or `--fork <id>` and nothing else (`arguments()` in `crates/cli/src/reopen.rs`,
+  [SCREEN-8](sessions-screen.md#SCREEN-8)), and the catalog messages `session-branched`,
+  `handoff-started`, `manifest-recorded` and `sessions-import-copied` name `bravebot --resume <id>`
+  with none. The messages are built in the `tui` crate or in another process, and neither they nor
+  `reopen.rs` read the record of flags the `cli` crate keeps for [SESSION-8](#SESSION-8), so a
+  session picked up through them runs under what the settings and defaults give, and asks again
+  where the bypass flag had stopped the questions.
+- **The line is quoted for a POSIX shell and fish.** The interface runs on Windows and prints the
+  line there, and a value with a backslash, such as the path of a settings file, is written with
+  each backslash outside single quotes, as `'C:'\\'Users'\\'me'\\'x.json'`. A shell with other
+  quoting rules, such as PowerShell or cmd, can read that as something other than one word naming
+  the file, so the line a Windows session prints can need its paths written again by hand
+  (the Known costs of [dropping.md](dropping.md) record the same limit for a dropped path). A
+  background session cannot be started on Windows, so the line printed when handing a session to
+  the background fails is not printed there.
+- **The line carries the flags the process started with, not the state when the session ended.** A
+  session that left the bypass or auto mode with the mode key still prints
+  `--dangerously-skip-permissions` or `--auto`, and a `/sandbox` change after the start is not
+  reflected, so a resume starts in the mode and under the sandbox the process started with. After
+  `/cd` the running session reads a relative sandbox entry against the new directory, because its
+  confinement is built from the session's current directory, while the line names the directory the
+  session started in. The resume reads the entry there, which is the place the person meant when
+  they typed it, and not the place the session last enforced.
+- **A system prompt is written to the terminal when the session ends.** The text of
+  `--system-prompt` and `--append-system-prompt` is part of the line, so it can reach the
+  scrollback, a terminal multiplexer's log or a recording, and a prompt that holds a secret is shown.
+- **A value with a control or bidirectional character is not printed as typed.** It is drawn as
+  pictures so the line cannot move the cursor, so pasting the line gives a different value. A path
+  names another place, and for a `--sandbox-deny-read` or `--sandbox-deny-write` entry the
+  restriction is lost.
+- **Values are printed in the spelling the flag parses, not byte for byte.** `SandboxMode::parse`
+  reads `standard` as `workspace-write` and `SandboxMode::name` returns `workspace-write`, so
+  `--sandbox standard` is printed `--sandbox workspace-write`. `--log-level` is
+  printed in the spelling it parses, and `--settings`, the prompts and each tool name are printed
+  without the white space around them. The line resumes the session under the same values, which is
+  not always the text that was typed.
+- **A relative sandbox entry of a session started in a directory with `*` or `?` in a name is not
+  on the line of a session that moved.** The line says which entries it left off, and the resumed
+  session runs without them, so a `--sandbox-deny-write` or `--sandbox-deny-read` entry that is left
+  off is not in force there. No spelling of the entry names the same place from another directory,
+  because the matcher has no way to write a wildcard character as a plain one.
 
 <a id="SESSION-35"></a>
 ### SESSION-35: a process can keep its records in a directory of its own
