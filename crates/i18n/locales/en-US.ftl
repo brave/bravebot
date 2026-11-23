@@ -3045,6 +3045,7 @@ vouch-explained =
     this file for the rest of this session, here and in every later read.
 vouch-rule = a yes trusts { $rule } and everything beneath it
 vouch-nothing = (nothing of this file can be shown)
+vouch-continues = (this is the beginning of the file, not all of it)
 vouch-yes = trust it
 vouch-no = leave it quarantined
 

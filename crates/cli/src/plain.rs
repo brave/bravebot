@@ -1902,6 +1902,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.rule,
             checked(request.verdict),
             &request.preview,
+            request.truncated,
             request.hidden,
         );
         self.about(Held::Vouch);
@@ -5620,6 +5621,44 @@ mod tests {
                 _ => assert!(
                     saying.is_some() && saying < preview_at,
                     "the vouch question did not say {hidden} characters drew as nothing above the preview: {screen}"
+                ),
+            }
+        }
+    }
+
+    /// PROMPT-13: the plain question for a vouch says the file continues, below the preview, when
+    /// the request's preview is the head of a longer file, and says nothing of the kind when it is
+    /// the whole file. The regression it rejects is a `confirm_vouch` that drops `truncated`, so a
+    /// 20-line head of a long file reads the same as a short file.
+    #[test]
+    fn the_plain_vouch_question_says_the_file_continues_only_when_the_preview_is_cut() {
+        let said = t!(vouch_continues).to_string();
+        for truncated in [true, false] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+                Vec::new(),
+            );
+            asking.confirm_vouch(&VouchRequest {
+                path: "big.md".to_string(),
+                rule: "big.md".to_string(),
+                preview: "line 1\nline 2".to_string(),
+                truncated,
+                hidden: 0,
+                verdict: Verdict::Safe,
+                reason: None,
+                label: String::new(),
+                reason_label: None,
+            });
+            let screen = String::from_utf8(asking.output).expect("text");
+            let rows: Vec<&str> = screen.lines().collect();
+            let saying = rows.iter().position(|row| row.contains(&said));
+            let last_preview = rows.iter().rposition(|row| row.ends_with("line 2"));
+            assert!(last_preview.is_some(), "{screen}");
+            match truncated {
+                false => assert!(saying.is_none(), "{screen}"),
+                true => assert!(
+                    saying.is_some() && saying > last_preview,
+                    "the vouch question did not say the file continues below the preview: {screen}"
                 ),
             }
         }

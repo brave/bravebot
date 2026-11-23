@@ -829,7 +829,9 @@ window is [dropping.md](dropping.md), and accepting a directory a settings file 
 ### TRUST-8: a quarantined read offers the same rule, at the moment it bites
 
 When a turn reads a file nobody has vouched for, the user is shown the path and the first lines of
-it and asked whether to trust it. Yes writes exactly the rule `@` would have written. Asked once
+it and asked whether to trust it. Where the file is longer than what is shown, every front end says
+after the preview that it is the beginning of the file and not all of it, and that row decides
+nothing: a yes writes the rule whatever it said. Yes writes exactly the rule `@` would have written. Asked once
 per path per turn, and only where the read is quarantined. Declining leaves the file as it was and
 the turn carries on with a reference.
 
@@ -900,6 +902,9 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::output_of_on_a_reference_nobody_vouched_for_is_answered_whatever_the_name_is`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
 `verified-by: bravebot_tui::confirm::vet::a_preview_with_nothing_in_it_says_so`
+`verified-by: bravebot_approval::lib::the_vouch_lines_say_the_file_continues_below_a_preview_that_is_its_head`
+`verified-by: bravebot_cli::plain::the_plain_vouch_question_says_the_file_continues_only_when_the_preview_is_cut`
+`verified-by: bravebot_ui_bridge::acp::the_editors_vouch_text_says_the_file_continues_only_when_the_preview_is_cut`
 
 <a id="TRUST-9"></a>
 ### TRUST-9: `/add-dir` makes a directory both reachable and trusted, for the session

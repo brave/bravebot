@@ -2417,6 +2417,7 @@ vouch-explained =
     lecture ultérieure.
 vouch-rule = un oui approuve { $rule } et tout ce qui se trouve en dessous
 vouch-nothing = (rien de ce fichier ne peut être affiché)
+vouch-continues = (ceci est le début du fichier, pas le fichier entier)
 vouch-yes = l'approuver
 vouch-no = le laisser en quarantaine
 

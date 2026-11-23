@@ -1031,6 +1031,12 @@ fn hidden_of(data: &Value) -> usize {
     data["hidden"].as_u64().map_or(0, |n| n as usize)
 }
 
+/// Whether the file has more lines than the preview the bridge carried. Absent from a request that
+/// did not cut a preview, which has nothing more to say.
+fn truncated_of(data: &Value) -> bool {
+    data["truncated"].as_bool().unwrap_or(false)
+}
+
 /// What a check made of the content, read from the verdict word the bridge sent. The checker's own
 /// sentence is not read, for the reason the terminal leaves it out.
 fn check_of(data: &Value) -> bravebot_approval::Check {
@@ -1238,6 +1244,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
                 text("rule"),
                 check_of(data),
                 text("preview"),
+                truncated_of(data),
                 hidden_of(data),
             )
             .join("\n"),
@@ -2559,6 +2566,41 @@ mod tests {
                         "`{stem}` did not say {hidden} characters drew as nothing above the text: {shown}"
                     ),
                 }
+            }
+        }
+    }
+
+    /// PROMPT-13: the editor's text for a vouch request says the file continues, below the preview
+    /// rows, when the request's preview is the head of a longer file, and says nothing of the kind
+    /// when it is the whole file. The regression it rejects is an editor arm that does not read
+    /// `truncated` from the request, so a 20-line head reads the same as a short file.
+    #[test]
+    fn the_editors_vouch_text_says_the_file_continues_only_when_the_preview_is_cut() {
+        let said = bravebot_i18n::t!(vouch_continues).to_string();
+        for truncated in [true, false] {
+            let vouch = bravebot_agent::confirm::VouchRequest {
+                path: "big.md".to_string(),
+                rule: "/work/big.md".to_string(),
+                preview: "line 1\nline 2".to_string(),
+                label: String::new(),
+                truncated,
+                hidden: 0,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                reason_label: None,
+            };
+            let (_, _, shown) = shown("vouch", crate::wire::vouch_request(6, &vouch));
+            let rows: Vec<&str> = shown.lines().collect();
+            let saying = rows.iter().position(|row| *row == said);
+            let margin = format!("{} line 2", bravebot_approval::QUARANTINE_BAR);
+            let last_preview = rows.iter().rposition(|row| *row == margin);
+            assert!(last_preview.is_some(), "{shown}");
+            match truncated {
+                false => assert!(saying.is_none(), "{shown}"),
+                true => assert!(
+                    saying.is_some() && saying > last_preview,
+                    "the editor did not say the file continues below the preview: {shown}"
+                ),
             }
         }
     }

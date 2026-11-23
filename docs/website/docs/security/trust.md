@@ -219,6 +219,12 @@ bidirectional control, a variation selector or a tag character is drawn as `‹U
 above the preview says how many there are. Only the lines shown are written out and counted. The
 planner receives the file as it is.
 
+**A preview that is the beginning of a longer file says so.** When the file has more lines than the
+preview, every front end adds a line after the preview saying it is the beginning of the file and not
+all of it. A file that fits in the preview has no such line. A blank preview of a longer file says
+the file continues, and does not say the file is empty. The line decides nothing: a yes writes the
+rule whatever it said.
+
 **What the file holds decides nothing about whether you are asked.** A file with nothing to show,
 because it is empty or does not read as text, is asked about like any other, and the prompt says so
 where the preview would be.
