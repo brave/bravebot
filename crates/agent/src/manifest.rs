@@ -106,7 +106,28 @@ const SERVER_SHAPE: &str = "\n\
 It can also call the tools of servers a person has vouched for, listed below as alias:tool. A step \
 may call one tool with arguments written out in the plan. What a call returns is shown to the \
 person and is not available to later steps, so nothing a call returns can be an argument of \
-another. Every call is put to the person as it comes up. The tools:";
+another. Approving the plan, whose line shows each call in full, approves the call, though a rule \
+or the server's declaration may still put it to the person as it comes up. The plan is fixed \
+before anything is read, so a wrong name cannot be recovered from: never guess the name of a \
+folder, file or other thing the task does not give. Where it gives none, use a tool that needs no name, or leave an \
+optional name out so the tool uses its own default. The tools:";
+
+/// Added to [`SERVER_SHAPE`] where a listed tool lets a row of an apply step fill an argument.
+const SERVER_APPLY_SHAPE: &str = "\n\
+A tool listed with apply can be called once for each item of a list that was read: an isolated \
+processor reads the list and proposes the calls, such as which folder each bookmark goes in and \
+what the new folders are called; the person approves the whole list before any call is made, \
+unless the person's declaration marks every tool of the step plan-covered, when approving the plan \
+covers it. The step's own processor decides its calls, and what became of each is shown after, \
+so a step that drafts or shows a grouping beforehand describes calls that will not be made. \
+So a task that reorganises many items is one read, then one apply, and no process or answer step \
+besides to propose or preview what the apply will do. The read must return the items \
+themselves, each with what the calls need, such as every bookmark with its url, and not only the \
+names of the places that hold them; where unsure which read does, prefer one that needs no name. \
+Where a later call names something an earlier call of the step creates, such as the folder a \
+bookmark moves into, and the list's entries already name such things, let that argument take \
+either, as [{\"row\": \"tool.argument\"}, {\"entry\": \"field\"}], so an existing one is used \
+rather than made twice.";
 
 /// Added to [`SERVER_SHAPE`] where a listed tool is marked read-only.
 const SERVER_READ_SHAPE: &str = "\n\
@@ -305,8 +326,8 @@ const REGISTRY: &[Advertised] = &[
         // The capability names the server, which only the step says, so the handler asks for it.
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for. The arguments are \
-                  written out in full here and fixed; the call is put to the person as it comes up, \
-                  and what it returns is shown to them",
+                  written out in full here and fixed, so approving the plan approves the call, \
+                  and what it returns is shown to the person",
         args: "server* (an alias from the list below), tool*, arguments (a JSON object; nothing \
                a step read can be named in it)",
     },
@@ -317,9 +338,25 @@ const REGISTRY: &[Advertised] = &[
         gate: None,
         summary: "Call one tool of an MCP server a person has vouched for that is marked \
                   read-only, and put what it returns in a slot. The arguments are written out in \
-                  full here and fixed; the call is put to the person as it comes up",
+                  full here and fixed, so approving the plan approves the call",
         args: "server* (an alias from the list below), tool* (one marked read-only), out_slot*, \
                arguments (a JSON object; nothing a step read can be named in it)",
+    },
+    Advertised {
+        capability: "APPLY",
+        tool: manifest::APPLY,
+        tier: Tier::Act,
+        gate: None,
+        summary: "For each item of a list a SERVER_READ step read, call tools of one server listed \
+                  with apply: an isolated processor proposes the calls, and the person approves the \
+                  whole list before any is made, or, where every tool of the step is marked \
+                  plan-covered, approving the plan covers them",
+        args: "server*, tools* (comma-separated tool names of that server), lists* (a list of \
+               slot names: the slots SERVER_READ steps filled, the first being the main one), \
+               entries (where each list is in its reply, as a JSON pointer such as /items, or an \
+               object of pointers by list, where a reply is not the list itself), instruction* \
+               (what to do with the items, for the processor), arguments* (a JSON object: for \
+               each tool, each argument with its kind), max_rows, max_new",
     },
     Advertised {
         capability: "ANSWER",
@@ -345,6 +382,7 @@ fn offered(
     match entry.tool {
         manifest::MCP_CALL => servers.any(),
         manifest::MCP_READ => servers.any_read_only(),
+        manifest::APPLY => servers.any_applicable(),
         tool => connectors.any() || !manifest::is_connector(tool),
     }
 }
@@ -446,10 +484,12 @@ fn parse(source: &str) -> Result<Draft, PlanError> {
                 if value.is_null() {
                     continue;
                 }
-                // A call's arguments are a JSON object, which a planner writes as one. The step
-                // carries them as the object's text, so the grammar below stays three shapes.
-                let object_as_text =
-                    (key == "arguments" && value.is_object()).then(|| Arg::Text(value.to_string()));
+                // A call's arguments, and an apply step's entries, are a JSON object a planner
+                // writes as one. The step carries each as the object's text, so the grammar below
+                // stays three shapes.
+                let object_as_text = (matches!(key.as_str(), "arguments" | "entries")
+                    && value.is_object())
+                .then(|| Arg::Text(value.to_string()));
                 let arg = object_as_text.or_else(|| read_arg(value)).ok_or_else(|| {
                     PlanError::Malformed(format!(
                         "step {index}: '{key}' is not text, a whole number, or a list of names"
@@ -795,12 +835,14 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     }
     let servers = Servers::of(task);
 
+    let puts_lists = confirmer.can_put_apply_lists();
     let planned = match plan(
         config,
         egress,
         task,
         &connectors,
         &servers,
+        puts_lists,
         &dropped,
         reporter,
         sink,
@@ -862,6 +904,9 @@ fn stopped(attempt: Attempt, error: TurnError) -> TurnError {
 /// What planning produced, ready for a driver.
 struct Planned {
     plan: Manifest,
+    /// The `apply` steps whose plan line says they run without asking, decided once from the
+    /// declarations, the mode and the rules before the line was written (MANIFEST-17).
+    covered: std::collections::BTreeSet<usize>,
     /// The label the plan carries, which every field lifted out of it carries too.
     label: Label,
     model: String,
@@ -937,7 +982,8 @@ impl Attempt {
     }
 }
 
-/// Phase 1, in two calls, then phases 2 and 3.
+/// Phase 1, in two calls, then phases 2 and 3. `puts_lists` says whether the client can put an
+/// `apply` step's list to the person.
 #[expect(
     clippy::too_many_arguments,
     reason = "the planning calls' collaborators, plus the attempt and accounting that run_accounted owns across the run"
@@ -948,6 +994,7 @@ fn plan<S: Sink, R: Reporter>(
     task: &Task,
     connectors: &crate::connectors::Connectors,
     servers: &Servers,
+    puts_lists: bool,
     dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
@@ -1055,7 +1102,7 @@ fn plan<S: Sink, R: Reporter>(
         catalogue(connectors, servers)
     );
     let mut round = "fit";
-    let (plan, label) = loop {
+    let (plan, label, covered) = loop {
         let proposal_wire = ask(
             config,
             egress,
@@ -1098,7 +1145,8 @@ fn plan<S: Sink, R: Reporter>(
         // in from the item it lands on, so the plan a person reads says both.
         let mut notes = connectors.notes(&plan);
         // And the arguments of each server call, in full, since a person approves the call by them.
-        notes.extend(Servers::notes(&plan));
+        let covered = servers.covered_steps(&plan, &task.permissions, task.permission_mode.get());
+        notes.extend(crate::server_calls::notes(&plan, &covered));
         let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
@@ -1111,8 +1159,19 @@ fn plan<S: Sink, R: Reporter>(
         // it is shown is its own plan and the check's words about it, so its context still holds
         // the task and the driver's words alone. A plan with no connector step passes the check,
         // so this never asks again in a run that uses no connector and calls no server.
-        match connectors.check(&plan).and_then(|()| servers.check(&plan)) {
-            Ok(()) => break (plan, label),
+        let listed = crate::server_calls::puts_a_list(&plan, &covered);
+        let checked = connectors
+            .check(&plan)
+            .and_then(|()| servers.check(&plan))
+            .and_then(|()| match listed {
+                Some(number) if !puts_lists => Err(format!(
+                    "step {number}: this client cannot put an APPLY step's calls to the person as \
+                     a list, so only a step whose tools the plan covers can run here"
+                )),
+                _ => Ok(()),
+            });
+        match checked {
+            Ok(()) => break (plan, label, covered),
             Err(why) if round == "fit" => {
                 reporter.narration(format!(
                     "The plan failed a connector check, so it was asked for once more: {why}"
@@ -1132,6 +1191,7 @@ fn plan<S: Sink, R: Reporter>(
 
     Ok(Planned {
         plan,
+        covered,
         label,
         model,
         clean: policy.finish(),
@@ -1150,10 +1210,15 @@ fn shape_system_prompt(connectors: &crate::connectors::Connectors, servers: &Ser
         },
         if servers.any() {
             format!(
-                "{SERVER_SHAPE}\n{}{}",
+                "{SERVER_SHAPE}\n{}{}{}",
                 servers.listing(),
                 if servers.any_read_only() {
                     SERVER_READ_SHAPE
+                } else {
+                    ""
+                },
+                if servers.any_applicable() {
+                    SERVER_APPLY_SHAPE
                 } else {
                     ""
                 }
@@ -1334,6 +1399,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 ) -> Result<Outcome, TurnError> {
     let Planned {
         plan,
+        covered,
         label,
         model,
         clean: planning_was_clean,
@@ -1418,7 +1484,16 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     // a whole program before answering for it. Left uncounted it would be reported as time the run
     // spent working.
     let mut waiting = crate::confirm::Timed::new(confirmer);
-    let verdict = waiting.confirm_manifest(&proposal);
+    // A plan bypassing approved was seen by nobody, so its approval answers no call's question for
+    // a person (MANIFEST-15).
+    let (verdict, answered_by) = waiting.confirm_manifest_noting_the_mode(&proposal);
+    let a_person_answered = answered_by.is_none();
+    // The steps the line said run without asking do so only where a person answered it outside
+    // plan mode; otherwise each puts its list, which asks more than the line promised, never less.
+    let covered = match a_person_answered && !permission_mode.get().refuses_writes() {
+        true => covered,
+        false => std::collections::BTreeSet::new(),
+    };
     accounting.elapsed.stalled += waiting.waited();
     accounting.publish(reporter);
     if verdict == Decision::Reject {
@@ -1487,6 +1562,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                 &mut chat,
                 &mut asking,
                 permission_mode,
+                a_person_answered,
+                covered.contains(&index),
                 index,
                 shown_only(&plan, index),
                 step,
@@ -1556,17 +1633,19 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let reply = match answer {
         Some(answered) => answered,
         None => {
-            shown = match plan
-                .steps()
-                .iter()
-                .any(|step| step.tool() == manifest::MCP_CALL)
-            {
-                true => format!(
+            let called = |tool: &str| plan.steps().iter().any(|step| step.tool() == tool);
+            shown = match (called(manifest::APPLY), called(manifest::MCP_CALL)) {
+                (true, _) => format!(
+                    "Ran the {} step(s) in the plan. What became of each call you approved is \
+                     listed under its step.",
+                    plan.len()
+                ),
+                (false, true) => format!(
                     "Ran the {} step(s) in the plan. It had no ANSWER step; what each server call \
                      returned is shown under it.",
                     plan.len()
                 ),
-                false => format!(
+                (false, false) => format!(
                     "Ran the {} step(s) in the plan. It had no ANSWER step, so there is nothing \
                      to show.",
                     plan.len()
@@ -1694,6 +1773,8 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     chat: &mut Chat<'_>,
     confirmer: &mut C,
     permission_mode: &crate::LiveMode,
+    a_person_answered: bool,
+    covered: bool,
     index: usize,
     shown_only: bool,
     step: &Step,
@@ -1842,7 +1923,9 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     Err(_) => None,
                 };
                 if let Some(usage) = usage {
-                    accounting.spent.add_request(usage);
+                    // A processor's usage is the run's spend and no part of the figure a
+                    // delegate's budget counts (DELEGATE-29).
+                    accounting.spent.add_unbudgeted_call(usage, true);
                 }
                 accounting.publish(reporter);
                 let mut processed = match processed {
@@ -1924,8 +2007,35 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let word = locked(policy, index, "tool")?;
             Ok(Done {
                 note: servers.call(
-                    policy, egress, confirmer, reporter, &alias, &word, step, None,
+                    policy,
+                    egress,
+                    confirmer,
+                    reporter,
+                    &alias,
+                    &word,
+                    step,
+                    None,
+                    a_person_answered && !permission_mode.get().refuses_writes(),
                 )?,
+                ..Done::default()
+            })
+        }
+        // An apply's calls are proposed by a processor and approved by the person as one list.
+        manifest::APPLY => {
+            let alias = locked(policy, index, "server")?;
+            locked(policy, index, "tools")?;
+            let began = std::time::Instant::now();
+            // A change of mode since the plan was answered can add the list, never take it away.
+            let covered = covered && !permission_mode.get().refuses_writes();
+            let applied = servers.apply(
+                policy, chat, egress, confirmer, reporter, slots, index, &alias, step, covered,
+            );
+            accounting.elapsed.inference += began.elapsed();
+            let (note, usage) = applied?;
+            accounting.spent.add_unbudgeted(usage);
+            accounting.publish(reporter);
+            Ok(Done {
+                note,
                 ..Done::default()
             })
         }
@@ -1944,6 +2054,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
                     &word,
                     step,
                     Some((out_slot, slots)),
+                    a_person_answered && !permission_mode.get().refuses_writes(),
                 )?,
                 ..Done::default()
             })
@@ -2452,6 +2563,9 @@ fn write<S: Sink, C: Confirmer>(
     // What the step would change, compared inside the kernel and released once, exactly as a
     // turn's write does it.
     let landed = crate::tools::landing_of(workspace, &path);
+    // What the destination reaches as the step is put to the person, which the write compares with
+    // what it reaches when the bytes are released.
+    let reach = workspace.reach_of(&path);
     let reviewed = crate::tools::review_a_write(
         policy,
         "write_file",
@@ -2513,6 +2627,7 @@ fn write<S: Sink, C: Confirmer>(
             &Labelled::trusted(path.clone()),
             &body,
             Some(approved_at),
+            Some(&reach),
         )
         .map_err(|e| e.to_string())?;
 
@@ -2585,6 +2700,18 @@ mod tests {
             .expect("a plan that validates")
     }
 
+    /// The routing the driver locks from `plan` before its first step, each value trusted and
+    /// public as the gate requires.
+    fn locked_from(plan: &Manifest) -> Routing {
+        let mut routing = Routing::new();
+        for (key, value) in plan.routing() {
+            routing
+                .insert(key, Labelled::new(value, Label::trusted_public()))
+                .expect("routing");
+        }
+        routing
+    }
+
     /// PROMPT-1, MANIFEST-10: a step that names a file draws it as every other prompt does, so a
     /// name with a space at its end, or with a bidirectional control in it, does not read as the
     /// name it resembles, and an ordinary name reads as it always did. The spelling follows the
@@ -2647,6 +2774,35 @@ mod tests {
         advertised.sort_unstable();
         validated.sort_unstable();
         assert_eq!(advertised, validated);
+    }
+
+    /// MANIFEST-5: the registry advertises exactly these capabilities and tools. There is no
+    /// capability that runs a command or starts a shell, so the planner is never offered one.
+    /// Rejects a registry that gains a capability the schema gains with it, which the test above
+    /// accepts because both tables agree.
+    #[test]
+    fn the_registry_offers_exactly_the_capabilities_the_clause_allows() {
+        let mut offered: Vec<(&str, &str)> = REGISTRY
+            .iter()
+            .map(|entry| (entry.capability, entry.tool))
+            .collect();
+        offered.sort_unstable();
+        assert_eq!(
+            offered,
+            vec![
+                ("ANSWER", "answer"),
+                ("APPLY", "apply"),
+                ("CONNECTOR_ACT", "connector_act"),
+                ("CONNECTOR_FETCH", "connector_fetch"),
+                ("FILE_LIST", "list_files"),
+                ("FILE_READ", "read_file"),
+                ("FILE_SEARCH", "search"),
+                ("FILE_WRITE", "write_file"),
+                ("SERVER_CALL", "mcp_call"),
+                ("SERVER_READ", "mcp_read"),
+                ("TRANSFORM", "process"),
+            ]
+        );
     }
 
     /// The tier a capability is advertised under is the tier its plan will be checked against,
@@ -2847,7 +3003,9 @@ mod tests {
             &Servers::default(),
         );
         for entry in REGISTRY.iter().filter(|entry| {
-            !manifest::is_connector(entry.tool) && !manifest::is_server_call(entry.tool)
+            !manifest::is_connector(entry.tool)
+                && !manifest::is_server_call(entry.tool)
+                && entry.tool != manifest::APPLY
         }) {
             assert!(
                 shown.contains(entry.capability),
@@ -2925,15 +3083,21 @@ mod tests {
 
         /// Answers a write yes, after starting a `run` line when it holds an authority to start
         /// one on. A plan has no step that starts a program, so the line stands for one a
-        /// delegate started beside the run. Every other question is Unattended's.
+        /// delegate started beside the run. It also runs `changes_the_files`, which stands for
+        /// something else on the machine acting while the person reads the question. Every other
+        /// question is Unattended's.
         struct SaysYes {
             starts_a_program_on: Option<FileAuthority>,
+            changes_the_files: Option<Box<dyn FnOnce()>>,
         }
 
         impl Confirmer for SaysYes {
             fn confirm_write(&mut self, _request: &WriteRequest) -> WriteDecision {
                 if let Some(authority) = self.starts_a_program_on.take() {
                     authority.note_program_started();
+                }
+                if let Some(change) = self.changes_the_files.take() {
+                    change();
                 }
                 WriteDecision::approve()
             }
@@ -3002,12 +3166,27 @@ mod tests {
         /// Runs a planned write over `a.txt`, which nobody vouched for, with a person who says
         /// yes. Returns what the file holds afterwards and the step's error, if it had one.
         fn write_step(starts_a_program: bool) -> (String, Option<String>) {
-            let root = crate::testutil::scratch_dir(&format!(
-                "bravebot-manifest-write-{starts_a_program}"
-            ));
+            let (kept, _other, error) = planned_write(
+                &format!("bravebot-manifest-write-{starts_a_program}"),
+                starts_a_program,
+                None,
+            );
+            (kept, error)
+        }
+
+        /// [`write_step`] where `a.txt` and `other.txt` both exist and `when_asked`, given the
+        /// directory, changes the files while the person is asked. Returns what `a.txt` holds, what
+        /// `other.txt` holds and the step's error, if it had one.
+        fn planned_write(
+            name: &str,
+            starts_a_program: bool,
+            when_asked: Option<fn(&std::path::Path)>,
+        ) -> (String, String, Option<String>) {
+            let root = crate::testutil::scratch_dir(name);
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(&root).unwrap();
             std::fs::write(root.join("a.txt"), "original\n").unwrap();
+            std::fs::write(root.join("other.txt"), "marker\n").unwrap();
             let workspace = Workspace::new(&root).expect("workspace");
 
             let draft = Draft::new(vec![
@@ -3030,12 +3209,7 @@ mod tests {
                 .expect("a plan");
             drop(planning);
 
-            let mut routing = Routing::new();
-            for (key, value) in plan.routing() {
-                routing
-                    .insert(key, Labelled::new(value, Label::trusted_public()))
-                    .expect("routing");
-            }
+            let routing = locked_from(&plan);
             let authority =
                 bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work"));
             let mut sink = bravebot_core::event::RecordingSink::new();
@@ -3047,8 +3221,11 @@ mod tests {
             )
             .expect("policy")
             .with_file_authority(authority.clone());
+            let in_the_directory = root.clone();
             let mut person = SaysYes {
                 starts_a_program_on: starts_a_program.then_some(authority),
+                changes_the_files: when_asked
+                    .map(|change| Box::new(move || change(&in_the_directory)) as Box<dyn FnOnce()>),
             };
             let outcome = write(
                 &mut policy,
@@ -3061,9 +3238,10 @@ mod tests {
                 &plan.steps()[0],
             );
             let kept = std::fs::read_to_string(root.join("a.txt")).unwrap();
+            let other = std::fs::read_to_string(root.join("other.txt")).unwrap();
             drop(policy);
             let _ = std::fs::remove_dir_all(&root);
-            (kept, outcome.err())
+            (kept, other, outcome.err())
         }
 
         /// A `run` line that started while the person was asked about a planned write voids the
@@ -3080,6 +3258,32 @@ mod tests {
             );
         }
 
+        /// TRUST-10 at a planned write: a link put at the destination while the person was asked
+        /// is refused when the write is made, and the file it leads to keeps its bytes. Rejects a
+        /// step that passes no reach to the write, which compares the typed name alone.
+        #[cfg(unix)]
+        #[test]
+        fn a_planned_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere()
+         {
+            let (_kept, other, error) = planned_write(
+                "bravebot-manifest-write-linked",
+                false,
+                Some(|root| {
+                    std::fs::remove_file(root.join("a.txt")).unwrap();
+                    std::os::unix::fs::symlink("other.txt", root.join("a.txt")).unwrap();
+                }),
+            );
+            assert_eq!(
+                other, "marker\n",
+                "the step wrote through a link the person was not shown"
+            );
+            assert!(
+                error.is_some_and(|error| error
+                    .contains("leads to a different file than it did when the user was asked")),
+                "the step did not say the destination was redirected"
+            );
+        }
+
         /// The control: with no line started, the same yes is spent and the write lands, so a
         /// test that never wrote could not pass the one above.
         #[test]
@@ -3087,6 +3291,213 @@ mod tests {
             let (kept, error) = write_step(false);
             assert_eq!(error, None);
             assert_eq!(kept, "replaced\n");
+        }
+
+        /// MANIFEST-6: a write goes to the path the lock holds. The lock here is built from a
+        /// different plan, which names `b.txt`, while the step that runs names `a.txt`. Rejects a
+        /// write that takes its path from the step's own text, which lands on `a.txt`.
+        #[test]
+        fn a_planned_write_goes_to_the_path_the_lock_holds_and_not_the_one_the_step_names() {
+            let root = crate::testutil::scratch_dir("bravebot-manifest-write-decoy");
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("a.txt"), "original\n").unwrap();
+            std::fs::write(root.join("b.txt"), "decoy\n").unwrap();
+            let workspace = Workspace::new(&root).expect("workspace");
+            let writing = |path: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("write_file")
+                        .with_text("path", path)
+                        .with_text("contents", "replaced\n"),
+                ]))
+            };
+            let the_step = writing("a.txt");
+            let the_lock = writing("b.txt");
+
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = Policy::begin(
+                locked_from(&the_lock),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_file_authority(FileAuthority::new(TrustStore::new("/work")));
+            let mut person = SaysYes {
+                starts_a_program_on: None,
+                changes_the_files: None,
+            };
+            let outcome = write(
+                &mut policy,
+                &workspace,
+                crate::findings::Recording::default(),
+                &SlotStore::new(),
+                &mut person,
+                &crate::LiveMode::new(crate::PermissionMode::Ask),
+                0,
+                &the_step.steps()[0],
+            );
+            let at_the_step = std::fs::read_to_string(root.join("a.txt")).unwrap();
+            let at_the_lock = std::fs::read_to_string(root.join("b.txt")).unwrap();
+            drop(policy);
+            let _ = std::fs::remove_dir_all(&root);
+
+            assert_eq!(outcome.err(), None);
+            assert_eq!(
+                at_the_step, "original\n",
+                "the write went to the path the step names"
+            );
+            assert_eq!(
+                at_the_lock, "replaced\n",
+                "the write did not go to the path the lock holds"
+            );
+        }
+    }
+
+    /// MANIFEST-6: a fetch step reads each destination out of the lock and not out of itself.
+    /// Every test runs one step against a lock built from a different plan, whose destinations
+    /// give a different count from the step's own, so a destination read from the step changes
+    /// the note.
+    mod a_step_reads_its_destination_from_the_lock {
+        use super::*;
+
+        /// The note the first step of `run` gives when the driver locked `decoy` instead.
+        fn note_under_the_lock_of(
+            root: &std::path::Path,
+            run: &Manifest,
+            decoy: &Manifest,
+        ) -> String {
+            let workspace = Workspace::new(root).expect("workspace");
+            let config = Config::from_lookup(|key| {
+                match key {
+                    bravebot_config::env_var::SIGNING_KEY => Some("test-signing-key"),
+                    bravebot_config::env_var::KEY_ID => Some("test-key-id"),
+                    bravebot_config::env_var::ENDPOINT => Some("https://example.invalid"),
+                    _ => None,
+                }
+                .map(str::to_string)
+            })
+            .expect("configured");
+            let egress = Egress::new();
+            let mut chat = Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin());
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = Policy::begin(
+                locked_from(decoy),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            let step = &run.steps()[0];
+            let done = run_step(
+                &mut crate::connectors::Connectors::default(),
+                &Servers::default(),
+                &egress,
+                None,
+                &mut policy,
+                &workspace,
+                crate::findings::Recording::default(),
+                &mut SlotStore::new(),
+                &mut chat,
+                &mut crate::confirm::Unattended,
+                &crate::LiveMode::new(crate::PermissionMode::Ask),
+                false,
+                false,
+                0,
+                false,
+                step,
+                registered_tool(step.tool()).expect("a registered tool"),
+                &mut Accounting::default(),
+                &mut crate::report::IgnoreReports,
+            )
+            .expect("the step runs");
+            done.note
+        }
+
+        fn scratch(name: &str) -> std::path::PathBuf {
+            let root = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            root
+        }
+
+        /// Rejects a read that takes its path from the step: `a.txt` has 4 bytes and `b.txt`,
+        /// which the lock names, has 16.
+        #[test]
+        fn a_read_step_reads_the_path_the_lock_holds() {
+            let root = scratch("bravebot-manifest-lock-read");
+            std::fs::write(root.join("a.txt"), "one\n").unwrap();
+            std::fs::write(root.join("b.txt"), "the decoy file\n\n").unwrap();
+            let reading = |path: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("read_file")
+                        .with_text("path", path)
+                        .with_text("out_slot", "s0"),
+                ]))
+            };
+
+            let note = note_under_the_lock_of(&root, &reading("a.txt"), &reading("b.txt"));
+            let _ = std::fs::remove_dir_all(&root);
+            assert_eq!(note, "16 bytes, read when something needs them");
+        }
+
+        /// Rejects a listing that takes its directory or its pattern from the step. The lock
+        /// names `y` and `*.md`, which hold two files. The step names `x`, which holds none that
+        /// end in `.md`, and `*.rs`, which nothing in `y` matches, so either field read from the
+        /// step lists nothing.
+        #[test]
+        fn a_listing_step_lists_the_directory_and_pattern_the_lock_holds() {
+            let root = scratch("bravebot-manifest-lock-list");
+            std::fs::create_dir_all(root.join("x")).unwrap();
+            std::fs::create_dir_all(root.join("y")).unwrap();
+            std::fs::write(root.join("x/one.txt"), "one\n").unwrap();
+            std::fs::write(root.join("y/two.txt"), "two\n").unwrap();
+            std::fs::write(root.join("y/three.md"), "three\n").unwrap();
+            std::fs::write(root.join("y/four.md"), "four\n").unwrap();
+            let listing = |directory: &str, pattern: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("list_files")
+                        .with_text("directory", directory)
+                        .with_text("pattern", pattern)
+                        .with_text("out_slot", "files"),
+                ]))
+            };
+
+            let note = note_under_the_lock_of(&root, &listing("x", "*.rs"), &listing("y", "*.md"));
+            let _ = std::fs::remove_dir_all(&root);
+            assert_eq!(note, "2 files");
+        }
+
+        /// Rejects a search that takes its pattern, directory or include from the step. The lock
+        /// names `beta`, `y` and `*.md`, which give three matches. Each of the three fields read
+        /// from the step instead gives a different count: `needle` is in no file of `y`, `x` holds
+        /// no `.md` file, and `*.rs` selects the one `.rs` file of `y`.
+        #[test]
+        fn a_search_step_searches_the_pattern_directory_and_include_the_lock_holds() {
+            let root = scratch("bravebot-manifest-lock-search");
+            std::fs::create_dir_all(root.join("x")).unwrap();
+            std::fs::create_dir_all(root.join("y")).unwrap();
+            std::fs::write(root.join("x/note.rs"), "needle\nbeta\n").unwrap();
+            std::fs::write(root.join("y/one.md"), "beta\n").unwrap();
+            std::fs::write(root.join("y/two.md"), "beta\nbeta\n").unwrap();
+            std::fs::write(root.join("y/three.rs"), "beta\n").unwrap();
+            let searching = |pattern: &str, directory: &str, include: &str| {
+                adopted(Draft::new(vec![
+                    DraftStep::new("search")
+                        .with_text("pattern", pattern)
+                        .with_text("directory", directory)
+                        .with_text("include", include)
+                        .with_text("out_slot", "hits"),
+                ]))
+            };
+
+            let note = note_under_the_lock_of(
+                &root,
+                &searching("needle", "x", "*.rs"),
+                &searching("beta", "y", "*.md"),
+            );
+            let _ = std::fs::remove_dir_all(&root);
+            assert_eq!(note, "3 matches");
         }
     }
 }

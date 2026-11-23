@@ -153,6 +153,7 @@ which is everything a processor produced, is refused as a destination. A number 
 `verified-by: bravebot_core::reference::content_is_not_offered_as_a_destination`
 `verified-by: bravebot_core::policy::a_reference_that_names_no_file_is_not_a_destination`
 `verified-by: bravebot_agent::turn::a_processors_output_cannot_be_a_destination`
+`verified-by: bravebot_agent::turn::a_listed_files_reference_is_a_destination_a_person_is_asked_about`
 `verified-by: bravebot_core::policy::a_choice_is_no_reference_to_any_gate_that_takes_text`
 `verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 

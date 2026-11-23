@@ -2137,6 +2137,7 @@ fn written(
                 path: (*path).to_string(),
                 by: None,
                 pinned: false,
+                from_a_checkout: false,
             })
             .collect()
     };
@@ -2357,7 +2358,10 @@ fn a_denied_read_written_through_a_link_holds_where_the_link_leads() {
 
 /// The regression it rejects: a refusal that cannot be applied being dropped, so a stage starts and
 /// reaches the path the person meant to hold back. It is not started, and the refusal names the key
-/// and the entry.
+/// and, for an entry the person wrote, the entry. An entry a checkout's settings file wrote is text
+/// the person did not write, so the refusal names the key, the reason and the file and not the
+/// spelling (SANDBOX-25, #4063). A refusal that quotes a checkout's entry, or one that stops
+/// quoting the person's own, fails here.
 #[cfg(unix)]
 #[test]
 fn a_denial_that_cannot_be_applied_stops_the_stage() {
@@ -2365,25 +2369,41 @@ fn a_denial_that_cannot_be_applied_stops_the_stage() {
         return;
     }
     let places = Places::new("filesystem-unapplied");
-    let listed = places
-        .confinement()
-        .with_filesystem(&written(&[], &["../escape"], &[], &[]));
+    let file = places.session.join(".bravebot/settings.json");
+    for (from_a_checkout, by) in [(false, None), (true, Some(file))] {
+        let mut lists = written(&[], &["../escape"], &[], &[]);
+        for entry in &mut lists.deny_read {
+            entry.from_a_checkout = from_a_checkout;
+            entry.by = by.clone();
+        }
+        let listed = places.confinement().with_filesystem(&lists);
 
-    let refused = exec::run_plan_observed(
-        &places.plan("cat inside.txt"),
-        &Cancel::new(),
-        exec::LIMIT,
-        None,
-        None,
-        Some(&listed),
-        &mut |_| Ok(()),
-    );
+        let refused = exec::run_plan_observed(
+            &places.plan("cat inside.txt"),
+            &Cancel::new(),
+            exec::LIMIT,
+            None,
+            None,
+            Some(&listed),
+            &mut |_| Ok(()),
+        );
 
-    assert!(
-        matches!(&refused, Err(exec::ExecError::NotConfined { detail, .. })
-            if detail.contains("denyRead") && detail.contains("../escape")),
-        "{refused:?}"
-    );
+        let Err(exec::ExecError::NotConfined { detail, .. }) = &refused else {
+            panic!("{from_a_checkout}: the stage was not refused: {refused:?}");
+        };
+        assert!(detail.contains("denyRead"), "{from_a_checkout}: {detail}");
+        assert_eq!(
+            detail.contains("../escape"),
+            !from_a_checkout,
+            "{from_a_checkout}: {detail}"
+        );
+        if let Some(file) = by {
+            assert!(
+                detail.contains(&file.display().to_string()),
+                "the refusal does not name the file: {detail}"
+            );
+        }
+    }
 }
 
 fn hosts(allowed: Option<&[&str]>, denied: &[&str]) -> bravebot_config::sandbox_network::Hosts {

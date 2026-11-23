@@ -12,6 +12,10 @@
 //! plugin said is left unread by a yes. The body scrolls, and no yes is taken before every row of
 //! it has been drawn.
 
+mod parts;
+mod update;
+
+use bravebot_agent::plugin_source::Source;
 use bravebot_agent::plugins::{self, Offered, Staged};
 use bravebot_agent::skills::Catalogue;
 use bravebot_core::delegate::Definitions;
@@ -29,6 +33,11 @@ use crate::theme;
 use super::chrome::{answer_keys, centred, indented, panel};
 use super::pinned::{self, Approving, Drawn, Question, Seen};
 use super::{Next, next_press};
+
+pub use parts::{HookRow, Listed, ServerRow};
+#[cfg(test)]
+pub(crate) use update::ask_update_reading;
+pub use update::{Delta, UpdateRequest, ask_update};
 
 /// How many rows of one description are drawn before `e` is pressed.
 const DESCRIPTION_ROWS: usize = 3;
@@ -50,6 +59,15 @@ pub struct DefinitionRow {
     pub shadowed_by: Option<String>,
 }
 
+/// The rows only a git source has (PLUGIN-4, PLUGIN-14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRows {
+    /// The ref the person typed after `#`, or `None` where they named none.
+    pub requested_ref: Option<String>,
+    /// The full 40-digit commit the clone resolved to.
+    pub commit: String,
+}
+
 /// What the install prompt shows. Built from the parts of the staged tree, not from a field the
 /// manifest wrote about itself (PLUGIN-4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,38 +76,75 @@ pub struct InstallRequest {
     pub version: String,
     /// The source directory. A local path has no commit, so none is shown.
     pub source: String,
+    /// What a git source adds to the listing. `None` for a local path, which has no commit, so
+    /// neither row is drawn for it.
+    pub git: Option<GitRows>,
     pub skills: Vec<SkillRow>,
     pub definitions: Vec<DefinitionRow>,
+    /// The hooks the plugin's hooks file declares, `${PLUGIN_ROOT}` already replaced. `None` where
+    /// the manifest names no hooks file.
+    pub hooks: Option<Listed<HookRow>>,
+    /// The servers the plugin's servers file declares, `${PLUGIN_ROOT}` already replaced. `None`
+    /// where the manifest names no servers file.
+    pub servers: Option<Listed<ServerRow>>,
 }
 
 impl InstallRequest {
     /// The listing of `staged`, with each name a higher-ranked source offers marked as shadowed.
     /// `catalogue` and `definitions` are what discovery found for this session.
     pub fn from_staged(staged: &Staged, catalogue: &Catalogue, definitions: &Definitions) -> Self {
-        let offers = plugins::staged_offers(staged);
-        let mut skills = Vec::new();
-        let mut kinds = Vec::new();
-        for mark in plugins::shadow_marks(&offers, catalogue, definitions) {
-            match mark.offer.what {
-                Offered::Skill { description } => skills.push(SkillRow {
-                    name: mark.offer.name,
-                    description,
-                    shadowed_by: mark.by,
-                }),
-                Offered::Definition { kind } => kinds.push(DefinitionRow {
-                    name: mark.offer.name,
-                    kind: kind.to_string(),
-                    shadowed_by: mark.by,
-                }),
-            }
-        }
+        let (skills, kinds) = offer_rows(&plugins::staged_offers(staged), catalogue, definitions);
         Self {
             name: staged.manifest.name.clone(),
             version: staged.manifest.version.clone(),
-            source: staged.source.display().to_string(),
+            source: staged.source.to_string(),
+            git: git_rows(&staged.source),
             skills,
             definitions: kinds,
+            hooks: parts::hooks_of(staged),
+            servers: parts::servers_of(staged),
         }
+    }
+}
+
+/// The skill and definition rows of `offers`, each name a higher-ranked source offers marked as
+/// shadowed. Shared by the install listing and the update difference.
+pub(super) fn offer_rows(
+    offers: &[plugins::Offer],
+    catalogue: &Catalogue,
+    definitions: &Definitions,
+) -> (Vec<SkillRow>, Vec<DefinitionRow>) {
+    let mut skills = Vec::new();
+    let mut kinds = Vec::new();
+    for mark in plugins::shadow_marks(offers, catalogue, definitions) {
+        match mark.offer.what {
+            Offered::Skill { description } => skills.push(SkillRow {
+                name: mark.offer.name,
+                description,
+                shadowed_by: mark.by,
+            }),
+            Offered::Definition { kind } => kinds.push(DefinitionRow {
+                name: mark.offer.name,
+                kind: kind.to_string(),
+                shadowed_by: mark.by,
+            }),
+        }
+    }
+    (skills, kinds)
+}
+
+/// The rows only a git source has, or `None` for a local path, which has no commit.
+pub(super) fn git_rows(source: &Source) -> Option<GitRows> {
+    match source {
+        Source::Local(_) => None,
+        Source::Git {
+            requested_ref,
+            commit,
+            ..
+        } => Some(GitRows {
+            requested_ref: requested_ref.clone(),
+            commit: commit.to_string(),
+        }),
     }
 }
 
@@ -151,6 +206,24 @@ pub fn ask_install<B: Backend>(terminal: &mut Terminal<B>, request: &InstallRequ
 pub(crate) fn ask_install_reading<B: Backend>(
     terminal: &mut Terminal<B>,
     request: &InstallRequest,
+    next: impl FnMut() -> Next,
+) -> bool {
+    ask_drawing(
+        terminal,
+        |frame, expanded, scroll, seen, cut| {
+            draw_install(frame, request, expanded, scroll, seen, cut)
+        },
+        next,
+    )
+}
+
+/// The loop of a plugin question: draw, read a key, scroll, expand or answer. `draw` draws the
+/// prompt and returns what the draw decided for the keys. Shared by the install and the update
+/// question, so both take a yes by the same rules: only a typed y, never while any text of the
+/// plugin is cut, and never before every deciding row has been drawn.
+pub(super) fn ask_drawing<B: Backend>(
+    terminal: &mut Terminal<B>,
+    mut draw: impl FnMut(&mut ratatui::Frame, bool, u16, &mut Seen, &Cell<bool>) -> Drawn,
     mut next: impl FnMut() -> Next,
 ) -> bool {
     let mut scroll = 0u16;
@@ -162,9 +235,7 @@ pub(crate) fn ask_install_reading<B: Backend>(
     loop {
         if !ignored
             && terminal
-                .draw(|frame| {
-                    drawn = draw_install(frame, request, expanded, scroll, &mut seen, &cut)
-                })
+                .draw(|frame| drawn = draw(frame, expanded, scroll, &mut seen, &cut))
                 .is_err()
         {
             return false;
@@ -188,7 +259,7 @@ pub(crate) fn ask_install_reading<B: Backend>(
 
 /// `text` behind the margin, one row per line, cut to `limit` rows unless `expanded`. Returns the
 /// rows and whether any was cut.
-fn untrusted(
+pub(super) fn untrusted(
     text: &str,
     style: Style,
     margin: &Span<'static>,
@@ -213,6 +284,54 @@ fn untrusted(
     }
 }
 
+/// The rows for the plugin's name, version, source and, for a git source, its ref and commit.
+fn fact_rows(
+    lines: &mut Vec<Line<'static>>,
+    request: &InstallRequest,
+    margin: &Span<'static>,
+    bold: Style,
+    muted: Style,
+    width: usize,
+    expanded: bool,
+) {
+    let source_label = match request.git {
+        Some(_) => t!(plugin_install_source_git),
+        None => t!(plugin_install_source),
+    };
+    let mut facts = vec![
+        (t!(plugin_install_name), request.name.clone()),
+        (t!(plugin_install_version), request.version.clone()),
+        (source_label, request.source.clone()),
+    ];
+    if let Some(git) = &request.git {
+        facts.push((
+            t!(plugin_install_requested_ref),
+            git.requested_ref
+                .clone()
+                .unwrap_or_else(|| t!(plugin_install_no_ref).to_string()),
+        ));
+        facts.push((t!(plugin_install_commit), git.commit.clone()));
+    }
+    fact_list(lines, facts, margin, bold, muted, width, expanded);
+}
+
+/// A label above each value, the value behind the margin.
+pub(super) fn fact_list(
+    lines: &mut Vec<Line<'static>>,
+    facts: Vec<(impl Into<String>, String)>,
+    margin: &Span<'static>,
+    bold: Style,
+    muted: Style,
+    width: usize,
+    expanded: bool,
+) {
+    for (label, value) in facts {
+        lines.extend(indented(label, muted, width));
+        let (rows, _) = untrusted(&value, bold, margin, width, None, expanded);
+        lines.extend(rows);
+    }
+}
+
 /// Draw the install prompt, returning what the draw decided for its keys.
 ///
 /// `cut` is set to whether any text of the plugin is drawn cut.
@@ -233,15 +352,7 @@ pub(super) fn draw_install(
     let mut any_cut = false;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for (label, value) in [
-        (t!(plugin_install_name), request.name.as_str()),
-        (t!(plugin_install_version), request.version.as_str()),
-        (t!(plugin_install_source), request.source.as_str()),
-    ] {
-        lines.extend(indented(label, muted, width));
-        let (rows, _) = untrusted(value, bold, &margin, width, None, expanded);
-        lines.extend(rows);
-    }
+    fact_rows(&mut lines, request, &margin, bold, muted, width, expanded);
 
     lines.push(Line::raw(""));
     lines.extend(match request.skills.is_empty() {
@@ -254,19 +365,7 @@ pub(super) fn draw_install(
     });
     for skill in &request.skills {
         lines.push(Line::raw(""));
-        let (rows, _) = untrusted(&skill.name, bold, &margin, width, None, expanded);
-        lines.extend(rows);
-        let (rows, was_cut) = untrusted(
-            &skill.description,
-            Style::default(),
-            &margin,
-            width,
-            Some(DESCRIPTION_ROWS),
-            expanded,
-        );
-        lines.extend(rows);
-        any_cut |= was_cut;
-        shadow_rows(&mut lines, skill.shadowed_by.as_deref(), width);
+        any_cut |= skill_body(&mut lines, skill, &margin, bold, width, expanded);
     }
 
     lines.push(Line::raw(""));
@@ -281,21 +380,16 @@ pub(super) fn draw_install(
             width,
         ),
     });
-    for definition in &request.definitions {
-        lines.push(Line::raw(""));
-        let (rows, _) = untrusted(&definition.name, bold, &margin, width, None, expanded);
-        lines.extend(rows);
-        let (rows, _) = untrusted(
-            &t!(plugin_install_kind, kind = definition.kind.as_str()),
-            Style::default(),
-            &margin,
-            width,
-            None,
-            expanded,
-        );
-        lines.extend(rows);
-        shadow_rows(&mut lines, definition.shadowed_by.as_deref(), width);
-    }
+    definition_rows(&mut lines, request, &margin, bold, width, expanded);
+
+    let pen = parts::Pen {
+        margin: &margin,
+        bold,
+        muted,
+        width,
+    };
+    parts::draw_hooks(&pen, &mut lines, request.hooks.as_ref());
+    parts::draw_servers(&pen, &mut lines, request.servers.as_ref());
 
     if any_cut {
         lines.push(Line::raw(""));
@@ -331,6 +425,70 @@ pub(super) fn draw_install(
     pinned::draw(frame, inside, question, scroll, seen)
 }
 
+/// The rows for each definition: its name, its kind and the mark of a source that shadows it.
+fn definition_rows(
+    lines: &mut Vec<Line<'static>>,
+    request: &InstallRequest,
+    margin: &Span<'static>,
+    bold: Style,
+    width: usize,
+    expanded: bool,
+) {
+    for definition in &request.definitions {
+        lines.push(Line::raw(""));
+        definition_body(lines, definition, margin, bold, width, expanded);
+    }
+}
+
+/// One skill: its name, its description cut to a few rows until `e`, and the mark of a source that
+/// shadows it. Returns whether the description is cut. Shared by the install listing and the update
+/// difference.
+pub(super) fn skill_body(
+    lines: &mut Vec<Line<'static>>,
+    skill: &SkillRow,
+    margin: &Span<'static>,
+    bold: Style,
+    width: usize,
+    expanded: bool,
+) -> bool {
+    let (rows, _) = untrusted(&skill.name, bold, margin, width, None, expanded);
+    lines.extend(rows);
+    let (rows, was_cut) = untrusted(
+        &skill.description,
+        Style::default(),
+        margin,
+        width,
+        Some(DESCRIPTION_ROWS),
+        expanded,
+    );
+    lines.extend(rows);
+    shadow_rows(lines, skill.shadowed_by.as_deref(), width);
+    was_cut
+}
+
+/// One definition: its name, its kind and the mark of a source that shadows it.
+pub(super) fn definition_body(
+    lines: &mut Vec<Line<'static>>,
+    definition: &DefinitionRow,
+    margin: &Span<'static>,
+    bold: Style,
+    width: usize,
+    expanded: bool,
+) {
+    let (rows, _) = untrusted(&definition.name, bold, margin, width, None, expanded);
+    lines.extend(rows);
+    let (rows, _) = untrusted(
+        &t!(plugin_install_kind, kind = definition.kind.as_str()),
+        Style::default(),
+        margin,
+        width,
+        None,
+        expanded,
+    );
+    lines.extend(rows);
+    shadow_rows(lines, definition.shadowed_by.as_deref(), width);
+}
+
 /// The mark under a name that a higher-ranked source takes. Its origin is a path, so it is drawn
 /// behind the margin as well.
 fn shadow_rows(lines: &mut Vec<Line<'static>>, by: Option<&str>, width: usize) {
@@ -358,6 +516,9 @@ mod tests {
             name: "demo".into(),
             version: "2.3.4".into(),
             source: "/work/src-demo".into(),
+            git: None,
+            hooks: None,
+            servers: None,
             skills: vec![SkillRow {
                 name: "hello".into(),
                 description: "Says hello.".into(),
@@ -374,7 +535,12 @@ mod tests {
     /// The keys a person presses at the prompt, the answer, how many keys it read, and the last
     /// screen it drew. A script that runs out is a lost terminal.
     fn answered(request: &InstallRequest, keys: &[KeyCode]) -> (bool, usize, String) {
-        let mut terminal = Terminal::new(TestBackend::new(100, 60)).unwrap();
+        answered_in(request, keys, 60)
+    }
+
+    /// [`answered`] on a terminal `rows` high, for a listing longer than a screen.
+    fn answered_in(request: &InstallRequest, keys: &[KeyCode], rows: u16) -> (bool, usize, String) {
+        let mut terminal = Terminal::new(TestBackend::new(100, rows)).unwrap();
         let mut queue: VecDeque<KeyCode> = keys.iter().copied().collect();
         let mut reads = 0;
         let answer = ask_install_reading(&mut terminal, request, || {
@@ -422,6 +588,50 @@ mod tests {
             assert!(screen.contains(shown), "{shown}\n{screen}");
         }
         assert!(!screen.to_lowercase().contains("commit"), "{screen}");
+    }
+
+    /// PLUGIN-4, PLUGIN-14: a git source's prompt shows the requested ref and the full commit,
+    /// each behind the margin, and says plainly when no ref was named.
+    ///
+    /// Rejects: a commit cut to a short id, a requested ref that is not drawn, a commit drawn
+    /// unmarked, a ref shown where none was typed, and rows drawn for a local path.
+    #[test]
+    fn a_git_source_shows_the_requested_ref_and_the_full_commit() {
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let mut shown = request();
+        shown.source = "https://example.com/demo.git".into();
+        shown.git = Some(GitRows {
+            requested_ref: Some("release-2".into()),
+            commit: commit.into(),
+        });
+        let (_, _, screen) = answered(&shown, &[KeyCode::Char('n')]);
+        for expected in [
+            "https://example.com/demo.git",
+            "Requested ref",
+            "release-2",
+            "Commit it resolved to",
+            commit,
+        ] {
+            assert!(screen.contains(expected), "{expected}\n{screen}");
+        }
+        let row = screen
+            .lines()
+            .find(|row| row.contains(commit))
+            .expect("the commit is drawn");
+        assert!(row.contains('\u{2503}'), "{row}");
+        assert!(!screen.contains("none given"), "{screen}");
+
+        shown.git = Some(GitRows {
+            requested_ref: None,
+            commit: commit.into(),
+        });
+        let (_, _, unnamed) = answered(&shown, &[KeyCode::Char('n')]);
+        assert!(unnamed.contains("none given"), "{unnamed}");
+        assert!(unnamed.contains(commit), "{unnamed}");
+
+        let (_, _, local) = answered(&request(), &[KeyCode::Char('n')]);
+        assert!(!local.contains("Requested ref"), "{local}");
+        assert!(!local.contains("Commit it resolved to"), "{local}");
     }
 
     /// R26: what the plugin wrote is drawn behind the margin, with control and invisible characters
@@ -488,6 +698,175 @@ mod tests {
         );
         let (_, _, plain) = answered(&request(), &[KeyCode::Char('n')]);
         assert!(!plain.contains("Shadowed"), "{plain}");
+    }
+
+    /// PLUGIN-4, PLUGIN-13: a plugin with a hooks file and a servers file is listed in full, from
+    /// the staged tree, with `${PLUGIN_ROOT}` already the installed path, each word of each argv on
+    /// its own row behind the margin, and the host, the command and the files on rows of their own.
+    ///
+    /// Rejects: a hook or server left out of the prompt, an argv drawn with the unexpanded
+    /// variable or the staging path, an argv cut or joined into one row, a host or a file that has
+    /// no row, text drawn without the margin, and an environment value that is expanded.
+    #[test]
+    fn hooks_and_servers_are_listed_in_full_with_the_installed_path_and_their_reach() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = scratch.path().join("src");
+        std::fs::create_dir_all(source.join("skills")).unwrap();
+        std::fs::write(
+            source.join("plugin.toml"),
+            "name = \"demo\"\nversion = \"1\"\ndescription = \"d\"\nskills = \"skills\"\nhooks = \"h.json\"\nservers = \"s.json\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("h.json"),
+            r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh","--flag","two words"]},{"on":"nope","run":["x"]}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("s.json"),
+            r#"{"servers":{"local":{"transport":"stdio","argv":["${PLUGIN_ROOT}/server.py","-v"],"variables":["API_KEY"],"env":{"HOME_X":"${PLUGIN_ROOT}/x"},"reads":["/etc/hosts"]},"web":{"transport":"http","url":"https://mcp.example.org/v1"},"broken":{"transport":"stdio"}}}"#,
+        )
+        .unwrap();
+        let staged = bravebot_agent::plugins::stage(&source, &home).unwrap();
+        let request = InstallRequest::from_staged(
+            &staged,
+            &bravebot_agent::skills::Catalogue::default(),
+            &Definitions::default(),
+        );
+        let installed = bravebot_agent::plugins::installed_dir(&home, "demo");
+        let installed = installed.display().to_string();
+        let (_, _, screen) = answered_in(&request, &[KeyCode::Char('n')], 200);
+        let flat: String = screen
+            .lines()
+            .map(|row| {
+                row.trim()
+                    .trim_matches('\u{2502}')
+                    .trim_start_matches('\u{2503}')
+                    .trim()
+            })
+            .collect();
+        for expected in [
+            "Hooks (1)",
+            "Runs at turn-started",
+            "2. --flag",
+            "3. two words",
+            "The hooks file holds more than is listed here: 1 entries",
+            "Servers (3)",
+            "local",
+            "stdio",
+            "API_KEY",
+            "HOME_X=${PLUGIN_ROOT}/x",
+            "Would start the program",
+            "May read the file",
+            "/etc/hosts",
+            "https://mcp.example.org/v1",
+            "Would reach the host",
+            "mcp.example.org",
+            "never started",
+        ] {
+            assert!(screen.contains(expected), "{expected}\n{screen}");
+        }
+        // Rows wrap at the screen width, so the paths are compared with the rows joined.
+        assert!(flat.contains(&format!("{installed}/hook.sh")), "{flat}");
+        assert!(flat.contains(&format!("{installed}/server.py")), "{flat}");
+        assert!(installed.contains("plugins"), "{installed}");
+        assert!(!screen.contains(".plugin-staging"), "{screen}");
+        assert!(!screen.contains("hook.sh${"), "{screen}");
+        let row = screen
+            .lines()
+            .find(|row| row.contains("two words"))
+            .expect("the third word is drawn");
+        assert!(row.contains('\u{2503}'), "{row}");
+        let row = screen
+            .lines()
+            .find(|row| row.contains("mcp.example.org") && !row.contains("https"))
+            .expect("the host has a row");
+        assert!(row.contains('\u{2503}'), "{row}");
+    }
+
+    /// PLUGIN-4: a hooks file that cannot be read is said in the listing, so the prompt is not
+    /// shorter than the plugin without telling the person.
+    ///
+    /// Rejects: an unusable file listed as a plugin with no hooks.
+    #[test]
+    fn an_unreadable_hooks_file_is_said_and_not_listed_as_no_hooks() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = scratch.path().join("home");
+        let source = scratch.path().join("src");
+        std::fs::create_dir_all(source.join("skills")).unwrap();
+        std::fs::write(
+            source.join("plugin.toml"),
+            "name = \"demo\"\nversion = \"1\"\ndescription = \"d\"\nskills = \"skills\"\nhooks = \"h.json\"\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("h.json"), "{ not json").unwrap();
+        let staged = bravebot_agent::plugins::stage(&source, &home).unwrap();
+        let request = InstallRequest::from_staged(
+            &staged,
+            &bravebot_agent::skills::Catalogue::default(),
+            &Definitions::default(),
+        );
+        let (_, _, screen) = answered(&request, &[KeyCode::Char('n')]);
+        assert!(screen.contains("Hooks (0)"), "{screen}");
+        assert!(screen.contains("is not a hooks file"), "{screen}");
+        assert!(!screen.contains("offers no hook"), "{screen}");
+        let (_, _, plain) = answered(&request_without_parts(), &[KeyCode::Char('n')]);
+        assert!(plain.contains("offers no hook"), "{plain}");
+        assert!(plain.contains("offers no server"), "{plain}");
+    }
+
+    fn request_without_parts() -> InstallRequest {
+        request()
+    }
+
+    /// PLUGIN-4: a server whose alias is fine alone but whose `<plugin>_<alias>` is longer than a
+    /// server's name may be is listed in full and marked never started, as an entry that states no
+    /// usable declaration is. The same server under a shorter alias carries no such mark.
+    ///
+    /// Rejects: a listing that marks usable a server a session can never reach, which a person
+    /// would answer yes to as though it would start.
+    #[test]
+    fn a_server_whose_joined_alias_is_too_long_is_listed_as_never_started() {
+        let listing = |alias: &str| {
+            let scratch = tempfile::tempdir().unwrap();
+            let home = scratch.path().join("home");
+            let source = scratch.path().join("src");
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join("plugin.toml"),
+                "name = \"demo\"\nversion = \"1\"\ndescription = \"d\"\nservers = \"s.json\"\n",
+            )
+            .unwrap();
+            std::fs::write(
+                source.join("s.json"),
+                format!(
+                    r#"{{"servers":{{"{alias}":{{"transport":"http","url":"https://mcp.example.org/v1"}}}}}}"#
+                ),
+            )
+            .unwrap();
+            let staged = bravebot_agent::plugins::stage(&source, &home).unwrap();
+            let request = InstallRequest::from_staged(
+                &staged,
+                &bravebot_agent::skills::Catalogue::default(),
+                &Definitions::default(),
+            );
+            let (_, _, screen) = answered_in(&request, &[KeyCode::Char('n')], 200);
+            screen
+        };
+        let too_long = "x".repeat(60);
+        let long = listing(&too_long);
+        assert!(
+            long.contains("https://mcp.example.org/v1"),
+            "listed in full\n{long}"
+        );
+        assert!(
+            long.contains("too long together, so it is never started"),
+            "{long}"
+        );
+        let short = listing(&"x".repeat(59));
+        assert!(short.contains("https://mcp.example.org/v1"), "{short}");
+        assert!(!short.contains("never started"), "{short}");
     }
 
     /// Only a typed y or Y says yes. Enter, Esc, n, a lost terminal and an unknown key do not.

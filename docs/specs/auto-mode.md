@@ -143,7 +143,8 @@ as it lands after links are followed and under each other name of a file with a 
 is recognised as [RUN-5](tools/run.md#RUN-5) recognises it, by the file its program resolved to and
 on every platform, and any stage of a pipeline counts. A fetch is put to it for
 `fetch_url`, for the first question about the URL, and not for `download_url`, which puts bytes into
-a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4)). It is consulted
+a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4)). A `web_search` is
+not put to it either ([WEBSEARCH-2](tools/web-search.md#WEBSEARCH-2)). It is consulted
 only in auto, only in a turn of a session the person has typed to, and not for a delegate, whose task
 is a sentence the driver composed. Where it is not consulted the question goes to the confirmer
 behind the mode.
@@ -162,6 +163,7 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_run_only_on_the_classifiers_allow_word_for_a_confined_line`
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_fetch_only_on_the_classifiers_allow_word_and_not_a_redirect`
 `verified-by: bravebot_agent::turn::a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::web_search::bypass_answers_a_search_and_auto_leaves_it_to_the_person_without_a_classifier_word`
 `verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_git_config`
 `verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_git_hook`
 `verified-by: bravebot_agent::turn::auto_asks_the_person_about_a_redirection_into_a_husky_hook`

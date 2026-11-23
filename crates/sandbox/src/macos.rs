@@ -2883,6 +2883,139 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A write row does not reach an existing `.git` by any way a stage has of changing one: it
+    /// cannot append to, truncate or change the mode of a file in it, rename a file or a directory
+    /// into it or over a file in it, rename an entry of it or the `.git` itself away, or remove
+    /// one. The test above creates and touches, and a refusal narrowed to creation and timestamps
+    /// passes it while leaving a hook or `.git/config` open to every other operation.
+    ///
+    /// Each attempt runs on a fresh copy of the same tree and is refused only when it exits
+    /// non-zero and leaves the tree as it was. The same lines under a policy that lifts the refusal
+    /// exit zero and change the tree, so each is refused by the `.git` rule and for no other
+    /// reason. Writes beside the `.git`, including a rename and a removal, succeed under the
+    /// refusing policy, so a profile that refuses every rename or removal does not pass.
+    #[test]
+    fn a_write_row_does_not_change_rename_into_or_remove_an_entry_of_a_git_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        /// One line per entry under `directory`: its path from `root`, mode and contents.
+        fn snapshot(directory: &Path, root: &Path, into: &mut Vec<String>) {
+            let mut paths: Vec<_> = std::fs::read_dir(directory)
+                .expect("readable")
+                .map(|entry| entry.expect("readable").path())
+                .collect();
+            paths.sort();
+            for path in paths {
+                let metadata = std::fs::symlink_metadata(&path).expect("readable");
+                let contents = if metadata.is_file() {
+                    std::fs::read_to_string(&path).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                into.push(format!(
+                    "{} {:o} {contents:?}",
+                    path.strip_prefix(root).expect("beneath the root").display(),
+                    metadata.permissions().mode() & 0o7777
+                ));
+                if metadata.is_dir() {
+                    snapshot(&path, root, into);
+                }
+            }
+        }
+
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-git-directory-changes");
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".git").join("hooks")).expect("creatable");
+            std::fs::create_dir_all(dir.join("sub").join(".git")).expect("creatable");
+            std::fs::create_dir_all(dir.join("below")).expect("creatable");
+            let config = dir.join(".git").join("config");
+            std::fs::write(&config, "[core]\n").expect("writable");
+            std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644))
+                .expect("settable");
+            std::fs::write(dir.join("outside"), "outside").expect("writable");
+            std::fs::write(dir.join("other"), "other").expect("writable");
+        };
+        let tree = || {
+            let mut lines = Vec::new();
+            snapshot(&dir, &dir, &mut lines);
+            lines
+        };
+        let attempt = |policy: &SandboxPolicy, line: &str| {
+            fresh();
+            let before = tree();
+            let code = sh_under(policy, &dir, line);
+            (code, tree() != before)
+        };
+
+        let refusing = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_write(&dir)
+            .allow_subprocesses();
+        let lifted = refusing.clone().allow_git_directory_writes();
+
+        let attempts = [
+            ("append to a file in .git", "echo x >> .git/config"),
+            ("truncate a file in .git", ": > .git/config"),
+            ("change the mode of a file in .git", "chmod 777 .git/config"),
+            (
+                "rename a file to a new name in .git",
+                "mv outside .git/hooks/pre-commit",
+            ),
+            ("rename a file over one in .git", "mv outside .git/config"),
+            ("rename a directory into .git", "mv below .git/below"),
+            ("rename a file to the name .GIT", "mv outside below/.GIT"),
+            (
+                "rename a file in .git to another name there",
+                "mv .git/config .git/config2",
+            ),
+            (
+                "rename a directory in .git out of it",
+                "mv .git/hooks hooks-aside",
+            ),
+            ("rename .git away", "mv .git moved-git"),
+            ("rename a nested .git away", "mv sub/.git sub/moved-git"),
+            ("remove a file in .git", "rm .git/config"),
+            ("remove an empty directory in .git", "rmdir .git/hooks"),
+            ("remove a nested .git", "rm -rf sub/.git"),
+            ("remove .git", "rm -rf .git"),
+        ];
+
+        let got_through: Vec<_> = attempts
+            .iter()
+            .filter(|(_, line)| {
+                let (code, changed) = attempt(&refusing, line);
+                code == Some(0) || changed
+            })
+            .map(|(what, _)| *what)
+            .collect();
+        assert!(got_through.is_empty(), "got through: {got_through:?}");
+
+        let not_lifted: Vec<_> = attempts
+            .iter()
+            .filter(|(_, line)| {
+                let (code, changed) = attempt(&lifted, line);
+                code != Some(0) || !changed
+            })
+            .map(|(what, _)| *what)
+            .collect();
+        assert!(
+            not_lifted.is_empty(),
+            "not a change the lift allows: {not_lifted:?}"
+        );
+
+        let (code, _) = attempt(
+            &refusing,
+            "echo y > beside && mv other beside2 && rm beside2 && echo z > .gitignore \
+             && mv .gitignore .gitignore2 && rm .gitignore2",
+        );
+        assert_eq!(code, Some(0), "a write beside the .git was refused");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A directory between a write row and a refused path is not renamed away. Seatbelt matches the
     /// path a process opens, so without a refusal of the rename the refused file is read and
     /// appended to under the new name of the directory above it (SANDBOX-12, SANDBOX-25).
@@ -4307,6 +4440,7 @@ int main(int argc, char **argv) {
             ".bravebot/chatgpt-account.json",
             ".bravebot/xai-account.json",
             ".bravebot/mcp.json",
+            ".bravebot/hooks-approved",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",
             ".ssh/id_rsa",

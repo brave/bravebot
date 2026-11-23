@@ -691,7 +691,11 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
         panic!("the list was drawn as {:?}", list.tools);
     };
     assert_eq!(tool.name, "weather:get_forecast");
-    assert_eq!(tool.arguments, ["city (string, required)"]);
+    let [argument] = tool.arguments.as_slice() else {
+        panic!("the arguments were drawn as {:?}", tool.arguments);
+    };
+    assert_eq!(argument.text, "city (string, required)");
+    assert!(argument.choices.is_empty());
     assert_eq!(tool.description.as_deref(), Some(DESCRIPTION));
 
     let [call] = confirmer.calls.as_slice() else {
@@ -3212,6 +3216,109 @@ fn screening_asked_for_makes_no_check_of_a_servers_list_under_bypass() {
     );
 }
 
+/// A mock chat server like [`serve_chat`], except that a check whose request holds the server's
+/// [`DESCRIPTION`] (the check of a list) is answered with `list_check`, a `reply_with` body.
+fn serve_chat_checking_the_list(
+    replies: Vec<String>,
+    list_check: String,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut replies = replies.into_iter();
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let reply = if body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION) {
+                list_check.clone()
+            } else if body.contains(A_CHECK_ASKING) {
+                reply_with(
+                    r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+                )
+            } else {
+                match replies.next() {
+                    Some(reply) => reply,
+                    None => {
+                        let refusal = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        let _ = stream.write_all(refusal.as_bytes());
+                        continue;
+                    }
+                }
+            };
+            let frames = as_sse(&reply);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                frames.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// In a mode that asks, a server's list is sent whole to a check before the person is asked about
+/// it, and the question carries the word and the sentence that check gave (CHECK-10).
+///
+/// The wrong implementation stops checking a list where the person is asked, so the question
+/// carries the driver's own `inconclusive` filler and no check request holds the list. The check
+/// says `unsafe` with a sentence so that the word on the question can only be the check's: a
+/// question built from the `safe` that every other check here gets, or from the filler, differs.
+#[test]
+fn a_servers_list_is_checked_whole_before_it_is_asked_about() {
+    for mode in [PermissionMode::Ask, PermissionMode::AcceptEdits] {
+        let scratch = Scratch::new(&format!("list-checked-{mode:?}"));
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+
+        let (endpoint, chat) = serve_chat_checking_the_list(
+            vec![reply_with("done")],
+            reply_with(
+                r#"{\"verdict\": \"unsafe\", \"reason\": \"REASON-MARKER-FROM-THE-LIST-CHECK\"}"#,
+            ),
+        );
+        let mut asking = Answering::new(Decision::Reject, CallDecision::reject());
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast")
+                .with_mcp(Some(session))
+                .with_permission_mode(mode),
+            &mut asking,
+        );
+
+        let sent: Vec<String> = chat.try_iter().collect();
+        let checks_of_the_list = sent
+            .iter()
+            .filter(|body| body.contains(A_CHECK_ASKING) && body.contains(DESCRIPTION))
+            .count();
+        assert_eq!(
+            checks_of_the_list, 1,
+            "{mode:?}: the list was not sent whole to one check before it was asked about"
+        );
+        let [put] = asking.lists.as_slice() else {
+            panic!(
+                "{mode:?}: expected one list question, got {}",
+                asking.lists.len()
+            );
+        };
+        assert_eq!(
+            put.verdict,
+            bravebot_core::vetting::Verdict::Unsafe,
+            "{mode:?}: the question does not carry the word the check gave"
+        );
+        assert!(
+            put.reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("REASON-MARKER-FROM-THE-LIST-CHECK")),
+            "{mode:?}: the question does not carry the sentence the check wrote: {:?}",
+            put.reason
+        );
+    }
+}
+
 /// A list offered in bypass stays offered once the session cycles out of the mode, since its words
 /// are already in the context the planner writes from, and from then on each call is asked.
 #[test]
@@ -4625,7 +4732,25 @@ fn delegate_the_forecast_recorded(
     kind: &str,
     asking_every_call: bool,
 ) -> (Delegated, RecordingSink) {
+    delegate_the_forecast_under(name, kind, asking_every_call, None, false)
+}
+
+/// [`delegate_the_forecast_recorded`] under the rules `permissions` where there are any, and with
+/// answer 2 already recorded for the forecast tool in the project where `standing` says so.
+fn delegate_the_forecast_under(
+    name: &str,
+    kind: &str,
+    asking_every_call: bool,
+    permissions: Option<bravebot_core::permissions::Permissions>,
+    standing: bool,
+) -> (Delegated, RecordingSink) {
     let scratch = Scratch::new(name);
+    if standing {
+        let mut recorded = Standing::to_change(&scratch.state()).expect("the record reads");
+        assert!(recorded.add("weather", "get_forecast", &scratch.project()));
+        std::fs::write(tools_file(&scratch.state()), recorded.to_text())
+            .expect("record answer 2 for the tool");
+    }
     let (url, server) = serve_weather();
     let session = match asking_every_call {
         true => session_asking_every_call(&url, &scratch, true),
@@ -4652,13 +4777,11 @@ fn delegate_the_forecast_recorded(
     ]);
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
     let mut trail = RecordingSink::new();
-    run_turn_recording(
-        &endpoint,
-        &scratch.project(),
-        Task::new(PARENT).with_mcp(Some(session)),
-        &mut asked,
-        &mut trail,
-    );
+    let mut task = Task::new(PARENT).with_mcp(Some(session));
+    if let Some(permissions) = permissions {
+        task = task.with_permissions(permissions);
+    }
+    run_turn_recording(&endpoint, &scratch.project(), task, &mut asked, &mut trail);
     let delegate = rounds(&chat)
         .into_iter()
         .filter(|body| body.contains(DELEGATED) && !body.contains(PARENT))
@@ -4938,6 +5061,207 @@ fn a_workers_call_to_a_server_asked_every_call_is_refused_unasked() {
         refused_under(&trail, "approval").is_empty(),
         "the control left a refusal: {:?}",
         refused_under(&trail, "approval")
+    );
+}
+
+/// DELEGATE-10. A rule decides a delegate's call to a server's tool as it decides the turn's. An
+/// allow rule makes the call with nobody asked, and a deny rule refuses it with nobody asked and
+/// nothing sent to the server, recorded under the rule's gate and not as an approval the person
+/// withheld. The control is the same delegation under no rule, where the call is put to the person.
+/// It rejects a delegate whose policy holds none of the turn's rules, which asks about the allowed
+/// call and sends the denied one.
+#[test]
+fn a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own() {
+    let (
+        Delegated {
+            asked: control_asked,
+            called: control_called,
+            ..
+        },
+        _,
+    ) = delegate_the_forecast_under("delegate-no-rule", "worker", false, None, false);
+    assert_eq!(
+        control_asked.calls.len(),
+        1,
+        "the call under no rule was not put to the person"
+    );
+    assert_eq!(control_called, ["tools/call"], "the control was not made");
+
+    let (
+        Delegated {
+            asked,
+            called,
+            delegate,
+        },
+        trail,
+    ) = delegate_the_forecast_under(
+        "delegate-allow-rule",
+        "worker",
+        false,
+        Some(allowing_the_weather()),
+        false,
+    );
+    assert!(
+        asked.calls.is_empty(),
+        "a call an allow rule decides was put to the person: {:?}",
+        asked.calls
+    );
+    assert_eq!(
+        called,
+        ["tools/call"],
+        "the allowed call did not reach the server"
+    );
+    assert!(
+        delegate.len() >= 2,
+        "the delegate made {} requests",
+        delegate.len()
+    );
+    assert!(
+        refused_under(&trail, "mcp_call").is_empty(),
+        "the allowed call was refused: {:?}",
+        refused_under(&trail, "mcp_call")
+    );
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Mcp(weather:get_forecast)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule in this test did not parse");
+    let (
+        Delegated {
+            asked,
+            called,
+            delegate,
+        },
+        trail,
+    ) = delegate_the_forecast_under(
+        "delegate-deny-rule",
+        "worker",
+        false,
+        Some(permissions),
+        false,
+    );
+    let [_, second, ..] = delegate.as_slice() else {
+        panic!("the delegate made {} requests", delegate.len());
+    };
+    assert!(
+        asked.calls.is_empty(),
+        "a call a deny rule refuses was put to the person: {:?}",
+        asked.calls
+    );
+    assert!(
+        called.is_empty(),
+        "the server heard a call a deny rule refuses: {called:?}"
+    );
+    assert!(
+        second.contains("refused"),
+        "the delegate was not told the call was refused: {second}"
+    );
+    assert_eq!(
+        refused_under(&trail, "mcp_call").len(),
+        1,
+        "the rule's refusal was not recorded once"
+    );
+    assert!(
+        refused_under(&trail, "approval").is_empty(),
+        "a call a rule refused was recorded as one the person did not approve: {:?}",
+        refused_under(&trail, "approval")
+    );
+}
+
+/// DELEGATE-10. An answer that stops asking for the weather server's tool in the project decides a
+/// delegate's call to it as it decides the turn's: nobody is asked and the server hears the call.
+/// The control is the same delegation with no answer recorded, where the call is put to the person.
+/// It rejects a delegate whose calls always ask whatever answer 2 recorded.
+#[test]
+fn a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked() {
+    let (
+        Delegated {
+            asked: control_asked,
+            ..
+        },
+        _,
+    ) = delegate_the_forecast_under("delegate-no-answer", "worker", false, None, false);
+    assert_eq!(
+        control_asked.calls.len(),
+        1,
+        "the call with no answer recorded was not put to the person"
+    );
+
+    let (Delegated { asked, called, .. }, trail) =
+        delegate_the_forecast_under("delegate-answer-two", "worker", false, None, true);
+    assert!(
+        asked.calls.is_empty(),
+        "a call answer 2 stands for was put to the person: {:?}",
+        asked.calls
+    );
+    assert_eq!(
+        called,
+        ["tools/call"],
+        "the call answer 2 stands for did not reach the server"
+    );
+    assert!(
+        refused_under(&trail, "approval").is_empty()
+            && refused_under(&trail, "mcp_call").is_empty(),
+        "the call was refused"
+    );
+}
+
+/// DELEGATE-10. An approval is for the one call it was given to: the turn's call to the forecast
+/// tool, a delegate's call to it and the turn's next call to it are each put to the person, in that
+/// order, though the person said yes every time. It rejects a delegate answered from the turn's
+/// earlier approval and a turn whose later call is answered from the delegate's approval, which
+/// each leave two questions asked.
+#[test]
+fn an_approval_given_to_a_turn_or_a_worker_decides_no_other_call() {
+    let scratch = Scratch::new("delegate-approval-not-shared");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
+    let (endpoint, _chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+                reply_with("done"),
+            ],
+        ),
+        (
+            DELEGATED,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                reply_with("looked it up"),
+            ],
+        ),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    let mut trail = RecordingSink::new();
+    let task = Task::new(PARENT).with_mcp(Some(session));
+    run_turn_recording(&endpoint, &scratch.project(), task, &mut asked, &mut trail);
+    let cities: Vec<_> = asked
+        .calls
+        .iter()
+        .map(|call| call.arguments.clone())
+        .collect();
+    assert_eq!(
+        cities,
+        [
+            vec![("city".to_string(), "\"Paris\"".to_string())],
+            vec![("city".to_string(), "\"Paris\"".to_string())],
+            vec![("city".to_string(), "\"Lyon\"".to_string())],
+        ],
+        "the turn, the delegate and the turn again were not each asked about their own call"
+    );
+    assert_eq!(
+        methods(&server),
+        ["tools/call", "tools/call", "tools/call"],
+        "the server did not hear the three approved calls"
     );
 }
 
@@ -8546,4 +8870,344 @@ fn no_more_checks_are_made_at_once_than_the_reads_of_one_round() {
         8,
         "the checks held open at one moment were not the eight a round may read"
     );
+}
+
+/// A server like the weather server, except that every call is answered by `failure`, which is
+/// given the request and builds the whole HTTP response.
+fn serve_failing_calls(failure: fn(&Value) -> String) -> (String, mpsc::Receiver<String>) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let response = match request.get("method").and_then(Value::as_str) {
+                Some("tools/call") => failure(&request),
+                _ => answered(&body, "get_forecast"),
+            };
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// A JSON-RPC error with code `code`, in a 200 reply.
+fn rejecting_with(request: &Value, code: i64) -> String {
+    let reply = json!({
+        "jsonrpc": "2.0",
+        "id": request.get("id"),
+        "error": {"code": code, "message": "x"},
+    })
+    .to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+        reply.len()
+    )
+}
+
+/// A reply with the HTTP status `status` and no body.
+fn answering_with_status(status: u16) -> String {
+    format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+}
+
+/// What the planner was sent as the answer to its call of the forecast tool, after a turn that
+/// made the call to `session`'s server.
+fn what_the_planner_was_told_of_a_call(session: Session, scratch: &Scratch) -> String {
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("show me the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+    let all: Vec<String> = chat.try_iter().collect();
+    the_answer_the_planner_got(&all)
+}
+
+/// MCP-8 and LABEL-3: a code a server chose in a JSON-RPC error, and a status an HTTP server
+/// answered with, are numbers the server picked, and neither reaches the planner. The planner is
+/// told a sentence this process wrote, and it is the same whatever the number is.
+///
+/// A wrong implementation puts the error's own text in the sentence (it holds the code and the
+/// status), so the digits reach the planner and two numbers give two sentences.
+#[test]
+fn a_code_or_a_status_a_server_chose_never_reaches_the_planner_over_http() {
+    let told = |failure: fn(&Value) -> String| {
+        let scratch = Scratch::new("mcp-failed-http");
+        let (url, _server) = serve_failing_calls(failure);
+        let session = session(&url, &scratch, true);
+        what_the_planner_was_told_of_a_call(session, &scratch)
+    };
+    let rejected = told(|request| rejecting_with(request, 1337133713371337));
+    assert_eq!(rejected, told(|request| rejecting_with(request, -32000)));
+    let unusable = told(|_| answering_with_status(599));
+    assert_eq!(unusable, told(|_| answering_with_status(400)));
+    assert_eq!(unusable, told(|_| answering_with_status(503)));
+    for sentence in [&rejected, &unusable] {
+        assert!(
+            sentence.contains("calling weather:get_forecast failed"),
+            "the failure is not told: {sentence}"
+        );
+        assert!(
+            !sentence.chars().any(|c| c.is_ascii_digit()),
+            "a number the server chose reached the planner: {sentence}"
+        );
+    }
+    assert_ne!(rejected, unusable);
+}
+
+/// A local server that fails every call with the JSON-RPC error code `CODE`.
+const REJECTING_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":CODE,"message":"x"}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+/// The same property over stdio: the code a local server chose does not reach the planner.
+#[test]
+fn a_code_a_server_chose_never_reaches_the_planner_over_stdio() {
+    let told = |code: i64| {
+        let scratch = Scratch::new("mcp-failed-stdio");
+        let source = REJECTING_SERVER.replace("CODE", &code.to_string());
+        let reached = reach_script(&scratch, &source, &[])?;
+        let session = Session::new(
+            vec![reached],
+            scratch.project(),
+            Some(scratch.state()),
+            true,
+            Managed::default(),
+        );
+        Some(what_the_planner_was_told_of_a_call(session, &scratch))
+    };
+    let Some(first) = told(1337133713371337) else {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    };
+    let second = told(-32000).expect("confinement was there a moment ago");
+    assert_eq!(first, second, "the code changed what the planner was told");
+    assert!(
+        first.contains("calling weather:get_forecast failed"),
+        "{first}"
+    );
+    assert!(
+        !first.chars().any(|c| c.is_ascii_digit()),
+        "a number the server chose reached the planner: {first}"
+    );
+}
+
+/// A 200 reply whose body is `length` bytes of text that is not JSON.
+fn answering_with_text(length: usize) -> String {
+    let body = "x".repeat(length);
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}"
+    )
+}
+
+/// MCP-8: the byte count of a reply with no JSON in it is a number the server chose, and it does
+/// not reach the planner.
+///
+/// A wrong implementation puts the error's own text in the sentence, which reads `returned no json
+/// payload (N bytes)`, so the count reaches the planner and two lengths give two sentences.
+#[test]
+fn a_byte_count_a_server_chose_never_reaches_the_planner_over_http() {
+    let told = |length: usize| {
+        let scratch = Scratch::new("mcp-no-payload-http");
+        let (url, _server) = match length {
+            4242 => serve_failing_calls(|_| answering_with_text(4242)),
+            _ => serve_failing_calls(|_| answering_with_text(17)),
+        };
+        let session = session(&url, &scratch, true);
+        what_the_planner_was_told_of_a_call(session, &scratch)
+    };
+    let long = told(4242);
+    assert_eq!(
+        long,
+        told(17),
+        "the length changed what the planner was told"
+    );
+    assert!(
+        long.contains("calling weather:get_forecast failed: the server's reply could not be used"),
+        "{long}"
+    );
+    assert!(
+        !long.chars().any(|c| c.is_ascii_digit()) && !long.contains("payload"),
+        "the server's reply left a trace in what the planner was told: {long}"
+    );
+}
+
+/// A local server that answers every call with a line that is not UTF-8.
+const GARBLING_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"get_forecast","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '\377\376\n'
+      ;;
+  esac
+done
+"#;
+
+/// MCP-8: a line a local server wrote that cannot be read is told to the planner as the fixed
+/// sentence for an unusable reply, and not as the reader's own `could not read a reply` text.
+///
+/// A wrong implementation formats the error's own text into the sentence, which holds the
+/// reader's words about what was wrong with the line.
+#[test]
+fn a_line_a_local_server_wrote_that_cannot_be_read_is_told_in_the_fixed_sentence() {
+    let scratch = Scratch::new("mcp-unreadable-stdio");
+    let Some(reached) = reach_script(&scratch, GARBLING_SERVER, &[]) else {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    };
+    let session = Session::new(
+        vec![reached],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let told = what_the_planner_was_told_of_a_call(session, &scratch);
+    assert!(
+        told.contains("calling weather:get_forecast failed: the server's reply could not be used"),
+        "{told}"
+    );
+    assert!(
+        !told.contains("could not read a reply") && !told.contains("utf-8"),
+        "the reader's own words reached the planner: {told}"
+    );
+}
+
+/// Installs the plugin `demo` into `scratch`'s state directory, carrying one remote server at `url`.
+fn a_plugin_carrying_the_server_at(scratch: &Scratch, url: &str) {
+    let source = scratch.path.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nservers = \"servers.json\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        source.join("servers.json"),
+        format!(r#"{{"servers":{{"weather":{{"transport":"http","url":"{url}"}}}}}}"#),
+    )
+    .expect("servers");
+    bravebot_agent::plugins::install(&source, &scratch.state()).expect("install");
+}
+
+/// PLUGIN-7, S17 to S21: a server an installed plugin carries is reached through the first-use
+/// question and then offered in a turn; once a file of the plugin changes, the next turn stops it,
+/// puts nothing of it to the person, offers none of its tools, and names the plugin once in the
+/// session, in the turn that found the change and not in the turns after.
+///
+/// Rejects: a turn that offers the changed plugin's server, one that asks for its list again, one
+/// that says nothing to the person, and one that says it at every turn.
+#[test]
+fn a_plugins_server_is_stopped_by_a_changed_tree_and_the_plugin_is_named_once() {
+    let scratch = Scratch::new("plugin-server-changed");
+    let (url, _server) = serve_two_tools();
+    a_plugin_carrying_the_server_at(&scratch, &format!("{url}/mcp"));
+    let state = scratch.state();
+    let home = bravebot_agent::servers::Home {
+        directory: Some(state.clone()),
+        writable: true,
+    };
+    let requested = bravebot_agent::plugin_servers::PluginServers::requests(&state, &[]);
+    let mut person = bravebot_agent::servers::Person {
+        answers: &b"1\n"[..],
+        screen: Vec::new(),
+        present: true,
+    };
+    let reached = bravebot_agent::servers::reach(
+        &requested,
+        &scratch.project(),
+        &home,
+        &Managed::default(),
+        bravebot_agent::servers::Asking::Person,
+        &mut person,
+        bravebot_sandbox::Stream::Null,
+    );
+    let session = reached
+        .session()
+        .unwrap_or_else(|| panic!("the plugin's server was not reached: {:?}", reached.notes));
+    let screen = String::from_utf8(person.screen).expect("screen");
+    assert!(screen.contains("demo_weather"), "{screen}");
+
+    let (endpoint, chat) = serve_chat(vec![
+        reply_with("one"),
+        reply_with("two"),
+        reply_with("three"),
+    ]);
+    let account = bravebot_agent::chatgpt::AccountSession::begin();
+    let turn = |confirmer: &mut Answering| {
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("what is the weather")
+                .with_mcp(Some(session.clone()))
+                .in_account_session(account.clone()),
+            confirmer,
+        )
+    };
+    let named = |outcome: &bravebot_agent::Outcome| {
+        outcome
+            .notices
+            .iter()
+            .filter(|notice| notice.contains("demo") && notice.contains("stopped"))
+            .count()
+    };
+
+    let mut first = Answering::new(Decision::Approve, CallDecision::approve());
+    let outcome = turn(&mut first);
+    assert_eq!(
+        first.lists.len(),
+        1,
+        "control: the list is put to the person"
+    );
+    assert_eq!(named(&outcome), 0);
+
+    std::fs::write(
+        bravebot_agent::plugins::installed_dir(&state, "demo").join("added.txt"),
+        "a file the install did not hold",
+    )
+    .expect("edit the plugin");
+    let mut second = Answering::new(Decision::Approve, CallDecision::approve());
+    let found = turn(&mut second);
+    let mut third = Answering::new(Decision::Approve, CallDecision::approve());
+    let after = turn(&mut third);
+
+    assert!(second.lists.is_empty(), "{:?}", second.lists);
+    assert!(third.lists.is_empty(), "{:?}", third.lists);
+    assert_eq!(named(&found), 1, "{:?}", found.notices);
+    assert_eq!(named(&after), 0, "{:?}", after.notices);
+    let sent = rounds(&chat);
+    let [with, without, still_without] = sent.as_slice() else {
+        panic!("one round for each turn: {}", sent.len());
+    };
+    assert!(with.contains("mcp__demo_weather__get_forecast"), "control");
+    assert!(!without.contains("demo_weather"), "{without}");
+    assert!(!still_without.contains("demo_weather"), "{still_without}");
 }

@@ -89,7 +89,11 @@ pub fn ask<'config, S: Sink, U>(
             places.push(Place::Settled(Entry::Named(provider)));
         } else if scope.asks_gateway(provider) {
             let credential = provider.credential(|name| std::env::var(name).ok());
-            if matches!(credential, Credential::Absent) && provider.compiled_roster().is_none() {
+            if matches!(
+                credential,
+                Credential::Absent | Credential::KeyFileUnusable(_)
+            ) && provider.compiled_roster().is_none()
+            {
                 places.push(Place::Settled(Entry::NoCredential(provider)));
             } else {
                 places.push(Place::Asked(provider));
@@ -170,12 +174,13 @@ fn ask_gateway<S: Sink>(
 ///
 /// `None` is not an error here: a gateway configured without a credential is asked without one,
 /// which is what a local Ollama wants. The listing reads `None` as a reason not to ask the
-/// account-scoped route at all, since there is no account to scope an answer to. `Absent` reaches
-/// this only for a service with a compiled list, which is offered without a request.
+/// account-scoped route at all, since there is no account to scope an answer to. `Absent` and
+/// `KeyFileUnusable` reach this only for a service with a compiled list, which is offered without a
+/// request.
 fn bearer(credential: &Credential) -> Option<&str> {
     match credential {
         Credential::Token(token) => Some(token.expose()),
-        Credential::NotNeeded | Credential::Absent => None,
+        Credential::NotNeeded | Credential::Absent | Credential::KeyFileUnusable(_) => None,
     }
 }
 
@@ -192,7 +197,7 @@ mod tests {
     use super::*;
     use bravebot_config::{Gateways, RosterAccounts};
     use bravebot_core::event::NullSink;
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
     use std::time::{Duration, Instant};
 
     fn configured(providers: &str) -> Config {
@@ -227,6 +232,116 @@ mod tests {
         // Asked without one rather than not asked, which is what a local Ollama wants.
         assert_eq!(bearer(&Credential::NotNeeded), None);
         assert_eq!(bearer(&Credential::Absent), None);
+        // A key file that gives no key carries no token either.
+        assert_eq!(
+            bearer(&Credential::KeyFileUnusable(
+                bravebot_config::provider::KeyFileFault::NotAKey
+            )),
+            None
+        );
+    }
+
+    /// A server on this machine that answers every request with `reply` and sends each request's
+    /// head to the receiver, so a request never made is told from one that was.
+    fn a_server_that_records(reply: Vec<u8>) -> (String, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let (seen, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut head = String::new();
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                    head.push_str(&line);
+                    line.clear();
+                }
+                let _ = seen.send(head);
+                let _ = stream.write_all(&reply);
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), received)
+    }
+
+    /// BACKEND-16, BACKEND-64: a gateway whose block names a key file that gives no key sends no
+    /// credential and is not asked for its models, and nothing the roster holds shows the path or
+    /// any text of the file. The entry is the no-credential entry, except for a service with a list
+    /// compiled in (Vertex AI), which is offered that list with no request. A file that holds a key
+    /// is the control: the same gateway is then asked, and the key is the only credential it carries.
+    ///
+    /// The regressions it rejects are a roster that asks a gateway with no credential when its key
+    /// file gives none (a request is recorded), one that lists a Vertex block as having no
+    /// credential although its list needs none, and a roster that holds the path or the file's text.
+    #[test]
+    fn a_key_file_that_gives_no_key_sends_no_credential_and_shows_no_key_text() {
+        let directory = tempfile::Builder::new()
+            .prefix("marker-8c41-")
+            .tempdir()
+            .expect("a scratch directory");
+        let file = directory.path().join("key.txt");
+        let key_file = file.to_str().expect("a path");
+        let providers = |answers: &str| {
+            serde_json::json!({
+                "gw": {"options": {"baseURL": format!("{answers}/v1"), "keyFile": key_file}},
+                "google-vertex": {"options": {"project": "example-project-1", "keyFile": key_file}},
+            })
+            .to_string()
+        };
+        let kinds = |roster: &Roster<'_>| -> Vec<String> {
+            let mut kinds: Vec<String> = roster
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    Entry::NoCredential(provider) => format!("no credential {}", provider.id),
+                    Entry::Asked(provider, Ok(rows)) if !rows.is_empty() => {
+                        format!("answered {}", provider.id)
+                    }
+                    other => format!("{other:?}"),
+                })
+                .collect();
+            kinds.sort();
+            kinds
+        };
+
+        for contents in ["marker-text-2f9a two words", "  \n"] {
+            std::fs::write(&file, contents).expect("a file");
+            let (answers, received) = a_server_that_records(listing(&["m"]));
+            let config = configured(&providers(&answers));
+            let (roster, ()) = ask(&config, everything(), &|| NullSink, || ());
+            assert_eq!(
+                kinds(&roster),
+                ["answered google-vertex", "no credential gw"],
+                "{contents:?}"
+            );
+            assert!(
+                received.recv_timeout(Duration::from_millis(300)).is_err(),
+                "a request was sent although the key file gave no key: {contents:?}"
+            );
+            let shown = format!("{roster:?}");
+            for held in ["marker-8c41", "marker-text-2f9a", "two words"] {
+                assert!(!shown.contains(held), "{held} is in: {shown}");
+            }
+        }
+
+        // The control: a file that holds a key makes the gateway one that is asked, with that key.
+        std::fs::write(&file, "placeholder-roster-key\n").expect("a file");
+        let (answers, received) = a_server_that_records(listing(&["m"]));
+        let config = configured(&providers(&answers));
+        let (roster, ()) = ask(&config, everything(), &|| NullSink, || ());
+        assert_eq!(kinds(&roster), ["answered google-vertex", "answered gw"]);
+        let heads: Vec<String> = received.try_iter().collect();
+        assert!(!heads.is_empty(), "the gateway was not asked");
+        assert!(
+            heads.iter().all(|head| head
+                .to_ascii_lowercase()
+                .contains("authorization: bearer placeholder-roster-key")),
+            "{heads:?}"
+        );
+        assert!(!format!("{roster:?}").contains("placeholder-roster-key"));
     }
 
     fn everything() -> RosterScope<'static> {

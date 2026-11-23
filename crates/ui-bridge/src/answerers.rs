@@ -3,13 +3,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this file,
 // You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Which questions a session's controller can answer right now.
+//! Which questions the clients attached to a session can answer right now.
 //!
 //! A turn that wants to write, run a command or fetch a page asks a person and waits. Where nobody
 //! is in a position to answer, waiting is wrong: the question would hang until something cancels
 //! the turn. [`Answerers`] is what the asking side consults, under the lock that registers the
 //! question, so a question is either refused before it is shown or registered where the loss of
-//! the controller will refuse it.
+//! the last client that could answer it will refuse it.
 
 use crate::protocol::Failure;
 use crate::turn::Kind;

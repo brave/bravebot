@@ -74,6 +74,14 @@ test('a session list is always the whole one, whatever directory the window put 
   assert.deepEqual(sanitised('session.list', undefined), {})
 })
 
+test('a spend report forwards the folder and the days, and nothing else', () => {
+  assert.deepEqual(
+    sanitised('session.stats', { directory: '/Users/me/app', days: 7, session: 's1', directories: ['/etc'] }),
+    { directory: '/Users/me/app', days: 7 },
+  )
+  assert.deepEqual(JSON.parse(JSON.stringify(sanitised('session.stats', undefined))), {})
+})
+
 test('a new session opens no folder beside its project that the window named', () => {
   const forwarded = sanitised('session.new', { directory: '/Users/me/app', directories: ['/Users/me/.ssh'] })
 
@@ -86,4 +94,24 @@ test('a folder list and a folder close forward the session and the folder, and n
     sanitised('session.folders.close', { session: 's1', path: '/Users/me/docs', trusted: true, directories: ['/etc'] }),
     { session: 's1', path: '/Users/me/docs' },
   )
+})
+
+test('a schedule line forwards its argument with the names and markers, and no file or grant under any key', () => {
+  const forwarded = sanitised('schedule.command', {
+    session: 's1',
+    argument: 'add --cron "0 9 * * *" --prompt "look at [Image #1] and [Image #2]"',
+    files: [{ marker: '[Image #1]', name: 'shot.png', path: '/Users/me/.ssh/id_rsa', grant: 'g-1' }],
+    pictures: ['[Image #2]'],
+    drops: [{ marker: '[Image #1]', grant: 'g-1' }],
+    pastes: [{ marker: '[Image #2]', grant: 'p-1' }],
+    dropped: ['/Users/me/.ssh/id_rsa'],
+    images: [picture],
+    attachments: ['a-1'],
+  })
+  assert.deepEqual(forwarded, {
+    session: 's1',
+    argument: 'add --cron "0 9 * * *" --prompt "look at [Image #1] and [Image #2]"',
+    files: [{ marker: '[Image #1]', name: 'shot.png' }],
+    pictures: ['[Image #2]'],
+  })
 })

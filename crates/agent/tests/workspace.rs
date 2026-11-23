@@ -2937,10 +2937,487 @@ fn a_bounded_listing_shares_its_cap_across_directories() {
     );
     assert_eq!(
         listing.partly_listed,
-        vec![(".aaa".to_string(), 1_801)],
+        vec![(".aaa".to_string(), 1_801, 0)],
         "the directory that was cut was not named with how many files it left out"
     );
     assert!(listing.truncated, "a per-directory cut was not reported");
+}
+
+/// LIST-5: a bounded listing also takes at most a fixed number of subdirectories from any one
+/// directory, so a directory of thousands of subdirectories at the depth limit that sorts first
+/// does not spend the whole cap and hide every directory after it. A walk that names every
+/// subdirectory it stops at reaches the cap inside `big` and lists nothing from `docs`, `src` or
+/// `tests`.
+#[test]
+fn a_bounded_listing_takes_at_most_the_cap_of_subdirectories_from_one_directory_and_goes_on() {
+    let scratch = Scratch::new("list-subdirectory-cap");
+    let crowded = scratch.path.join("big");
+    std::fs::create_dir_all(&crowded).unwrap();
+    for n in 0..2_001 {
+        std::fs::create_dir(crowded.join(format!("d{n:04}"))).unwrap();
+    }
+    for dir in ["docs", "src", "tests"] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+    }
+    std::fs::write(scratch.path.join("docs/a.md"), "a").unwrap();
+    std::fs::write(scratch.path.join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::write(scratch.path.join("tests/t.rs"), "t").unwrap();
+    std::fs::write(scratch.path.join("README.md"), "readme").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(2));
+
+    for later in ["README.md", "docs/a.md", "src/main.rs", "tests/t.rs"] {
+        assert!(
+            listing.files.iter().any(|f| f == later),
+            "{later} was crowded out by one directory's subdirectories"
+        );
+    }
+    let expected: Vec<String> = (0..200).map(|n| format!("big/d{n:04}")).collect();
+    assert_eq!(
+        listing.directories, expected,
+        "one directory contributed other than the first 200 of its subdirectories by name"
+    );
+    assert!(listing.truncated, "a subdirectory cut was not reported");
+    assert!(
+        !listing.at_the_cap,
+        "a listing that stopped at no whole-walk cap was reported as having stopped at it"
+    );
+}
+
+/// Makes `count` empty subdirectories of `parent`, named `{prefix}0000`, `{prefix}0001` and so on,
+/// which sort in the order they were made.
+fn make_subdirectories(parent: &std::path::Path, prefix: &str, count: usize) {
+    std::fs::create_dir_all(parent).unwrap();
+    for n in 0..count {
+        std::fs::create_dir(parent.join(format!("{prefix}{n:04}"))).unwrap();
+    }
+}
+
+/// Makes the directories `g00`, `g01` and so on under `scratch`, the nth holding `counts[n]` empty
+/// subdirectories.
+fn make_groups(scratch: &Scratch, counts: &[usize]) {
+    for (n, count) in counts.iter().enumerate() {
+        make_subdirectories(&scratch.path.join(format!("g{n:02}")), "d", *count);
+    }
+}
+
+/// The listing of `directory` to `depth`, narrowed by `pattern`, under the deny rules `rules`,
+/// released for the test to read.
+fn bounded_listing(
+    workspace: &Workspace,
+    rules: &[&str],
+    directory: &str,
+    pattern: Option<&str>,
+    depth: Option<usize>,
+) -> bravebot_agent::workspace::Listing {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(denying(rules));
+    let pattern = pattern.map(|pattern| Labelled::trusted(pattern.to_string()));
+    let listing = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(directory.to_string()),
+            pattern.as_ref(),
+            depth,
+        )
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    listing.declassify(&proof)
+}
+
+/// LIST-5: the subdirectory bound holds where the walk goes into the subdirectories as well as
+/// where it stops at them. A directory of 250 subdirectories, each holding a file and a
+/// subdirectory, listed three levels deep is entered at the first 200 by name, which name the
+/// subdirectory each holds as where the walk stopped. The other 50 are not entered and are counted
+/// as left out. A bound applied only to the subdirectories a walk stops at enters all 250.
+#[test]
+fn a_bounded_listing_goes_into_at_most_the_cap_of_subdirectories_of_one_directory() {
+    let scratch = Scratch::new("list-subdirectory-cap-descending");
+    let wide = scratch.path.join("wide");
+    make_subdirectories(&wide, "s", 250);
+    for n in 0..250 {
+        let each = wide.join(format!("s{n:04}"));
+        std::fs::create_dir(each.join("deeper")).unwrap();
+        std::fs::write(each.join("f.txt"), "x").unwrap();
+    }
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs/a.md"), "a").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(3));
+
+    let mut expected_files = vec!["docs/a.md".to_string()];
+    expected_files.extend((0..200).map(|n| format!("wide/s{n:04}/f.txt")));
+    assert_eq!(
+        listing.files, expected_files,
+        "the walk did not go into exactly the first 200 subdirectories of `wide` by name"
+    );
+    let expected_directories: Vec<String> =
+        (0..200).map(|n| format!("wide/s{n:04}/deeper")).collect();
+    assert_eq!(
+        listing.directories, expected_directories,
+        "a subdirectory past the cap was entered, or one inside the first 200 was not named"
+    );
+    assert_eq!(
+        listing.partly_listed,
+        vec![("wide".to_string(), 0, 50)],
+        "the subdirectories the walk did not enter were not counted as left out"
+    );
+    assert!(listing.truncated, "a subdirectory cut was not reported");
+    assert!(
+        !listing.at_the_cap,
+        "a listing that stopped at no whole-walk cap was reported as having stopped at it"
+    );
+}
+
+/// LIST-5: a directory cut only for its subdirectories is named in the result, once, with the
+/// count of subdirectories left out and no files left out. The walk root is `.` when it is the
+/// workspace root. A cut that is recorded again for each subdirectory left out names the directory
+/// five times, and one recorded under an empty name does not name the workspace root.
+#[test]
+fn a_bounded_listing_cut_only_for_subdirectories_names_the_directory_once_with_the_count() {
+    let scratch = Scratch::new("list-cut-only-subdirectories");
+    make_subdirectories(&scratch.path, "d", 205);
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(scratch.path.join(name), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(1));
+
+    assert_eq!(
+        listing.partly_listed,
+        vec![(".".to_string(), 0, 5)],
+        "the root was not named once, as `.`, with five subdirectories and no files left out"
+    );
+    let expected: Vec<String> = (0..200).map(|n| format!("d{n:04}")).collect();
+    assert_eq!(listing.directories, expected);
+    assert_eq!(
+        listing.files,
+        vec![
+            "a.txt".to_string(),
+            "b.txt".to_string(),
+            "c.txt".to_string()
+        ]
+    );
+    assert!(listing.truncated, "a subdirectory cut was not reported");
+    assert!(!listing.at_the_cap);
+}
+
+/// LIST-5: a directory cut for both its files and its subdirectories is named once, with both
+/// counts. The walk takes its files before its subdirectories, so the second cut has to find the
+/// record the first made. A walk that records each cut by itself names the directory twice, and
+/// one that does not find the record loses a count.
+#[test]
+fn a_bounded_listing_cut_for_files_and_subdirectories_names_the_directory_once_with_both_counts() {
+    let scratch = Scratch::new("list-cut-files-and-subdirectories");
+    let mixed = scratch.path.join("mixed");
+    make_subdirectories(&mixed, "d", 207);
+    for n in 0..205 {
+        std::fs::write(mixed.join(format!("f{n:04}.txt")), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(2));
+
+    assert_eq!(
+        listing.partly_listed,
+        vec![("mixed".to_string(), 5, 7)],
+        "the directory was not named once with 5 files and 7 subdirectories left out"
+    );
+    assert_eq!(listing.files.len(), 200);
+    assert_eq!(listing.directories.len(), 200);
+    assert!(listing.truncated);
+    assert!(!listing.at_the_cap);
+}
+
+/// LIST-5: a directory cut for its subdirectories keeps its own count where the first subdirectory
+/// the walk goes into is cut as well. A directory cut for files has its record before the records
+/// of the subdirectories the walk enters, and the count of subdirectories it left out comes after
+/// them, so that count has to be added to the directory's own record. A walk that adds it to the
+/// record made last gives `parent/s0000` the subdirectories `parent` left out. The parent is cut
+/// for subdirectories only in one listing and for files as well in the other.
+#[test]
+fn a_directory_cut_for_subdirectories_keeps_its_own_count_when_an_entered_child_is_cut_too() {
+    let listing_of = |name: &str, files_in_parent: usize| {
+        let scratch = Scratch::new(name);
+        let parent = scratch.path.join("parent");
+        make_subdirectories(&parent, "s", 203);
+        for n in 0..files_in_parent {
+            std::fs::write(parent.join(format!("f{n:04}.txt")), "x").unwrap();
+        }
+        for n in 0..203 {
+            std::fs::write(parent.join("s0000").join(format!("f{n:04}.txt")), "x").unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        bounded_listing(&workspace, &[], ".", None, Some(3))
+    };
+    let records_of = |listing: &bravebot_agent::workspace::Listing, name: &str| {
+        listing
+            .partly_listed
+            .iter()
+            .filter(|(each, ..)| each == name)
+            .map(|(_, files, directories)| (*files, *directories))
+            .collect::<Vec<(usize, usize)>>()
+    };
+
+    let subdirectories_only = listing_of("list-cut-parent-subdirectories-child-files", 0);
+    assert_eq!(
+        records_of(&subdirectories_only, "parent/s0000"),
+        vec![(3, 0)],
+        "the entered subdirectory was not named once with the 3 files it left out and no \
+         subdirectories"
+    );
+    assert_eq!(
+        records_of(&subdirectories_only, "parent"),
+        vec![(0, 3)],
+        "the parent was not named once with the 3 subdirectories it left out and no files"
+    );
+    assert_eq!(
+        subdirectories_only.partly_listed.len(),
+        2,
+        "a directory other than the parent and its first subdirectory was named"
+    );
+    assert_eq!(subdirectories_only.files.len(), 200);
+    assert!(subdirectories_only.directories.is_empty());
+    assert!(subdirectories_only.truncated);
+    assert!(!subdirectories_only.at_the_cap);
+
+    let files_and_subdirectories = listing_of("list-cut-parent-both-child-files", 202);
+    assert_eq!(
+        records_of(&files_and_subdirectories, "parent/s0000"),
+        vec![(3, 0)],
+        "the entered subdirectory was not named once with the 3 files it left out and no \
+         subdirectories"
+    );
+    assert_eq!(
+        records_of(&files_and_subdirectories, "parent"),
+        vec![(2, 3)],
+        "the parent was not named once with the 2 files and 3 subdirectories it left out"
+    );
+    assert_eq!(
+        files_and_subdirectories.partly_listed.len(),
+        2,
+        "a directory other than the parent and its first subdirectory was named"
+    );
+    assert_eq!(files_and_subdirectories.files.len(), 400);
+    assert!(files_and_subdirectories.directories.is_empty());
+    assert!(files_and_subdirectories.truncated);
+    assert!(!files_and_subdirectories.at_the_cap);
+}
+
+/// LIST-5: a subdirectory a permission rule covers is neither listed nor counted as left out, and
+/// does not use up the cap. `wide` holds exactly 200 subdirectories no rule covers, and two
+/// covered ones, one sorting before them and one after. Counting a covered subdirectory before the
+/// rule is asked takes a place from one that is listed, or reports one as left out. The same tree
+/// without the rule has 202 to choose from, which shows the rule is what leaves them out.
+#[test]
+fn a_subdirectory_a_rule_covers_is_neither_listed_nor_counted_as_left_out() {
+    let scratch = Scratch::new("list-fenced-subdirectories");
+    let wide = scratch.path.join("wide");
+    make_subdirectories(&wide, "d", 200);
+    for fenced in ["aaa", "zzz"] {
+        std::fs::create_dir(wide.join(fenced)).unwrap();
+        std::fs::write(wide.join(fenced).join("key.pem"), "private").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let fenced = bounded_listing(
+        &workspace,
+        &["Read(wide/aaa/**)", "Read(wide/zzz/**)"],
+        ".",
+        None,
+        Some(2),
+    );
+
+    let expected: Vec<String> = (0..200).map(|n| format!("wide/d{n:04}")).collect();
+    assert_eq!(
+        fenced.directories, expected,
+        "a covered subdirectory was listed or took the place of one that is not covered"
+    );
+    assert!(
+        fenced.partly_listed.is_empty(),
+        "a covered subdirectory was counted as left out: {:?}",
+        fenced.partly_listed
+    );
+    assert!(!fenced.truncated);
+
+    let open = bounded_listing(&workspace, &[], ".", None, Some(2));
+    assert_eq!(
+        open.partly_listed,
+        vec![("wide".to_string(), 0, 2)],
+        "without the rule the tree does not hold more subdirectories than the cap"
+    );
+}
+
+/// LIST-5: the include pattern selects files and does not apply to directories, so it does not
+/// change which subdirectories a bounded walk takes or how many it leaves out. A walk that tested
+/// a subdirectory's name against the pattern before counting it lists none of them for `*.rs`.
+#[test]
+fn a_pattern_does_not_change_how_many_subdirectories_a_bounded_listing_takes() {
+    let scratch = Scratch::new("list-pattern-subdirectories");
+    make_subdirectories(&scratch.path.join("wide"), "d", 205);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let without = bounded_listing(&workspace, &[], ".", None, Some(2));
+    let with = bounded_listing(&workspace, &[], ".", Some("*.rs"), Some(2));
+
+    let expected: Vec<String> = (0..200).map(|n| format!("wide/d{n:04}")).collect();
+    assert_eq!(without.directories, expected);
+    assert_eq!(
+        with.directories, expected,
+        "a pattern changed which subdirectories were taken"
+    );
+    assert_eq!(
+        with.partly_listed,
+        vec![("wide".to_string(), 0, 5)],
+        "a pattern changed how many subdirectories were left out"
+    );
+    assert_eq!(with.partly_listed, without.partly_listed);
+    assert!(with.files.is_empty());
+}
+
+/// LIST-5: a walk with no depth is not held to the subdirectory bound, as it is not held to the
+/// file bound: it goes into every subdirectory, lists the files in each, and names no directory
+/// as cut. 450 subdirectories of one directory are all listed.
+#[test]
+fn an_unbounded_listing_goes_into_every_subdirectory_of_a_directory() {
+    let scratch = Scratch::new("list-unbounded-subdirectories");
+    let many = scratch.path.join("many");
+    make_subdirectories(&many, "s", 450);
+    for n in 0..450 {
+        std::fs::write(many.join(format!("s{n:04}")).join("f.txt"), "x").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, None);
+
+    let expected: Vec<String> = (0..450).map(|n| format!("many/s{n:04}/f.txt")).collect();
+    assert_eq!(
+        listing.files, expected,
+        "an unbounded listing did not go into every subdirectory"
+    );
+    assert!(listing.partly_listed.is_empty());
+    assert!(listing.directories.is_empty());
+    assert!(!listing.truncated);
+    assert!(!listing.at_the_cap);
+}
+
+/// LIST-5: the cap is on more than 200. A directory of exactly 200 subdirectories leaves none out,
+/// and one of 201 leaves exactly one out, named by the name the call gave it. A comparison that
+/// lets one more through than the cap lists all 201.
+#[test]
+fn a_directory_of_exactly_the_subdirectory_cap_leaves_none_out_and_one_more_leaves_one_out() {
+    let scratch = Scratch::new("list-subdirectory-boundary");
+    make_subdirectories(&scratch.path.join("exact"), "d", 200);
+    make_subdirectories(&scratch.path.join("over"), "d", 201);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let exact = bounded_listing(&workspace, &[], "exact", None, Some(1));
+    let expected: Vec<String> = (0..200).map(|n| format!("exact/d{n:04}")).collect();
+    assert_eq!(exact.directories, expected);
+    assert!(
+        exact.partly_listed.is_empty(),
+        "a directory of exactly the cap had a subdirectory left out: {:?}",
+        exact.partly_listed
+    );
+    assert!(!exact.truncated);
+
+    let over = bounded_listing(&workspace, &[], "over", None, Some(1));
+    let expected: Vec<String> = (0..200).map(|n| format!("over/d{n:04}")).collect();
+    assert_eq!(
+        over.directories, expected,
+        "a directory of one more than the cap listed more than the cap"
+    );
+    assert_eq!(
+        over.partly_listed,
+        vec![("over".to_string(), 0, 1)],
+        "exactly one subdirectory should have been left out"
+    );
+    assert!(over.truncated);
+    assert!(!over.at_the_cap);
+}
+
+/// LIST-5, LIST-4: a directory cut for its subdirectories is one entry against the cap over the
+/// whole walk. Ten directories stop at 1999 subdirectories and name one cut directory, which is
+/// 2000 entries and within the cap, though the listing is truncated. One more subdirectory makes
+/// 2001, and the listing is then reported as stopped at the cap. A count that leaves the cut
+/// directory out of the total does not report the second.
+#[test]
+fn a_directory_cut_for_subdirectories_counts_as_one_entry_against_the_whole_walk_cap() {
+    let at_the_cap = |name: &str, last: usize| {
+        let scratch = Scratch::new(name);
+        let mut counts = vec![201];
+        counts.extend([200; 8]);
+        counts.push(last);
+        make_groups(&scratch, &counts);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        bounded_listing(&workspace, &[], ".", None, Some(2))
+    };
+
+    let within = at_the_cap("list-subdirectory-cut-within-cap", 199);
+    assert_eq!(
+        within.directories.len(),
+        1_999,
+        "the 1999 subdirectories the walk stopped at were not all named"
+    );
+    assert_eq!(within.partly_listed, vec![("g00".to_string(), 0, 1)]);
+    assert!(
+        !within.at_the_cap,
+        "2000 entries, the cut directory among them, were reported as past the cap"
+    );
+    assert!(
+        within.truncated,
+        "a listing with a cut directory was not truncated"
+    );
+
+    let past = at_the_cap("list-subdirectory-cut-past-cap", 200);
+    assert!(
+        past.at_the_cap,
+        "2001 entries, the cut directory among them, were not reported as past the cap"
+    );
+    assert!(past.truncated);
+    assert_eq!(
+        past.files.len() + past.directories.len() + past.partly_listed.len(),
+        2_000,
+        "the listing was not cut to the cap"
+    );
+}
+
+/// LIST-4, LIST-5: the whole-walk cap is still reported where several directories each hold more
+/// subdirectories than the per-directory cap. Eleven directories of 250 subdirectories give 200
+/// entries and a cut directory each, which is more than 2000 together, so the walk stops at the
+/// cap and says so as well as saying that directories were cut.
+#[test]
+fn the_whole_walk_cap_is_reported_where_several_directories_each_exceed_the_subdirectory_cap() {
+    let scratch = Scratch::new("list-several-cut-directories");
+    make_groups(&scratch, &[250; 11]);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let listing = bounded_listing(&workspace, &[], ".", None, Some(2));
+
+    assert!(
+        listing.at_the_cap,
+        "the walk went past 2000 entries and the listing was not reported as stopped at the cap"
+    );
+    assert!(listing.truncated);
+    assert!(
+        !listing.partly_listed.is_empty(),
+        "the cut directories the cap left room for were not named"
+    );
+    assert_eq!(
+        listing.files.len() + listing.directories.len() + listing.partly_listed.len(),
+        2_000,
+        "the listing was not cut to the cap"
+    );
 }
 
 /// LIST-5: a cut directory is named by where the walk found it. The walk root is `.` when it is
@@ -2981,7 +3458,7 @@ fn a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name() {
         .declassify(&proof);
     assert_eq!(
         from_the_root.partly_listed,
-        vec![(".".to_string(), 1), ("sub".to_string(), 1)],
+        vec![(".".to_string(), 1, 0), ("sub".to_string(), 1, 0)],
         "the workspace root was not named `.` or a subdirectory was not named by its name"
     );
 
@@ -2996,7 +3473,7 @@ fn a_cut_walk_root_is_named_dot_and_a_cut_subdirectory_by_its_name() {
         .declassify(&proof);
     assert_eq!(
         from_a_subdirectory.partly_listed,
-        vec![("sub".to_string(), 1), ("sub/deeper".to_string(), 1)],
+        vec![("sub".to_string(), 1, 0), ("sub/deeper".to_string(), 1, 0)],
         "a walk root that is not the workspace root was not named by its relative name"
     );
 }
@@ -4034,12 +4511,14 @@ fn a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding() {
     }
 }
 
-/// What a deferred read fills a slot with is written back to a file or handed to a program as the
-/// file, so a slot is filled from the file's own UTF-8 or not at all, and so is the page a plan
-/// reads into one. A decoding in its place would write U+FFFD over the byte it replaced, or a
-/// different encoding over the file.
+/// The whole read `edit_file` and a plain `read_file` work from, and the page a plan reads, both
+/// accept only text that is UTF-8 as it stands: neither is a slot, and neither holds a decoding in
+/// its place, unlike a deferred read into a slot, which does
+/// (`a_decoded_slot_is_read_by_a_processor_and_never_written_back`). A decoding here would write
+/// U+FFFD over the byte it replaced, or a different encoding over the file, with nothing recording
+/// that it had.
 #[test]
-fn a_slot_is_never_filled_from_a_decoding_of_another_encoding() {
+fn a_whole_page_and_a_plans_page_refuse_a_file_in_another_encoding() {
     let scratch = Scratch::new("slot-not-utf8");
     std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
     std::fs::write(
@@ -5511,6 +5990,410 @@ fn a_symlink_out_of_an_added_directory_is_refused() {
         .read(&mut policy, &link)
         .expect_err("a symlink out of an added directory must be refused");
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+}
+
+/// TRUST-10: a path a link carries out of an added directory is refused with nothing offered,
+/// whatever the link leads to. The directory a remedy would name is not the one the path is
+/// written in, and opening it would not make the typed path work. Choosing the sentence from the
+/// link's target would let a link planted in the directory decide which sentence the planner
+/// reads, so every target kind gets the one sentence: a directory, a file in an ordinary
+/// directory, a file in a credential location, a file and a directory holding the working
+/// directory, a link with nothing at its other end, and a name nothing is at yet behind a link
+/// to a directory. Reads, writes and listings of each are asked.
+///
+/// The regression it rejects: the remedy chosen from where the link lands, which names
+/// `/add-dir`, a drop or the checkout warning for a path that none of them cures.
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_an_added_directory_is_refused_with_nothing_offered_whatever_it_leads_to() {
+    let base = Scratch::new("added-link-remedy");
+    let base_path = base.path.canonicalize().expect("canonical base");
+    let home = base_path.join("home");
+    let project = base_path.join("project");
+    let downloads = base_path.join("downloads");
+    let other = base_path.join("other");
+    for made in [
+        home.join(".ssh"),
+        project.clone(),
+        downloads.clone(),
+        other.clone(),
+    ] {
+        std::fs::create_dir_all(made).unwrap();
+    }
+    std::fs::write(home.join(".ssh/config"), "Host *\n").unwrap();
+    std::fs::write(other.join("notes.txt"), "notes\n").unwrap();
+    std::fs::write(base_path.join("notes.txt"), "beside the project\n").unwrap();
+
+    let links = [
+        ("to-directory", home.clone()),
+        ("to-file", other.join("notes.txt")),
+        ("to-credential-file", home.join(".ssh/config")),
+        ("to-credential-directory", home.join(".ssh")),
+        ("to-file-holding-the-project", base_path.join("notes.txt")),
+        ("to-directory-holding-the-project", base_path.clone()),
+        ("to-nothing", other.join("missing.txt")),
+        ("through", other.clone()),
+    ];
+    for (name, target) in &links {
+        std::os::unix::fs::symlink(target, downloads.join(name)).unwrap();
+    }
+
+    let mut workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_home(Some(home.clone()));
+    let added = workspace
+        .add_directory(downloads.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut typed_names: Vec<String> = links
+        .iter()
+        .map(|(name, _)| added.join(name).display().to_string())
+        .collect();
+    typed_names.push(added.join("through/fresh.txt").display().to_string());
+
+    for typed in &typed_names {
+        let refused = [
+            (
+                "read",
+                workspace
+                    .read(&mut policy, &Labelled::trusted(typed.clone()))
+                    .map(|_| ()),
+            ),
+            (
+                "write",
+                workspace
+                    .write(
+                        &mut policy,
+                        &Labelled::trusted(typed.clone()),
+                        &Labelled::trusted("text".to_string()),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "list",
+                workspace
+                    .list(&mut policy, &Labelled::trusted(typed.clone()), None, None)
+                    .map(|_| ()),
+            ),
+        ];
+        for (call, result) in refused {
+            let error = result.expect_err("a path a link carries out is refused");
+            assert!(
+                matches!(
+                    error,
+                    WorkspaceError::Escapes {
+                        remedy: Remedy::Nothing,
+                        ..
+                    }
+                ),
+                "{call} {typed}: the remedy followed the link's target: {error:?}"
+            );
+            assert_eq!(
+                error.describe(typed),
+                format!("'{typed}' resolves outside the workspace; refusing to touch it"),
+                "{call} {typed}"
+            );
+        }
+    }
+    assert!(
+        !other.join("fresh.txt").exists(),
+        "a refused write landed beside the link's target"
+    );
+}
+
+/// TRUST-10: an absolute path typed from the top of the file system, under no opened directory, is
+/// still offered the directory to open, so the refusal of a link does not take that away. The
+/// same file reached through a link in an added directory is not offered it.
+#[cfg(unix)]
+#[test]
+fn a_file_typed_outside_every_directory_is_offered_what_a_link_to_it_is_not() {
+    let base = Scratch::new("added-link-versus-typed");
+    let base_path = base.path.canonicalize().expect("canonical base");
+    let project = base_path.join("project");
+    let downloads = base_path.join("downloads");
+    let other = base_path.join("other");
+    for made in [project.clone(), downloads.clone(), other.clone()] {
+        std::fs::create_dir_all(made).unwrap();
+    }
+    std::fs::write(other.join("notes.txt"), "notes\n").unwrap();
+    std::os::unix::fs::symlink(other.join("notes.txt"), downloads.join("n")).unwrap();
+
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(downloads.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = other.join("notes.txt").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("the file is in no opened directory");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenOrDrop,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.describe(&typed).contains("/add-dir"));
+
+    let through = downloads.join("n").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(through.clone()))
+        .expect_err("the link leaves the directory");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Nothing,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(!error.describe(&through).contains("/add-dir"));
+}
+
+/// TRUST-10: a path written in an added directory is refused the same way whether the link leads
+/// into the working directory or outside every opened directory, and two links of different kinds
+/// give the same refusal once the name typed is set aside. A path written in a directory that is
+/// not opened is still told it is inside the workspace when it lands there, which is how a path
+/// typed from the top of the file system to a file in the root is told.
+///
+/// The regression it rejects: the landing in the root choosing the sentence for a link in an added
+/// directory, so that a link planted there decides whether the planner reads "is inside the
+/// workspace" or "resolves outside it".
+#[cfg(unix)]
+#[test]
+fn a_link_from_an_added_directory_into_the_root_is_refused_as_every_other_link_is() {
+    let base = Scratch::new("added-link-to-root");
+    let base_path = base.path.canonicalize().expect("canonical base");
+    let project = base_path.join("project");
+    let downloads = base_path.join("downloads");
+    let other = base_path.join("other");
+    let holder = base_path.join("holder");
+    for made in [
+        project.clone(),
+        downloads.clone(),
+        other.clone(),
+        holder.clone(),
+    ] {
+        std::fs::create_dir_all(made).unwrap();
+    }
+    std::fs::write(project.join("inside.txt"), "in the root\n").unwrap();
+    std::fs::write(other.join("notes.txt"), "notes\n").unwrap();
+    std::os::unix::fs::symlink(project.join("inside.txt"), downloads.join("to-root-file")).unwrap();
+    std::os::unix::fs::symlink(&project, downloads.join("to-root")).unwrap();
+    std::os::unix::fs::symlink(other.join("notes.txt"), downloads.join("to-other-file")).unwrap();
+    std::os::unix::fs::symlink(&other, downloads.join("to-other")).unwrap();
+    std::os::unix::fs::symlink(project.join("inside.txt"), holder.join("to-root-file")).unwrap();
+
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    let added = workspace
+        .add_directory(downloads.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut told_of = Vec::new();
+    for name in ["to-root-file", "to-root", "to-other-file", "to-other"] {
+        let typed = added.join(name).display().to_string();
+        for (call, result) in [
+            (
+                "read",
+                workspace
+                    .read(&mut policy, &Labelled::trusted(typed.clone()))
+                    .map(|_| ()),
+            ),
+            (
+                "list",
+                workspace
+                    .list(&mut policy, &Labelled::trusted(typed.clone()), None, None)
+                    .map(|_| ()),
+            ),
+        ] {
+            let error = result.expect_err("a path a link carries out is refused");
+            let WorkspaceError::Escapes { remedy, .. } = &error else {
+                panic!("{call} {name}: not a refusal for leaving: {error:?}");
+            };
+            assert_eq!(*remedy, Remedy::Nothing, "{call} {name}");
+            told_of.push((
+                call,
+                *remedy,
+                error.describe(&typed).replace(&typed, "<path>"),
+            ));
+        }
+    }
+    for call in ["read", "list"] {
+        let kinds: Vec<_> = told_of.iter().filter(|told| told.0 == call).collect();
+        assert!(
+            kinds.windows(2).all(|pair| pair[0] == pair[1]),
+            "{call}: links of different kinds were told differently: {kinds:?}"
+        );
+    }
+
+    // From a directory nothing opened, the same file is still told it is inside the workspace.
+    let typed = holder.join("to-root-file").display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(typed.clone()))
+        .expect_err("a link to the root from an unopened directory is refused as typed");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Inside,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// TRUST-10: a name written under the working directory that a link carries out is refused with
+/// nothing offered, whether it is spelled from the top or relative, and a file typed from the top
+/// outside every opened directory keeps the directory to open. A path typed under the root that
+/// lands in it is told it is inside.
+///
+/// The regression it rejects: every absolute refusal becoming `Nothing`, which takes the directory
+/// to open from a file nothing opened, or choosing the sentence for a link in the root from where
+/// it leads.
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_root_is_refused_with_nothing_and_a_file_typed_outside_keeps_its_remedy() {
+    let scratch = Scratch::new("root-link-remedy");
+    let elsewhere = outside("root-link-remedy");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("escape-dir")).unwrap();
+    std::fs::write(scratch.path.join("here.txt"), "in the root").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let root = workspace.root().display().to_string();
+    for (typed, expected) in [
+        (format!("{root}/escape-dir/todo.txt"), Remedy::Nothing),
+        ("escape-dir/todo.txt".to_string(), Remedy::Nothing),
+        (
+            elsewhere.path.join("todo.txt").display().to_string(),
+            Remedy::OpenOrDrop,
+        ),
+        (format!("{root}/here.txt"), Remedy::Inside),
+    ] {
+        let error = workspace
+            .read(&mut policy, &Labelled::trusted(typed.clone()))
+            .expect_err("each of these is refused as typed");
+        assert!(
+            matches!(&error, WorkspaceError::Escapes { remedy, .. } if *remedy == expected),
+            "{typed}: expected {expected:?}: {error:?}"
+        );
+    }
+}
+
+/// PERM-16: where the file tools are kept inside the workspace, a directory opened earlier is not
+/// reached, so a path typed under it is written outside every reached directory and gets the
+/// sentence that names the key, whatever its link leads to. A name written under the root that a
+/// link carries out is still refused with nothing offered, since the root is reached.
+///
+/// The regression it rejects: counting an unreached added directory as a place a path is written
+/// in, which gives a path typed under it the sentence for a link and never names the key.
+#[cfg(unix)]
+#[test]
+fn a_link_in_an_added_directory_names_the_key_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("kept-link-remedy");
+    let added_target = outside("kept-link-remedy-added");
+    let elsewhere = outside("kept-link-remedy-else");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("escape-dir")).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path.join("todo.txt"),
+        added_target.path.join("link.txt"),
+    )
+    .unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(added_target.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let workspace = workspace.with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let typed = added.join("link.txt").display().to_string();
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(typed.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("the directory is not reached");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Kept,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .describe(&typed)
+            .contains("permissions.readsStayInWorkspace")
+    );
+
+    let root = workspace.root().display().to_string();
+    let through_root = format!("{root}/escape-dir/todo.txt");
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(through_root.clone()))
+        .expect_err("a link out of the root is refused");
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Nothing,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 }
 
 /// The added-directory resolver has the same job as the primary one, so a write that creates a
@@ -10112,6 +10995,118 @@ fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
     );
 }
 
+/// TRUST-19. The gap a write in the session's own directory leaves is the scratch gap and no other,
+/// and a write in the project leaves none. Marking another gap for it (a command, an unavailable
+/// backup) would tell the person the wrong reason an undo is incomplete.
+#[test]
+fn a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other() {
+    use bravebot_agent::rewind::CoverageGap;
+
+    let project = Scratch::new("scratch-gap-named");
+    std::fs::write(project.path.join("source.txt"), "before").expect("a file in the project");
+    let given = SessionScratch::create().expect("a directory of its own");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let coverage = workspace.rewind_coverage();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text("source.txt"),
+            &trusted_text("after"),
+        )
+        .expect("a write in the project");
+    assert!(
+        coverage.is_complete(),
+        "a write in the project left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    let named = given.path().join("workings.txt").display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&named),
+            &trusted_text("intermediate"),
+        )
+        .expect("a write in the session's own directory");
+    assert_eq!(coverage.gaps(), [CoverageGap::Scratch].into());
+}
+
+/// TRUST-19. A directory the person opened is inside the backup domain: a write there keeps a
+/// backup that restores the file, leaves no scratch gap, and the session's own directory beside it
+/// still keeps none. Treating every directory outside the project as scratch would keep nothing
+/// for the directory the person opened.
+#[test]
+fn a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap() {
+    use bravebot_agent::rewind::CoverageGap;
+
+    let project = Scratch::new("scratch-gap-project");
+    let opened = Scratch::new("scratch-gap-opened");
+    let kept = opened.path.join("notes.txt");
+    std::fs::write(&kept, "the person's notes").expect("a file in the opened directory");
+    let given = SessionScratch::create().expect("a directory of its own");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace
+        .add_directory(opened.path.to_str().expect("utf-8 path"))
+        .expect("the person opens a directory");
+    workspace.open_scratch(given.directory());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let coverage = workspace.rewind_coverage();
+    let named = kept.display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&named),
+            &trusted_text("what the turn made of them"),
+        )
+        .expect("a write in the directory the person opened");
+    assert!(
+        coverage.is_complete(),
+        "a write in an opened directory left a gap: {:?}",
+        coverage.gaps()
+    );
+
+    let workings = given.path().join("workings.txt").display().to_string();
+    workspace
+        .write(
+            &mut policy,
+            &trusted_text(&workings),
+            &trusted_text("intermediate"),
+        )
+        .expect("a write in the session's own directory");
+    assert_eq!(coverage.gaps(), [CoverageGap::Scratch].into());
+
+    let backups = workspace.take_backups();
+    let backed_up: Vec<_> = backups.iter().map(|backup| backup.path.clone()).collect();
+    assert_eq!(backed_up, vec![kept.canonicalize().expect("canonical")]);
+    assert!(restore_for_test(&workspace, backups).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&kept).expect("the opened directory's file"),
+        "the person's notes"
+    );
+}
+
 /// Given, not opened by name. It is not among the directories the user asked for, because `/status`
 /// says what it is instead of listing it as somewhere they chose to reach.
 #[test]
@@ -10141,6 +11136,33 @@ fn the_sessions_own_directory_cannot_be_added_by_name() {
         .expect_err("the session's own directory is not one to add");
 
     assert!(matches!(error, WorkspaceError::Invalid { .. }), "{error:?}");
+    assert!(workspace.added_directories().is_empty());
+}
+
+/// A directory inside it is refused as it is. An implementation that compared the name with the
+/// session's directory for equality refuses that one and opens `deeper`, which writes a rule over
+/// a directory that is reachable already and that carries none.
+#[test]
+fn a_directory_inside_the_sessions_own_directory_cannot_be_added_by_name() {
+    let project = Scratch::new("scratch-inside-not-addable");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let inside = given.path().join("deeper").join("deeper still");
+    std::fs::create_dir_all(&inside).expect("directories inside it");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    for refused in [given.path().join("deeper"), inside] {
+        let error = workspace
+            .add_directory(refused.to_str().expect("utf-8 path"))
+            .expect_err("a directory inside the session's own directory is not one to add");
+        assert!(
+            matches!(error, WorkspaceError::Invalid { .. }),
+            "{}: {error:?}",
+            refused.display()
+        );
+    }
+
     assert!(workspace.added_directories().is_empty());
 }
 
@@ -10280,6 +11302,113 @@ fn the_temporary_directory_around_it_stays_unreachable() {
             "{}: {error:?}",
             directory.display()
         );
+    }
+}
+
+/// Listing is a reach of its own, not a side effect of reading. A resolver that admitted the
+/// session's directory for a read and a write and listed an absolute directory against the project
+/// alone refuses the directory the session was given, and a turn cannot see the files it wrote
+/// there. The project holds a file of its own so a listing that fell back to the project for an
+/// absolute name is told apart from one that listed the directory named.
+#[test]
+fn a_file_in_the_sessions_own_directory_is_listed_by_its_absolute_path() {
+    let project = Scratch::new("scratch-list");
+    std::fs::write(project.path.join("project-only.txt"), "in the project").unwrap();
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(given.path().join("workings.txt"), "intermediate").unwrap();
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let listing = listing_under_a_directory_rule(&workspace, &given.path().display().to_string());
+
+    assert!(
+        listing
+            .files
+            .iter()
+            .any(|file| file.ends_with("workings.txt")),
+        "the file in the session's own directory was not listed: {:?}",
+        listing.files
+    );
+    assert!(
+        !listing
+            .files
+            .iter()
+            .any(|file| file.ends_with("project-only.txt")),
+        "the project was listed in place of the directory named: {:?}",
+        listing.files
+    );
+}
+
+/// A search is a reach of its own as a listing is. The project holds a file with the same word, so
+/// a search that ignored the absolute directory and walked the project is told apart from one that
+/// searched the session's own directory.
+#[test]
+fn a_file_in_the_sessions_own_directory_is_searched_by_its_absolute_path() {
+    let project = Scratch::new("scratch-search");
+    std::fs::write(
+        project.path.join("project-only.txt"),
+        "needle in the project",
+    )
+    .unwrap();
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(
+        given.path().join("workings.txt"),
+        "first pass\nneedle in the workings\n",
+    )
+    .unwrap();
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let found = search_at(
+        &workspace,
+        denying(&[]),
+        &given.path().display().to_string(),
+        None,
+    )
+    .expect("the session's own directory is searched by its absolute path");
+
+    let hits: Vec<(&str, usize, &str)> = found
+        .matches
+        .iter()
+        .map(|hit| (hit.path.as_str(), hit.line, hit.text.as_str()))
+        .collect();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].0.ends_with("workings.txt"), "{hits:?}");
+    assert_eq!(hits[0].1, 2, "{hits:?}");
+    assert!(hits[0].2.contains("needle in the workings"), "{hits:?}");
+}
+
+/// The directories around the session's own are not refused by `/add-dir`: the temporary directory
+/// and the directory the session's sits in are ones a person may open, and their answer about them
+/// is theirs to give. A refusal built as "the name and the session's directory overlap in either
+/// direction" turns away the directories that hold it as well as the ones inside it. A fresh
+/// workspace for each, because opening the outer one covers the inner.
+#[test]
+fn the_directories_around_the_sessions_own_can_be_added_by_name() {
+    let given = SessionScratch::create().expect("a directory of its own");
+    let holder = given
+        .path()
+        .parent()
+        .expect("the directory it sits in")
+        .to_path_buf();
+    let temporary = std::env::temp_dir().canonicalize().expect("temporary");
+
+    for around in [holder, temporary] {
+        let project = Scratch::new("scratch-around-addable");
+        let mut workspace = Workspace::new(&project.path).expect("workspace");
+        workspace.open_scratch(given.directory());
+
+        let added = workspace
+            .add_directory(around.to_str().expect("utf-8 path"))
+            .unwrap_or_else(|error| {
+                panic!("{} was refused: {error:?}", around.display());
+            });
+
+        assert_eq!(added, around);
+        assert_eq!(workspace.added_directories(), vec![around.clone()]);
+        assert_eq!(workspace.scratch(), Some(given.path()));
     }
 }
 
@@ -10685,7 +11814,7 @@ fn an_attributes_file_the_map_does_not_trust_refuses_a_checkout() {
     );
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     for (name, distrusted, expected) in [
-        ("untrusted", Some("docs"), Refused::AttributesUntrusted),
+        ("untrusted", Some("docs"), Refused::Distrusted),
         ("trusted", None, Refused::Converts(Conversion::Filter)),
     ] {
         let mut trust = TrustStore::new(workspace.root());
@@ -10711,6 +11840,115 @@ fn an_attributes_file_the_map_does_not_trust_refuses_a_checkout() {
             other => panic!("{name}: the checkout was not refused: {other:?}"),
         }
         assert!(!target.exists(), "{name}: a refused checkout was written");
+    }
+}
+
+/// CHECKOUT-4. A spawn refused for an entry under a path the map does not trust gets one sentence,
+/// the same for an entry git refuses to check out, a `.gitattributes` file and a tree past the
+/// bound, and the map's own rule for the path selects it: the same tree under a trusted path gets
+/// the sentence that names the check. The sentence is the one a planner reads.
+#[test]
+fn a_spawn_refused_for_an_entry_under_a_distrusted_path_gets_one_fixed_sentence() {
+    use bravebot_agent::git::checkout::{Bound, Refused};
+    use bravebot_core::delegate::CheckoutRefusal;
+    let trees: [(&str, &[(&str, &str)]); 2] = [
+        (
+            "name",
+            &[("README", "hello\n"), ("incoming/.GIT/config", "x\n")],
+        ),
+        (
+            "attributes",
+            &[
+                ("README", "hello\n"),
+                ("incoming/.gitattributes", "* filter=x\n"),
+            ],
+        ),
+    ];
+    let mut sentences = Vec::new();
+    let mut named = Vec::new();
+    for (name, files) in trees {
+        let (_scratch, state, workspace) =
+            repository_with_a_state_directory(&format!("checkout-distrusted-{name}"), files);
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.distrust("incoming");
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        let refused = workspace
+            .checkout_for_cause(&policy, &state.path, d1())
+            .expect_err(name);
+        assert_eq!(refused.0, CheckoutRefusal::RepositoryRefused, "{name}");
+        sentences.push(refused.1);
+
+        let mut sink = RecordingSink::new();
+        let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+        named.push(
+            workspace
+                .checkout_for(&policy, &state.path, d1())
+                .expect_err(name),
+        );
+    }
+    assert_eq!(sentences[0], sentences[1], "{sentences:?}");
+    assert_eq!(
+        sentences[0],
+        Refused::Distrusted.describe("the working directory")
+    );
+    assert_ne!(named[0], named[1], "{named:?}");
+    assert!(
+        named.iter().all(|sentence| *sentence != sentences[0]),
+        "{named:?}"
+    );
+
+    // A tree past the bound, through the same closure of the map.
+    let scratch = Scratch::new("checkout-distrusted-bound");
+    let elsewhere = Scratch::new("checkout-distrusted-bound-target");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("incoming/a", "a\n"),
+            ("incoming/b", "b\n"),
+        ],
+        "first",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let bound = Bound {
+        files: 2,
+        bytes: 1 << 20,
+    };
+    for (distrusted, expected) in [(true, Refused::Distrusted), (false, Refused::TooManyFiles)] {
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        if distrusted {
+            trust.distrust("incoming");
+        }
+        let mut sink = RecordingSink::new();
+        let policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+        let target = elsewhere.path.join(format!("c{distrusted}"));
+        match workspace.make_checkout(&policy, &target, "c1", bound) {
+            Err(WorkspaceError::Checkout { refused, .. }) => {
+                assert_eq!(refused, expected, "{distrusted}")
+            }
+            other => panic!("{distrusted}: the checkout was not refused: {other:?}"),
+        }
+        assert!(
+            !target.exists(),
+            "{distrusted}: a refused checkout was written"
+        );
     }
 }
 
@@ -11527,8 +12765,12 @@ fn the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout() {
 }
 
 /// CHECKOUT-7, PERM-16. Where the settings keep the file tools inside the workspace, a delegate's
-/// checkout keeps them inside its root: a directory the parent already had open is reached by none
-/// of a read, a write, a listing and a search, though the checkout's own files are.
+/// checkout keeps them inside its root: a directory the parent already had open and the parent's
+/// working directory are each reached by none of a read, a write, a listing and a search, though
+/// the checkout's own files are.
+///
+/// The failure this rejects is a checkout whose root is still the working directory, or one that
+/// does not carry the key, so either tree is reachable by its absolute path from the delegate.
 #[test]
 fn the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout() {
     let (_scratch, state, mut workspace) =
@@ -11566,41 +12808,50 @@ fn the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout() {
         1,
     )
     .expect("the checkout searches its own tree");
-    let directory = trusted_text(&opened.display().to_string());
-    let errors = [
-        made.read(
-            &mut policy,
-            &trusted_text(&opened.join("notes.md").display().to_string()),
-        )
-        .err(),
-        made.write(
-            &mut policy,
-            &trusted_text(&opened.join("fresh.md").display().to_string()),
-            &trusted_text("written"),
-        )
-        .err(),
-        made.list(&mut policy, &directory, None, None).err(),
-        made.grep(
-            &mut policy,
-            std::slice::from_ref(&trusted_text("note")),
-            &directory,
-            None,
-            true,
-            1,
-        )
-        .err(),
-    ];
-    let reached: Vec<&str> = ["read", "write", "list", "grep"]
-        .into_iter()
-        .zip(errors)
-        .filter(|(_, error)| !matches!(error, Some(WorkspaceError::Escapes { .. })))
-        .map(|(tool, _)| tool)
-        .collect();
+    let working_directory = workspace.root().to_path_buf();
+    let mut reached: Vec<String> = Vec::new();
+    for (holder, outside_the_checkout, existing, needle) in [
+        ("opened", opened.clone(), "notes.md", "note"),
+        ("working", working_directory.clone(), "README", "hello"),
+    ] {
+        let directory = trusted_text(&outside_the_checkout.display().to_string());
+        let errors = [
+            made.read(
+                &mut policy,
+                &trusted_text(&outside_the_checkout.join(existing).display().to_string()),
+            )
+            .err(),
+            made.write(
+                &mut policy,
+                &trusted_text(&outside_the_checkout.join("fresh.md").display().to_string()),
+                &trusted_text("written"),
+            )
+            .err(),
+            made.list(&mut policy, &directory, None, None).err(),
+            made.grep(
+                &mut policy,
+                std::slice::from_ref(&trusted_text(needle)),
+                &directory,
+                None,
+                true,
+                1,
+            )
+            .err(),
+        ];
+        reached.extend(
+            ["read", "write", "list", "grep"]
+                .into_iter()
+                .zip(errors)
+                .filter(|(_, error)| !matches!(error, Some(WorkspaceError::Escapes { .. })))
+                .map(|(tool, _)| format!("{tool} in the {holder} directory")),
+        );
+    }
     assert!(
         reached.is_empty(),
         "these tools reached a directory outside the checkout: {reached:?}"
     );
     assert!(!opened.join("fresh.md").exists());
+    assert!(!working_directory.join("fresh.md").exists());
 }
 
 /// TRACE-1. The refusal for an opened directory carries a fixed cause that names the directory a
@@ -14347,6 +15598,214 @@ fn a_repo_map_says_when_the_file_cap_stopped_it() {
     assert_eq!(map.files, 5);
 }
 
+/// Rust source of exactly `size` bytes whose only declaration is `declaration`, so a size limit
+/// is tested at its boundary and what the file declares does not depend on the padding.
+fn source_of_exactly(size: usize, declaration: &str) -> String {
+    let padding = format!("//{}\n", " ".repeat(4093));
+    let mut text = format!("{declaration}\n");
+    while text.len() + padding.len() <= size {
+        text.push_str(&padding);
+    }
+    let rest = size - text.len();
+    if rest > 0 {
+        text.push_str(&" ".repeat(rest - 1));
+        text.push('\n');
+    }
+    assert_eq!(text.len(), size);
+    text
+}
+
+/// MAP-5: the walk reads at most 32 MiB of source and says when it stopped there. Sixty-four files
+/// of 512 KiB total exactly 32 MiB, and a sixty-fifth would pass it, so the map holds the first
+/// sixty-four and reports a cut. The regressions it rejects: no cap on bytes (the sixty-fifth file
+/// is read and nothing is reported), a cap that is not reported, and a comparison that refuses the
+/// sixty-fourth file because the total reaches the cap.
+#[test]
+fn a_repo_map_says_when_the_byte_cap_stopped_it() {
+    let scratch = Scratch::new("map-byte-capped");
+    for n in 0..65 {
+        std::fs::write(
+            scratch.path.join(format!("f{n:02}.rs")),
+            source_of_exactly(512 * 1024, &format!("pub fn f_{n:02}() {{}}")),
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(
+        map.truncated,
+        "a walk that reached the cap on bytes did not say so: {map:?}"
+    );
+    assert_eq!(
+        (map.files, map.found, map.skipped, map.unvouched),
+        (64, 64, 0, 0),
+        "the files read were not the 64 that fit under the cap: {map:?}"
+    );
+}
+
+/// MAP-5, MAP-3: a file past 512 KiB is generated or data, so it is left out and counted with the
+/// files that were not read, and a file of exactly 512 KiB is read. The regressions it rejects:
+/// reading the large file, leaving it out without counting it, and refusing a file at the limit.
+#[test]
+fn a_repo_map_leaves_out_a_file_past_the_per_file_size_limit() {
+    let scratch = Scratch::new("map-file-limit");
+    std::fs::write(
+        scratch.path.join("at_the_limit.rs"),
+        source_of_exactly(512 * 1024, "pub fn at_the_limit() {}"),
+    )
+    .unwrap();
+    std::fs::write(
+        scratch.path.join("past_the_limit.rs"),
+        source_of_exactly(512 * 1024 + 1, "pub fn past_the_limit() {}"),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("small.rs"), "pub fn small() {}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert_eq!(
+        (map.files, map.unvouched, map.skipped),
+        (2, 0, 1),
+        "{map:?}"
+    );
+    assert!(map.body.contains("at_the_limit"), "{}", map.body);
+    assert!(map.body.contains("small"), "{}", map.body);
+    assert!(!map.body.contains("past_the_limit"), "{}", map.body);
+    assert!(
+        !map.truncated,
+        "a file left out for its size was reported as a cut: {map:?}"
+    );
+}
+
+/// A project with `count` files in `first/` and a vouched `src/lib.rs` that declares `wanted`.
+/// `first/` sorts before `src/`, so a walk that spends the file cap on `first/` reaches `src/`
+/// last.
+fn a_directory_of_files_before_a_vouched_source(tag: &str, count: usize) -> Scratch {
+    let scratch = Scratch::new(tag);
+    std::fs::create_dir_all(scratch.path.join("first")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    for n in 0..count {
+        std::fs::write(
+            scratch.path.join(format!("first/f{n}.rs")),
+            format!("pub fn hidden_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(scratch.path.join("src/lib.rs"), "pub fn wanted() {}\n").unwrap();
+    scratch
+}
+
+/// What a distrusted directory holds must not decide which vouched files a map shows (MAP-1). The
+/// distrusted directory holds more files than the cap and sorts first, so a walk that charges its
+/// files to the cap stops before `src/`, shows nothing from it and reports a cut that no vouched
+/// file caused. The regression it rejects: counting a file against the cap before asking the trust
+/// map about it.
+#[test]
+fn a_repo_map_does_not_charge_files_nobody_vouched_for_to_the_file_cap() {
+    let scratch = a_directory_of_files_before_a_vouched_source("map-unvouched-cap", 11);
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+    let trust = trusting_all_but(&workspace, &["first"]);
+
+    let (map, integrity) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(map.body.contains("wanted"), "{}", map.body);
+    assert!(!map.body.contains("hidden"), "{}", map.body);
+    assert_eq!(
+        (map.files, map.unvouched, map.skipped),
+        (1, 11, 0),
+        "{map:?}"
+    );
+    assert!(
+        !map.truncated,
+        "a file nobody vouched for was reported as a cap on files: {map:?}"
+    );
+    assert_eq!(integrity, Integrity::Trusted);
+}
+
+/// A cap that vouched files reach is still reported, with an unvouched directory in the same tree.
+/// The regression it rejects: dropping the cap from a walk that holds a distrusted directory, which
+/// the test above alone does not catch, since its vouched files are far under the cap.
+#[test]
+fn a_repo_map_still_says_when_vouched_files_reach_the_file_cap_beside_unvouched_ones() {
+    let scratch = a_directory_of_files_before_a_vouched_source("map-vouched-cap", 4);
+    for n in 0..6 {
+        std::fs::write(
+            scratch.path.join(format!("src/more{n}.rs")),
+            format!("pub fn more_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(3), None);
+    let trust = trusting_all_but(&workspace, &["first"]);
+
+    let (map, _) = map_of(&workspace, trust, None, ".").expect("map");
+
+    assert!(
+        map.truncated,
+        "the cap was reached by vouched files and not reported: {map:?}"
+    );
+    assert_eq!(
+        map.unvouched, 4,
+        "the files nobody vouched for before the cap were not all counted: {map:?}"
+    );
+    assert!(
+        map.files >= 1 && map.files < 7,
+        "the vouched files shown were none, or not bounded by the cap: {map:?}"
+    );
+    assert!(!map.body.contains("hidden"), "{}", map.body);
+}
+
+/// MAP-4: a file a deny rule covers is not charged to the cap either, so eleven fenced files that
+/// sort first do not push `open.rs` past a cap of ten. The regression it rejects: charging a
+/// covered file to the cap. The walk asks the rules before the cap whether or not it sets
+/// unvouched files aside, so this test guards MAP-4 against a later change to that order and does
+/// not pin the unvouched filter.
+#[test]
+fn a_repo_map_does_not_charge_a_file_a_deny_rule_covers_to_the_file_cap() {
+    let scratch = Scratch::new("map-denied-cap");
+    for n in 0..11 {
+        std::fs::write(
+            scratch.path.join(format!("fenced{n}.rs")),
+            format!("pub fn fenced_{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(scratch.path.join("open.rs"), "pub fn open_function() {}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(10), None);
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let (map, _) = map_of(
+        &workspace,
+        trust,
+        Some(denying(&["Read(./fenced*.rs)"])),
+        ".",
+    )
+    .expect("map");
+
+    assert!(map.body.contains("open_function"), "{}", map.body);
+    assert!(!map.body.contains("fenced"), "{}", map.body);
+    assert_eq!(
+        (map.files, map.unvouched, map.skipped),
+        (1, 0, 0),
+        "{map:?}"
+    );
+    assert!(
+        !map.truncated,
+        "a denied file was charged to the cap: {map:?}"
+    );
+}
+
 /// A tree with a directory that cannot be opened is not the tree the map shows, and a map that says
 /// nothing reads as complete. The files beside the directory are still mapped.
 #[cfg(unix)]
@@ -14887,6 +16346,7 @@ fn the_refusals_hold_for_a_file_a_reference_stands_for() {
             path: read_denied.display().to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         }],
         ..Lists::default()
     };
@@ -14986,6 +16446,7 @@ fn the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass() {
         path: path.display().to_string(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     let lists = || Lists {
         deny_read: vec![entry(&read_denied)],
@@ -15050,6 +16511,7 @@ fn reading_under_the_reach_judges_a_read_and_gives_the_call_its_own_reach_back()
         path: write_denied.display().to_string(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     places.workspace.hold_bypass_reach(Some(places.reach_with(
         "write_file",
@@ -15137,6 +16599,7 @@ fn a_look_holding_a_reach_is_judged_by_the_refusals_of_a_read_and_records_nothin
         path: path.display().to_string(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     let lists = || Lists {
         deny_read: vec![entry(&read_denied)],

@@ -169,6 +169,31 @@ impl Stage {
     }
 }
 
+/// The routes of a command spelled as a line writes them, each after a space, so that an entry
+/// made at `sh check.sh > /dev/null` is drawn with its redirection and not as the bare line.
+pub fn spelled_routes(routes: &[Route]) -> String {
+    let mut out = String::new();
+    for route in routes {
+        out.push(' ');
+        out.push_str(&match route {
+            Route::Stdout { path, append } => format!(
+                "{} {}",
+                if *append { ">>" } else { ">" },
+                quoted(&path.to_string_lossy())
+            ),
+            Route::Stdin { path } => format!("< {}", quoted(&path.to_string_lossy())),
+            Route::Stderr { path, append } => format!(
+                "{} {}",
+                if *append { "2>>" } else { "2>" },
+                quoted(&path.to_string_lossy())
+            ),
+            Route::Both { path } => format!("&> {}", quoted(&path.to_string_lossy())),
+            Route::StderrToStdout => "2>&1".to_string(),
+        });
+    }
+    out
+}
+
 /// A path a program starts by and the file it leads to, drawn as `ls -l` draws a link.
 ///
 /// The file alone where the two are one path.
@@ -181,6 +206,33 @@ pub(crate) fn started_through(started_as: &Path, file: &Path) -> String {
             started_as.to_string_lossy(),
             file.to_string_lossy()
         )
+    }
+}
+
+/// The program word a sentence addressed to the planner names `started_as` by.
+///
+/// `started_as` was built by joining a name the line used onto `landing`, the directory the line
+/// actually ran in, which is where a link in a tree nobody vouched for led. Under that directory,
+/// the word is respelled as `told_directory`, the planner's own spelling of it, followed by the
+/// rest of `started_as`, exactly as a redirection's target is respelled for the same sentence: the
+/// landing is never shown to the planner, because the name whoever wrote the tree chose for it is
+/// not the planner's own word (LABEL-3, TOOL-4). `told_directory` is `None` for a line run at the
+/// root, and then, like a path elsewhere, `started_as` is shown as it is. Both halves are strings
+/// the planner wrote or paths the driver resolved: nothing is read from a file to build the word.
+fn told_started_as(started_as: &Path, landing: &Path, told_directory: Option<&str>) -> String {
+    match (told_directory, started_as.strip_prefix(landing)) {
+        (Some(told_directory), Ok(rest)) => {
+            let rest: Vec<std::borrow::Cow<'_, str>> = rest
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect();
+            format!(
+                "{}/{}",
+                told_directory.trim_end_matches('/'),
+                rest.join("/")
+            )
+        }
+        _ => started_as.to_string_lossy().into_owned(),
     }
 }
 
@@ -266,7 +318,7 @@ impl Pipeline {
 
 /// How two parts of a plan are joined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(verus_keep_ghost, verus_verify)]
+#[cfg_attr(verus_keep_ghost, verus_verify, derive(Structural))]
 pub enum Joiner {
     /// `&&`: the right side runs only if the left side succeeded.
     And,
@@ -280,7 +332,7 @@ pub enum Joiner {
 ///
 /// The paths are absolute and are not tidied. What is recorded is what will be opened, and
 /// rewriting a `..` away would make the two differ wherever a symlink is involved.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(
     verus_keep_ghost,
     verus_verify,
@@ -448,10 +500,12 @@ pub struct Step {
     /// The argument vector, literal and final.
     pub args: Vec<String>,
     /// Which arguments a filename pattern produced: one entry per entry of [`Step::args`], `true`
-    /// where the word is a name the pattern matched on disk ([CMDLINE-4]).
+    /// where the word came from an unquoted pattern, whether it is a name the pattern matched on
+    /// disk or the pattern itself, passed through as written because nothing matched ([CMDLINE-4]).
     ///
-    /// Set by the compiler from whether the pattern matched, never from the name's bytes. Empty
-    /// where no argument came from a pattern. A list of another length than [`Step::args`]
+    /// Set by the compiler from the shape of the word, never from whether the pattern matched or
+    /// from the name's bytes. Empty where no argument came from a pattern. A list of another
+    /// length than [`Step::args`]
     /// answers for no argument, and [`Step::from_a_pattern`] reads every argument of such a step
     /// as produced by one. Not part of any key: the person is shown and endorses the expanded
     /// arguments either way.
@@ -471,7 +525,8 @@ pub struct Step {
 }
 
 impl Step {
-    /// Whether the argument at `index` is a name a filename pattern matched.
+    /// Whether the argument at `index` came from a filename pattern, matched or passed through as
+    /// written.
     ///
     /// `true` for every argument where [`Step::matched`] is neither empty nor one entry per
     /// argument, since such a list says nothing about which argument is which.
@@ -562,9 +617,19 @@ impl Step {
     ///
     /// `targets` holds the file each redirection of the step names, as the line wrote it and
     /// already quoted, in the order of the routes that name a file. A route's own path was joined
-    /// onto the directory the line landed in, which is where a link led.
-    pub(crate) fn told_args(&self, args: Vec<String>, targets: &[String]) -> String {
-        self.render_args(&self.started_as.to_string_lossy(), args, Some(targets))
+    /// onto the directory the line landed in, which is where a link led. `landing` is that same
+    /// directory and `told_directory` is the planner's own spelling of it, `None` at the root: a
+    /// program found by a relative path is, like a redirection's target, respelled under the
+    /// directory as typed rather than shown by the landing (LABEL-3, TOOL-4).
+    pub(crate) fn told_args(
+        &self,
+        args: Vec<String>,
+        targets: &[String],
+        landing: &Path,
+        told_directory: Option<&str>,
+    ) -> String {
+        let program = told_started_as(&self.started_as, landing, told_directory);
+        self.render_args(&program, args, Some(targets))
     }
 
     fn render_args(&self, program: &str, args: Vec<String>, targets: Option<&[String]>) -> String {
@@ -609,8 +674,10 @@ impl Step {
     /// directory and that is the one the prompt showed. An entry covers that tree and no other, so
     /// passing a tree the person was not shown would record a grant nobody gave.
     pub fn command(&self, directory: &Path) -> crate::programs::Command {
-        // Left out for the reasons `Policy::every_step_vouched` gives: an assignment is refused
-        // before an entry is offered, and a route is the write question's.
+        // An assignment is left out because `Plan::carries_an_assignment` refuses it before an
+        // entry is offered. The routes are in the entry: a line that sends a stream to the null
+        // device or merges its streams is not the line without them, and an entry made for one
+        // must not cover the other.
         let Step {
             program: _,
             resolved,
@@ -620,10 +687,11 @@ impl Step {
             matched: _,
             environment: _,
             expansions: _,
-            routes: _,
+            routes,
         } = self;
         crate::programs::Command::new(resolved.clone(), args.clone(), directory)
             .started_as(started_as.clone())
+            .routed(routes.clone())
     }
 }
 
@@ -769,18 +837,23 @@ impl Steps {
     /// step are what a pattern matched, which is a listing of a directory, and a sentence the
     /// planner is shown cannot hold one. The caller owns the quoting of the words, as for
     /// [`Step::told_args`], and passes the file each redirection names, as the line wrote it, in
-    /// `targets`: one list per step, in the order of the routes that name a file.
+    /// `targets`: one list per step, in the order of the routes that name a file. `landing` and
+    /// `told_directory` are [`Step::told_args`]'s own: the directory every step ran in and the
+    /// planner's spelling of it, so a program found by a relative path is respelled the same way
+    /// a redirection's target is.
     /// `None` where `written` or `targets` does not hold exactly one list per step.
     pub fn display_with_operands(
         &self,
         written: &[Vec<String>],
         targets: &[Vec<String>],
+        landing: &Path,
+        told_directory: Option<&str>,
     ) -> Option<String> {
         if written.len() != targets.len() {
             return None;
         }
         let mut rest = written.iter().zip(targets.iter());
-        let shown = self.draw_with_operands(&mut rest)?;
+        let shown = self.draw_with_operands(&mut rest, landing, told_directory)?;
         rest.next().is_none().then_some(shown)
     }
 
@@ -836,13 +909,15 @@ impl Steps {
             std::slice::Iter<'_, Vec<String>>,
             std::slice::Iter<'_, Vec<String>>,
         >,
+        landing: &Path,
+        told_directory: Option<&str>,
     ) -> Option<String> {
         Some(match self {
             Self::Pipeline(steps) => {
                 let mut drawn = Vec::with_capacity(steps.len());
                 for step in steps {
                     let (args, targets) = written.next()?;
-                    drawn.push(step.told_args(args.clone(), targets));
+                    drawn.push(step.told_args(args.clone(), targets, landing, told_directory));
                 }
                 drawn.join(" | ")
             }
@@ -856,11 +931,16 @@ impl Steps {
                     Joiner::Or => "||",
                     Joiner::Then => ";",
                 };
-                let left = left.draw_with_operands(written)?;
-                let right = right.draw_with_operands(written)?;
+                let left = left.draw_with_operands(written, landing, told_directory)?;
+                let right = right.draw_with_operands(written, landing, told_directory)?;
                 format!("{left} {joiner} {right}")
             }
-            Self::Group(inner) => format!("( {} )", inner.draw_with_operands(written)?),
+            Self::Group(inner) => {
+                format!(
+                    "( {} )",
+                    inner.draw_with_operands(written, landing, told_directory)?
+                )
+            }
         })
     }
 }
@@ -1024,11 +1104,15 @@ impl Plan {
     /// the entry records the tree, so a line running outside the workspace root is a line an entry
     /// can hold exactly as written.
     ///
-    /// A redirection is among them, in both directions. An entry holds no destination any more than
-    /// it holds a source, so an entry made while output was redirected would cover the same program
-    /// with the redirection gone, which is a line nobody read. A line that writes is asked about
-    /// every time whatever is recorded, so the key stops no prompt for the line it was pressed on:
-    /// the only thing it could ever grant is the bare one.
+    /// A redirection that opens a file is among them, in both directions. An entry holds no file
+    /// to write or read, so an entry made while output was redirected to a file would cover the
+    /// same program with the redirection gone, which is a line nobody read. A line that writes is
+    /// asked about every time whatever is recorded, so the key stops no prompt for the line it was
+    /// pressed on: the only thing it could ever grant is the bare one.
+    ///
+    /// A route that opens no file, which is a stream sent to the null device or `2>&1`, can be
+    /// remembered, because the entry holds the routes: it covers that line and not the same
+    /// program without them.
     ///
     /// Nor is standard input fed from a reference, whatever the reference's label. An entry holds a
     /// program and its arguments and not the bytes it reads, so one made for `python3 -` fed one
@@ -1579,6 +1663,63 @@ mod tests {
         }
     }
 
+    /// A line that sends a stream to the null device can be remembered, and the entry it makes
+    /// holds the route: the plan of `sh check.sh > /dev/null` has entries unlike the plan of
+    /// `sh check.sh`, and an entry made at one covers only that one, in both directions, for a
+    /// discarded stream and for `2>&1` alike. Rejects an entry that ignores routes, which leaves
+    /// the bare line covered by an answer given at the line that discarded its output.
+    #[test]
+    fn an_entry_made_at_a_line_with_routes_does_not_cover_the_line_without_them() {
+        use crate::programs::TrustedPrograms;
+
+        let routed = |routes: Vec<Route>| {
+            let mut one = step("sh", &["check.sh"]);
+            one.routes = routes;
+            plan(Steps::Pipeline(vec![one]))
+        };
+        let discarding = || {
+            routed(vec![Route::Stdout {
+                path: PathBuf::from("/dev/null"),
+                append: false,
+            }])
+        };
+        let merging = || routed(vec![Route::StderrToStdout]);
+        let bare = || routed(Vec::new());
+
+        let line = discarding();
+        assert!(line.writes.is_empty(), "a discard line wrote a file");
+        assert!(
+            line.can_be_remembered(),
+            "a discard line was not rememberable"
+        );
+        assert!(line.vouch(Asked::default()).is_some());
+        assert_ne!(
+            line.entries(),
+            bare().entries(),
+            "the entry for a discard line is the entry for the bare line"
+        );
+        assert_ne!(merging().entries(), bare().entries());
+        assert_ne!(merging().entries(), discarding().entries());
+
+        for (made_at, other, said) in [
+            (discarding(), bare(), "a discard line covered the bare line"),
+            (bare(), discarding(), "the bare line covered a discard line"),
+            (merging(), bare(), "a merged line covered the bare line"),
+            (
+                discarding(),
+                merging(),
+                "a discard line covered a merged line",
+            ),
+        ] {
+            let programs: TrustedPrograms = made_at.entries().into_iter().collect();
+            assert!(
+                programs.covers_every_step(&made_at),
+                "an entry did not cover its own line"
+            );
+            assert!(!programs.covers_every_step(&other), "{said}");
+        }
+    }
+
     /// A step that takes `name` from `parts` in front of its program.
     fn expanding(program: &str, name: &str, parts: Vec<ValuePart>) -> Step {
         Step {
@@ -1646,7 +1787,7 @@ mod tests {
         let steps = Steps::Pipeline(vec![expanding]);
         assert_eq!(steps.display(), "TOKEN=$SECRET /usr/bin/prog");
         let told = steps
-            .display_with_operands(&[vec!["arg".into()]], &[vec![]])
+            .display_with_operands(&[vec!["arg".into()]], &[vec![]], Path::new("/work"), None)
             .expect("one list per step");
         assert_eq!(told, "TOKEN=$SECRET /usr/bin/prog arg");
         assert_eq!(plan(steps.clone()).display(), "TOKEN=$SECRET /usr/bin/prog");
@@ -1971,9 +2112,34 @@ mod tests {
             .display_with_operands(
                 &[vec!["test".into()], vec!["-n".into(), "5".into()]],
                 &[vec![], vec![]],
+                Path::new("/work"),
+                None,
             )
             .expect("one list per step");
         assert_eq!(told, "/home/me/.cargo/bin/cargo test | /usr/bin/tail -n 5");
+        assert!(steps.display().contains("HOSTILE-landed"));
+    }
+
+    /// A program found by a relative path under a directory a link led to is told to the planner
+    /// by the directory as it typed it, followed by the rest of the path, exactly as a
+    /// redirection's target is. The regression this rejects is the program word drawn from
+    /// `started_as` whole, which is `landing` joined onto the name the line used and so carries
+    /// the name whoever made the link chose (LABEL-3, TOOL-4).
+    #[test]
+    fn what_the_planner_is_told_names_a_relative_program_under_the_directory_as_typed() {
+        let mut build = step("./build.sh", &[]);
+        build.started_as = PathBuf::from("/work/HOSTILE-landed/build.sh");
+        build.resolved = PathBuf::from("/work/HOSTILE-landed/build.sh");
+        let steps = Steps::Pipeline(vec![build]);
+        let told = steps
+            .display_with_operands(
+                &[vec![]],
+                &[vec![]],
+                Path::new("/work/HOSTILE-landed"),
+                Some("docs"),
+            )
+            .expect("one list per step");
+        assert_eq!(told, "docs/build.sh");
         assert!(steps.display().contains("HOSTILE-landed"));
     }
 

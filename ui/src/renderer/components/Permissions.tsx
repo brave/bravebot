@@ -19,7 +19,8 @@ function GrantName({ name }: { name: string }): React.JSX.Element {
 interface Grants {
   /** `shownPath` is `path` spelled so a blank or whitespace-ended name is visible. */
   paths: { path: string; shownPath: string; integrity: string }[]
-  commands: { program: string; startedAs: string; args: string[]; display: string }[]
+  /** `directory` is the tree the command was vouched in, as held; null where it has no text spelling, which no revoke matches. `shownDirectory` is the same tree spelled for the screen (`.` for the workspace itself) and is only drawn. */
+  commands: { program: string; startedAs: string; args: string[]; directory: string | null; shownDirectory: string; display: string }[]
   /** The yes kept about this directory for later sessions (TRUST-23), read when this was asked. */
   remembered?: KeptTrust | null
   /** The rules this conversation opened under. Absent from an older bridge. */
@@ -53,10 +54,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     <section className="grant-section">
       <h3>Remembered commands</h3>
       <p className="grant-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
-      {grants && grants.commands.length > 0 && <ul className="grant-list">{grants.commands.map((command) => <li className="grant-row" key={JSON.stringify(command)}>
-        <Icon name="window-console" /><GrantName name={command.display} />
-        <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, startedAs: command.startedAs, args: command.args } })}>Revoke</Button>
-      </li>)}</ul>}
+      {grants && grants.commands.length > 0 && <CommandPermissions commands={grants.commands} busy={busy} onRevoke={(command) => void request('permissions.revoke', { kind: 'command', command })} />}
       {grants?.commands.length === 0 && <p className="grant-empty"><Icon name="window-console" />No remembered command grants.</p>}
     </section>
     <section className="grant-section">
@@ -88,6 +86,26 @@ export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>
 }
+
+/**
+ * The remembered commands, one row for each entry. An entry is keyed on the tree it was vouched in as well as the
+ * command, so two rows can read alike and differ in the tree drawn under them. Revoke names the tree, and the
+ * bridge withdraws only the entry held in it.
+ */
+export function CommandPermissions({ commands, busy, onRevoke }: { commands: Grants['commands']; busy: boolean; onRevoke: (command: { program: string; startedAs: string; args: string[]; directory: string | null }) => void }): React.JSX.Element {
+  return <ul className="grant-list">{commands.map((command) => <li className="grant-row" key={commandKey(command)}>
+    <Icon name="window-console" />
+    <div className="grant-text">
+      <GrantName name={command.display} />
+      <span className="grant-meta" data-test="command-tree">{`in ${command.shownDirectory}`}</span>
+      {command.directory === null && <span className="grant-meta" data-test="command-not-revocable">This tree is not text, so no revoke can name it.</span>}
+    </div>
+    <Button size="small" kind="plain-faint" isDisabled={busy || command.directory === null} onClick={() => onRevoke({ program: command.program, startedAs: command.startedAs, args: command.args, directory: command.directory })}>Revoke</Button>
+  </li>)}</ul>
+}
+
+/** All four fields of an entry's key, so two entries for one command in two trees are two rows. */
+export const commandKey = (command: Grants['commands'][number]): string => JSON.stringify([command.program, command.startedAs, command.args, command.directory])
 
 /** The root is the empty name, which a person is shown in words; any other rule is drawn as the agent spelled it. */
 const named = (grant: Grants['paths'][number]): string => grant.path === '' ? 'Project root' : grant.shownPath

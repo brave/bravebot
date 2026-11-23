@@ -350,7 +350,7 @@ fn run_client(
     if current.quitting.load(std::sync::atomic::Ordering::SeqCst) {
         let _ = linked.channel.shutdown(std::net::Shutdown::Both);
     }
-    let ended = host.serve(linked.channel, &client.answers);
+    let ended = host.serve(linked.channel, &client.name, &client.answers);
     if let Ok(mut channels) = current.channels.lock() {
         channels.remove(&place);
     }

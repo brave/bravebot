@@ -14,8 +14,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+mod status;
 #[cfg(unix)]
 mod transport;
+
+pub use status::Status;
 
 /// The name a session reports under, as both the source of its reports and the agent it is.
 const NAME: &str = "bravebot";

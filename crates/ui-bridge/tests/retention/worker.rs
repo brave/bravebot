@@ -57,10 +57,12 @@ fn take_turn_in(
             session: "retention".into(),
             project: workspace.root().to_path_buf(),
             state,
+            reports: Default::default(),
             config,
             workspace,
             attribution: Default::default(),
             effort: None,
+            variant: None,
             output_cap: None,
             download_cap: None,
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
@@ -92,6 +94,8 @@ fn take_turn_in(
             answers: receiver,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             interjections: Default::default(),
+            actors: Default::default(),
+            published: Default::default(),
         })
     });
     let mut seen = Vec::new();

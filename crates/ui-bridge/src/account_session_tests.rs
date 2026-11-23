@@ -54,10 +54,12 @@ fn take_a_turn_at(
         session: "account-session".into(),
         project: workspace.root().to_path_buf(),
         state: Arc::clone(state),
+        reports: Default::default(),
         config: config(),
         workspace: workspace.clone(),
         attribution: Default::default(),
         effort,
+        variant: None,
         output_cap: None,
         download_cap: None,
         deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
@@ -84,6 +86,8 @@ fn take_a_turn_at(
         answers: receiver,
         finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         interjections: Default::default(),
+        actors: Default::default(),
+        published: Default::default(),
     });
 }
 
@@ -361,12 +365,28 @@ fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_l
     if !profile::in_isolated_profile() {
         return;
     }
-    // A service that needs no credential, so that a request can be built; it is never answered.
+    // A service that needs no credential, so that a request can be built. It answers every
+    // request with a 500 and `maxRetries` of zero sends each request once, so a turn ends as soon
+    // as its level is recorded. A port nothing listens on ends a turn only as fast as the machine
+    // refuses the connection, and a runner that holds the connection open keeps the turn running
+    // past the 30 seconds `dispatch_when_idle` waits for it.
+    let service = std::net::TcpListener::bind("127.0.0.1:0").expect("a port on this machine");
+    let port = service.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        for mut connection in service.incoming().flatten() {
+            let _ = connection.write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
     let home = bravebot_agent::home::directory().expect("the profile's state directory");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(
         home.join("settings.json"),
-        r#"{"provider":{"local":{"options":{"baseURL":"http://127.0.0.1:9/v1"},"models":{"m":{}}}},"model":"local/m"}"#,
+        format!(
+            r#"{{"provider":{{"local":{{"options":{{"baseURL":"http://127.0.0.1:{port}/v1","maxRetries":0}},"models":{{"m":{{}}}}}}}},"model":"local/m"}}"#
+        ),
     )
     .unwrap();
     let (directory, workspace, trust) = project();
@@ -452,4 +472,73 @@ fn a_session_opens_with_the_level_its_project_settles_on() {
     let level = |handle: &str| bridge.open[handle].state.lock().unwrap().account.effort();
     assert_eq!(level(&outranked), Some(Effort::Max));
     assert_eq!(level(&free), Some(Effort::Low));
+}
+
+/// The window's picker names the level a ChatGPT conversation is sent (CHATGPT-10), so `effort.get`
+/// with an open session's handle reports the level that session began with beside the record. A
+/// level chosen after the session opened changes the record and leaves the starting level as it
+/// was, and a session that began with no level reports null.
+#[test]
+fn effort_get_names_the_level_an_open_session_began_with_whatever_is_chosen_after() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("a project directory");
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    let mut call = |method: &str, params: Value| {
+        let line = json!({"id": 1, "method": method, "params": params});
+        bridge
+            .dispatch(&Request::parse(&line.to_string()).unwrap())
+            .unwrap_or_else(|failure| panic!("{method} fails: {failure:?}"))
+    };
+    let open = |call: &mut dyn FnMut(&str, Value) -> Value| {
+        call("session.new", json!({"directory": directory.path()}))["session"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    call("effort.set", json!({"level": null}));
+    let unset = open(&mut call);
+    call("effort.set", json!({"level": "low"}));
+    let low = open(&mut call);
+    call("effort.set", json!({"level": "high"}));
+
+    let report = call(
+        "effort.get",
+        json!({"directory": directory.path(), "session": low}),
+    );
+    assert_eq!(report["recorded"], "high");
+    assert_eq!(report["sessionBegan"], "low");
+
+    let report = call(
+        "effort.get",
+        json!({"directory": directory.path(), "session": unset}),
+    );
+    assert_eq!(report["recorded"], "high");
+    let report = report.as_object().unwrap();
+    assert_eq!(report.get("sessionBegan"), Some(&Value::Null));
+}
+
+/// Bots and discovery calls name no open session, and a handle the bridge does not hold is not an
+/// error: either way the reply is the one before CHATGPT-10's desktop note, with no `sessionBegan`.
+#[test]
+fn effort_get_without_an_open_session_carries_no_starting_level() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("a project directory");
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    for params in [
+        json!({"directory": directory.path()}),
+        json!({"directory": directory.path(), "session": "no-such-session"}),
+    ] {
+        let line = json!({"id": 1, "method": "effort.get", "params": params});
+        let report = bridge
+            .dispatch(&Request::parse(&line.to_string()).unwrap())
+            .expect("effort.get answers");
+        let report = report.as_object().unwrap();
+        assert!(!report.contains_key("sessionBegan"), "{report:?}");
+        assert!(report.contains_key("recorded"));
+    }
 }

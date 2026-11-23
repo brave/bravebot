@@ -31,6 +31,7 @@ pub mod commit_message_command;
 pub mod config_prompt;
 pub mod confirm;
 pub mod crash_notice;
+pub mod crash_reports_command;
 pub mod dropped;
 pub mod editor;
 pub mod effort_prompt;

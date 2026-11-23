@@ -51,6 +51,7 @@ governs:
   - crates/aichat/src/models.rs
   - crates/aichat/src/roster.rs
   - crates/config/src/provider.rs
+  - crates/config/src/key_file.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/models.rs
   - crates/ui-bridge/src/effort.rs
@@ -477,14 +478,15 @@ is that the service owns those names, and a renamed one is reset by the endpoint
 
 What configures a gateway is a block whose field names, nesting and optionality are another tool's,
 so that a block copied out of that tool's configuration works here unedited. Nothing is required that
-it does not require, no field is added to the block however useful it would be, and a field this
-system does not know is read past rather than refused.
+it does not require, a field this system adds is optional and is written inside `options`
+(`options.keyFile` is one), and a field this system does not know is read past rather than refused.
 
 **Why.** The whole value of the shape is that somebody already knows it and an editor already
-validates it. A field added here would be one the other tool rejects, and a requirement added here
-would refuse a block it accepts, so either one costs exactly the property the borrowing was for.
-Reading past an unknown field is what makes a copy work, which is why it is the deliberate behaviour
-and not a shortcoming.
+validates it. A requirement added here would refuse a block the other tool accepts, which costs
+exactly the property the borrowing was for. A field added here is optional, so a block copied out of
+the other tool reads the same with or without it, and the website marks each such field as this
+system's own. Reading past an unknown field is what makes a copy work, which is why it is the
+deliberate behaviour and not a shortcoming.
 
 Optionality is the part of the shape easiest to take and then quietly not honour. That tool resolves a
 gateway's endpoint and its roster from a registry it fetches, so its blocks leave both out and the
@@ -624,6 +626,13 @@ none is in force until somebody typed a name. It is held for the session and is 
 looked up in whichever model is in force when a request is built, so a pick made under one model adds
 nothing under another that has no variant of that name.
 
+The desktop window's composer offers the same list, pick and drop through the bridge's
+`session.variant`. It lists the names the model chosen in the composer offers, picks an offered name,
+and with `null` or `off` drops the pick, under the same rules as `/variant`. The pick is held for the
+open chat in the bridge, is never written to the session store, and a chat that is opened, resumed,
+forked or made new starts with none. Each turn the bridge starts carries the pick held when the turn
+begins.
+
 Variants are read from the layers that may name `provider` ([BACKEND-24](#BACKEND-24)), because they
 are part of the block. They are merged into a request to a gateway in each protocol that merges
 `options`, and a Bedrock request, which merges none, carries none.
@@ -646,16 +655,21 @@ a file from deciding what was asked, and keeping the choice a person's is what k
 `verified-by: bravebot_agent::turn::a_chosen_variant_is_merged_into_the_planners_request`
 `verified-by: bravebot_tui::app::a_variant_the_model_offers_is_picked_and_reaches_the_next_turn`
 `verified-by: bravebot_tui::app::a_model_offering_no_variants_takes_no_pick`
+`verified-by: bravebot_ui_bridge::variant::session_variant_lists_picks_refuses_and_drops`
+`verified-by: bravebot_ui_bridge::variant::a_picked_variant_reaches_the_next_turns_request_and_none_adds_nothing`
+`verified-by: bravebot_ui_bridge::variant::a_new_or_forked_session_starts_with_no_variant`
 
 <a id="BACKEND-16"></a>
 ### BACKEND-16: a gateway credential is named rather than resolved ahead of time
 
-Where a gateway's credential lives is named by its block: variables that may hold it, or a value
-written in the file. A key `bravebot auth login gateway` stored for the block's id is a third place,
-kept in a file of its own rather than in settings ([CLI-18](cli.md#CLI-18)). A variable is read
-first, then the stored key, then the value in the file. It is read at the point a request needs it,
-and a request whose block named a credential that nothing holds is refused with the remedy named
-rather than sent.
+Where a gateway's credential lives is named by its block: variables that may hold it, a file that
+holds it, or a value written in the settings file. A key `bravebot auth login gateway` stored for the
+block's id is another place, kept in a file of its own rather than in settings
+([CLI-18](cli.md#CLI-18)). A variable the block's `env` names is read first (the first one that holds
+text), then the stored key, then the file `options.keyFile` names, then `options.apiKey`. The first
+source that gives a token is the credential, and a source later in the order is not read. A variable and
+the key file are read at the point a request needs it, and a request whose block named a credential
+that nothing holds is refused with the remedy named rather than sent.
 
 **Why.** Read once at startup, a credential goes stale in a session where somebody exported a new
 one. Sent without one, the request fails at the far end for a reason nothing local could explain,
@@ -663,8 +677,41 @@ which is the same argument that stops a model name being guessed for an unconfig
 variable is also the only way to keep a long-lived token out of a file people paste into issues,
 which is why it is preferred where the block offers both and why a value in the file never displaces
 one a variable holds. A stored key is out of the settings file too, so it comes before the value in
-it. A variable still comes first, because one exported for a single session is the more specific
-thing somebody said.
+it. A key file is out of the settings file like a stored key, so it comes after the stored key, which
+the person stored with a command for the purpose, and before `options.apiKey`. A variable still comes
+first, because one exported for a single session is the more specific thing somebody said.
+
+**A key file is read when a request needs it.** The file `options.keyFile` names is read by the one
+reader in `crates/config/src/key_file.rs`, which the search key file ([WEBSEARCH-6](tools/web-search.md#WEBSEARCH-6))
+uses too. The value is the absolute path of the file. A value that is blank or is not a string is read
+as not written, as a blank `apiKey` is. The file must be a regular file of at most 4,096 bytes and
+UTF-8, its whole content trimmed is the key, and the key must be non-empty ASCII with no whitespace or
+control character inside it. It is read when a request needs it, so a file replaced while a session is
+open is the one the next request reads, as a variable is. Where a variable or a stored key gives a
+token, the file is not read.
+
+**A key file that gives no key refuses the request.** A block that names `options.keyFile` has said
+where its credential lives. Where no variable and no stored key gives a token, and the file is missing,
+is not a regular file, cannot be read as text, holds more than 4,096 bytes, holds nothing but
+whitespace, or holds whitespace, a control character or a character outside ASCII inside the key, the
+request is refused and nothing is sent. So is a non-blank value that is not an absolute path, `~/key`
+included, since `~` is not expanded; it names a credential that cannot be used, and the text of the
+value is kept nowhere and printed nowhere. `options.apiKey` is not used in the file's place. The
+refusal is one sentence in the message catalog: `no credential for the <gateway> gateway: the file its
+\`options.keyFile\` names <reason>, so nothing was sent; fix the path, or put the key alone in that file`.
+The reason is one of five: is not an absolute path or is missing; is not a regular file or cannot be
+read as text; holds more than 4,096 bytes; holds nothing but whitespace; holds whitespace, a control
+character or a character outside ASCII inside the key. The sentence carries no path and no byte of the
+file, and no error, trace, log, prompt, `Debug` or `Display` carries the key or any text of the file.
+A roster does not ask a gateway whose key file gives no key and whose block names no models, except a
+service with a list compiled in, which is offered that list with no request, and the embeddings
+request of retrieval is not built for one. Neither sends a request with no credential.
+
+**A block naming a key file names a credential.** It is not a block naming no credential (below), so
+it is never read as the person saying the gateway wants none. A header named for the credential
+(`authorization`, `x-api-key`, `x-goog-api-key`) is refused in `options.headers` as it is for `env` and
+`apiKey` ([BACKEND-60](#BACKEND-60)). A Cloudflare entry that names a key file does not also read its
+default key variable (`CLOUDFLARE_API_KEY`, `CLOUDFLARE_API_TOKEN`).
 
 **The stored key is read when the program starts**, not at each request, so a key stored while a
 session is running is sent by the sessions started after it. The key is only stored, and never
@@ -686,8 +733,8 @@ signature over the request, so there is no credential for a block to name and no
 Which set of AWS credentials to sign with comes from the profile the block names, resolved when a
 request needs it, which is the same moment and the same reason a token is read.
 
-**A block naming no credential is the second exception.** An empty `env`, no `options.apiKey` and no
-key stored for its id is the person saying this gateway wants none, so its requests carry no
+**A block naming no credential is the second exception.** An empty `env`, no `options.apiKey`, no
+`options.keyFile` and no key stored for its id is the person saying this gateway wants none, so its requests carry no
 `authorization` header and its roster is asked for without one. A key stored for such a block is
 sent, because storing one is somebody saying the gateway wants one. A block that does name somewhere
 for a credential to live, and finds nothing there, is a stale or missing token and is still refused.
@@ -705,12 +752,28 @@ a gateway that wants no credential answers an unauthenticated request, so nothin
 for a reason nothing local could explain, and a refusal names a remedy that does not exist. Requiring
 a value instead would require a field of a block that does not have one, which BACKEND-13 rules out,
 and a dummy `apiKey` teaches people to write fake credentials into a file they paste into issues.
+A named file that gives no key is refused and not skipped because a stale `options.apiKey` left
+behind when the key moved to the file would otherwise be sent in its place.
 Deciding it by endpoint alone would refuse the same local service reached
 across a LAN or through a reverse proxy; the exception above reads the id and the absence of a stated
 endpoint, which such a service does not match. BACKEND-5 is unaffected: such a gateway is reachable, so
 offering its models is not offering rows that fail when picked.
 
 `verified-by: bravebot_config::provider::a_named_variable_holds_the_token_before_the_file_does`
+`verified-by: bravebot_config::provider::the_four_sources_of_a_gateway_token_are_read_in_order`
+`verified-by: bravebot_config::provider::a_named_variable_holds_the_token_before_a_key_file_does`
+`verified-by: bravebot_config::provider::a_key_file_is_read_before_a_token_written_into_the_block`
+`verified-by: bravebot_config::provider::a_key_file_is_read_again_when_a_request_needs_it`
+`verified-by: bravebot_config::provider::a_key_file_that_gives_no_key_is_refused_and_no_other_source_stands_in`
+`verified-by: bravebot_config::provider::a_key_file_that_is_not_an_absolute_path_names_a_credential_that_cannot_be_used`
+`verified-by: bravebot_config::provider::a_block_naming_a_key_file_refuses_the_header_its_credential_goes_in`
+`verified-by: bravebot_config::provider::a_cloudflare_entry_naming_a_key_file_does_not_read_its_default_variable`
+`verified-by: bravebot_aichat::roster::a_key_file_that_gives_no_key_sends_no_credential_and_shows_no_key_text`
+`verified-by: bravebot_aichat::embeddings::a_key_file_that_gives_no_key_is_refused_for_embeddings_and_names_nothing_of_it`
+`verified-by: bravebot_agent::backend::a_gateway_whose_key_file_gives_no_key_refuses_the_request_and_sends_nothing`
+`verified-by: bravebot_agent::backend::a_key_file_is_sent_as_the_gateways_bearer_token`
+`verified-by: bravebot_agent::accounts::a_key_file_that_gives_no_key_is_not_signed_in_and_one_that_does_is`
+`verified-by: bravebot_cli::doctor::a_gateway_key_file_is_reported_as_found_or_unusable_and_never_printed`
 `verified-by: bravebot_config::provider::a_stored_key_is_read_after_a_variable_and_before_the_file`
 `verified-by: bravebot_config::provider::a_stored_key_is_sent_to_a_block_naming_no_credential`
 `verified-by: bravebot_config::lib::a_stored_key_reaches_the_gateway_its_id_names`
@@ -1112,8 +1175,10 @@ choice of something.
 **A ChatGPT account is sent one level for a whole session.** The level in force when a session begins is the
 one the account is sent for all of it ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)): a request that asks for
 a level carries that one, in the field [BACKEND-21](#BACKEND-21) states, whatever was chosen afterwards, and
-a request that asks for none carries none. What is chosen applies to the account from the next session, and
-to every other service at once. A model of the account that refuses a request carrying the level is the
+a request that asks for none carries none. What is chosen with `/effort` applies to the account from the
+next session, what is chosen with `/effort session` applies from `/clear`, which begins the next ChatGPT
+session, and what is chosen applies to every other service at once. A model of the account that refuses
+a request carrying the level is the
 exception, as [BACKEND-22](#BACKEND-22) has it for any model: that refusal outranks the level the session
 began with, and no later request carries a level to that model.
 
@@ -1384,6 +1449,10 @@ nothing or somebody told their configuration is broken when their session merely
 `verified-by: bravebot_bedrock::credentials::a_listing_that_could_not_be_read_does_not_withhold_a_sign_in`
 `verified-by: bravebot_bedrock::credentials::naming_no_profile_is_not_naming_a_missing_one`
 `verified-by: bravebot_bedrock::credentials::a_machine_with_no_profiles_at_all_says_so`
+`verified-by: bravebot_bedrock::credentials::a_report_on_a_profile_the_cli_does_not_list_names_the_profiles_it_has`
+`verified-by: bravebot_bedrock::credentials::a_sign_in_for_a_profile_the_cli_does_not_list_never_runs_the_login`
+`verified-by: bravebot_bedrock::credentials::a_good_session_costs_the_export_and_no_listing`
+`verified-by: bravebot_bedrock::credentials::a_listing_the_cli_fails_to_give_does_not_withhold_the_sign_in`
 
 
 <a id="BACKEND-24"></a>
@@ -1411,6 +1480,7 @@ read as the table says.
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
 | `references`, `attribution`, `askIdleSeconds`, `permissions.startInAuto` | home layer, and the file `--settings` names; a project or local layer naming one is ignored and reported the same way. The managed file is not read for `permissions.startInAuto`, and `doctor` says so where it names it ([AUTO-1](auto-mode.md#AUTO-1)) |
+| `webSearch.keyFile`, `webSearch.env` | home layer, and the file `--settings` names; a project or local layer naming either is ignored and reported, and the rest of that layer's `webSearch` block is read as before ([WEBSEARCH-6](tools/web-search.md#WEBSEARCH-6)) |
 | `limit` | home layer, and the file `--settings` names, decide it as they would any key; a project or local layer may only narrow what they settled on (below) |
 | `updateCheck` | the same as `limit`: a project or local layer may turn it off and may not turn it on over the person's `false` |
 | `deepLinks` | the same as `updateCheck`: a project or local layer may turn links off and may not turn them on over the person's `false` |
@@ -1611,6 +1681,7 @@ with it.
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_backend`
 `verified-by: bravebot_config::settings::a_project_provider_block_leaves_the_home_ones_alone`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_a_key_file_for_a_gateway`
 `verified-by: bravebot_config::settings::a_named_layer_picks_a_backend`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_smuggle_a_provider_env_name`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_model`
@@ -2848,9 +2919,12 @@ reaches or the command a program runs, and a session starts none the lists refus
 [SERVERS-12](mcp-servers.md#SERVERS-12) is those keys, and says why the layer may keep a server
 from starting and never add one.
 
-No credential is read from this file. A gateway entry's `apiKey` is dropped, and the entry's host,
-models and variable names are honoured without it. A key the person stored for the entry's id with
-`bravebot auth login gateway` is sent to it, as a variable it names is.
+No credential is read from this file. A gateway entry's `apiKey` and `options.keyFile` are dropped,
+and the entry's host, models, variable names and headers are honoured without them. A key the person
+stored for the entry's id with `bravebot auth login gateway` is sent to it, as a variable it names is.
+The layer names the host a token goes to, so it does not also choose which file's content is sent
+there. An entry that names only a key file therefore names no credential once the file is dropped, as
+one that names only an `apiKey` does.
 
 The `provider` block is pinned whole rather than a name at a time, and a block that is present and
 empty says that there are no gateways. A file that does not have the block, or that spells it as
@@ -2911,6 +2985,7 @@ that path rather than with the person in front of the screen.
 `verified-by: bravebot_config::managed::a_provider_key_that_is_not_a_block_decides_nothing`
 `verified-by: bravebot_config::managed::a_gateway_block_names_the_gateways_in_force`
 `verified-by: bravebot_config::managed::a_token_written_into_the_file_is_not_read`
+`verified-by: bravebot_config::managed::a_key_file_written_into_the_file_is_not_read`
 `verified-by: bravebot_config::managed::an_absent_file_pins_nothing_and_is_not_reported`
 `verified-by: bravebot_config::managed::an_unparseable_file_pins_nothing_and_is_still_named`
 `verified-by: bravebot_config::managed::a_blank_value_pins_nothing`
@@ -3352,6 +3427,18 @@ and writing one down would make reading a file once enough to outlive the file.
 Nothing else names a level: no release bakes one in, no variable is read for one, and the
 machine-level layer of [BACKEND-38](#BACKEND-38) does not pin it.
 
+A level chosen with `/effort session` ranks as a level chosen in the running session does: above
+`--effort`, above the recorded level and above every settings file, for the session that chose it
+and for no other. It is written to no file of the effort setting, so the next session opens on the
+level it would have had without it. A level recorded with `/effort` afterwards replaces it. The
+session record, which the Sessions screen reads for its Reasoning line, holds the level in force when
+a turn finished. A turn that finished while a session-only level was in force leaves that level in the
+record, as it does for a recorded level, and a level chosen after the last turn finished is not in it.
+A resumed session opens on the recorded level or the settings file's and not on a session-only one,
+because nothing reads a level back out of a record into a running session. `/clear`, `/handoff` and
+`/branch` keep a session-only level for the session that chose it. An incognito session takes it and
+writes nothing.
+
 **Why.** A pick is stored once per person and read back by every run. Ranked above every file, it
 would be the one thing a checkout cannot override: two checkouts in one account cannot want
 different levels, and "the work in this repository is worth thinking hard about" is undone by
@@ -3382,6 +3469,14 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_session::store::a_checkouts_level_outranks_the_saved_pick_and_the_home_file_does_not`
 `verified-by: bravebot_session::store::a_settings_file_naming_no_level_asks_for_none`
 `verified-by: bravebot_tui::persist::a_recorded_level_answers_between_a_checkouts_file_and_the_persons_own`
+`verified-by: bravebot_tui::persist::a_level_chosen_for_this_session_is_recorded_nowhere_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_session_only_level_is_asked_for_over_the_record_and_the_files_and_the_next_session_ignores_it`
+`verified-by: bravebot_tui::app::a_resume_after_a_session_only_level_opens_on_the_recorded_level`
+`verified-by: bravebot_tui::app::a_turn_begun_after_effort_session_is_asked_for_that_level`
+`verified-by: bravebot_tui::app::a_session_only_level_survives_a_clear_and_a_handoff`
+`verified-by: bravebot_tui::app::a_branch_keeps_a_session_only_level_chosen_after_the_last_turn_and_records_it_nowhere`
+`verified-by: bravebot_tui::app::the_record_and_a_branch_hold_the_level_in_force_when_the_last_turn_finished`
+`verified-by: bravebot_tui::app::an_incognito_session_takes_a_session_only_level_and_writes_nothing`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded`
 `verified-by: bravebot_cli::running::a_run_sends_a_checkouts_level_over_the_recorded_one`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`
@@ -3770,6 +3865,8 @@ request back in its error body is quoted without the header.
 `verified-by: bravebot_aichat::lib::another_gateway_still_sends_its_token_as_a_bearer`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refusal`
+`verified-by: bravebot_aichat::client::a_vertex_key_the_service_echoes_in_its_refusal_is_in_no_error_event_or_log_line`
+`verified-by: bravebot_aichat::client::a_vertex_key_is_in_no_event_reply_or_log_line_of_an_answered_request`
 `verified-by: bravebot_aichat::client::a_refused_google_vertex_request_does_not_repeat_the_key`
 `verified-by: bravebot_config::provider::a_google_vertex_key_is_sent_in_its_own_header`
 
@@ -4408,11 +4505,12 @@ file.
 A name the request's own framing or authentication depends on is refused when the block is read,
 and the block's other headers are still sent: `host`, `content-length`, `content-type`,
 `transfer-encoding`, `connection`, and the header this provider's credential goes in where the
-block names a credential, which is `x-goog-api-key` for `google-vertex`
+block names a credential (an `env`, an `options.apiKey` or an `options.keyFile`), which is `x-goog-api-key` for `google-vertex`
 ([BACKEND-51](#BACKEND-51)), `x-api-key` for an `anthropic` entry reached through the Messages API
 ([BACKEND-57](#BACKEND-57)), and `authorization` for every other gateway, whichever protocol it
 answers in. A block naming no credential may write `authorization` itself, because then nothing
-else is setting it. `anthropic-version` is refused on an `anthropic` entry the same way, since this
+else is setting it. A block naming an `options.keyFile` names a credential, whether or not the file
+gives a key. `anthropic-version` is refused on an `anthropic` entry the same way, since this
 program sets it on every Messages request before a configured header is. An entry naming AWS sends
 no configured header at all, Bedrock signing over the headers it sends.
 A name that is not a field name, a value holding a line ending or another character a header
@@ -4821,6 +4919,7 @@ others.
 `verified-by: bravebot_aichat::models::a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes`
 `verified-by: bravebot_aichat::roster::a_roster_gives_up_on_a_gateway_that_takes_the_connection_and_never_answers`
 `verified-by: bravebot_aichat::roster::the_entries_are_in_the_configurations_order_and_each_kind_of_gateway_is_told_apart`
+`verified-by: bravebot_aichat::roster::a_key_file_that_gives_no_key_sends_no_credential_and_shows_no_key_text`
 `verified-by: bravebot_cli::window_lookup::a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes`
 `verified-by: bravebot_cli::window_lookup::a_turn_sent_before_the_window_arrives_waits_for_it`
 `verified-by: bravebot_tui::app::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
@@ -4837,6 +4936,10 @@ Where a request goes to a `google-vertex` service that a project builds ([BACKEN
 a Google Vertex host over `https`, and no key resolves ([BACKEND-50](#BACKEND-50)) and the block states no
 `authorization` header, bravebot asks the Google Cloud CLI for an access token with
 `gcloud auth application-default print-access-token` and sends it as `authorization: Bearer <token>`.
+A key resolves from a variable the block's `env` names, from a key stored for the block's id, from the
+file `options.keyFile` names, or from `options.apiKey`, in that order ([BACKEND-16](#BACKEND-16)). A
+key file that gives no key is no key resolving here, as an unset variable is, so the CLI token is used
+and the request is not refused as [BACKEND-16](#BACKEND-16) refuses it for other gateways.
 A key that resolves is sent as [BACKEND-51](#BACKEND-51) says and the program is not started. Express
 mode, and an entry whose `baseURL` is not a Google Vertex host, are never sent a token.
 
@@ -4888,6 +4991,7 @@ check before a turn is one more run of the program.
 
 `verified-by: bravebot_config::provider::only_a_project_reached_at_a_google_vertex_host_takes_the_google_cloud_token`
 `verified-by: bravebot_config::provider::a_key_or_an_authorization_header_of_the_blocks_own_leaves_no_need_for_a_token`
+`verified-by: bravebot_config::provider::a_vertex_key_file_gives_the_key_or_leaves_the_google_cloud_token_in_use`
 `verified-by: bravebot_config::lib::a_project_alone_names_the_service_the_google_cloud_cli_signs_in`
 `verified-by: bravebot_aichat::lib::a_google_vertex_access_token_is_sent_as_a_bearer_and_not_in_the_key_header`
 `verified-by: bravebot_agent::backend::a_vertex_project_with_no_key_is_sent_the_token_the_cli_gives`
@@ -5232,6 +5336,11 @@ cancel kills it rather than asking it to stop.
   bounded set writes the allow list, which is the half that cannot be got around by a name nobody
   thought of. A gateway whose roster grows is the case this costs most: a new slug reaches a machine
   whose file only denies.
+  The comparison is exact in case as well. Whether a service accepts a model name written in
+  another case is not known. Where a service does, a deny entry written in one case does not
+  refuse the name written in another, which that
+  service answers as the same model. An allow list is not affected, since a name it does not hold in
+  that case is not allowed ([#4041](https://github.com/brave/bravebot/issues/4041), row 37).
 
 - **The refusal is made where a model is settled, and a model picked mid-session is not checked
   again.** The same cost BACKEND-39 carries and for the same reason: `/model` offers only what the
@@ -5369,7 +5478,9 @@ cancel kills it rather than asking it to stop.
   is wanted: a private deployment behind a known name, or a local service reached at one, may want
   none. A block whose `apiKey` is written blank, or whose `env` lists only blank names, names no
   credential by that same reading, since a blank in this file is read as nothing having been written
-  there. A placeholder somebody meant to fill in later at a stated endpoint is therefore read as them
+  there. A blank `options.keyFile`, or one that is not a string, is read the same way. A non-blank
+  `options.keyFile` that is not an absolute path is not blank: it names a credential that cannot be
+  used, and the request is refused. A placeholder somebody meant to fill in later at a stated endpoint is therefore read as them
   saying none is wanted, and the refusal that would have pointed at it does not happen.
 
 - **A credential is resolved by running the AWS CLI.** Reaching Bedrock needs short-lived keys that
@@ -5537,11 +5648,34 @@ cancel kills it rather than asking it to stop.
   person's own layers; a block pasted by hand is the person's own act and is read whole.
 
 - **A header in the managed layer is a value every account on the machine can read.** The layer
-  drops `options.apiKey` for that reason and keeps `headers`, because a header is how that layer
+  drops `options.apiKey` and `options.keyFile` for that reason and keeps `headers`, because a header is how that layer
   names a tenant or a route and dropping it would leave the gateway it approves unreachable. So a
   header value written into `managed.json` directly, rather than as `{env:NAME}`, is readable by
   anybody on the machine, and one holding a second credential is that credential handed to every
   account. Naming a variable is the form that avoids it.
+
+- **A block whose key file gives no key is listed as having no credential.** The model picker of the
+  desktop window and the roster of a gateway whose block names no models read a block whose key file
+  gives no key as one with no credential, and the desktop window warns "No credential configured for
+  <gateway>." The sentence does not say that the block names a key file or that the file gave no key,
+  and the terminal picker says nothing for the block. A request to the gateway is refused with the
+  sentence BACKEND-16 states, which names `options.keyFile` and the reason, and `bravebot doctor` and
+  `bravebot auth status` give the same reason. Naming the key file in the picker's warning needs a
+  catalog message of its own and a new case in the roster's entry type that each reader of the
+  roster handles.
+
+- **A Vertex project with no key is listed as not signed in.** `bravebot auth status` and the
+  window list a `google-vertex` block whose `env` variable holds nothing, or whose `options.keyFile`
+  gives no key, as not signed in, although a request to a Google Vertex host is sent the Google Cloud
+  CLI token ([BACKEND-65](#BACKEND-65)), because the account listing does not ask the CLI.
+
+- **A managed block that names only a key file names no credential.** The layer drops
+  `options.keyFile` where it drops `options.apiKey`, so a managed block that names only a key file is,
+  once the file is dropped, a block naming no credential, as one that names only an `apiKey` is
+  (BACKEND-16). It is read as the person saying the gateway wants none, unless it is a known name at
+  its compiled-in host, and sends no credential until a variable its `env` names or a key stored
+  with `bravebot auth login gateway` gives one. An administrator who wants a file's content sent
+  cannot say so in this layer.
 
 - **An `aws` that lives only in a directory a stage can write is not found.** The same holds for
   a bare hook program, a language server and the Ctrl-G editor, which read as not found, not
@@ -5791,3 +5925,4 @@ guessed project does.
 `verified-by: bravebot_config::provider::a_cloudflare_entry_is_reached_at_the_host_its_ids_build`
 `verified-by: bravebot_config::provider::a_cloudflare_id_that_would_move_the_request_configures_nothing`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_cloudflare_host_and_a_named_credential_beats_the_default`
+`verified-by: bravebot_config::provider::a_cloudflare_entry_naming_a_key_file_does_not_read_its_default_variable`

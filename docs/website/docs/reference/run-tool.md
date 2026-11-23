@@ -284,10 +284,12 @@ link to a directory. `ls`, `stat` and `du` must name a path, because with none t
 working directory or, for BSD `stat`, on standard input, and `-L` and `-H` are refused because they
 follow a link to a place the line does not name.
 
-A name an unquoted pattern matched counts as a path read only where the program reads that argument as
-a file. Where it sits as an operand the program prints (`basename`'s or `dirname`'s), as grep's pattern,
-as an option or as an option's value, the line is not proven: you are asked and the output is untrusted.
-So `basename incoming/*` asks, `basename 'incoming/*'` (quoted, passed as written) does not, and
+A word an unquoted pattern produced counts as a path read only where the program reads that argument as
+a file, whether the pattern matched a name or matched nothing and is passed as written. Where it sits as
+an operand the program prints (`basename`'s or `dirname`'s), as grep's pattern, as an option or as an
+option's value, the line is not proven: you are asked and the output is untrusted, so what a directory
+holds does not decide whether you are asked. So `basename incoming/a*` asks whether or not a name in
+`incoming/` begins with `a`, `basename 'incoming/a*'` (quoted, passed as written) does not, and
 `cat src/*.rs` in a tree you vouched for still runs unasked. A matched name that starts with `-` is
 read as an option and also stops the proof.
 
@@ -426,14 +428,17 @@ no option name before the `=`, a pattern ahead of the `=`, and a dash with no `=
 planner is told the line as it wrote it, with the pattern, in a run's result, in a job's start and end,
 and in an error. A refusal by a `deny` rule names the program and no operands.
 
-A name a pattern matched counts as a file the line reads only where the program reads it as a file.
-`cat incoming/*` takes its label from what the trust map says about `incoming/`. `basename incoming/*`
-may print the names, so the line is asked about and its output is quarantined, and so is a line where
-a matched name starts with `-` and so is read as an option. Quoting the pattern, as in
-`basename 'incoming/*'`, passes it as written and keeps the line proven by what it reads.
+A word a pattern produced counts as a file the line reads only where the program reads it as a file,
+whether the pattern matched a name or matched nothing. `cat incoming/*` takes its label from what the
+trust map says about `incoming/`. `basename incoming/*` may print the names, so the line is asked about
+and its output is quarantined, and it is the same when nothing in `incoming/` matches, so the question
+and the label do not tell whether a name exists. A line where a matched name starts with `-` is read as
+an option and is asked about too. Quoting the pattern, as in `basename 'incoming/*'`, passes it as
+written and keeps the line proven by what it reads.
 
-Expansion is bounded in both directions: a word standing for more than 100 arguments is refused with
-the count, and the walk gives up after 4,096 directories. An approval prompt nobody reads grants
+Expansion is bounded in both directions: a word standing for more than 100 arguments is refused, and
+the refusal says the cap and not how many names a pattern matched, because the planner may not learn
+that from a directory nobody vouched for. The walk gives up after 4,096 directories. An approval prompt nobody reads grants
 everything and asks nothing.
 
 ## A redirection is a write
@@ -680,7 +685,8 @@ assignments. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
 
 The description of `run` tells the planner that these three are removed, and that the variables your
-settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
+settings name as a gateway's token, as the Brave Search key or in `run.scrubEnv` are removed too,
+without listing those. It
 also says that a program reporting one of them unset says nothing about whether you have set it, so a
 build that fails for want of one is not reported to you as a gap in your setup.
 

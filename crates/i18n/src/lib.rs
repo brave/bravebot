@@ -661,4 +661,82 @@ mod tests {
             assert_eq!(pick(word), Err(NoCatalog), "{word:?}");
         }
     }
+
+    /// Whether `library`, the source of this file, links the catalog parser into the shipped
+    /// library. Every line outside the test module that names the parser's module or file is
+    /// collected, and exactly one may exist: the private `mod catalog;` with `#[cfg(test)]` among
+    /// the attributes directly above it.
+    fn the_catalog_parser_is_compiled_for_tests_only(library: &str) -> Result<(), String> {
+        let shipped = library.split("\nmod tests {").next().unwrap_or_default();
+        let lines: Vec<&str> = shipped.lines().map(str::trim).collect();
+        let naming: Vec<usize> = (0..lines.len())
+            .filter(|&at| {
+                let line = lines[at];
+                !line.starts_with("//")
+                    && line.contains("catalog")
+                    && ["mod ", "use ", "include", "::", ".rs"]
+                        .iter()
+                        .any(|word| line.contains(word))
+            })
+            .collect();
+        let [at] = naming[..] else {
+            return Err(format!("{} lines name the parser", naming.len()));
+        };
+        if lines[at] != "mod catalog;" {
+            return Err(format!("the parser is declared as `{}`", lines[at]));
+        }
+        let mut attached = lines[..at]
+            .iter()
+            .rev()
+            .take_while(|line| line.starts_with("//") || line.starts_with("#["));
+        if attached.any(|line| *line == "#[cfg(test)]") {
+            Ok(())
+        } else {
+            Err("the parser is compiled outside tests".to_string())
+        }
+    }
+
+    /// The parser is compiled for the build script, which includes its file, and for tests. A
+    /// library that declares the module without the gate, or exports it, links a parser into every
+    /// binary while the doctest that calls `bravebot_i18n::catalog::parse` still fails to compile
+    /// because the module is private.
+    #[test]
+    fn the_library_a_binary_links_has_no_catalog_parser() {
+        let library = include_str!("lib.rs");
+        assert_eq!(
+            the_catalog_parser_is_compiled_for_tests_only(library),
+            Ok(())
+        );
+
+        let gated = "/// The parser.\n#[cfg(test)]\nmod catalog;\npub mod plural;\n";
+        assert_eq!(the_catalog_parser_is_compiled_for_tests_only(gated), Ok(()));
+        for (shape, source) in [
+            (
+                "no gate",
+                "/// The parser.\nmod catalog;\npub mod plural;\n",
+            ),
+            ("an exported module", "#[cfg(test)]\npub mod catalog;\n"),
+            (
+                "an exported use",
+                "#[cfg(test)]\nmod catalog;\npub use catalog::parse;\n",
+            ),
+            (
+                "a second declaration",
+                "#[cfg(test)]\nmod catalog;\nmod catalog;\n",
+            ),
+            (
+                "a path attribute",
+                "#[path = \"catalog.rs\"]\nmod parser;\n",
+            ),
+            (
+                "a gate on another item",
+                "#[cfg(test)]\nmod generate;\nmod catalog;\n",
+            ),
+        ] {
+            assert!(
+                the_catalog_parser_is_compiled_for_tests_only(source).is_err(),
+                "{shape} was accepted"
+            );
+        }
+    }
 }

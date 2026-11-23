@@ -81,7 +81,7 @@ test('the composer asks for the command only from the text a person typed, throu
   // The recogniser is applied to the draft in the three places the box sends a line from.
   assert.equal([...turn.matchAll(/scheduleArgument\(/g)].length, 3, 'submit, the interject key and the queue key')
   // A line leaving the queue is asked again only where the person's line was held for the turn.
-  assert.match(turn, /message\.schedule !== undefined\s*\?\s*schedule\(handle, message\.schedule, message\.prompt, true\)\s*:\s*send\(/)
+  assert.match(turn, /message\.schedule !== undefined\s*\?\s*schedule\(handle, message\.schedule, message\.prompt, message\.staged, true\)\s*:\s*send\(/)
   // The window holds a writing form for the turn on the bridge's refusal, not on a reading of the line.
   assert.match(turn, /error\.code === 'turn_in_flight'/)
   assert.doesNotMatch(turn.slice(turn.indexOf('const schedule = ')), /reads_only|readsOnly|startsWith\('(add|remove)/)
@@ -98,7 +98,27 @@ test('a /schedule line typed behind a waiting /schedule line waits, and is not s
   const called = body.indexOf("call<ScheduleAnswer>('schedule.command'")
   assert.ok(read > 0 && called > read, 'the queue is read before schedule.command is called')
   assert.match(body.slice(0, called), /!queuedAlready && openedLives\.current\.get\(handle\)\?\.queued\?\.some\(\(item\) => item\.schedule !== undefined\)/)
-  assert.match(body.slice(0, called), /if \(waiting\) \{.*?queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged: \[\], schedule: argument \}\].*?return\s*\}/s)
+  assert.match(body.slice(0, called), /if \(waiting\) \{.*?queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged, schedule: argument \}\].*?return\s*\}/s)
+})
+
+test('a /schedule line sends the markers it names, and clears what the box had staged (DROP-4, DROP-6)', () => {
+  const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
+  const body = turn.slice(turn.indexOf('const schedule = '))
+  // Only markers and file names go with the argument; the bridge puts them back to names and words.
+  assert.match(body, /call<ScheduleAnswer>\('schedule\.command', \{ session: handle, argument, \.\.\.markersOf\(staged\) \}\)/)
+  // A line that waits keeps what it named, so a line the queue reaches later carries the same.
+  assert.equal([...turn.matchAll(/staged: \[\], schedule: argument/g)].length, 0, 'no queued schedule line drops what it named')
+  assert.equal([...turn.matchAll(/\{ prompt: line, attachments: \[\], staged, schedule: argument \}/g)].length, 2)
+  // Each place the box dispatches a /schedule line takes what it names, then clears the staging.
+  const sites = [...turn.matchAll(/if \(typed !== null[^{]*\{(.*?)return\s*\}/gs)].map((match) => match[1])
+  assert.equal(sites.length, 3, 'submit, the interject key and the queue key')
+  for (const site of sites) {
+    const naming = site.search(/const staged = named\(live\??\.staging, /)
+    const clearing = site.indexOf("setDraft('')")
+    assert.ok(naming >= 0 && clearing > naming, 'the staged items are taken before the draft is cleared')
+    assert.match(site, /setLive\(\(old\) => old \? \{ \.\.\.old, attachments: \[\], staging: sent\(old\.staging\) \} : old\)/)
+    assert.match(site, /void schedule\(.*, staged\)$/m)
+  }
 })
 
 test('the bridge method is one the window may send, and is a method the main process does not gate by directory', () => {

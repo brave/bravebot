@@ -303,6 +303,10 @@ impl Step {
                 vec![subject, Part::Words(format!(":{}", self.text("tool")))],
                 Vec::new(),
             ),
+            APPLY => (
+                vec![subject, Part::Words(format!(":{}", self.text("tools")))],
+                Vec::new(),
+            ),
             _ => (vec![subject], routing),
         };
 
@@ -591,6 +595,13 @@ pub const MCP_CALL: &str = "mcp_call";
 /// the same literal arguments, and its reply is quarantined as any fetch's is.
 pub const MCP_READ: &str = "mcp_read";
 
+/// The step that calls tools of an MCP server for each row an isolated processor proposes, where
+/// the person approves the resolved list (`docs/design/manifest-apply.md`).
+///
+/// Named for the reason [`ANSWER`] is. Its server and tools are routing; its arguments are a body
+/// the plan wrote that says, for each argument of each tool, where its value may come from.
+pub const APPLY: &str = "apply";
+
 /// Whether a step calls a tool of an MCP server, to act or to read.
 pub fn is_server_call(tool: &str) -> bool {
     tool == MCP_CALL || tool == MCP_READ
@@ -840,6 +851,35 @@ const CONTRACTS: &[Contract] = &[
         routing: &["server", "tool"],
         headline: &["server"],
         verb: "read",
+    },
+    // The server is an alias a person typed, and the tools words on a list a person vouched for,
+    // written as one comma-separated field so the routing lock holds them as text. The arguments
+    // are the plan's own text, a JSON object that gives each argument of each tool its kind. The
+    // lists are slots earlier fetches filled, read for their entries; the step fills no slot.
+    Contract {
+        tool: APPLY,
+        tier: Tier::Act,
+        required: &["server", "tools", "arguments", "lists", "instruction"],
+        accepted: &[
+            "server",
+            "tools",
+            "arguments",
+            "lists",
+            "entries",
+            "instruction",
+            "max_rows",
+            "max_new",
+        ],
+        slot_output: None,
+        slot_inputs: &["lists"],
+        slot_refs: &[],
+        paths: &[],
+        counts: &["max_rows", "max_new"],
+        texts: &["arguments", "instruction", "entries"],
+        alternatives: &[],
+        routing: &["server", "tools"],
+        headline: &["server"],
+        verb: "apply",
     },
     Contract {
         tool: ANSWER,
@@ -1934,6 +1974,31 @@ mod tests {
         }
     }
 
+    /// MANIFEST-5: the schema names exactly these tools at these tiers. There is no `run`, shell,
+    /// `edit_file` or `todo_write`, so a command string never becomes a step. Rejects a table that
+    /// gains any tool, which the registry test passes while the registry gains the same one.
+    #[test]
+    fn the_schema_names_exactly_the_tools_the_clause_allows() {
+        let mut named = tools();
+        named.sort_unstable_by_key(|(tool, _)| *tool);
+        assert_eq!(
+            named,
+            vec![
+                (ANSWER, Tier::Act),
+                (APPLY, Tier::Act),
+                (CONNECTOR_ACT, Tier::Act),
+                (CONNECTOR_FETCH, Tier::Fetch),
+                ("list_files", Tier::Fetch),
+                (MCP_CALL, Tier::Act),
+                (MCP_READ, Tier::Fetch),
+                ("process", Tier::Process),
+                ("read_file", Tier::Fetch),
+                ("search", Tier::Fetch),
+                ("write_file", Tier::Act),
+            ]
+        );
+    }
+
     /// Validation is a function of the draft and nothing else, so the same plan is refused for
     /// the same reason every time and a person can be told what to change.
     #[test]
@@ -2250,6 +2315,47 @@ mod tests {
                 field: "out_slot",
                 ..
             })
+        ));
+    }
+
+    /// An apply step reads the list an earlier read filled, comes after every read, and is locked by
+    /// its server and tools, never by its arguments or its instruction.
+    #[test]
+    fn an_apply_step_reads_its_list_and_locks_its_server_and_tools() {
+        let apply = DraftStep::new(APPLY)
+            .with_text("server", "brave-bookmarks-write")
+            .with_text("tools", "create_bookmark_folder,move_bookmark")
+            .with_text("arguments", r#"{"move_bookmark":{"url":{"entry":"url"}}}"#)
+            .with("lists", Arg::List(vec!["marks".to_string()]))
+            .with_text("instruction", "group these bookmarks");
+        let plan = validate(&Draft::new(vec![
+            server_read("brave-bookmarks-read", "list_bookmark_folder", "marks"),
+            apply.clone(),
+        ]))
+        .unwrap();
+        assert_eq!(plan.steps()[1].tier(), Tier::Act);
+        assert_eq!(
+            plan.steps()[1].describe(),
+            "apply brave-bookmarks-write:create_bookmark_folder,move_bookmark from marks"
+        );
+        let routing = plan.routing();
+        assert!(routing.contains(&(
+            "step_1_server".to_string(),
+            "brave-bookmarks-write".to_string()
+        )));
+        assert!(routing.contains(&(
+            "step_1_tools".to_string(),
+            "create_bookmark_folder,move_bookmark".to_string()
+        )));
+        assert!(
+            routing
+                .iter()
+                .all(|(key, _)| !key.ends_with("arguments") && !key.ends_with("instruction")),
+            "{routing:?}"
+        );
+        assert!(matches!(
+            validate(&Draft::new(vec![apply])),
+            Err(ManifestError::SlotNotYetWritten { .. })
         ));
     }
 

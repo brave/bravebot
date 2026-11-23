@@ -265,7 +265,19 @@ impl Workspace {
             });
         }
         let canonical = existing_directory(directory)?;
+        self.admit_resolved_directory(directory, canonical, BACKSLASH_SEPARATES)
+    }
 
+    /// The refusals of [`Workspace::resolve_directory`] that look at where `canonical`, the name
+    /// `directory` resolved to, sits. `backslash_separates` is the host's answer about what
+    /// separates, which a caller outside the tests takes from [`BACKSLASH_SEPARATES`]: asked of a
+    /// name from another host, it lets the refusal of an unkeyable name be exercised everywhere.
+    pub(super) fn admit_resolved_directory(
+        &self,
+        directory: &str,
+        canonical: PathBuf,
+        backslash_separates: bool,
+    ) -> Result<PathBuf, WorkspaceError> {
         if canonical.starts_with(&self.root) {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -308,7 +320,7 @@ impl Workspace {
             });
         }
 
-        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
+        refuse_unkeyable(&canonical, directory, backslash_separates)?;
 
         Ok(canonical)
     }
@@ -617,7 +629,20 @@ impl Workspace {
             return Err(WorkspaceError::KeepsCheckouts { ids: kept });
         }
         let canonical = existing_directory(directory)?;
+        self.move_root_to(directory, canonical, BACKSLASH_SEPARATES)
+    }
 
+    /// The part of [`Workspace::change_root`] that looks at where `canonical`, the name
+    /// `directory` resolved to, sits, and the move itself. `backslash_separates` is the host's
+    /// answer about what separates, which a caller outside the tests takes from
+    /// [`BACKSLASH_SEPARATES`]: asked of a name from another host, it lets the refusal of an
+    /// unkeyable name be exercised everywhere.
+    pub(super) fn move_root_to(
+        &mut self,
+        directory: &str,
+        canonical: PathBuf,
+        backslash_separates: bool,
+    ) -> Result<Moved, WorkspaceError> {
         if canonical == self.root {
             return Err(WorkspaceError::Invalid {
                 path: directory.to_string(),
@@ -645,7 +670,7 @@ impl Workspace {
             });
         }
 
-        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
+        refuse_unkeyable(&canonical, directory, backslash_separates)?;
 
         bravebot_sandbox::programs::keep_out_with_checkout(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.

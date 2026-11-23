@@ -55,8 +55,58 @@ fn a_press_on_a_row_moves_the_cursor_and_a_second_takes_it_in_a_picker_opened_mi
     press(&mut session, row, column, KeyModifiers::NONE);
     assert!(session.picking().is_none(), "the second press left it open");
     match session.take_pick() {
-        Some(Picked::Effort(row)) => assert_eq!(row.0, Some(Effort::High)),
+        Some(Picked::Effort(row, scope)) => {
+            assert_eq!(row.0, Some(Effort::High));
+            assert_eq!(scope, crate::model_prompt::Scope::EverySession);
+        }
         other => panic!("the row taken was {other:?}"),
+    }
+}
+
+/// MOUSE-15, MOUSE-29, VIEW-46. A second press on a row of an effort picker opened mid-turn
+/// takes the row with the scope the picker is in: the one it was opened in, or the one Tab left it
+/// in. Rejects: a press that takes the row in the every-session scope whatever the picker is in,
+/// which records a level that was asked to be kept for this session only, and one that reads the
+/// scope the picker was opened in and not the one in force.
+#[test]
+fn a_second_press_on_a_row_of_the_effort_picker_takes_it_in_the_scope_in_force() {
+    use crate::model_prompt::Scope;
+    for (opened_in, tabs, taken_in) in [
+        (Scope::ThisSession, 0, Scope::ThisSession),
+        (Scope::EverySession, 0, Scope::EverySession),
+        (Scope::EverySession, 1, Scope::ThisSession),
+        (Scope::ThisSession, 1, Scope::EverySession),
+    ] {
+        let (mut session, _) = a_session_beside_the_panel();
+        session.open_picking(Picking::Effort(
+            crate::effort_prompt::Picker::new(None).starting_in(opened_in),
+        ));
+        drawn(&mut session);
+        for _ in 0..tabs {
+            session.press_in_picking(KeyCode::Tab, KeyModifiers::NONE);
+        }
+        drawn(&mut session);
+
+        let (row, column) = row_of_the_picker(&session, 4);
+        press(&mut session, row, column, KeyModifiers::NONE);
+        assert!(
+            session.take_pick().is_none(),
+            "the first press took the row"
+        );
+        press(&mut session, row, column, KeyModifiers::NONE);
+
+        let case = format!("opened in {opened_in:?}, {tabs} Tab");
+        assert!(
+            session.picking().is_none(),
+            "{case}: the picker stayed open"
+        );
+        match session.take_pick() {
+            Some(Picked::Effort(row, scope)) => {
+                assert_eq!(row.0, Some(Effort::Xhigh), "{case}");
+                assert_eq!(scope, taken_in, "{case}");
+            }
+            other => panic!("{case}: the row taken was {other:?}"),
+        }
     }
 }
 

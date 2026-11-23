@@ -531,12 +531,12 @@ name the session bus that `gio open` connects to: `XDG_RUNTIME_DIR` is kept only
 directory outside every directory a stage may write, and `DBUS_SESSION_BUS_ADDRESS` only if every
 entry is a `unix:path=` socket path outside those directories (or `unix:runtime=yes`). An address of
 another transport, an abstract socket or a path that does not exist is removed whole. The same address
-check applies to the clipboard tool `wl-copy` on Linux, whose helper programs read it. `systemctl --user`
+check applies to the clipboard tool `wl-copy` on Linux, whose helper programs read it, and to the AWS CLI, `gcloud` and the programs of `doctor --push-identity`, which open a sign-in page or a credential helper's page through `xdg-open`. `systemctl --user`
 (used by `bravebot schedule`) and `systemd-inhibit` (used by `/caffeinate`) have neither
 `DBUS_SESSION_BUS_ADDRESS` nor `DBUS_SYSTEM_BUS_ADDRESS` whatever they hold, so no `unixexec:` address
 reaches them. The `make` that `doctor --sandbox-check` starts also has the variables and special
 targets that make it run a program removed, including `CPP`, `TARGET_MACH` and `.SHELLFLAGS`. The desktop app removes
-the five names above, and not these two, before it opens an address or a file.
+the five names above before it opens an address or a file, and asks the agent which of these two lead to a socket a stage may write and removes those.
 Every other variable reaches the opener unchanged. If your own `BROWSER` or `XDG_*` setting points
 into a directory a stage may write, the opener ignores it and uses the system default. `HOME` is
 removed for the AWS CLI and the opener, and also for an asdf or pyenv shim (a file directly in a
@@ -727,8 +727,15 @@ deleted. The service sees the network address a request came from, as any server
 
 Reports are on in a released build and off in a build from source that was not given an address.
 `BRAVEBOT_CRASH_REPORTS=0` or `"crashReports": false` in your own `~/.bravebot/settings.json` turns
-them off, a checkout's settings file is not consulted, and an incognito session leaves and sends none.
-See [`crashReports`](../customize/configuration.md#crashreports).
+them off, as does **Settings → General → Privacy** in the desktop app, which writes that key. A
+checkout's settings file is not consulted, and an incognito session leaves and sends none. Nothing
+asks you before the first report: the terminal, the desktop app and the editor integration each say
+once that reports are sent, and what a report holds, at the first launch that is reporting. See
+[`crashReports`](../customize/configuration.md#crashreports).
+
+The terminal interface and the desktop window each say once, on the first launch that reports, what a
+report holds, that it goes to Brave and how to turn reports off. The two share one record of it, so
+after either has shown it neither shows it again.
 
 Only a panic is reported. A process that dies without one leaves nothing, and a minidump to cover that
 case would hold the memory of a process that holds credentials.

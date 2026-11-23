@@ -68,12 +68,21 @@
 //! and asks, because a list kept per directory would grant this on behalf of a user who was never
 //! asked. The tree in an entry is what the entry covers, not where the list lives.
 
+use crate::command::{Expansion, Route, Step, Steps, ValuePart};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 /// One command a user vouched for: a resolved program, the path it is started by, the exact
-/// arguments it runs with, and the tree it was vouched for in.
+/// arguments it runs with, where its streams go, and the tree it was vouched for in.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    verus_keep_ghost,
+    verus_verify,
+    verifier::allow(autoderive_clone_without_spec)
+)]
 pub struct Command {
     /// The absolute path the program name resolved to.
     pub program: PathBuf,
@@ -83,6 +92,16 @@ pub struct Command {
     pub started_as: PathBuf,
     /// The arguments, in order. Empty is a real value and different from any non-empty list.
     pub args: Vec<String>,
+    /// Where the streams went, in the order the line wrote them. Empty is a real value and
+    /// different from any non-empty list: the entry for `sh check.sh > /dev/null` is not the entry
+    /// for `sh check.sh`, so a vouch made at a line that discarded its output does not cover the
+    /// line that prints it ([RUN-8]).
+    ///
+    /// Only routes that open no file are ever held, because a line that opens a file is not
+    /// remembered ([`crate::command::Plan::can_be_remembered`]).
+    ///
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
+    pub routes: Vec<Route>,
     /// The directory the vouch was given in, absolute and canonical.
     ///
     /// The third thing the prompt showed. An entry grants in this tree and in no other, not in a
@@ -102,8 +121,14 @@ impl Command {
             started_as: program.clone(),
             program,
             args,
+            routes: Vec::new(),
             directory: directory.into(),
         }
+    }
+
+    /// The same command, with its streams sent where `routes` say.
+    pub fn routed(self, routes: Vec<Route>) -> Self {
+        Self { routes, ..self }
     }
 
     /// The same command, started by `path` instead.
@@ -116,7 +141,7 @@ impl Command {
 
     /// The command as a person should read it, with argument boundaries visible.
     ///
-    /// The program and its arguments, without the tree. Whoever draws this has the tree beside it
+    /// The program and its arguments and where its streams go, without the tree. Whoever draws this has the tree beside it
     /// and renders it the way that screen renders a path: `/status` and a run prompt both show one
     /// relative to the workspace where they can, and this crate cannot, since it does not know
     /// where the workspace is.
@@ -128,7 +153,61 @@ impl Command {
     /// so two entries for one binary under two spellings draw as two lines.
     pub fn display(&self) -> String {
         let program = crate::command::started_through(&self.started_as, &self.program);
-        crate::command::Stage::new(program, self.args.clone()).display()
+        let mut shown = crate::command::Stage::new(program, self.args.clone()).display();
+        shown.push_str(&crate::command::spelled_routes(&self.routes));
+        shown
+    }
+
+    /// Whether this entry is this exact program, started by this exact path, under this exact
+    /// argument list, with its streams sent to these exact places, in this exact tree. Every field
+    /// is compared, and each by equality.
+    fn is(
+        &self,
+        program: &Path,
+        started_as: &Path,
+        args: &[String],
+        routes: &[Route],
+        directory: &Path,
+    ) -> bool {
+        let Self {
+            program: held_program,
+            started_as: held_started_as,
+            args: held_args,
+            routes: held_routes,
+            directory: held_directory,
+        } = self;
+        held_program == program
+            && held_started_as == started_as
+            && held_args == args
+            && held_routes == routes
+            && held_directory == directory
+    }
+
+    /// [`Command::is`] for a step about to run, in the form a contract can name.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::command_is(*self, *program, *started_as, args@, routes@, *directory),
+    ))]
+    fn is_entry_for(
+        &self,
+        program: &PathBuf,
+        started_as: &PathBuf,
+        args: &[String],
+        routes: &[Route],
+        directory: &PathBuf,
+    ) -> bool {
+        let Self {
+            program: held_program,
+            started_as: held_started_as,
+            args: held_args,
+            routes: held_routes,
+            directory: held_directory,
+        } = self;
+        crate::compare::same_path_buf(held_program, program)
+            && crate::compare::same_path_buf(held_started_as, started_as)
+            && crate::compare::same_texts(held_args, args)
+            && crate::compare::same_routes(held_routes, routes)
+            && crate::compare::same_path_buf(held_directory, directory)
     }
 
     /// Whether this is the same program under the same arguments, wherever either was run.
@@ -143,14 +222,218 @@ impl Command {
     }
 }
 
+/// Whether some entry is this step, in this tree: the five fields an entry holds, and only those.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::some_entry_is(listed@, *step, *directory),
+))]
+fn some_entry_is(listed: &[Command], step: &Step, directory: &PathBuf) -> bool {
+    // Destructured so that a field added to `Step` stops the build here. An entry holds five of
+    // the six deliberately, and the one it leaves out is only safe because something else refuses
+    // it first: an assignment is refused by `Plan::carries_an_assignment`, which every gate
+    // consulting this one has to ask separately. A route is compared, so a line with its streams
+    // sent elsewhere is not covered by an entry for the line without them.
+    let Step {
+        program: _,
+        resolved: _,
+        started_as: _,
+        args: _,
+        // The person vouched for the expanded arguments, whichever a pattern produced.
+        matched: _,
+        environment: _,
+        expansions: _,
+        routes: _,
+    } = step;
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= listed.len(),
+            forall|i: int| 0 <= i < at ==> !crate::spec::entry_is_step(
+                #[trigger] listed@[i],
+                *step,
+                *directory,
+            ),
+        decreases listed.len() - at,
+    ))]
+    while at < listed.len() {
+        if listed[at].is_entry_for(
+            &step.resolved,
+            &step.started_as,
+            &step.args,
+            &step.routes,
+            directory,
+        ) {
+            return true;
+        }
+        at += 1;
+    }
+    false
+}
+
+/// Whether every step a plan runs is an entry, in this tree, the steps inside a `$(...)` among
+/// them, as [`crate::command::Steps::steps`] walks them.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::steps_vouched(listed@, *steps, *directory),
+    decreases *steps, 0nat,
+))]
+fn steps_vouched(listed: &[Command], steps: &Steps, directory: &PathBuf) -> bool {
+    match steps {
+        Steps::Pipeline(list) => pipeline_vouched(listed, list, directory),
+        Steps::Join {
+            left,
+            joiner: _,
+            right,
+        } => {
+            let left = steps_vouched(listed, left, directory);
+            left && steps_vouched(listed, right, directory)
+        }
+        // A group starts nothing of its own, so it is vouched for where what it holds is.
+        Steps::Group(inner) => steps_vouched(listed, inner, directory),
+    }
+}
+
+#[expect(
+    clippy::ptr_arg,
+    reason = "Verus needs the Vec to show each step it indexes is smaller than the list"
+)]
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == (forall|i: int|
+            0 <= i < list@.len()
+                ==> crate::spec::step_vouched(listed@, #[trigger] list@[i], *directory)),
+    decreases *list, 0nat,
+))]
+fn pipeline_vouched(listed: &[Command], list: &Vec<Step>, directory: &PathBuf) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= list.len(),
+            forall|i: int|
+                0 <= i < at ==> crate::spec::step_vouched(listed@, #[trigger] list@[i], *directory),
+        decreases list.len() - at,
+    ))]
+    while at < list.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            vstd::std_specs::vec::axiom_vec_index_decreases(*list, at as int);
+        }
+        if !step_vouched(listed, &list[at], directory) {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+/// Whether a step and every step inside its `$(...)` is an entry, in this tree.
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::step_vouched(listed@, *step, *directory),
+    decreases *step, 0nat,
+))]
+fn step_vouched(listed: &[Command], step: &Step, directory: &PathBuf) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= step.expansions.len(),
+            forall|i: int| 0 <= i < at ==> crate::spec::expansion_vouched(
+                listed@,
+                #[trigger] step.expansions@[i],
+                *directory,
+            ),
+        decreases step.expansions.len() - at,
+    ))]
+    while at < step.expansions.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            vstd::std_specs::vec::axiom_vec_index_decreases(step.expansions, at as int);
+        }
+        if !expansion_vouched(listed, &step.expansions[at], directory) {
+            return false;
+        }
+        at += 1;
+    }
+    some_entry_is(listed, step, directory)
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::expansion_vouched(listed@, *expansion, *directory),
+    decreases *expansion, 0nat,
+))]
+fn expansion_vouched(listed: &[Command], expansion: &Expansion, directory: &PathBuf) -> bool {
+    let mut at = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant
+            at <= expansion.parts.len(),
+            forall|i: int| 0 <= i < at ==> crate::spec::part_vouched(
+                listed@,
+                #[trigger] expansion.parts@[i],
+                *directory,
+            ),
+        decreases expansion.parts.len() - at,
+    ))]
+    while at < expansion.parts.len() {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            vstd::std_specs::vec::axiom_vec_index_decreases(expansion.parts, at as int);
+        }
+        if !part_vouched(listed, &expansion.parts[at], directory) {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+#[cfg_attr(verus_keep_ghost, verus_spec(r =>
+    ensures
+        r == crate::spec::part_vouched(listed@, *part, *directory),
+    decreases *part, 0nat,
+))]
+fn part_vouched(listed: &[Command], part: &ValuePart, directory: &PathBuf) -> bool {
+    match part {
+        ValuePart::Substitution { source: _, steps } => steps_vouched(listed, steps, directory),
+        ValuePart::Text(_) | ValuePart::Variable(_) => true,
+    }
+}
+
 /// The set of commands a session has vouched for.
 ///
 /// Empty means every run asks and every run's output is untrusted, which is the state every
 /// session starts in. Membership is granted, never assumed.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify, verifier::external_body)]
 pub struct TrustedPrograms {
     /// Ordered so a record written twice is written the same way.
     commands: BTreeSet<Command>,
+}
+
+// Written out rather than derived, because Verus refuses a derived `Default` or `Clone` on a type
+// whose fields it does not read.
+impl Clone for TrustedPrograms {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn clone(&self) -> Self {
+        Self {
+            commands: self.commands.clone(),
+        }
+    }
+}
+
+impl Default for TrustedPrograms {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    fn default() -> Self {
+        Self {
+            commands: BTreeSet::new(),
+        }
+    }
+}
+
+// What a contract may say about the list: the entries in it, in the set's order.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub uninterp spec fn spec_commands(programs: TrustedPrograms) -> Seq<Command>;
 }
 
 impl TrustedPrograms {
@@ -169,8 +452,9 @@ impl TrustedPrograms {
         self.commands.remove(command)
     }
 
-    /// Whether this exact program, started by this exact path, under this exact argument list was
-    /// vouched for, in this exact tree.
+    /// Whether this exact program, started by this exact path, under this exact argument list, with
+    /// no stream sent anywhere, was vouched for, in this exact tree. A line that sends a stream
+    /// somewhere is asked about with [`TrustedPrograms::contains_routed`].
     ///
     /// All four, and `directory` by equality rather than by prefix: an entry given in `sub/`
     /// covers `sub/` and neither the root above it nor a `nested/` below it. A prefix test would
@@ -183,12 +467,46 @@ impl TrustedPrograms {
         args: &[String],
         directory: &Path,
     ) -> bool {
-        self.commands.iter().any(|c| {
-            c.program == program
-                && c.started_as == started_as
-                && c.args == args
-                && c.directory == directory
-        })
+        self.contains_routed(program, started_as, args, &[], directory)
+    }
+
+    /// [`TrustedPrograms::contains`] for a line whose streams go to `routes`. An entry made for a
+    /// line with routes holds them, and only a line with the same routes is covered by it.
+    pub fn contains_routed(
+        &self,
+        program: &Path,
+        started_as: &Path,
+        args: &[String],
+        routes: &[Route],
+        directory: &Path,
+    ) -> bool {
+        self.commands
+            .iter()
+            .any(|c| c.is(program, started_as, args, routes, directory))
+    }
+
+    /// Whether every step a plan runs is on the list, in the tree the plan runs in.
+    ///
+    /// The five fields an entry holds, and only those. A step's assignments are not in an entry,
+    /// so the gates that ask this refuse a line carrying one before it is asked
+    /// ([`crate::command::Plan::carries_an_assignment`]). A step's routes are in the entry, so the
+    /// bare line is not covered by an entry made for the same line with its output discarded.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r == crate::spec::steps_vouched(spec_commands(*self), plan.steps, plan.directory),
+    ))]
+    pub fn covers_every_step(&self, plan: &crate::command::Plan) -> bool {
+        steps_vouched(&self.listed(), &plan.steps, &plan.directory)
+    }
+
+    /// The entries as a list, in a stable order, for the loop a contract can read.
+    #[cfg_attr(verus_keep_ghost, verus_verify(external_body))]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r@ == spec_commands(*self),
+    ))]
+    fn listed(&self) -> Vec<Command> {
+        self.commands.iter().cloned().collect()
     }
 
     /// Every command vouched for, in a stable order.

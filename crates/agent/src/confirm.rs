@@ -469,6 +469,22 @@ pub struct Remembered {
 }
 
 impl Confined {
+    /// The credential scopes a person kept at an earlier prompt that a stage carries, each once, by
+    /// their menu names. A directory a person named with `/reach` is not a credential scope.
+    pub fn kept_scopes(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = Vec::new();
+        for stage in &self.carried {
+            for remembered in &stage.remembered {
+                if let crate::reach::Reached::Scope(scope) = &remembered.reached
+                    && !names.contains(&scope.name())
+                {
+                    names.push(scope.name());
+                }
+            }
+        }
+        names
+    }
+
     /// What a credential scope brings to `program`, in the one wording both a scope the argv names
     /// and one a person remembered use.
     fn scope_sentence(&self, scope: bravebot_sandbox::scope::Scope, program: &str) -> String {
@@ -778,7 +794,10 @@ impl RunRequest {
     }
 
     /// Whether an entry could record this line at all, which is what `a` would make, as
-    /// [`bravebot_core::command::Plan::can_be_remembered_as`] answers it.
+    /// [`bravebot_core::command::Plan::can_be_remembered_as`] answers it. A line that sends a
+    /// stream to the null device or merges its streams can be recorded, and its entry holds those
+    /// routes, so it covers that line and not the same program without them. A line that opens a
+    /// file by a redirection cannot.
     pub fn can_be_remembered(&self) -> bool {
         self.plan.can_be_remembered_as(self.asked())
     }
@@ -792,17 +811,30 @@ impl RunRequest {
         }
     }
 
-    /// Whether the planner asked this line to carry a credential scope or a toolchain list.
+    /// Whether the planner asked this line to carry a credential scope or a toolchain list, or a
+    /// stage of it is lent a credential scope a person kept at an earlier prompt.
     ///
     /// The fifth reason, and the one nothing recorded can account for: an entry and a remembered
     /// line hold a program, its arguments and a tree, so `a` made for a line with `aws` asked for
     /// would cover the same line with none, and one made for a line without would cover it with.
+    /// A scope kept with `m` or `e` is lent to a later line the same way, so such a line is held to
+    /// the same answer (SANDBOX-27). Both are read from the plan's own confinement and never from
+    /// anything a program printed.
     /// Asked apart from [`RunRequest::can_be_remembered`] for the reason
     /// [`RunRequest::carries_an_assignment`] is.
     pub fn asks_for_scopes(&self) -> bool {
+        self.confined.as_ref().is_some_and(|confined| {
+            !confined.requested.is_empty() || !confined.kept_scopes().is_empty()
+        })
+    }
+
+    /// The credential scopes a person kept at an earlier prompt that a stage of this line is lent,
+    /// each once, by their menu names. Empty for a line that carries none.
+    pub fn kept_scopes(&self) -> Vec<&'static str> {
         self.confined
             .as_ref()
-            .is_some_and(|confined| !confined.requested.is_empty())
+            .map(|confined| confined.kept_scopes())
+            .unwrap_or_default()
     }
 
     /// The names the planner asked for, each once, in the menu's order.
@@ -894,9 +926,10 @@ impl RunRequest {
         }
     }
 
-    /// Whether the prompt may offer to record this answer past the session.
+    /// Whether the prompt may offer to record this answer past the session. Not for a line a stage
+    /// of which is lent a kept credential scope (SANDBOX-27): such a line is asked about every time.
     pub fn may_record(&self) -> bool {
-        self.record.is_some() && !self.unconfined
+        self.record.is_some() && !self.unconfined && self.kept_scopes().is_empty()
     }
 
     /// The scope the prompt may also offer to record: it may record at all, and the line is one
@@ -1366,6 +1399,49 @@ pub fn shown_path(path: &std::path::Path) -> String {
     shown(&pieces, true)
 }
 
+/// The tree a remembered command was given in, spelled for a person: relative to the workspace
+/// root where it is inside it, `.` for the root itself, and the absolute path otherwise, each
+/// spelled as [`shown_path`] spells a path, so a byte that is not text is written `\xNN` here as
+/// everywhere else a path is drawn.
+///
+/// `roots` are the spellings of the workspace root, tried in order, and the first that holds the
+/// tree is the one it is made relative to. A caller whose root has a link in it passes the
+/// resolved root and the one it was named by.
+///
+/// `home` is where a tree outside the root is written from `~` instead of in full, for a client
+/// that does this to every other path it draws. `None` writes it in full. The prefix is removed by
+/// path component, so a directory whose name merely starts with the home directory's is not under
+/// it, and an empty `home` or the filesystem root abbreviates nothing, since every absolute path
+/// would otherwise read as `~`.
+///
+/// For display only, and a pure mapping from the three paths: entries are keyed on the path and a
+/// revoke never compares this.
+pub fn shown_tree(
+    directory: &std::path::Path,
+    roots: &[&std::path::Path],
+    home: Option<&std::path::Path>,
+) -> String {
+    for root in roots {
+        if let Ok(rest) = directory.strip_prefix(root) {
+            return if rest.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                shown_path(rest)
+            };
+        }
+    }
+    if let Some(home) = home.filter(|home| {
+        !home.as_os_str().is_empty() && *home != std::path::Path::new(std::path::MAIN_SEPARATOR_STR)
+    }) && let Ok(rest) = directory.strip_prefix(home)
+    {
+        if rest.as_os_str().is_empty() {
+            return "~".to_string();
+        }
+        return shown_path(&std::path::Path::new("~").join(rest));
+    }
+    shown_path(directory)
+}
+
 /// The file a step runs, and the path that starts it where that is another, each spelled as
 /// [`shown_path`] spells a path.
 ///
@@ -1392,7 +1468,9 @@ pub fn shown_binary(step: &bravebot_core::command::Step) -> String {
 /// always were.
 pub fn shown_command(command: &bravebot_core::programs::Command) -> String {
     let program = shown_through(&command.started_as, &command.program);
-    bravebot_core::command::Stage::new(program, command.args.clone()).display()
+    let mut shown = bravebot_core::command::Stage::new(program, command.args.clone()).display();
+    shown.push_str(&bravebot_core::command::spelled_routes(&command.routes));
+    shown
 }
 
 /// `file`, and `started_as` before it with an arrow where the program is started through another
@@ -1584,9 +1662,10 @@ pub struct ManifestRequest {
 /// The tools an MCP server offers, put to the person before any of them is offered (SERVERS-8).
 ///
 /// The list as the client drew it and nothing else of the server's reply: each tool's name, its
-/// arguments and its description. A yes promotes exactly this text into the planner's context and
-/// records a digest of it, so what is drawn has to be all of it, the description included, and
-/// that is why the description is here uncut and marked by whoever draws it.
+/// arguments, the values each argument takes and its description. A yes promotes exactly this
+/// text into the planner's context and records a digest of it, so what is drawn has to be all of
+/// it, and that is why the description and each value are here uncut and marked by whoever draws
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolListRequest {
     /// The alias the person gave the server.
@@ -1608,12 +1687,27 @@ pub struct ToolListRequest {
 pub struct ListedTool {
     /// `alias:word`, the name a person reads and a rule matches.
     pub name: String,
-    /// Each argument, as its name with its type and whether it is required after it.
-    pub arguments: Vec<String>,
+    /// Each argument, as its name with its type and whether it is required after it, and apart
+    /// from that the values the server says it takes.
+    pub arguments: Vec<ListedToolArgument>,
     /// The server's own sentence about the tool, where it wrote one.
     pub description: Option<String>,
     /// Whether the server marks the tool read-only. Its word, not a check of what the tool does.
     pub read_only: bool,
+}
+
+/// One argument of a listed tool, as it is drawn (SERVERS-8).
+///
+/// The name comes from the alphabet of `bravebot_mcp::protocol::is_argument_name` and the type
+/// from a fixed list, so `text` is drawn as the client's own. The values are the server's own
+/// strings: any printable text up to a bound, so each is drawn behind the margin as a description
+/// is, one row to a value, and none is joined into `text`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedToolArgument {
+    /// `city (string, required)`: the name, the type and whether it is required.
+    pub text: String,
+    /// The values the argument takes where the server lists them, in the order it wrote them.
+    pub choices: Vec<String>,
 }
 
 /// A call to an MCP server's tool the planner has asked for (SERVERS-7).
@@ -1723,6 +1817,64 @@ pub enum MessageDecision {
     ForTheTurn,
     /// Send nothing. Also what nobody being there to ask comes to.
     Decline,
+}
+
+/// The calls a plan's `apply` step resolved to, put to the person as one list before any is made
+/// (`docs/design/manifest-apply.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyRequest {
+    /// The alias of the server every call goes to.
+    pub alias: String,
+    /// The slot the list was read from, as the plan named it.
+    pub list: String,
+    /// Each call in order. Every value not written by the plan is untrusted content.
+    pub calls: Vec<ApplyCall>,
+    /// How many of the processor's rows were dropped, and why, in words this process wrote.
+    pub dropped: Vec<(String, usize)>,
+}
+
+/// One call of an [`ApplyRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyCall {
+    /// The tool's word on the list a person vouched for.
+    pub tool: String,
+    /// Each argument as its name, its value, and where the value came from in this process's own
+    /// words: the plan, an entry of the list, the processor, or an earlier call.
+    pub arguments: Vec<(String, String, String)>,
+    /// The earlier call this one depends on, by its index, which unticking takes with it.
+    pub after: Option<usize>,
+}
+
+/// What the person decided about the calls of an [`ApplyRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyDecision {
+    /// The calls to make, by their index. Empty where none is to be made.
+    pub kept: Vec<usize>,
+    /// Whether the client refused without a person being asked, because it has no way to put the
+    /// list. Only set with nothing kept.
+    pub unasked: bool,
+}
+
+impl ApplyDecision {
+    pub fn keep(kept: Vec<usize>) -> Self {
+        Self {
+            kept,
+            unasked: false,
+        }
+    }
+
+    /// Nothing kept, with somebody having been asked, so it is a decline and not [`Self::unasked`].
+    pub fn reject() -> Self {
+        Self::keep(Vec::new())
+    }
+
+    /// Make none of them, because nobody could be asked.
+    pub fn unasked() -> Self {
+        Self {
+            kept: Vec::new(),
+            unasked: true,
+        }
+    }
 }
 
 /// What the person decided about a call to a server's tool.
@@ -2158,6 +2310,27 @@ fn tally(count: usize, one: &str, many: &str) -> String {
     }
 }
 
+/// A hook a plugin carries, about to fire for the first time in this session (PLUGIN-7).
+///
+/// Every field is drawn from the plugin's own files except `moment`, which is the driver's word
+/// for the moment. The plugin's name and argv are untrusted: a front end draws them inside the
+/// margin untrusted content is drawn in, and decides nothing from them.
+///
+/// No field names a mode, a rule or a setting, so nothing but a person's answer can approve it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookRequest {
+    /// The plugin's name, as its manifest wrote it.
+    pub plugin: String,
+    /// The moment the hook is attached to, in the word the hooks file spells it with.
+    pub moment: &'static str,
+    /// The program and its arguments with `${PLUGIN_ROOT}` already replaced (PLUGIN-13), one word
+    /// each. These are the words the approval is a digest of.
+    pub argv: Vec<String>,
+    /// Whether a yes is written to `~/.bravebot/hooks-approved`. False in an incognito session and
+    /// where the state directory cannot be written, and then a yes lasts until the session ends.
+    pub records: bool,
+}
+
 /// What a confirmer calls just before it puts a question to a person who can answer it.
 ///
 /// Takes and returns nothing: what it is told is that a question is coming and not what it is
@@ -2294,9 +2467,19 @@ pub trait Confirmer {
     ///
     /// A yes covers this plan and stops there. There is no standing form of it: a plan is written
     /// afresh for each run, so remembering an answer would be approving steps nobody has seen. It
-    /// is also not an answer to any other question in this trait, and grants nothing a step will
-    /// later ask about.
+    /// is also not an answer to any other question in this trait. What it grants beyond running
+    /// the plan is the default question of each call to a server's tool the plan fixed, which the
+    /// step then does not put (MANIFEST-15), and only where a person gave it.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision;
+
+    /// [`Confirmer::confirm_manifest`], and the mode that answered where a mode did rather than a
+    /// person, so a plan bypassing approved is not taken for one somebody read (MANIFEST-15).
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_manifest(request), None)
+    }
 
     /// Ask whether to vouch for a quarantined file the model wants to read. Implementations must
     /// default to refusal when they cannot ask.
@@ -2357,6 +2540,20 @@ pub trait Confirmer {
     /// to recording nothing, when they cannot ask.
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision;
 
+    /// Ask about the calls a plan's `apply` step resolved to, as one list. Nothing but a person
+    /// answers it: no mode, rule or earlier answer does, and a client that cannot put the list
+    /// refuses it unasked, which is the default.
+    fn confirm_apply(&mut self, _request: &ApplyRequest) -> ApplyDecision {
+        ApplyDecision::unasked()
+    }
+
+    /// Whether [`Confirmer::confirm_apply`] can put a list to a person here. A plan whose `apply`
+    /// step would put its list is refused before it is put to anybody where it cannot, rather than
+    /// failing at the step after the person approved it and the reads ran (MANIFEST-16).
+    fn can_put_apply_lists(&mut self) -> bool {
+        false
+    }
+
     /// Ask whether a remote MCP server is now where its request was redirected. Implementations must
     /// refuse when they cannot ask, and bypassing every check refuses too (SERVERS-13).
     ///
@@ -2364,6 +2561,28 @@ pub trait Confirmer {
     /// rewrites what the person declared, so every later call, and every later session, goes to the
     /// new destination with the server's arguments and its session id.
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision;
+
+    /// Whether [`Confirmer::confirm_hook`] puts its question to a person who can answer it.
+    ///
+    /// False unless an implementation says otherwise, so a confirmer written without a thought for
+    /// plugin hooks fires none (PLUGIN-7: where nobody can be asked, the hook does not fire). True
+    /// only for a front end that draws the question and reads an answer. Read once, when a turn
+    /// begins, and never from anything a plugin wrote.
+    fn can_ask_about_a_hook(&self) -> bool {
+        false
+    }
+
+    /// Ask whether a hook a plugin carries may fire, naming the plugin, the moment and the argv
+    /// (PLUGIN-7). Implementations must refuse when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_run`] because a yes is about a program that will start on a
+    /// moment of every later turn, and is recorded against the plugin's tree digest. No mode and no
+    /// allow rule answers it, as none answers the install prompt (PLUGIN-4): a wrapper passes it to
+    /// the confirmer behind it and nothing else. The refusal is the default body, so a test double
+    /// that does not mention hooks answers no.
+    fn confirm_hook(&mut self, _request: &HookRequest) -> Decision {
+        Decision::Reject
+    }
 
     /// Ask whether programs the planner starts may reach one more path for the rest of the session.
     /// Implementations must refuse when they cannot ask.
@@ -2531,6 +2750,107 @@ impl Confirmer for Unattended {
     }
 
     /// Nobody is typing.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// Answers the question about a plugin's hook with one fixed decision and records each time it was
+/// put. Test-only, and named so its use is conspicuous.
+///
+/// It can be asked, so a turn puts the question to it, and it refuses every other question as
+/// [`Unattended`] does.
+#[derive(Debug)]
+pub struct AnswersHooks {
+    /// What every hook question is answered.
+    pub answer: Decision,
+    /// The questions put, in order.
+    pub asked: Vec<HookRequest>,
+}
+
+impl AnswersHooks {
+    pub fn new(answer: Decision) -> Self {
+        Self {
+            answer,
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl Confirmer for AnswersHooks {
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    fn confirm_hook(&mut self, request: &HookRequest) -> Decision {
+        self.asked.push(request.clone());
+        self.answer
+    }
+
+    fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
+        Unattended.confirm_server(request)
+    }
+
+    fn confirm_path(&mut self, request: &PathRequest) -> Decision {
+        Unattended.confirm_path(request)
+    }
+
+    fn confirm_host(&mut self, request: &HostRequest) -> Decision {
+        Unattended.confirm_host(request)
+    }
+
+    fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision {
+        Unattended.confirm_message(request)
+    }
+
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        Unattended.confirm_move(request)
+    }
+
+    fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+        Unattended.confirm_manifest(request)
+    }
+
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+        Unattended.confirm_write(request)
+    }
+
+    fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+        Unattended.confirm_run(request)
+    }
+
+    fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+        Unattended.confirm_read_output(request)
+    }
+
+    fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+        Unattended.confirm_vetted_read(request)
+    }
+
+    fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
+        Unattended.confirm_fetch(request)
+    }
+
+    fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+        Unattended.confirm_vouch(request)
+    }
+
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+        Unattended.confirm_exposing_read(request)
+    }
+
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        Unattended.confirm_tool_list(request)
+    }
+
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        Unattended.confirm_mcp_call(request)
+    }
+
+    fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+        Unattended.ask_user(asking)
+    }
+
     fn interjection(&mut self) -> Option<String> {
         None
     }
@@ -3356,6 +3676,13 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
         self.timing(|inner| inner.confirm_vouch_noting_the_mode(request))
     }
 
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.timing(|inner| inner.confirm_manifest_noting_the_mode(request))
+    }
+
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
         self.timing(|inner| inner.confirm_exposing_read(request))
     }
@@ -3369,6 +3696,14 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.timing(|inner| inner.confirm_tool_list(request))
+    }
+
+    fn confirm_apply(&mut self, request: &ApplyRequest) -> ApplyDecision {
+        self.timing(|inner| inner.confirm_apply(request))
+    }
+
+    fn can_put_apply_lists(&mut self) -> bool {
+        self.inner.can_put_apply_lists()
     }
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
@@ -3389,6 +3724,14 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         self.timing(|inner| inner.confirm_move(request))
+    }
+
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.inner.can_ask_about_a_hook()
+    }
+
+    fn confirm_hook(&mut self, request: &HookRequest) -> Decision {
+        self.timing(|inner| inner.confirm_hook(request))
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
@@ -3903,6 +4246,78 @@ mod tests {
         }
     }
 
+    /// PROMPT-1, RUN-9: a tree is spelled the one way in every client. The root is `.`, a
+    /// directory under it is relative, and one outside it is whole. The home directory is
+    /// abbreviated only where the caller gives it, by path component, and the escape of a name that
+    /// is not text is the one [`shown_path`] writes, with or without the abbreviation.
+    #[test]
+    fn a_tree_is_spelled_relative_to_the_root_and_whole_outside_it() {
+        use std::path::Path;
+        let root = Path::new("/work/proj");
+        let shown = |tree: &str, home: Option<&str>| {
+            shown_tree(Path::new(tree), &[root], home.map(Path::new))
+        };
+        assert_eq!(shown("/work/proj", None), ".");
+        assert_eq!(shown("/work/proj/crates/tui", None), "crates/tui");
+        assert_eq!(shown("/elsewhere/x", None), "/elsewhere/x");
+        // A directory whose name only starts with the root's is not under it.
+        assert_eq!(shown("/work/proj2", None), "/work/proj2");
+        // A second spelling of the root is tried after the first.
+        assert_eq!(
+            shown_tree(
+                Path::new("/private/work/proj/sub"),
+                &[Path::new("/work/proj"), Path::new("/private/work/proj")],
+                None
+            ),
+            "sub"
+        );
+        // The root wins over the home directory, which holds it.
+        assert_eq!(shown("/work/proj/sub", Some("/work")), "sub");
+        assert_eq!(shown("/work/proj", Some("/work")), ".");
+        // Outside the root the home directory is abbreviated only when it is given.
+        assert_eq!(shown("/home/me/other", Some("/home/me")), "~/other");
+        assert_eq!(shown("/home/me", Some("/home/me")), "~");
+        assert_eq!(shown("/home/me/other", None), "/home/me/other");
+        assert_eq!(
+            shown("/home/meagain/x", Some("/home/me")),
+            "/home/meagain/x"
+        );
+        assert_eq!(shown("/tmp/x", Some("/home/me")), "/tmp/x");
+        // An empty home or the root abbreviates nothing.
+        assert_eq!(shown("/tmp/x", Some("")), "/tmp/x");
+        assert_eq!(shown("/tmp/x", Some("/")), "/tmp/x");
+        // A name that needs spelling is spelled as a path is.
+        assert_eq!(shown("/work/proj/a b /c", None), "\"a b\u{2423}/c\"");
+    }
+
+    /// PROMPT-1, PATH-003: a tree that is not text is spelled with the byte written out, under the
+    /// root, outside it and under the home directory, and two trees that differ in such a byte are
+    /// not spelled alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_that_is_not_text_is_spelled_with_its_bytes_in_every_position() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+        let root = Path::new("/work/proj");
+        let home = Path::new("/home/me");
+        let shown = |bytes: &[u8], home: Option<&Path>| {
+            shown_tree(Path::new(OsStr::from_bytes(bytes)), &[root], home)
+        };
+        assert_eq!(shown(b"/work/proj/t\xff", None), "\"t\\xff\"");
+        assert_eq!(shown(b"/elsewhere/t\xff", None), "\"/elsewhere/t\\xff\"");
+        assert_eq!(
+            shown(b"/elsewhere/t\xff", Some(home)),
+            "\"/elsewhere/t\\xff\""
+        );
+        assert_eq!(shown(b"/home/me/t\xff", Some(home)), "\"~/t\\xff\"");
+        assert_eq!(shown(b"/home/me/t\xff", None), "\"/home/me/t\\xff\"");
+        assert_ne!(
+            shown(b"/elsewhere/t\xff", None),
+            shown("/elsewhere/t\u{fffd}".as_bytes(), None)
+        );
+    }
+
     /// PROMPT-12: a note is one line, cut to a length, and nothing where there is nothing in it.
     #[test]
     fn a_note_is_one_bounded_line() {
@@ -4108,6 +4523,63 @@ mod tests {
             request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offered_scope(),
             None
         );
+    }
+
+    /// SANDBOX-27: a request built with a record path still offers no recording for a line a stage
+    /// of which is lent a kept credential scope, so a front end cannot bind `r` for it. A kept
+    /// directory does not change the answer.
+    #[test]
+    fn a_line_lent_a_kept_scope_may_not_be_recorded_even_with_a_record_path() {
+        let confined = |reached| Confined {
+            reads_the_machine: true,
+            directories: Vec::new(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: vec![Carried {
+                program: "make".into(),
+                toolchain: None,
+                scope: None,
+                reaches: Vec::new(),
+                identity: None,
+                network: false,
+                remembered: vec![Remembered {
+                    reached,
+                    write: false,
+                    allowed: "2026-10-07".into(),
+                }],
+            }],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            writes_git_directories: false,
+        };
+        let request = |confined| RunRequest {
+            plan: a_listed_line(),
+            record: Some(std::path::PathBuf::from(
+                "/home/.bravebot/remembered/work.jsonl",
+            )),
+            pattern: None,
+            stdin: None,
+            confined,
+            reach_record: None,
+            unconfined: false,
+            key_choice: None,
+            classified: Classified::NotAsked,
+            protected: false,
+            destinations: Vec::new(),
+        };
+        let kept = request(Some(confined(crate::reach::Reached::Scope(
+            bravebot_sandbox::scope::Scope::Aws,
+        ))));
+        assert_eq!(kept.kept_scopes(), vec!["aws"]);
+        assert!(!kept.may_record());
+        assert_eq!(kept.offered_scope(), None);
+
+        let directory = request(Some(confined(crate::reach::Reached::Directory(
+            std::path::PathBuf::from("/tmp/data"),
+        ))));
+        assert!(directory.kept_scopes().is_empty());
+        assert!(directory.may_record());
+        assert!(request(None).may_record());
     }
 
     fn a_series() -> Asking {

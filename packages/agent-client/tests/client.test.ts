@@ -143,7 +143,7 @@ test('a startup that broke the protocol is refused even when a valid initial vie
   await assert.rejects(open([initial(99), initial(0)]), /sequence 99/)
   await assert.rejects(open([{ data: { nonsense: true } }, initial(0)]), ProtocolError)
   await assert.rejects(open([{ event: 'session.view.update', data: initial(1, 'running').data }, initial(0)]), /before the initial view/)
-  // A snapshot starts a view only for a session being taken over, not one being created.
+  // A snapshot starts a view only for a session being joined, not one being created.
   await assert.rejects(open([{ event: 'session.view.snapshot', data: { sequence: 4, turn: 0, target: 0, status: 'idle', pending: null, rows: [], omitted: 0 } }, initial(0)]), /a view snapshot arrived before the initial view/)
   const session = await open([initial(0)])
   assert.equal(session.view.ended, null)
@@ -418,7 +418,7 @@ test('a runtime from before snapshots ends the view at a gap without asking for 
 })
 
 /**
- * A host holding session `s7`, left by its controller at sequence 4 with rows 1 to 3 dropped. It
+ * A host holding session `s7`, at sequence 4 with rows 1 to 3 dropped. It
  * answers `session.attach` as `answer` says: with the snapshot first, the snapshot and the startup
  * question, no snapshot, or a refusal.
  */
@@ -433,11 +433,11 @@ function aHostHoldingALeftSession(answer: 'snapshot' | 'trust' | 'nothing' | 're
       const event = (name: string, data: unknown): void => client.receive(JSON.stringify({ event: name, session: 's7', data }) + '\n')
       if (request.method === 'agent.info') return reply({ ok: { capabilities: { sessionView: contract.capability } } })
       if (request.method === 'instance.info') {
-        return reply({ ok: { instance: 'run-1', inspection: 'refused', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }], answers: ['confirm', 'trust'] } })
+        return reply({ ok: { instance: 'run-1', inspection: 'refused', sessions: [{ session: 's7', state: 'open', working: false, attached: false }], answers: ['confirm', 'trust'] } })
       }
       if (request.method === 'turn.send') return reply({ ok: { turn: 3, target: 9 } })
       if (request.method !== 'session.attach') return assert.fail(`unexpected method ${request.method}`)
-      if (answer === 'refused') return reply({ error: { code: 'not_allowed', message: 'another connection controls that session' } })
+      if (answer === 'refused') return reply({ error: { code: 'not_allowed', message: 'this connection is not attached to that session' } })
       const status = answer === 'trust' ? 'awaiting_trust' : 'completed'
       if (answer !== 'nothing') event('session.view.snapshot', { sequence: 4, turn: 2, target: 8, status, pending: null, rows: [prompt], omitted: 3 })
       if (answer === 'trust') event('trust.request', { directory: '/work' })
@@ -447,9 +447,9 @@ function aHostHoldingALeftSession(answer: 'snapshot' | 'trust' | 'nothing' | 're
   return { client, sent }
 }
 
-test('a session taken over starts its view from the snapshot the host sends, and is driven from there', async () => {
+test('a session joined starts its view from the snapshot the host sends, and is driven from there', async () => {
   const { client, sent } = aHostHoldingALeftSession('snapshot')
-  assert.deepEqual(await client.instance(), { instance: 'run-1', sessions: [{ session: 's7', state: 'open', working: false, controlled: false }], answers: ['confirm', 'trust'] })
+  assert.deepEqual(await client.instance(), { instance: 'run-1', sessions: [{ session: 's7', state: 'open', working: false, attached: false }], answers: ['confirm', 'trust'] })
   const session = await client.attach('s7')
   assert.equal(session.id, 's7')
   assert.deepEqual(
@@ -463,21 +463,35 @@ test('a session taken over starts its view from the snapshot the host sends, and
   assert.deepEqual(sent.find((request) => request.method === 'session.attach')?.params, { session: 's7' })
 })
 
-test('a session taken over with its startup question unanswered offers that question', async () => {
+test('a joined session holds the name of the client that acted last, through the updates that do not act', async () => {
+  const { client } = aHostHoldingALeftSession('snapshot')
+  const session = await client.attach('s7')
+  assert.equal(session.view.actor, null, 'a snapshot that names nobody')
+  const update = (sequence: number, actor?: string | null) =>
+    client.receive(JSON.stringify({ event: 'session.view.update', session: 's7', data: { sequence, turn: 3, target: 9, status: 'running', pending: null, rows: [], omitted: 3, ...(actor === undefined ? {} : { actor }) } }) + '\n')
+  update(5, 'phone')
+  assert.equal(session.view.actor, 'phone')
+  update(6, 'desktop')
+  assert.equal(session.view.actor, 'desktop')
+  update(7, null)
+  assert.equal(session.view.actor, null, 'a refusal made because nobody could answer names no client')
+})
+
+test('a session joined with its startup question unanswered offers that question', async () => {
   const { client } = aHostHoldingALeftSession('trust')
   const session = await client.attach('s7')
   assert.equal(session.view.status, 'awaiting_trust')
   assert.deepEqual(session.startupTrust, { directory: '/work' })
 })
 
-test('a session the client holds is not taken over again, and nothing is sent for it', async () => {
+test('a session the client holds is not joined again, and nothing is sent for it', async () => {
   const { client, sent } = aHostHoldingALeftSession('snapshot')
   await client.attach('s7')
   await assert.rejects(client.attach('s7'), (error: unknown) => error instanceof RpcError && error.code === 'bad_request' && error.outcome === 'rejected')
   assert.equal(sent.filter((request) => request.method === 'session.attach').length, 1)
 })
 
-test('a take-over answered before its snapshot, or refused, leaves no session behind to route to', async () => {
+test('a join answered before its snapshot, or refused, leaves no session behind to route to', async () => {
   for (const answer of ['nothing', 'refused'] as const) {
     const { client, sent } = aHostHoldingALeftSession(answer)
     await assert.rejects(client.attach('s7'), answer === 'nothing' ? ProtocolError : (error: unknown) => error instanceof RpcError && error.code === 'not_allowed')
@@ -487,10 +501,20 @@ test('a take-over answered before its snapshot, or refused, leaves no session be
   }
 })
 
+test('a session another client closes is forgotten when its view arrives detached, so it can be named again', async () => {
+  const { client, sent } = aHostHoldingALeftSession('snapshot')
+  const session = await client.attach('s7')
+  client.receive(JSON.stringify({ event: 'session.view.update', session: 's7', data: { sequence: 5, turn: 2, target: 8, status: 'detached', pending: null, rows: [], omitted: 3 } }) + '\n')
+  assert.equal(session.view.ended?.reason, 'detached')
+  // Not held, so the attempt is sent and the host answers it.
+  await client.attach('s7')
+  assert.equal(sent.filter((request) => request.method === 'session.attach').length, 2)
+})
+
 test('an instance listing in a shape the host does not send is refused', async () => {
   for (const ok of [
     { sessions: [], answers: [] },
-    { instance: 'run-1', sessions: [{ session: 's7', state: 'gone', working: false, controlled: false }], answers: [] },
+    { instance: 'run-1', sessions: [{ session: 's7', state: 'gone', working: false, attached: false }], answers: [] },
     { instance: 'run-1', sessions: [] },
     { instance: 'run-1', sessions: [], answers: ['write'] },
   ]) {

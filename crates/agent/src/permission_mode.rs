@@ -672,9 +672,11 @@ impl Unasked {
     }
 
     /// See [`Confining::confirm_manifest`].
-    pub fn manifest(&self) -> Option<Decision> {
-        match self.mode.get() {
-            PermissionMode::Bypass => Some(Decision::Approve),
+    /// The answer and the name of the mode that gave it.
+    pub fn manifest(&self) -> Option<(Decision, &'static str)> {
+        let mode = self.mode.get();
+        match mode {
+            PermissionMode::Bypass => Some((Decision::Approve, mode.name())),
             PermissionMode::Ask
             | PermissionMode::AcceptEdits
             | PermissionMode::Plan
@@ -930,9 +932,18 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// question, and a person in plan mode who wants a run planned before it touches anything is
     /// asking for exactly what this mode does.
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
+        self.confirm_manifest_noting_the_mode(request).0
+    }
+
+    /// The answer and, where bypassing gave it, the mode, read from one look at the mode, so a plan
+    /// nobody saw answers no call's question for a person (MANIFEST-15, MODE-8).
+    fn confirm_manifest_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ManifestRequest,
+    ) -> (Decision, Option<&'static str>) {
         match self.unasked.manifest() {
-            Some(answer) => answer,
-            None => self.asking().confirm_manifest(request),
+            Some((answer, mode)) => (answer, Some(mode)),
+            None => (self.asking().confirm_manifest(request), None),
         }
     }
 
@@ -1010,6 +1021,19 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// A call to a server declared to ask every call is asked in bypass too: the person chose that
     /// for the server when they declared it, and the mode that answers the other questions does not
     /// take that choice back (SERVERS-21).
+    /// Put to the person in every mode, bypass and plan mode included: the list is the trusted
+    /// selector of the calls a processor proposed, and no mode is a person reading it.
+    fn confirm_apply(
+        &mut self,
+        request: &crate::confirm::ApplyRequest,
+    ) -> crate::confirm::ApplyDecision {
+        self.asking().confirm_apply(request)
+    }
+
+    fn can_put_apply_lists(&mut self) -> bool {
+        self.asking().can_put_apply_lists()
+    }
+
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,
@@ -1072,6 +1096,17 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
             Some(answer) => answer,
             None => self.asking().confirm_move(request),
         }
+    }
+
+    fn can_ask_about_a_hook(&self) -> bool {
+        self.inner.can_ask_about_a_hook()
+    }
+
+    /// Always the person's. No mode answers whether a plugin's hook may fire, bypassing every check
+    /// included, for the reason none answers the install prompt (PLUGIN-4, PLUGIN-7): the question
+    /// has no mode in its request and [`Unasked`] holds no answer for it.
+    fn confirm_hook(&mut self, request: &crate::confirm::HookRequest) -> Decision {
+        self.asking().confirm_hook(request)
     }
 
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
@@ -2205,6 +2240,58 @@ mod tests {
             destination: "https://elsewhere.example/mcp".to_string(),
             authority: "elsewhere.example:443".to_string(),
             may_record: true,
+        }
+    }
+
+    /// PLUGIN-7, S31: no mode answers whether a plugin's hook may fire. Bypassing every check
+    /// answers a write and a run, and this question still reaches the confirmer behind it: a
+    /// refusing person is not overridden, an agreeing one is asked exactly once, and a confirmer
+    /// nobody can ask says so through the mode.
+    ///
+    /// Rejects: a mode that answers the hook question yes unasked, and a wrapper that does not pass
+    /// on whether anybody can be asked.
+    #[test]
+    fn no_mode_answers_the_question_about_a_plugins_hook() {
+        use crate::confirm::{AnswersHooks, HookRequest};
+        let request = HookRequest {
+            plugin: "demo".to_string(),
+            moment: "turn-started",
+            argv: vec!["/p/hook.sh".to_string()],
+            records: true,
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+        ] {
+            let mut refuses = AnswersHooks::new(Decision::Reject);
+            let mut confining = Confining::new(&mut refuses, mode, false);
+            assert!(confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
+            assert_eq!(refuses.asked.len(), 1, "{mode:?} did not put the question");
+
+            let mut agrees = AnswersHooks::new(Decision::Approve);
+            assert_eq!(
+                Confining::new(&mut agrees, mode, false).confirm_hook(&request),
+                Decision::Approve,
+                "{mode:?}"
+            );
+            assert_eq!(agrees.asked.len(), 1, "{mode:?}");
+
+            let mut nobody = Unattended;
+            let mut confining = Confining::new(&mut nobody, mode, false);
+            assert!(!confining.can_ask_about_a_hook(), "{mode:?}");
+            assert_eq!(
+                confining.confirm_hook(&request),
+                Decision::Reject,
+                "{mode:?}"
+            );
         }
     }
 

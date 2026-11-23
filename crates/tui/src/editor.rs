@@ -1296,6 +1296,60 @@ mod tests {
         assert!(opened.is_some(), "the editor was never handed a file");
     }
 
+    /// A closure standing in for the editor runs before anything `show_through` does afterwards, so
+    /// a read of the file added after it returns is invisible to
+    /// `a_transcript_opened_in_the_editor_is_never_read_back`. The three functions between the key
+    /// and the file are scanned instead: none of them reads a file or goes through the round trip
+    /// that does, which is what would let an edited transcript reach the session.
+    #[test]
+    fn showing_a_transcript_reads_no_file_back() {
+        let editor = include_str!("editor.rs");
+        let terminal = include_str!("app/terminal.rs");
+        // The function each one hands the transcript to, so the chain scanned is the chain that runs.
+        let chain = [
+            (editor, "pub fn show(text: &str)", "show_through("),
+            (editor, "fn show_through(", "write_scratch("),
+            (
+                terminal,
+                "pub(super) fn show_transcript(",
+                "crate::editor::show(",
+            ),
+        ];
+        let reads = [
+            "read_to_string",
+            "read_to_end",
+            "read_exact",
+            "read_line",
+            "fs::read(",
+            ".read(",
+            "File::open",
+            "OpenOptions",
+            "BufReader",
+            "read_dir",
+            "metadata",
+            "round_trip",
+            "through_a_file",
+            "take_edited",
+        ];
+        for (source, signature, callee) in chain {
+            let from = source.find(signature).unwrap_or_else(|| {
+                panic!("`{signature}` is not in the source it was looked up in")
+            });
+            let rest = &source[from..];
+            let body = &rest[..rest.find("\n}\n").expect("the function ends")];
+            assert!(
+                body.contains(callee),
+                "`{signature}` no longer reaches `{callee}`, so the scan below follows a path that does not run"
+            );
+            for read in reads {
+                assert!(
+                    !body.contains(read),
+                    "`{signature}` contains `{read}`, a way to read the transcript file back"
+                );
+            }
+        }
+    }
+
     /// A transcript holds content nobody vouched for. It goes where scratch files go, and not
     /// into the workspace, where the next turn would find it as a file somebody had written.
     #[test]

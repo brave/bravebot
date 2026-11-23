@@ -5,9 +5,7 @@
 use super::Workspace;
 #[cfg(unix)]
 use std::collections::HashMap;
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The names a file has under the open directories, for a file with more than one.
 #[cfg(unix)]
@@ -150,7 +148,42 @@ pub(crate) struct OtherKeys {
     pub(crate) complete: bool,
 }
 
+/// The file a name reaches and the other names that file has, as the permission and protected-path
+/// questions of a write read them (PERM-7, TRUST-10): where the name lands, and its hard links.
+/// Those are the only two things beside the typed name that [`crate::tools::write_needs_approval`]
+/// and [`crate::tools::write_is_protected`] look at, so a write whose reach is what it was when the
+/// person was asked gets the same answer to both now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Aimed {
+    /// Where the name lands, `None` where it cannot be resolved.
+    landing: Option<PathBuf>,
+    /// The hard links of the file, sorted, `None` where the walk for them could not finish.
+    hard_links: Option<Vec<String>>,
+}
+
+impl Aimed {
+    /// Whether the name resolved when this was taken. A name that does not resolve is refused by
+    /// the write's own confinement check, which says why, so it is not compared here.
+    pub(crate) fn resolves(&self) -> bool {
+        self.landing.is_some()
+    }
+}
+
 impl Workspace {
+    /// What `named` reaches now, taken when a person is asked about a write to it and compared with
+    /// what it reaches when the bytes are released. Read from the file system's names and
+    /// metadata, never from a file's bytes.
+    pub(crate) fn reach_of(&self, named: &str) -> Aimed {
+        let mut hard_links = self.hard_links(named);
+        if let Some(names) = hard_links.as_mut() {
+            names.sort();
+        }
+        Aimed {
+            landing: self.resolve(named).ok(),
+            hard_links,
+        }
+    }
+
     /// The other names of an entry a walk reported as `reported`, whose key under the name the call
     /// typed is `key`: the keys a read of it is asked under besides that one (TRUST-2, TRUST-18).
     ///

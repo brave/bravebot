@@ -515,6 +515,8 @@ const api = {
       context: ContextRef | null,
     ) => listener(id, context)
     ipcRenderer.on('bravebot:command', handler)
+    // A command chosen with no window builds one, and the main process holds it until this runs.
+    ipcRenderer.send('bravebot:commands:ready')
     return () => ipcRenderer.off('bravebot:command', handler)
   },
 

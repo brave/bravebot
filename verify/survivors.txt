@@ -1,0 +1,43 @@
+# The changes contrib/check-verus-sweep.py makes that Verus still verifies, each with the reason it
+# is acceptable. docs/development/verification.md says what the sweep changes and why a survivor is
+# listed rather than refused.
+
+survivor: Every code with a parameter is left in the text and drawn byte by byte, which the contract allows: it states only that an offset it returns is an `m` inside the bytes.
+in: crates/core/src/colour_codes.rs::code_end
+was: if !matches!(byte, b'0'..=b'9' | b';' | b':') {
+now: if matches!(byte, b'0'..=b'9' | b';' | b':') {
+
+survivor: A code takes one parameter fewer than MOST_PARAMETERS, still inside the bound the contract states.
+in: crates/core/src/colour_codes.rs::code_end
+was: while taken < room && taken <= most {
+now: while taken < room && taken < most {
+
+survivor: A line is asked about where it is at the root or vouched for but not both, which asks more. The contract states what is always asked, not what may go unasked.
+in: crates/core/src/policy.rs::run_reason
+was: if !facts.at_root && !facts.vouched {
+now: if !facts.at_root || !facts.vouched {
+
+survivor: A vouched line's output is labelled untrusted, which trusts less. The contract states when output may be trusted, not that it is.
+in: crates/core/src/policy.rs::output_label
+was: integrity: Integrity::Trusted,
+now: integrity: Integrity::Untrusted,
+
+survivor: An answer lowers the context, which trusts less. The contract states what the reply is labelled, not what the context is afterwards.
+in: crates/core/src/policy.rs::record_answers
+was: self.absorb(Integrity::Trusted);
+now: self.absorb(Integrity::Untrusted);
+
+survivor: The release is recorded as private. The label goes only to the event record_into_place emits, which is external_body, and what is released is decided by precommitted_into, which the contract states.
+in: crates/core/src/policy.rs::declassify_into_place
+was: let to = Label::new(from.integrity, Confidentiality::Public);
+now: let to = Label::new(from.integrity, Confidentiality::Private);
+
+survivor: The release is recorded as private. The label goes only to the event record_release emits, which is external_body, and what is released is decided by precommitted, which the contract states.
+in: crates/core/src/policy.rs::declassify
+was: let to = Label::new(from.integrity, Confidentiality::Public);
+now: let to = Label::new(from.integrity, Confidentiality::Private);
+
+survivor: Of two decisions of equal strength the other one is returned, and decisions of equal strength are equal, so the result is the same.
+in: crates/core/src/trust.rs::weaker
+was: let b_grants_less = strength(b) < strength(a);
+now: let b_grants_less = strength(b) <= strength(a);

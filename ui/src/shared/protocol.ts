@@ -139,6 +139,23 @@ export interface SessionNote {
   text: string
 }
 
+/**
+ * `session.background`'s answer (BG-2, CMD-34): the id of the record a background session now
+ * runs, and the word for the permission mode it runs in. The bridge has closed the chat by then.
+ */
+export interface BackgroundedSession {
+  handedOver: string
+  mode: string
+}
+
+/**
+ * `session.background.stop`'s answer (BG-11): `stopped` when the process was ended, `not-running`
+ * when it had already ended. The session record is kept either way.
+ */
+export interface StoppedBackground {
+  stopped: 'stopped' | 'not-running'
+}
+
 /** `session.note`'s answer: what became of the text, and the session's notes as they now stand. */
 export interface NotedSession {
   noted: 'kept' | 'unwritable' | 'empty'
@@ -290,7 +307,20 @@ export interface SessionSummary {
    * `manifest.read` and cannot be opened or continued. Absent from an older bridge.
    */
   manifest?: boolean
+  /**
+   * The id of the record this chat was handed off from (SESSION-34), or null for one that was not.
+   * Absent from an older bridge.
+   */
+  handedOffFrom?: string | null
+  /**
+   * The state of the background process that holds this chat (BG-6), in the roster's words, or
+   * null for a chat no background process has held. Absent from an older bridge.
+   */
+  background?: BackgroundState | null
 }
+
+/** A background session's state, spelled as `State::word()` in `crates/session/src/jobs.rs` (BG-6). */
+export type BackgroundState = 'working' | 'needs-input' | 'idle' | 'stopped' | 'interrupted'
 
 export interface SessionRecord {
   id: string
@@ -366,6 +396,23 @@ export interface SessionSettled extends ProjectQuestionsReport {
   settingsRules?: SettingsRules | null
 }
 
+/** `session.btw`: a question asked over the exchange, at rest or beside the running turn (CMD-8). Answered with `AsideStarted`. */
+export interface BtwParams {
+  session: string
+  question: string
+  model: string | null
+  /** Ids of pictures pasted on the line, which the main process resolves to `images` (CMD-5). */
+  pastes?: string[]
+  /** Ids of pictures and PDFs dropped on the line, which the main process resolves to `attachments`. */
+  drops?: string[]
+  /** Text files dropped on the line, each put back into the question as its name (DROP-4). */
+  files?: { marker: string; name: string }[]
+}
+/** `session.recap`: a recap of the exchange at rest (CMD-16). Refused with `turn_in_flight` while a turn runs. */
+export interface RecapParams { session: string; model: string | null }
+/** `session.aside.cancel`: stops the question that is out, if any. Answered with `{}`. */
+export interface AsideCancelParams { session: string }
+
 export interface OpenedSession extends SessionSettled {
   /** Absent from an older bridge, which kept no rewind points. Newest first. */
   rewind?: RewindPoint[]
@@ -378,6 +425,8 @@ export interface OpenedSession extends SessionSettled {
   todos: Record<string, TodoRow[]>
   /** Absent from an older bridge, which sent none. */
   notes?: SessionNote[]
+  /** The `/btw` and `/recap` asides the record kept, oldest first. Absent from an older bridge. */
+  asides?: import('./aside').AsideRow[]
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string
@@ -416,6 +465,48 @@ export type SandboxMode = 'workspace-write' | 'read-only' | 'strict'
 
 /** The order the sandbox menu lists them. */
 export const SANDBOX_MODES: readonly SandboxMode[] = ['workspace-write', 'read-only', 'strict']
+
+/** What a session spend limit counts (TURN-8). */
+export type SpendUnit = 'tokens' | 'credits'
+
+/** A session spend limit: a positive count of one unit. */
+export interface SpendLimitFigure {
+  unit: SpendUnit
+  count: number
+}
+
+/**
+ * `session.limit`'s params. Without `limit` the call only reads. A string is read the way the
+ * `limit` setting is (`50000`, `500k`, `20 credits`), and `null` takes the limit away.
+ */
+export interface SessionLimitParams {
+  session: string
+  limit?: string | null
+}
+
+/** `session.limit`'s answer: the limit in force, and what the session has spent in its unit (tokens when there is none). */
+export interface SessionLimit {
+  limit: SpendLimitFigure | null
+  spent: number
+}
+
+/**
+ * `session.variant`'s params (BACKEND-66). `model` is the composer's pick, which can differ from
+ * the session's model until the next `turn.send`. Without `variant` the call only reads. `null` or
+ * `"off"` drops the pick, and a name picks one the model offers.
+ */
+export interface SessionVariantParams {
+  session: string
+  model?: string
+  variant?: string | null
+}
+
+/** `session.variant`'s answer: the model in force, the variant names it offers, and the pick or `null`. */
+export interface SessionVariant {
+  model: string
+  offered: string[]
+  variant: string | null
+}
 
 export function nextPermissionMode(mode: PermissionMode): PermissionMode {
   return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length]!
@@ -482,6 +573,11 @@ export interface EffortReport {
   recorded: EffortLevel | null
   inForce: EffortLevel | null
   outranked: boolean
+  /**
+   * The level the open session began with, which a model of the ChatGPT account is sent for the
+   * whole session (CHATGPT-10); absent where the window named no open session.
+   */
+  sessionBegan?: EffortLevel | null
 }
 
 /** `language.get`: the catalog the window is read in, and the choice `/language` keeps. */
@@ -515,6 +611,24 @@ export interface UsagePingReport {
 
 /** `usage_ping.set`: the report after the change, and whether the switch file was written. */
 export interface UsagePingSaved extends UsagePingReport {
+  saved: boolean
+}
+
+/** What keeps crash reports off where their switch cannot: `variable` is set for `environment`. */
+export interface CrashReportsReason {
+  code: 'environment' | 'admin' | 'incognito'
+  variable?: string
+}
+
+/** `crash_reports.get`: whether reports are on, and `reason` when the switch cannot change that. */
+export interface CrashReportsReport {
+  enabled: boolean
+  changeable: boolean
+  reason: CrashReportsReason | null
+}
+
+/** `crash_reports.set`: the report after the change, and whether `crashReports` was written. */
+export interface CrashReportsSaved extends CrashReportsReport {
   saved: boolean
 }
 
@@ -917,10 +1031,19 @@ export interface McpServerRequest {
   lines?: string[]
 }
 
+/**
+ * One argument of a listed tool. `text` is the client's own words (name, type, whether it is
+ * required). `choices` are the values the server says it takes, each the server's own string.
+ */
+export interface McpToolArgument {
+  text: string
+  choices: string[]
+}
+
 /** One tool on an MCP server's list, as the client drew it. `description` is the server's text. */
 export interface McpTool {
   name: string
-  arguments: string[]
+  arguments: McpToolArgument[]
   description: string | null
   /** The server marks the tool read-only, as its own `readOnlyHint` says (SERVERS-8). */
   read_only?: boolean
@@ -1186,10 +1309,24 @@ export interface EventMap {
    * shown. `unusable` is an empty rewrite or one past `limit` characters. `failed` carries `message`.
    */
   'enhance.done': { status: 'ready' | 'untrusted' | 'unusable' | 'stopped' | 'failed'; text?: string; removed?: number; limit?: number; message?: string }
+  /**
+   * What a `session.compact` request came back with (CMD-34). `compacted` carries `summarised`, the
+   * messages no longer sent word for word, and `kept`, those still sent. `nothing` means there was
+   * nothing worth shortening. `failed` carries `message`.
+   */
+  'compact.done': { status: 'compacted' | 'nothing' | 'stopped' | 'failed'; summarised?: number; kept?: number; message?: string }
+  /**
+   * What a `session.handoff` request came back with (SESSION-34). `ready` carries `text`: the brief,
+   * the sentence saying what did not come with it, and the goal. `untrusted` means the exchange met
+   * something the planner is not shown, so no brief is offered. `failed` carries `message`.
+   */
+  'handoff.done': { status: 'ready' | 'untrusted' | 'stopped' | 'failed'; text?: string; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
   'schedule.ran': import('./schedule').ScheduleAnswer
+  /** What a `session.btw` or `session.recap` came back with (CMD-8, CMD-16). Shown, never sent to the model. */
+  'aside.done': import('./aside').AsideDone
   /** `retry` is set only on `reconnecting`, while the request waits, and `null` once its attempt is out. */
   phase: { phase: Phase; retry?: RetryEvent | null }
   composing: { call: string | null }

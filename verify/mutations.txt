@@ -192,3 +192,368 @@ replace: weakest = weaker(weakest, matching[at]); => weakest = weakest;
 mutation: weakest_decision finds a decision where no spelling holds one
 file: crates/core/src/trust.rs
 replace: if matching.is_empty() { => if false {
+
+mutation: Command::is_entry_for covers a step under any arguments
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_texts(held_args, args) => && true
+
+mutation: Command::is_entry_for covers a step in any tree
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_path_buf(held_directory, directory) => && true
+
+mutation: Command::is_entry_for covers a binary started by another path
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_path_buf(held_started_as, started_as) => && true
+
+mutation: Command::is_entry_for covers a step with its streams sent elsewhere
+file: crates/core/src/programs.rs
+replace: && crate::compare::same_routes(held_routes, routes) => && true
+
+mutation: Command::is_entry_for covers another binary
+file: crates/core/src/programs.rs
+replace: crate::compare::same_path_buf(held_program, program) => true
+
+mutation: steps_vouched reads only the left side of a join
+file: crates/core/src/programs.rs
+replace: left && steps_vouched(listed, right, directory) => left
+
+mutation: step_vouched lets a step through without an entry for it
+file: crates/core/src/programs.rs
+replace: some_entry_is(listed, step, directory) => true
+
+mutation: same_texts reads two different arguments as the same
+file: crates/core/src/compare.rs
+replace: let same = same_text(&a[at], &b[at]); => let same = true;
+
+mutation: RememberedStep::matches covers a step carrying an expansion
+file: crates/core/src/remembered.rs
+replace: expansions.is_empty() => true
+
+mutation: RememberedStep::matches covers a step under another name
+file: crates/core/src/remembered.rs
+replace: && crate::compare::same_text(held_program, program) => && true
+
+mutation: RememberedStep::matches covers a step with an assignment in front of it
+file: crates/core/src/remembered.rs
+replace: && crate::compare::same_environment(held_environment, environment) => && true
+
+mutation: RememberedStep::matches covers a step with its streams sent elsewhere
+file: crates/core/src/remembered.rs
+replace: && crate::compare::same_routes(held_routes, routes) => && true
+
+mutation: RememberedStep::matches covers a step under any arguments
+file: crates/core/src/remembered.rs
+replace: && every_arg_admits(held_args, args) => && true
+
+mutation: Shape::matches covers a line joined another way
+file: crates/core/src/remembered.rs
+replace: let joined = *held_joiner == *joiner; => let joined = true;
+
+mutation: same_environment compares names only
+file: crates/core/src/compare.rs
+replace: if !same_text(name, other_name) || !same_text(value, other_value) { => if !same_text(name, other_name) {
+
+mutation: Remembered::covers reads a scope's lines as covering every line
+file: crates/core/src/remembered.rs
+replace: some_entry_covers(entries, plan) || some_scope_covers(scopes, plan) => some_entry_covers(entries, plan) || !scopes.is_empty()
+
+mutation: step_vouched lets a step through without asking about the steps inside its `$(...)`
+file: crates/core/src/programs.rs
+replace: if !expansion_vouched(listed, &step.expansions[at], directory) { => if false {
+
+mutation: expansion_vouched lets an expansion through without asking about its parts
+file: crates/core/src/programs.rs
+replace: if !part_vouched(listed, &expansion.parts[at], directory) { => if false {
+
+mutation: steps_vouched lets a group through without asking about the steps inside it
+file: crates/core/src/programs.rs
+replace: // A group starts nothing of its own, so it is vouched for where what it holds is. => Steps::Group(_) => true,
+
+mutation: pipeline_vouched lets a pipeline through without asking about its steps
+file: crates/core/src/programs.rs
+replace: if !step_vouched(listed, &list[at], directory) { => if false {
+
+mutation: same_route reads `>` and `>>` to one file as the same route
+file: crates/core/src/compare.rs
+replace: same_way && same_path_buf(path, other) => same_path_buf(path, other)
+
+mutation: same_routes reads two different routes as the same
+file: crates/core/src/compare.rs
+replace: if !same_route(&a[at], &b[at]) { => if false {
+
+mutation: RememberedArg::admits lets a number slot admit any text
+file: crates/core/src/remembered.rs
+replace: // Digits only, so a slot cannot admit a flag or a name. => Self::Number => true,
+
+mutation: every_arg_admits reads two different arguments as admitted
+file: crates/core/src/remembered.rs
+replace: if !held[at].admits(&seen[at]) { => if false {
+
+mutation: every_step_matches reads two different steps as matching
+file: crates/core/src/remembered.rs
+replace: if !held[at].matches(&seen[at]) { => if false {
+
+mutation: Shape::matches reads only the left side of a join
+file: crates/core/src/remembered.rs
+replace: joined && held_left.matches(left) && held_right.matches(right) => joined && held_left.matches(left)
+
+mutation: ruling_of lets a matching allow beat a matching deny
+file: crates/core/src/permissions.rs
+replace: return Some(Ruling::Deny); => return if allowed { Some(Ruling::Allow) } else { Some(Ruling::Deny) };
+
+mutation: ruling_of reads a matching ask as an allow
+file: crates/core/src/permissions.rs
+replace: return Some(Ruling::Ask); => return Some(Ruling::Allow);
+
+mutation: pipeline_decision lets a pipeline with a denied stage through to an ask
+file: crates/core/src/permissions.rs
+replace: denied = denied || stage == Decision::Ruled(Ruling::Deny); => denied = denied;
+
+mutation: pipeline_decision lets a pipeline with a stage that asks through
+file: crates/core/src/permissions.rs
+replace: asked = asked || stage == Decision::Ruled(Ruling::Ask); => asked = asked;
+
+mutation: pipeline_decision allows a pipeline whose later stage no rule allows
+file: crates/core/src/permissions.rs
+replace: all_allowed = all_allowed && stage == Decision::Ruled(Ruling::Allow); => all_allowed = all_allowed && (at > 0 || stage == Decision::Ruled(Ruling::Allow));
+
+mutation: pipeline_decision allows an empty pipeline
+file: crates/core/src/permissions.rs
+replace: if each.is_empty() { => if false {
+
+mutation: pipeline_decision reads a denied stage as an ask
+file: crates/core/src/permissions.rs
+replace: return Decision::Ruled(Ruling::Deny); => return Decision::Ruled(Ruling::Ask);
+
+mutation: read_planner_argument reads a private argument
+file: crates/core/src/policy.rs
+replace: let private_argument = !label.is_public(); => let private_argument = false;
+
+mutation: read_planner_argument reads an argument written from a fallen context
+file: crates/core/src/policy.rs
+replace: let fallen_argument = self.context_integrity() != Integrity::Trusted; => let fallen_argument = false;
+
+mutation: promote_confined_read promotes a private proposal
+file: crates/core/src/policy.rs
+replace: let private_proposal = !label.is_public(); => let private_proposal = false;
+
+mutation: promote_confined_read promotes a proposal from a fallen context
+file: crates/core/src/policy.rs
+replace: let fallen_proposal = self.context_integrity() != Integrity::Trusted; => let fallen_proposal = false;
+
+mutation: declassify_written_into_workspace raises the integrity of what it releases
+file: crates/core/src/policy.rs
+replace: let to_the_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_workspace = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: declassify_written_into_workspace keeps a private write private
+file: crates/core/src/policy.rs
+replace: let to_the_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_workspace = from;
+
+mutation: declassify_into_workspace raises the integrity of what it releases
+file: crates/core/src/policy.rs
+replace: let to_its_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_its_workspace = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: declassify_into_workspace keeps a private release private
+file: crates/core/src/policy.rs
+replace: let to_its_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_its_workspace = from;
+
+mutation: declassify_checkout_into_workspace raises the integrity of what it releases
+file: crates/core/src/policy.rs
+replace: let to_the_checkouts_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_checkouts_workspace = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: declassify_checkout_into_workspace keeps a private release private
+file: crates/core/src/policy.rs
+replace: let to_the_checkouts_workspace = Label::new(from.integrity, Confidentiality::Public); => let to_the_checkouts_workspace = from;
+
+mutation: declassify releases a slot the plan did not name
+file: crates/core/src/policy.rs
+replace: let precommitted = self.precommitted(slot); => let precommitted = true;
+
+mutation: declassify_into_place releases a slot to a destination the plan did not name
+file: crates/core/src/policy.rs
+replace: let precommitted_here = self.precommitted_into(slot, destination); => let precommitted_here = self.precommitted(slot);
+
+mutation: endorsed_for_reading hands a slot of the wrong kind to the planner
+file: crates/core/src/policy.rs
+replace: if !right_kind { => if false {
+
+mutation: endorsed_for_reading hands a slot to the planner without an endorsement
+file: crates/core/src/policy.rs
+replace: self.consume_grant(tool, "ref", slot.as_str()) => Ok(())
+
+mutation: Labelled::trusted builds a value that is private
+file: crates/core/src/value.rs
+replace: confidentiality: crate::label::Confidentiality::Public, => confidentiality: crate::label::Confidentiality::Private,
+
+mutation: Labelled::new builds a value at a label other than the one it was given
+file: crates/core/src/value.rs
+replace: let given = label; => let given = Label { integrity: crate::label::Integrity::Trusted, confidentiality: label.confidentiality };
+
+mutation: Label::new builds a label at another integrity than the one it was given
+file: crates/core/src/label.rs
+replace: let integrity_given = integrity; => let integrity_given = Integrity::Trusted;
+
+mutation: write_reason lets a destination nobody has read through to a rule
+file: crates/core/src/policy.rs
+replace: if facts.by_reference { => if false {
+
+mutation: write_reason lets an allow rule answer for a protected path
+file: crates/core/src/policy.rs
+replace: if facts.protected { => if false {
+
+mutation: write_reason lets the trust map overturn an ask rule
+file: crates/core/src/policy.rs
+replace: return WriteReason::Ruled(ruling); => return if ruling == crate::permissions::Ruling::Allow { WriteReason::Ruled(ruling) } else { WriteReason::KeepsTrust };
+
+mutation: write_reason lets a write through to a path nobody has vouched for
+file: crates/core/src/policy.rs
+replace: return WriteReason::Undecided; => return WriteReason::AlreadyUntrusted;
+
+mutation: write_reason lets untrusted data into a trusted path unasked
+file: crates/core/src/policy.rs
+replace: return WriteReason::LowersTrust; => return WriteReason::KeepsTrust;
+
+mutation: write_reason reads a write into a trusted path as one into an untrusted path
+file: crates/core/src/policy.rs
+replace: let into_trusted = in_force == Integrity::Trusted; => let into_trusted = false;
+
+mutation: WriteReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let write_allowed = ruling == crate::permissions::Ruling::Allow; => let write_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: WriteReason::asks lets a protected path through
+file: crates/core/src/policy.rs
+replace: // write would make a trusted path untrusted. => Self::Protected => false,
+
+mutation: promote_a_tool_list offers a list at a label other than (T,pub)
+file: crates/core/src/policy.rs
+replace: let vouched_list = Label::new(Integrity::Trusted, Confidentiality::Public); => let vouched_list = Label::new(Integrity::Trusted, Confidentiality::Private);
+
+mutation: promote_a_server_move declares a move at a label other than (T,pub)
+file: crates/core/src/policy.rs
+replace: let approved_move = Label::new(Integrity::Trusted, Confidentiality::Public); => let approved_move = Label::new(Integrity::Untrusted, Confidentiality::Public);
+
+mutation: adopt_edited_body adopts a body that was not trusted
+file: crates/core/src/policy.rs
+replace: let editable = was.is_trusted() && was.is_public(); => let editable = was.is_public();
+
+mutation: adopt_edited_body adopts a body that was private
+file: crates/core/src/policy.rs
+replace: let editable = was.is_trusted() && was.is_public(); => let editable = was.is_trusted();
+
+mutation: adopt_edited_body records an edited body at another label
+file: crates/core/src/policy.rs
+replace: let edited = Label::new(Integrity::Trusted, Confidentiality::Public); => let edited = Label::new(Integrity::Trusted, Confidentiality::Private);
+
+mutation: record_answers records a reply to questions that were not trusted
+file: crates/core/src/policy.rs
+replace: let asked_from_trust = label.is_trusted(); => let asked_from_trust = true;
+
+mutation: record_answers records a private reply as public
+file: crates/core/src/policy.rs
+replace: let replied = Label::new(Integrity::Trusted, label.confidentiality); => let replied = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: label_user_command_output labels what a person's own command printed as public
+file: crates/core/src/policy.rs
+replace: let typed_output = Label::new(Integrity::Trusted, Confidentiality::Private); => let typed_output = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: label_user_configuration labels the person's own configuration as private
+file: crates/core/src/policy.rs
+replace: let own_configuration = Label::new(Integrity::Trusted, Confidentiality::Public); => let own_configuration = Label::new(Integrity::Trusted, Confidentiality::Private);
+
+mutation: label_kept_fact labels a private fact public
+file: crates/core/src/policy.rs
+replace: let kept_fact = Label::new(Integrity::Trusted, confidentiality); => let kept_fact = Label::new(Integrity::Trusted, Confidentiality::Public);
+
+mutation: shown_to_the_planner shows untrusted content
+file: crates/core/src/policy.rs
+replace: let trusted = label.integrity == Integrity::Trusted; => let trusted = true;
+
+mutation: shown_to_the_planner shows a picture
+file: crates/core/src/policy.rs
+replace: trusted && !picture => trusted
+
+mutation: Context::absorb lets a trusted observation restore integrity already lost
+file: crates/core/src/policy.rs
+replace: let met = self.integrity.meet(observed); => let met = observed;
+
+mutation: Context::hold lets a public observation make a private context public again
+file: crates/core/src/policy.rs
+replace: let joined = self.confidentiality.join(shown); => let joined = shown;
+
+mutation: Context::fresh starts a turn's context private
+file: crates/core/src/policy.rs
+replace: confidentiality: Confidentiality::Public, => confidentiality: Confidentiality::Private,
+
+
+mutation: Context::integrity reports a fallen context as trusted
+file: crates/core/src/policy.rs
+replace: self.integrity => Integrity::Trusted
+
+mutation: Context::confidentiality reports a private context as public
+file: crates/core/src/policy.rs
+replace: self.confidentiality => Confidentiality::Public
+
+mutation: Context::label reports a fallen context as trusted
+file: crates/core/src/policy.rs
+replace: Label::new(self.integrity, self.confidentiality) => Label::new(Integrity::Trusted, self.confidentiality)
+
+mutation: Grants::spend spends an endorsement made for another tool
+file: crates/core/src/policy.rs
+replace: let matches = crate::compare::same_text(&grant.tool, tool) => let matches = true
+
+mutation: Grants::spend spends an endorsement made for another field
+file: crates/core/src/policy.rs
+replace: && crate::compare::same_text(&grant.field, field) => && true
+
+mutation: Grants::spend spends an endorsement made for another value
+file: crates/core/src/policy.rs
+replace: && crate::compare::same_text(&grant.value, value); => && true;
+
+mutation: Grants::spend leaves a spent endorsement to be spent again
+file: crates/core/src/policy.rs
+replace: self.pending.remove(at); => let _ = at;
+
+mutation: Grants::issue drops the endorsement a person's answer issued
+file: crates/core/src/policy.rs
+replace: self.pending.push(grant); => let _ = grant;
+
+mutation: fetch_reason reads a rule about a host as no rule
+file: crates/core/src/policy.rs
+replace: let ruled = FetchReason::Ruled(ruling); => let ruled = FetchReason::Ruled(crate::permissions::Ruling::Allow);
+
+mutation: FetchReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let fetch_allowed = ruling == crate::permissions::Ruling::Allow; => let fetch_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: mcp_reason lets a rule answer for a server that asks about every call
+file: crates/core/src/policy.rs
+replace: if standing == McpStanding::AskedEveryCall { => if false {
+
+mutation: mcp_reason lets a rule answer for a call with private arguments
+file: crates/core/src/policy.rs
+replace: let private_arguments = !public_arguments; => let private_arguments = false;
+
+mutation: mcp_reason lets a standing answer overturn an ask rule
+file: crates/core/src/policy.rs
+replace: return McpReason::Ruled(ruling); => return if ruling == crate::permissions::Ruling::Allow { McpReason::Ruled(ruling) } else { McpReason::StoppedAsking };
+
+mutation: McpReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let call_allowed = ruling == crate::permissions::Ruling::Allow; => let call_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: McpReason::asks lets a call with private arguments through
+file: crates/core/src/policy.rs
+replace: // answers for the tool. => Self::Private => false,
+
+mutation: search_reason lets a rule answer for a search made after private content was shown
+file: crates/core/src/policy.rs
+replace: let private_context = !public_context; => let private_context = false;
+
+mutation: SearchReason::asks reads an ask rule as no prompt
+file: crates/core/src/policy.rs
+replace: let search_allowed = ruling == crate::permissions::Ruling::Allow; => let search_allowed = ruling != crate::permissions::Ruling::Deny;
+
+mutation: SearchReason::asks lets a search after private content through
+file: crates/core/src/policy.rs
+replace: // The planner's context holds private content, or nothing answers for a search. => Self::Private => false,

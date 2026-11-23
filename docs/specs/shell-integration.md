@@ -64,7 +64,8 @@ which is the behaviour a person who set them wants. A terminal keeps
 recording in the directory `BRAVEBOT_HOME` named when its hook was sourced, so a change to the
 variable in that terminal moves a question's run and leaves the record where it was. The tests
 run the bash hook in a real `bash`; the zsh and fish hooks are the same design written for those
-shells and are not run by the suite.
+shells and are not run by the suite. A test reads the text of both hooks and requires the skip of an
+empty line, of `@bravebot` alone and of `@bravebot` and a space ahead of the write.
 
 `verified-by: bravebot_cli::running::a_question_carries_the_commands_since_the_last_one_on_stdin`
 `verified-by: bravebot_cli::running::the_recorded_lines_are_private_and_end_with_the_terminal`
@@ -73,6 +74,8 @@ shells and are not run by the suite.
 `verified-by: bravebot_cli::running::the_hook_narrows_a_named_directory_and_nothing_above_it`
 `verified-by: bravebot_cli::running::the_hook_steps_over_a_named_directory_that_is_a_link`
 `verified-by: bravebot_cli::running::the_hook_passes_over_a_value_that_names_no_directory`
+`verified-by: bravebot_cli::running::a_question_with_no_words_after_the_name_is_not_recorded`
+`verified-by: bravebot_cli::running::the_zsh_and_fish_hooks_skip_a_question_line_before_they_record`
 
 <a id="SHELLINT-3"></a>
 ### SHELLINT-3: `BRAVEBOT_INCOGNITO` set and not empty stops the recording

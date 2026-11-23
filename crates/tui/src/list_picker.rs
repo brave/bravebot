@@ -11,8 +11,15 @@
 //! takes the row (PANEL-17).
 //!
 //! What differs between the pickers is data a caller hands in: the rows, the panel's title, keys
-//! line and width. The message ids stay named in each picker's own source, so the callers pass text
-//! that is already resolved and this module never chooses which sentence a person is shown.
+//! line, scope line and width. The message ids stay named in each picker's own source, so the callers
+//! pass text that is already resolved and this module never chooses which sentence a person is shown.
+//!
+//! A picker may carry a [`Scope`], how long a pick lasts. Tab and Shift-Tab switch it and Enter takes
+//! it along with the row. The caller builds the panel for the scope in force, with a title that names
+//! it and a scope line saying what Enter and Tab do. The scope line is drawn between the line saying
+//! what the row means and the line of keys, on a second row where the panel is too narrow for it, and
+//! the panel is one row taller for it (VIEW-14, VIEW-46). A picker with no scope draws no such row and
+//! ignores Tab.
 //!
 //! Nothing labelled is involved. The rows are fixed strings from the message catalog or theme names
 //! a person picks, and they are drawn for that person.
@@ -30,8 +37,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use crate::input;
+use crate::model_prompt::Scope;
 use crate::select::{self, Click};
 use crate::theme;
+use crate::wrap::display_width;
 
 /// One row of a list.
 pub trait PickerRow {
@@ -54,6 +63,9 @@ pub struct Panel {
     pub title: &'static str,
     /// The line of keys under the list.
     pub keys: &'static str,
+    /// What Enter and Tab do in the scope the picker is in, drawn above the line of keys. `None` for
+    /// a picker with no scope, which draws no such row.
+    pub scope_line: Option<&'static str>,
     /// The widest the panel is drawn, in columns.
     pub width: u16,
 }
@@ -70,18 +82,34 @@ pub struct ListPicker<R: PickerRow> {
     /// already drawn and the rows stay where they are, so a second press on the same cell is on the
     /// same row. A key or a turn of the wheel lets go of it, and the list moves as it always did.
     held_from: Option<usize>,
+    /// How long a pick lasts, which Enter takes along with the row. `None` for a picker whose pick
+    /// has no scope, which Tab leaves alone.
+    scope: Option<Scope>,
 }
 
 impl<R: PickerRow> ListPicker<R> {
     /// Open with the cursor on `selected` and `previous` marked as in force. Not called `new`, so
-    /// that each picker keeps its own `Picker::new(current)` on its alias.
+    /// that each picker keeps its own `Picker::new(current)` on its alias. The picker has no scope
+    /// until [`ListPicker::starting_in`] gives it one.
     pub fn open(rows: Vec<R>, selected: usize, previous: R) -> Self {
         Self {
             rows,
             selected,
             previous,
             held_from: None,
+            scope: None,
         }
+    }
+
+    /// Open in `scope`, which Tab changes while the picker is open.
+    pub fn starting_in(mut self, scope: Scope) -> Self {
+        self.scope = Some(scope);
+        self
+    }
+
+    /// How long the pick lasts if Enter is pressed now, or `None` for a picker with no scope.
+    pub fn scope(&self) -> Option<Scope> {
+        self.scope
     }
 
     /// The row under the cursor.
@@ -165,6 +193,11 @@ pub fn handle_key<R: PickerRow>(
 
     match code {
         KeyCode::Esc => Outcome::Cancel,
+        // Either direction, since there are two scopes. A picker with no scope has no use for Tab.
+        KeyCode::Tab | KeyCode::BackTab => {
+            picker.scope = picker.scope.map(Scope::other);
+            Outcome::Continue
+        }
         KeyCode::Enter => Outcome::Select,
         KeyCode::Up | KeyCode::Char('k') => {
             picker.up();
@@ -270,11 +303,26 @@ pub fn handle_mouse_taking<R: PickerRow>(
 /// looking at the same session they opened the picker from. A draw or a read that fails refuses.
 pub fn choose<B: Backend, R: PickerRow + Clone>(
     terminal: &mut Terminal<B>,
-    mut picker: ListPicker<R>,
+    picker: ListPicker<R>,
     panel: &Panel,
     wheel: u16,
-    mut behind: impl FnMut(&mut Frame),
+    behind: impl FnMut(&mut Frame),
 ) -> Option<R> {
+    choose_with(terminal, picker, |_| *panel, wheel, behind).map(|(row, _)| row)
+}
+
+/// [`choose`] for a picker with a scope, which returns the scope in force with the row.
+///
+/// `panel` is asked for the panel of the scope the picker is in each time it is drawn, since Tab
+/// changes the title and the scope line. A picker with no scope is asked with `None` and answers
+/// `None`.
+pub fn choose_with<B: Backend, R: PickerRow + Clone>(
+    terminal: &mut Terminal<B>,
+    mut picker: ListPicker<R>,
+    panel: impl Fn(Option<Scope>) -> Panel,
+    wheel: u16,
+    mut behind: impl FnMut(&mut Frame),
+) -> Option<(R, Option<Scope>)> {
     let mut shown = Placed::default();
     let mut last = None;
     let mut ignored = false;
@@ -284,9 +332,10 @@ pub fn choose<B: Backend, R: PickerRow + Clone>(
         if !ignored
             && terminal
                 .draw(|frame| {
+                    let panel = panel(picker.scope());
                     behind(frame);
-                    draw(frame, &picker, panel);
-                    shown = placed(frame.area(), &picker, panel);
+                    draw(frame, &picker, &panel);
+                    shown = placed(frame.area(), &picker, &panel);
                 })
                 .is_err()
         {
@@ -304,7 +353,7 @@ pub fn choose<B: Backend, R: PickerRow + Clone>(
         if let TermEvent::Mouse(mouse) = event {
             let now = std::time::Instant::now();
             match handle_mouse(&mut picker, shown, mouse, &mut last, now, wheel) {
-                Outcome::Select => return picker.chosen().cloned(),
+                Outcome::Select => return picked(&picker),
                 Outcome::Cancel => return None,
                 Outcome::Continue => continue,
             }
@@ -319,9 +368,14 @@ pub fn choose<B: Backend, R: PickerRow + Clone>(
         match handle_key(&mut picker, key.code, key.modifiers) {
             Outcome::Continue => continue,
             Outcome::Cancel => return None,
-            Outcome::Select => return picker.chosen().cloned(),
+            Outcome::Select => return picked(&picker),
         }
     }
+}
+
+/// The row under the cursor and the scope the picker is in.
+fn picked<R: PickerRow + Clone>(picker: &ListPicker<R>) -> Option<(R, Option<Scope>)> {
+    picker.chosen().cloned().map(|row| (row, picker.scope))
 }
 
 /// Where a picker is drawn in a frame: the panel with its border, and the rows of the list in it.
@@ -335,14 +389,19 @@ pub struct Placed {
 /// so what a press is read against is where the rows are.
 pub fn placed<R: PickerRow>(frame: Rect, picker: &ListPicker<R>, panel: &Panel) -> Placed {
     Placed {
-        area: centred(frame, picker.rows.len(), panel.width),
-        list: regions(frame, picker.rows.len(), panel.width)[0],
+        area: centred_with(frame, picker.rows.len(), panel.width, panel.scope_line),
+        list: regions_with(frame, picker.rows.len(), panel.width, panel.scope_line)[0],
     }
 }
 
 /// Draw the panel over whatever is already in the frame.
 pub fn draw<R: PickerRow>(frame: &mut Frame, picker: &ListPicker<R>, panel: &Panel) {
-    let area = centred(frame.area(), picker.rows.len(), panel.width);
+    let area = centred_with(
+        frame.area(),
+        picker.rows.len(),
+        panel.width,
+        panel.scope_line,
+    );
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -354,7 +413,7 @@ pub fn draw<R: PickerRow>(frame: &mut Frame, picker: &ListPicker<R>, panel: &Pan
     let inside = block.inner(area);
     frame.render_widget(block, area);
 
-    let layout = split(inside);
+    let layout = split(inside, footer_height(panel.scope_line, area.width));
 
     frame.render_widget(Paragraph::new(list_lines(picker, layout[0])), layout[0]);
 
@@ -372,40 +431,111 @@ pub fn draw<R: PickerRow>(frame: &mut Frame, picker: &ListPicker<R>, panel: &Pan
         layout[1],
     );
 
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {}", panel.keys),
-            Style::default().fg(theme::muted()),
-        ))),
-        layout[2],
-    );
+    // What Enter and Tab do in the scope in force, then the keys that do not depend on it. The scope
+    // has its own row or rows because both of them with the keys are wider than the widest panel.
+    let mut footer: Vec<Line> = panel
+        .scope_line
+        .map(|line| scope_rows(line, scope_room(area.width)))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            Line::from(Span::styled(
+                format!(" {row}"),
+                Style::default().fg(theme::text()),
+            ))
+        })
+        .collect();
+    footer.push(Line::from(Span::styled(
+        format!(" {}", panel.keys),
+        Style::default().fg(theme::muted()),
+    )));
+    frame.render_widget(Paragraph::new(footer), layout[2]);
 }
 
-/// The list, the line saying what the row under the cursor means, and the line of keys, inside the
-/// border of the panel [`draw`] draws over `frame`.
+/// The list, the line saying what the row under the cursor means, and the footer, inside the border
+/// of the panel [`draw`] draws over `frame` for a panel with no scope line.
 pub fn regions(frame: Rect, rows: usize, width: u16) -> std::rc::Rc<[Rect]> {
-    let area = centred(frame, rows, width);
-    split(Block::default().borders(Borders::ALL).inner(area))
+    regions_with(frame, rows, width, None)
 }
 
-fn split(inside: Rect) -> std::rc::Rc<[Rect]> {
+/// [`regions`] for a panel that draws `scope_line` above its keys.
+pub fn regions_with(
+    frame: Rect,
+    rows: usize,
+    width: u16,
+    scope_line: Option<&str>,
+) -> std::rc::Rc<[Rect]> {
+    let area = centred_with(frame, rows, width, scope_line);
+    split(
+        Block::default().borders(Borders::ALL).inner(area),
+        footer_height(scope_line, area.width),
+    )
+}
+
+/// The list, the line saying what the row under the cursor means, and the footer: the scope rows
+/// where there are any, and the keys. The footer is `footer` rows.
+fn split(inside: Rect, footer: u16) -> std::rc::Rc<[Rect]> {
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // what the row under the cursor means
-            Constraint::Length(1), // keys
+            Constraint::Min(1),         // list
+            Constraint::Length(1),      // what the row under the cursor means
+            Constraint::Length(footer), // scope rows, keys
         ])
         .split(inside)
 }
 
+/// The columns a footer row has in a panel `panel_width` wide: inside the border, less the space
+/// each row starts with.
+pub(crate) fn scope_room(panel_width: u16) -> usize {
+    usize::from(panel_width).saturating_sub(3)
+}
+
+/// The rows a scope line is drawn on in `room` columns: one where it fits, and otherwise the Enter
+/// half and the Tab half packed onto as few rows as hold them whole, so the half that names how to
+/// leave the scope is not the one a narrow terminal cuts off.
+pub(crate) fn scope_rows(line: &str, room: usize) -> Vec<String> {
+    if display_width(line) <= room {
+        return vec![line.to_string()];
+    }
+    let mut rows: Vec<String> = Vec::new();
+    for half in line
+        .split('·')
+        .map(str::trim)
+        .filter(|half| !half.is_empty())
+    {
+        match rows.last_mut() {
+            Some(row) if display_width(row) + 3 + display_width(half) <= room => {
+                row.push_str(" · ");
+                row.push_str(half);
+            }
+            _ => rows.push(half.to_string()),
+        }
+    }
+    rows
+}
+
+/// How many rows the footer takes in a panel `panel_width` wide: the scope rows, if the panel has a
+/// scope line, and the keys row.
+pub(crate) fn footer_height(scope_line: Option<&str>, panel_width: u16) -> u16 {
+    let rows = scope_line.map_or(0, |line| scope_rows(line, scope_room(panel_width)).len());
+    u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(1)
+}
+
 /// A centred panel sized to the list, never larger than the terminal and never wider than `width`.
 pub fn centred(area: Rect, rows: usize, width: u16) -> Rect {
+    centred_with(area, rows, width, None)
+}
+
+/// [`centred`] for a panel that draws `scope_line` above its keys, one row taller where the scope
+/// line wraps onto a second row, so no row of the list is hidden behind the footer.
+pub fn centred_with(area: Rect, rows: usize, width: u16, scope_line: Option<&str>) -> Rect {
     let available = area.width.saturating_sub(2);
     let width = available.min(width).max(24.min(available));
-    // Borders, hint line, key line, and one row per entry that fits.
+    // Borders, the line saying what the row means, the footer, and one row per entry that fits.
     let list = (rows as u16)
-        .saturating_add(4)
+        .saturating_add(3)
+        .saturating_add(footer_height(scope_line, width))
         .min(area.height.saturating_sub(2));
     let height = list.max(6).min(area.height.saturating_sub(2));
 
@@ -476,6 +606,7 @@ mod tests {
     const PANEL: Panel = Panel {
         title: "words",
         keys: "enter picks",
+        scope_line: None,
         width: 52,
     };
 
@@ -587,6 +718,123 @@ mod tests {
             Outcome::Continue
         );
         assert_eq!(picker.chosen().map(|row| row.0), Some("one"));
+    }
+
+    /// VIEW-46. A picker built with no scope has none to hand back, ignores Tab and Shift-Tab, and
+    /// moves nothing by them: `/config`, `/theme` and `/sidebar` have no use for either key.
+    ///
+    /// Rejects: a `handle_key` that gives every picker a scope when Tab is pressed, which would make
+    /// those pickers draw and return a scope they never had, and a Tab that moves the cursor.
+    #[test]
+    fn a_picker_with_no_scope_has_none_and_ignores_tab() {
+        let mut picker = open_on(1);
+        assert_eq!(picker.scope(), None);
+        for (code, modifiers) in [
+            (KeyCode::Tab, KeyModifiers::NONE),
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(handle_key(&mut picker, code, modifiers), Outcome::Continue);
+            assert_eq!(picker.scope(), None, "{code:?} gave the picker a scope");
+            assert_eq!(picker.chosen().map(|row| row.0), Some("two"), "{code:?}");
+        }
+        assert_eq!(picked(&picker), Some((Word("two", None), None)));
+    }
+
+    /// A picker with a scope hands the scope in force back with the row, so Enter takes both.
+    ///
+    /// Rejects: a result that carries the scope the picker opened in and not the one Tab left it in,
+    /// and one that carries no scope for a picker that has one.
+    #[test]
+    fn the_row_is_handed_back_with_the_scope_in_force() {
+        let mut picker = open_on(0).starting_in(Scope::EverySession);
+        assert_eq!(
+            picked(&picker),
+            Some((Word("one", Some("the first")), Some(Scope::EverySession)))
+        );
+        handle_key(&mut picker, KeyCode::Tab, KeyModifiers::NONE);
+        handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(
+            picked(&picker),
+            Some((Word("two", None), Some(Scope::ThisSession)))
+        );
+    }
+
+    /// VIEW-46. A panel with no scope line has the list, the line saying what the row means and
+    /// one row of keys, so the keys are the row directly under the hint row and the panel is four
+    /// rows taller than its list.
+    ///
+    /// Rejects: a footer row drawn for a picker that has no scope line, and a panel sized for one.
+    #[test]
+    fn a_panel_with_no_scope_line_draws_no_footer_row() {
+        let picker = open_on(0);
+        let screen: Vec<String> = {
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+            terminal
+                .draw(|frame| draw(frame, &picker, &PANEL))
+                .expect("draw succeeds");
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .chunks(80)
+                .map(|line| line.iter().map(|cell| cell.symbol()).collect())
+                .collect()
+        };
+        let hint = screen
+            .iter()
+            .position(|row| row.contains("the first"))
+            .expect("the hint is drawn");
+        let keys = screen
+            .iter()
+            .position(|row| row.contains(PANEL.keys))
+            .expect("the keys are drawn");
+        assert_eq!(keys, hint + 1, "{screen:#?}");
+        let area = centred(Rect::new(0, 0, 80, 24), 3, PANEL.width);
+        assert_eq!(area.height, 3 + 4);
+        assert_eq!(
+            placed(Rect::new(0, 0, 80, 24), &picker, &PANEL).area.height,
+            area.height
+        );
+    }
+
+    /// The Enter half and the Tab half of a scope line are drawn whole: on one row where the panel has
+    /// the room, and otherwise on two, each half whole, so the half that says how to leave the scope
+    /// is not the one a narrow terminal cuts off.
+    ///
+    /// Rejects: a line left on one row that is wider than the room, a wrap that drops or cuts a half,
+    /// and a wrap made where the line fits. The line is 47 columns with its two-space separators and
+    /// 45 packed with one space each side of the dot, so it is kept as written down to 47 columns of
+    /// room, packed down to 45, and split into its two halves below that.
+    #[test]
+    fn a_scope_line_wider_than_the_room_is_split_whole_at_its_separator() {
+        let line = "Enter: every session  ·  Tab: this session only";
+        let packed = "Enter: every session · Tab: this session only";
+        assert_eq!(scope_rows(line, 47), [line]);
+        assert_eq!(scope_rows(line, 46), [packed]);
+        assert_eq!(scope_rows(line, 45), [packed]);
+        let halves = ["Enter: every session", "Tab: this session only"];
+        assert_eq!(scope_rows(line, 44), halves);
+        assert_eq!(scope_rows(line, 22), halves);
+        assert_eq!(footer_height(None, 40), 1);
+        assert_eq!(footer_height(Some(line), 80), 2);
+        assert_eq!(footer_height(Some(line), 40), 3);
+    }
+
+    /// VIEW-46. A panel with a scope line is one row taller than one with none where the line
+    /// fits a row, and two where it wraps, so the list keeps the rows it had.
+    ///
+    /// Rejects: a height that does not grow with the footer, which hides the last row behind it, and
+    /// one that grows where the footer did not.
+    #[test]
+    fn the_panel_grows_by_the_rows_the_scope_line_takes() {
+        let line = "Enter: every session  ·  Tab: this session only";
+        let plain = centred(Rect::new(0, 0, 80, 24), 6, 52).height;
+        let one_row = centred_with(Rect::new(0, 0, 80, 24), 6, 52, Some(line));
+        let wrapped = centred_with(Rect::new(0, 0, 40, 24), 6, 52, Some(line));
+        assert_eq!(one_row.height, plain + 1);
+        assert_eq!(wrapped.height, plain + 2);
+        let list = regions_with(Rect::new(0, 0, 80, 24), 6, 52, Some(line))[0];
+        assert_eq!(list.height, 6, "the list lost a row to the footer");
     }
 
     /// The panel is sized to the terminal at either width a picker asks for, so a small window never

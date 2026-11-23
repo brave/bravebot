@@ -209,6 +209,7 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::tests::scroller::the_wheel_moves_three_rows_where_nothing_names_a_number`
 `verified-by: bravebot_tui::app::tests::scroller::a_wheel_count_outside_the_range_is_held_to_it`
 `verified-by: bravebot_tui::app::tests::scroller::a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count`
+`verified-by: bravebot_tui::app::tests::scroller::a_wheel_count_the_settings_name_reaches_the_session_and_moves_the_view`
 `verified-by: bravebot_tui::files_mode::the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves`
 `verified-by: bravebot_tui::files_mode::the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_far_the_wheel_moves_the_view`
@@ -285,6 +286,7 @@ under Known costs rather than left to be found.
 `verified-by: bravebot_tui::render::a_search_matches_quarantined_content_too`
 `verified-by: bravebot_tui::render::a_match_inside_a_quarantined_block_stays_inside_it`
 `verified-by: bravebot_tui::render::the_search_footer_never_quotes_what_it_matched`
+`verified-by: bravebot_tui::render::the_footer_says_which_match_the_view_is_on_after_it_has_moved`
 `verified-by: bravebot_tui::render::two_matches_in_one_quarantined_row_are_counted_as_two`
 `verified-by: bravebot_tui::render::a_quarantined_row_is_marked_in_the_scroller_as_it_is_in_the_transcript`
 
@@ -315,6 +317,7 @@ side, keeping a copy, or grepping the lot, is a text editor's job, and the user 
 `verified-by: bravebot_tui::render::what_goes_to_the_editor_leaves_out_the_word_that_copies_a_block`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_written_outside_the_workspace`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_never_read_back`
+`verified-by: bravebot_tui::editor::showing_a_transcript_reads_no_file_back`
 `verified-by: bravebot_tui::editor::the_file_goes_when_the_editor_exits`
 
 
@@ -421,7 +424,13 @@ left out. Without a key the rest is reachable only by rerunning the command or o
 `verified-by: bravebot_tui::render::an_expanded_write_shows_past_twelve_lines`
 `verified-by: bravebot_tui::render::a_transcript_at_rest_is_drawn_collapsed_after_the_scroller_closes`
 `verified-by: bravebot_tui::render::the_expand_key_leaves_a_call_below_the_screen_alone`
+`verified-by: bravebot_tui::render::the_expand_key_takes_the_topmost_of_several_calls_on_the_screen`
+`verified-by: bravebot_tui::render::the_expand_key_skips_a_call_scrolled_above_the_view`
+`verified-by: bravebot_tui::render::the_expand_key_expands_a_write_and_a_second_press_collapses_it`
+`verified-by: bravebot_tui::state::expanding_does_nothing_while_a_delegate_is_watched`
+`verified-by: bravebot_tui::state::a_delegates_long_result_is_not_held_for_expansion`
 `verified-by: bravebot_tui::state::a_session_holds_a_bounded_number_of_lines_for_expansion`
+`verified-by: bravebot_tui::state::a_session_holds_twenty_thousand_lines_for_expansion_and_no_more`
 `verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
 
 ## Known costs

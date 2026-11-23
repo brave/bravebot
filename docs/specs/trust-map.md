@@ -564,7 +564,7 @@ be listed, a read of the file is untrusted and so is the backup the write takes 
 did not finish is never read as a file with no other name. This holds for the label of one path, for
 the question whether a read is quarantined, and for several paths asked together, where one
 unfinished lookup makes the whole answer untrusted. The same holds for the locations an LSP answer
-names ([LSP-3](tools/lsp.md)). A name that is not UTF-8 ends the lookup the same way and is reasoned
+names and the file it was asked at ([LSP-3](tools/lsp.md)). A name that is not UTF-8 ends the lookup the same way and is reasoned
 only on this host, since the file system here does not hold such a name.
 
 `verified-by: bravebot_core::policy::a_lookup_of_other_names_that_did_not_finish_reads_as_untrusted`
@@ -847,6 +847,13 @@ name it was given, so a prompt titled with one file would hand over the trust ha
 rather than one a person typed. Reach it would not grant, which is the only part of that gesture
 this could not have imitated.
 
+Those two tests are made on a name the planner typed. A read through a `path_ref` is offered for a
+vouch whatever the name behind the reference is, because that name came out of a directory nobody
+vouched for: an offer chosen by its extension, or by what the file system says of it, would be put
+for one reference and not for another, and under a mode that answers the offer the planner would be
+handed text for one and told there is none for the other. The reference came from a listing, which
+gives references to files only, and the person is shown the path before they answer.
+
 A confined check reads the file before the question is drawn, and the word it gave is on the screen
 with the preview. It reads **the whole file** and not the preview, because a yes grants the whole
 file. That is [CHECK-10](vetting.md#CHECK-10), and it decides nothing here: a yes writes the rule
@@ -889,6 +896,8 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_named_with_whitespace_leaves_its_siblings_asking`
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone`
 `verified-by: bravebot_agent::turn::a_trusted_file_is_not_offered_for_vouching`
+`verified-by: bravebot_agent::turn::a_reference_is_offered_for_vouching_whatever_the_name_behind_it_is`
+`verified-by: bravebot_agent::turn::output_of_on_a_reference_nobody_vouched_for_is_answered_whatever_the_name_is`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
 `verified-by: bravebot_tui::confirm::vet::a_preview_with_nothing_in_it_says_so`
 
@@ -1079,7 +1088,24 @@ declining rather than that the path is out of reach and what the person can do. 
 as the refusal of the same destination at the end of the write is, about the reference where the
 path came from one, and is recorded in the trail as a path refused for leaving the workspace. The
 write resolves the destination again after the answer, since a directory on the way can have become
-a link while the person read the question.
+a link while the person read the question. It compares what the destination lands on and the other
+names of that file with what they were when the question was drawn, and refuses the write, naming
+the destination as the person was shown it, when either differs. The answer covered the file
+shown, so a file an ask rule or the protected list covers, or one no rule covers, is refused the
+same way. It also asks the deny rules ([PERM-7](permissions.md#PERM-7)) about what the destination
+resolves to then. A destination that did not exist when asked and a link that was there when asked
+are written as shown.
+
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file`
+`verified-by: bravebot_agent::turn::a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_hard_link_put_in_place_while_the_question_was_open_leads_to_another_file`
+`verified-by: bravebot_agent::turn::a_picture_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::an_edit_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::a_download_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
 
 A `write` step of a manifest ([manifest.md](manifest.md)) confines its destination only when it
 writes, after its question. Plan validation refuses a path that names a root, a home directory or a
@@ -1102,12 +1128,29 @@ approve with the file shown ([SANDBOX-29](sandboxing.md#SANDBOX-29)). It names i
 session would accept that request and the front end can ask about it. A path that climbs out with `..` into a directory that is not open is refused the same
 way, and once that directory is opened the same path, as typed, reaches the file. Every other
 refusal for leaving the workspace offers nothing, since opening a directory would not make that
-path work: a climb off the top of the file system or onto a name that is not UTF-8, and one a link
-carries out. So does a path whose directory is, or lies inside, a
+path work: a climb off the top of the file system or onto a name that is not UTF-8, and an absolute
+path that a link carries out. So does a path whose directory is, or lies inside, a
 credential location, since `/add-dir` refuses to open one ([SANDBOX-18](sandboxing.md#SANDBOX-18))
 and `request_path` refuses to lend one ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A read of a
 file there is offered the drop alone, a write is offered the unconfined line alone where the
 session accepts one, and a name for the directory itself is offered nothing.
+An absolute path that is written inside the working directory or an opened directory, with each `..`
+taken out, and whose destination is in neither, or is in the working directory while it is written in an
+opened directory, is one a link carried out. The file tools refuse it
+with nothing offered, as they refuse a `run` line's redirection below, and the refusal is the same
+whatever the link leads to: a file, a directory, a credential location, a directory holding the
+working directory, or a name nothing is at yet. A link planted in a directory therefore does not
+choose which sentence the planner reads. The directory a sentence would name is not the one the
+path is written in, so opening it would not make the path work. A link in an opened directory that
+leads into the working directory is refused the same way, and is not told it is inside the
+workspace, since it is not written under the working directory. The choice reads the path as the
+planner spelled it, the directories that are open and where the file system says the path leads,
+and never a byte a file holds. A path
+written outside every directory that is reached keeps the remedy its landing gives, as above.
+Where `permissions.readsStayInWorkspace` keeps reads inside the workspace an added directory is not
+reached, so a path written under one is written outside every directory that is reached and the
+refusal names the setting whatever its link leads to, while a link written under the working
+directory is still refused with nothing offered.
 A `run` line's redirection refused for leaving the workspace is given the remedy a write of the
 same path is given, chosen from where the destination lands, and once that directory is opened the
 same line as typed writes the file. Where the path as the line wrote it, with each `..` taken out,
@@ -1135,15 +1178,16 @@ names no directory to open and no file to drop, a call that writes is not pointe
 with no sandbox ([SANDBOX-29](sandboxing.md#SANDBOX-29)), and the sentence carries the name the
 planner was told and not the path the call was made on.
 
-An absolute path that lands inside the root and in no opened directory is refused too, since a
+An absolute path that lands inside the root and in no opened directory, and is not written in an
+opened directory, is refused too, since a
 relative path means the project. It does not leave the workspace, and the refusal does not say it
 does. It says the path is inside the workspace and that a path there is named relative to the
 workspace root, without the workspace's own directory in front or as `.` for the root itself. It
 names no directory to open and no file to drop, because the relative spelling reaches the file, and
 a call that writes is not pointed at a `run` line with no sandbox
-([SANDBOX-29](sandboxing.md#SANDBOX-29)). The landing of the path decides this, so a link to the
-root, a `.` segment and a doubled separator are told they are inside, and a name under the root that
-a link carries out is told it leaves.
+([SANDBOX-29](sandboxing.md#SANDBOX-29)). The landing of a path written outside every opened
+directory decides this, so a link to the root, a `.` segment and a doubled separator are told they
+are inside, and a name under the root that a link carries out is told it leaves.
 
 `request_path` ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is not among these remedies. A
 person's yes to it reaches programs and not these tools, and `/add-dir` is the grant that reaches
@@ -1212,6 +1256,13 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::turn::a_read_climbing_to_a_sibling_directory_tells_the_planner_to_ask_for_the_directory`
 `verified-by: bravebot_agent::workspace::a_parent_component_cannot_climb_out_of_an_added_directory`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_an_added_directory_is_refused`
+`verified-by: bravebot_agent::workspace::a_link_out_of_an_added_directory_is_refused_with_nothing_offered_whatever_it_leads_to`
+`verified-by: bravebot_agent::workspace::a_file_typed_outside_every_directory_is_offered_what_a_link_to_it_is_not`
+`verified-by: bravebot_agent::workspace::a_link_from_an_added_directory_into_the_root_is_refused_as_every_other_link_is`
+`verified-by: bravebot_agent::workspace::a_link_in_the_root_is_refused_with_nothing_and_a_file_typed_outside_keeps_its_remedy`
+`verified-by: bravebot_agent::workspace::a_link_in_an_added_directory_names_the_key_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::turn::a_link_in_a_distrusted_subdirectory_of_an_added_directory_is_refused_with_nothing_offered`
+`verified-by: bravebot_agent::tools::tests::confinement::a_link_out_of_an_added_directory_is_told_the_same_whatever_it_leads_to`
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlinked_directory_out_of_the_workspace_is_refused`
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlinked_directory_in_an_added_directory_is_refused`
 `verified-by: bravebot_agent::workspace::writing_to_a_dangling_symlink_out_of_the_workspace_is_refused`
@@ -1481,6 +1532,9 @@ behind, and there is no ordering to get right between removing it and still bein
 `verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
 `verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
+`verified-by: bravebot_tui::app::branching_replaces_the_sessions_directory_only_where_a_copy_was_made`
+`verified-by: bravebot_tui::app::clearing_and_a_handoff_each_replace_the_sessions_directory`
+`verified-by: bravebot_tui::app::a_session_begun_from_a_record_is_given_a_directory_of_its_own`
 
 <a id="TRUST-16"></a>
 ### TRUST-16: the session's directory is reachable, and its reach grants no trust
@@ -1555,10 +1609,14 @@ untouched. A directory reachable without a rule is also why `/status` has a line
 says out loud is reach somebody discovers by accident.
 
 `verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path`
+`verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_listed_by_its_absolute_path`
+`verified-by: bravebot_agent::workspace::a_file_in_the_sessions_own_directory_is_searched_by_its_absolute_path`
 `verified-by: bravebot_agent::workspace::the_temporary_directory_around_it_stays_unreachable`
+`verified-by: bravebot_agent::workspace::the_directories_around_the_sessions_own_can_be_added_by_name`
 `verified-by: bravebot_agent::workspace::a_symlink_out_of_the_sessions_own_directory_is_refused`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_is_not_one_the_user_added`
 `verified-by: bravebot_agent::workspace::the_sessions_own_directory_cannot_be_added_by_name`
+`verified-by: bravebot_agent::workspace::a_directory_inside_the_sessions_own_directory_cannot_be_added_by_name`
 `verified-by: bravebot_agent::workspace::the_working_directory_cannot_be_moved_into_the_sessions_own_directory`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_rule`
 `verified-by: bravebot_core::policy::a_write_in_the_sessions_own_directory_asks_what_a_write_in_the_project_asks`
@@ -1709,6 +1767,17 @@ thing stays outside both: the prompt before a write asks under the
 spelling it was given, since it also matches the rules a person wrote in advance and those are
 matched on the path as written, so it asks where a reduced name would not have.
 
+Whether a name is below the working directory is decided in one spelling of both. On a host where a
+backslash separates, the platform resolves the working directory to `\\?\C:\proj` and a person, a
+command line or a language server names a file in it as `C:\proj\x`. `Path` reads those as two
+different prefixes, so a comparison by components finds nothing below the directory, and a lookup
+that is made under the relative name is made under an absolute one instead, which
+`Workspace::resolve` refuses inside the root. `bravebot_core::spelling::below` compares both as keys,
+with the drive letter in one case, and is what takes a name below the working directory for its
+relative spelling in the operands of a `run` line ([CMDLINE-8](tools/command-line.md#CMDLINE-8)) and
+in the locations a language server reports ([LSP-3](tools/lsp.md#LSP-3)). Where a slash is the only
+separator `C:\proj\x` is a file at the top of the project and is below nothing.
+
 **Why.** Without the reduction a directory reached by a second spelling of its own name is covered
 by nothing, so a file the user vouched for is quarantined under half its names; on macOS that is
 the ordinary case rather than a corner, since `/tmp` and `$TMPDIR` are both links. And the refusal
@@ -1723,6 +1792,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_trust_rule_covers_the_file_below_it_wherever_a_backslash_separates`
 `verified-by: bravebot_agent::workspace::a_name_and_its_key_are_spelled_the_way_the_host_separates`
 `verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_agent::workspace::each_door_that_opens_a_directory_by_name_refuses_one_the_trust_map_cannot_key`
 `verified-by: bravebot_agent::workspace::a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash`
 `verified-by: bravebot_agent::workspace::a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else`
 `verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
@@ -1730,6 +1800,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::spelling::a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::policy::a_listing_of_a_distrusted_directory_on_a_drive_letter_is_untrusted`
 `verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_on_a_drive_letter_is_untrusted`
+`verified-by: bravebot_core::policy::an_operand_on_a_drive_letter_is_also_named_relative_to_the_project`
 `verified-by: bravebot_core::policy::the_sessions_own_directory_on_a_drive_letter_is_answered_as_the_workspace`
 `verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
@@ -1737,6 +1808,7 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_named_through_a_symlinked_ancestor_keeps_its_rule`
 `verified-by: bravebot_agent::workspace::a_project_file_named_through_a_symlinked_ancestor_is_read_under_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_by_a_link_into_the_middle_of_an_added_directory_is_not_covered_by_its_rule`
+`verified-by: bravebot_session::sessions::a_rule_recorded_under_a_drive_letter_is_replayed_under_the_key_spelled_from_slash`
 `verified-by: bravebot_agent::turn::vouching_for_a_project_file_named_absolutely_records_its_relative_rule`
 `verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
 `verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
@@ -1744,6 +1816,9 @@ run whose output lands there is labelled by the answer about the project.
 `verified-by: bravebot_core::policy::a_held_line_is_asked_about_every_name_of_a_word_and_fails_closed`
 `verified-by: bravebot_agent::workspace::files_in_an_added_directory_named_through_a_link_are_labelled_as_a_read_labels_them`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_vouched_directory_reached_through_a_link_holds_its_files`
+`verified-by: bravebot_core::spelling::a_name_is_below_a_verbatim_root_whichever_way_the_drive_path_is_spelled`
+`verified-by: bravebot_core::spelling::a_drive_spelling_is_not_below_a_root_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_agent::workspace::a_name_typed_with_a_drive_letter_is_below_the_workspace_root_that_resolved_to_a_verbatim_path`
 
 ## What a rewind puts back
 
@@ -1761,6 +1836,8 @@ without blocking restoration of other files.
 
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
+`verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_records_the_scratch_gap_and_no_other`
+`verified-by: bravebot_agent::workspace::a_write_in_a_directory_the_person_opened_is_kept_for_an_undo_and_leaves_no_scratch_gap`
 
 ## The session's directory in an incognito session
 
@@ -2022,7 +2099,7 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the startup question through react-dom and asserts the directory, the rows saying what an answer does and the row naming the file are marked as deciding, that the yes is held shut under both of its labels and the no under neither, and that a directory of three 255-character components is drawn in a box that scrolls; ui/scripts/shown.test.mjs pins the rules of the count that question shares with the cards (it opens once every row has been wholly in view, starts again on a change of width and stays shut before anything is measured); ui/scripts/drive-shown.mjs asks it in the real window at 900x560 and checks that the yes is refused until those rows have been on screen; ui/scripts/drive-remembered-trust.mjs checks, for a directory of three 255-character components, that a record holding confined_lines is written only for a yes given after the sentence was on screen; make check-ui runs them)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the startup question through react-dom and asserts the directory, the rows saying what an answer does and the row naming the file are marked as deciding, that the yes is held shut under both of its labels and the no under neither, and that a directory of three 255-character components is drawn in a box that scrolls; ui/scripts/shown.test.mjs pins the rules of the count that question shares with the cards (it opens once every row has been wholly in view, starts again on a change of width and stays shut before anything is measured); ui/scripts/drive-shown.mjs asks it in the real window at 900x560 and checks that the yes is refused until those rows have been on screen; ui/scripts/drive-remembered-trust.mjs checks, for a directory of three 255-character components, that a record holding confined_lines is written only for a yes given after the sentence was on screen; both drivers are run by hand and not by make check-ui)`
 
 <a id="TRUST-24"></a>
 ### TRUST-24: a kept answer is shown with the session's rules and taken back where they are
@@ -2160,6 +2237,7 @@ large as whatever a turn unpacked there, and nothing in the opening session need
 `verified-by: bravebot_agent::scratch::a_program_a_session_starts_does_not_hold_its_directory`
 `verified-by: bravebot_agent::scratch::a_claim_held_for_a_moment_is_waited_out`
 `verified-by: bravebot_agent::scratch::a_claim_held_by_something_else_does_not_stall_the_session`
+`verified-by: bravebot_agent::scratch::the_removal_of_leftovers_runs_beside_the_opening_session_and_not_ahead_of_it`
 
 ## Known costs
 

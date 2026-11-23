@@ -102,13 +102,25 @@ had been would be the trace the mode exists to avoid.
 `verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
 
 <a id="DIAG-5"></a>
-### DIAG-5: `doctor` names the directory the logs are in
+### DIAG-5: `doctor` and the desktop settings report name the directory the logs are in
+
+`doctor` names `<state directory>/logs`. The desktop app's settings report names the same
+directory and says whether this process writes logs there. The desktop bug report embeds the
+settings report, so it names the directory too. Both give the name before any log exists, and
+asking for it creates nothing. With no state directory the settings report names no directory, and
+in an incognito process it says that no log is written.
 
 **Why.** Asking somebody to attach the log is no use if they cannot be told where it is, and the
 state directory moves with the profile variable, so the path is not one to be assumed.
 
 `verified-by: bravebot_cli::doctor::doctor_names_the_diagnostic_log_directory`
 `verified-by: bravebot_cli::running::doctor_names_the_log_directory`
+`verified-by: bravebot_ui_bridge::settings::the_report_names_the_diagnostic_log_directory`
+`verified-by: bravebot_ui_bridge::settings::with_no_home_the_report_names_no_log_directory`
+`verified-by: bravebot_ui_bridge::settings::a_log_directory_that_is_not_text_is_sent_as_null`
+`verified-by: bravebot_ui_bridge::bug_report::the_report_names_the_log_directory_when_there_is_no_log`
+`verified-by: bravebot_ui_bridge::dispatch::the_settings_report_names_the_log_directory_before_any_log_exists`
+`verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
 
 <a id="DIAG-6"></a>
 ### DIAG-6: nothing in the program reads the log

@@ -1453,6 +1453,8 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
 `verified-by: bravebot_tui::app::a_failed_turn_with_no_requests_sent_remains_unmeasured`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_what_its_last_request_came_to`
+`verified-by: bravebot_tui::app::a_resumed_session_reads_the_context_from_the_request_its_record_measured`
+`verified-by: bravebot_tui::app::a_finished_compaction_reads_what_it_won_back_and_an_unfinished_one_keeps_the_measured_reading`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_config::lib::a_default_budget_is_marked_as_guessed`
 `verified-by: bravebot_config::lib::an_advertised_budget_is_not_marked_as_guessed`
@@ -2620,6 +2622,7 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
 `verified-by: bravebot_tui::app::every_refused_return_is_said_and_not_just_the_first`
+`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_is_not_queued_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
 `verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`

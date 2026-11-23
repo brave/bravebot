@@ -453,8 +453,8 @@ result.
 **A delegate's own budget is separate.** A delegate is never asked this question. What it spends
 reaches the session's total when it is collected, and a token budget of its own
 ([DELEGATE-29](delegation.md#DELEGATE-29)) stops it by removing its tools, with nobody asked. The
-checks it makes on content nobody vouched for count toward what it spends and not toward that
-budget.
+checks it makes on content nobody vouched for and the processors it calls count toward what it
+spends and not toward that budget.
 
 **Asked each time.** The question carries a key of its own on every ask, because an interface may
 remember an answer by key, and the same figures can come back after a stop.
@@ -462,9 +462,14 @@ remember an answer by key, and the same figures can come back after a stop.
 **Recorded.** The trail gets a line with the round, the spent total, the limit and what the person
 chose, which carries no content ([TRACE-2](trace.md#TRACE-2)).
 
-**Only where a person is in front of it.** The terminal session sets the limit on the turns it
-starts. A one-shot run, a manifest run and the desktop window set none, for the reason
-[TURN-2](#TURN-2) gives, so none of them is asked.
+**Only where a person is in front of it.** The terminal session and the desktop window set the
+limit on the turns they start. Each reads it from the `limit` setting when a session is opened,
+created, forked or resumed. The terminal changes it with `/limit`, and the desktop window with the
+bridge's `session.limit` method ([HOST-3](local-host.md#HOST-3)). In the desktop window the question
+reaches the person as any question the planner asks does. A one-shot run and a manifest run set
+none, for the reason [TURN-2](#TURN-2) gives, so neither of them is asked. The session limit is not
+the round bound: the desktop window still passes no round bound ([TURN-2](#TURN-2)) and no run
+limit ([TURN-14](#TURN-14)).
 
 **Known costs.** The check comes before a request, so a limit is passed by the round that reached it
 and by whatever a delegate in flight spends before it is collected. A limit counted in tokens says
@@ -490,6 +495,13 @@ outside the turn; it is not kept when a session is resumed, and `/clear` starts 
 `verified-by: bravebot_agent::turn::two_questions_about_the_same_figures_are_different_questions`
 `verified-by: bravebot_agent::turn::a_session_with_no_limit_is_never_asked`
 `verified-by: bravebot_tui::app::a_turn_shares_the_sessions_limit_and_carries_what_was_spent`
+`verified-by: bravebot_ui_bridge::spend_limit::a_desktop_session_held_to_its_limit_asks_before_the_next_request`
+`verified-by: bravebot_ui_bridge::spend_limit::stopping_at_the_limit_ends_the_turn_as_a_stop`
+`verified-by: bravebot_ui_bridge::spend_limit::going_on_without_a_limit_sends_the_request`
+`verified-by: bravebot_ui_bridge::spend_limit::a_new_limit_typed_at_the_question_is_the_sessions_afterwards`
+`verified-by: bravebot_ui_bridge::spend_limit::a_figure_below_what_is_spent_is_asked_again_and_the_third_stops`
+`verified-by: bravebot_ui_bridge::spend_limit::session_limit_sets_clears_and_reads`
+`verified-by: bravebot_ui_bridge::spend_limit::a_limit_set_while_a_turn_runs_holds_its_next_request`
 `verified-by: bravebot_config::settings::only_a_positive_count_is_a_session_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_remove_raise_or_change_the_unit_of_the_limit`
 `verified-by: bravebot_config::settings::a_checkout_layer_cannot_move_a_credit_limit_into_tokens`

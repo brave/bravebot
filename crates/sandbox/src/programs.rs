@@ -902,6 +902,13 @@ pub mod selectors {
     pub const GIO_MODULE_DIR: (&str, Names) = ("GIO_MODULE_DIR", Names::Directory);
     /// Directories Qt loads plug-ins from.
     pub const QT_PLUGIN_PATH: (&str, Names) = ("QT_PLUGIN_PATH", Names::Directories);
+    /// The directory `gio open` finds the session bus in (`$XDG_RUNTIME_DIR/bus`) when
+    /// `DBUS_SESSION_BUS_ADDRESS` is not set. A service a stage runs on a socket it can create
+    /// answers as the bus, so the directory is judged by where it is.
+    pub const XDG_RUNTIME_DIR: (&str, Names) = ("XDG_RUNTIME_DIR", Names::Directory);
+    /// The address `gio open` connects to for the session bus, judged as a bus address.
+    pub const DBUS_SESSION_BUS_ADDRESS: (&str, Names) =
+        ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress);
 }
 
 /// Take each variable in `selectors` off `command` unless [`may_be_run`] accepts the value `held`

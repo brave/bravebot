@@ -6,7 +6,9 @@
     pr-fix.py ci <pr> [--wait]          the checks GitHub ran on the head, with the log of each failure;
                                         --wait polls until one fails or --wait-seconds N (default 540)
                                         have passed since the script started, counting every poll, or
-                                        until the pull request is merged or closed
+                                        until the pull request is merged or closed, or until a review
+                                        thread, comment or review appears that was not there when the
+                                        wait began (exit 3; `comments` prints it)
     pr-fix.py comments <pr>             the review threads and reviews still waiting on a change, each
                                         thread with the id `reply` takes
     pr-fix.py reply <pr> --body-file F [--thread ID]
@@ -37,7 +39,7 @@ comment. <pr> is a number or a pull request URL, several of them separated by co
 issue number or URL, one at a time. Several run in
 parallel, each in a process of its own, and each one's output is printed as soon as it finishes. Several
 that wait share one wait, so they take no longer than one. It works from the main clone or from any
-worktree.
+worktree, and the copy that runs is the one the session names by absolute path.
 
 A branch already checked out in another worktree is used there only when that worktree is not locked
 and is inside the directory worktrees are made in (.worktrees/ unless BRAVEBOT_PR_WORKTREES names
@@ -69,7 +71,6 @@ except ImportError:
     fcntl = None
 
 REVIEWER = "netzenbot-reviewer"
-SCRIPT = "python3 agents/skills/pr-fix/pr-fix.py"
 TREE_STEPS = ("start", "continue", "check", "push")
 ISSUE_STEPS = ("issue", "open")
 BASE_BRANCH = "main"
@@ -94,6 +95,9 @@ def _load_shared():
 # The skill scripts are not an importable package, so the module they share is loaded by path.
 pr_worktree = _load_shared()
 
+# Every next step this script prints names the file that is running by its absolute path. A session whose
+# directory is a pull request's worktree would otherwise run that worktree's copy of the script.
+SCRIPT = pr_worktree.script_command(__file__)
 BASE_REPO = pr_worktree.BASE_REPO
 die = pr_worktree.die
 run = pr_worktree.run
@@ -145,7 +149,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           comments(first: 20) { nodes { databaseId author { login } authorAssociation body } }
         }
       }
-      reviews(last: 50) { nodes { author { login } authorAssociation state body } }
+      reviews(last: 50) { nodes { databaseId author { login } authorAssociation state body } }
     }
   }
 }
@@ -301,21 +305,62 @@ def failure_log(link):
     return tail(done.stdout or done.stderr)
 
 
+def review_data(number, timeout=None):
+    """The review threads and reviews of a pull request, as GitHub's GraphQL API answers."""
+    owner, name = BASE_REPO.split("/")
+    return json.loads(
+        run(
+            "gh", "api", "graphql", "-f", f"query={THREADS}", "-F", f"owner={owner}", "-F", f"name={name}",
+            "-F", f"number={number}", timeout=timeout,
+        ).stdout
+    )
+
+
+def feedback_ids(data):
+    """What `open_comments` would print, as a set of (kind, id): each comment of an unresolved thread and each
+    latest change-asking review. A wait compares two of these to find what a reviewer wrote since it began."""
+    request = data["data"]["repository"]["pullRequest"]
+    found = set()
+    for thread in request["reviewThreads"]["nodes"]:
+        if not thread["isResolved"]:
+            found.update(("comment", one["databaseId"]) for one in thread["comments"]["nodes"])
+    latest = {}
+    for review in request["reviews"]["nodes"]:
+        latest[review["author"]["login"] if review["author"] else ""] = review
+    for review in latest.values():
+        if review["state"] in ("CHANGES_REQUESTED", "COMMENTED") and review["body"].strip():
+            found.add(("review", review["databaseId"]))
+    return found
+
+
+def waiting_feedback(number, until):
+    """`feedback_ids` for the pull request now, or None when GitHub does not answer before `until`."""
+    try:
+        return feedback_ids(review_data(number, timeout=max(until - time.monotonic(), 1)))
+    except subprocess.TimeoutExpired:
+        return None
+
+
 def ci(pr, until):
     """Report the checks on the head. With `until`, a `time.monotonic()` value, poll for them to settle until then.
 
     A pull request that is merged or closed while it waits ends the wait, since its checks no longer matter.
+    So does review feedback that was not there when the wait began, since a reviewer who asks for a change
+    needs an answer whether or not the checks have finished. Feedback already there, which includes the
+    replies the caller posted before waiting, does not.
     """
     tree = pr.tree
     if tree.is_dir() and rev("HEAD", tree) != pr.head_sha:
         print(f"{tree} is at {rev('HEAD', tree)[:8]} and GitHub tests {pr.head_sha[:8]}; "
               f"these results are for {pr.head_sha[:8]}")
     rollup = pr.rollup
+    seen = None if until is None else waiting_feedback(pr.number, until)
+    fresh = set()
     while True:
         failing, pending, passing = classify(rollup)
         running = bool(pending) or not rollup
         left = None if until is None else until - time.monotonic()
-        if failing or not running or left is None or left <= 0:
+        if failing or fresh or not running or left is None or left <= 0:
             break
         time.sleep(min(POLL_SECONDS, left))
         try:
@@ -328,7 +373,14 @@ def ci(pr, until):
             break
         pr_worktree.refuse_unless_open(view)
         rollup = view.get("statusCheckRollup") or []
+        now = waiting_feedback(pr.number, until)
+        if now is None:
+            break
+        fresh = now - seen if seen is not None else set()
     print(f"{len(passing)} passed, {len(failing)} failed, {len(pending)} pending")
+    if fresh:
+        print(f"review feedback arrived while waiting: {len(fresh)} new comment(s) or review(s); "
+              f"`{SCRIPT} comments {pr.number}` prints them")
     for name, link, verdict in failing:
         print(f"failed ({verdict.lower()}): {name} {link}")
         log = failure_log(link)
@@ -338,7 +390,7 @@ def ci(pr, until):
         print(f"pending: {name} {link}")
     if not rollup:
         print("GitHub has reported no checks for this head yet")
-    return 1 if failing else 2 if pending or not rollup else 0
+    return 1 if failing else 3 if fresh else 2 if pending or not rollup else 0
 
 
 def rerun(pr, job):
@@ -390,14 +442,7 @@ def open_comments(data):
 
 
 def comments(pr):
-    owner, name = BASE_REPO.split("/")
-    data = json.loads(
-        run(
-            "gh", "api", "graphql", "-f", f"query={THREADS}", "-F", f"owner={owner}", "-F", f"name={name}",
-            "-F", f"number={pr.number}",
-        ).stdout
-    )
-    lines = open_comments(data)
+    lines = open_comments(review_data(pr.number))
     if not lines:
         print("no review comment is waiting on a change")
         return 0

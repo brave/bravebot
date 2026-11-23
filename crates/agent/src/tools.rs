@@ -47,8 +47,10 @@ use crate::workspace::{Listing, Page, Paging, Workspace};
 mod link;
 mod message;
 mod recall;
+mod web_search;
 use link::set_link;
 use recall::{propose_rule, recall, remember};
+use web_search::web_search;
 mod offered;
 
 use offered::checkouts_share_refs;
@@ -57,8 +59,9 @@ use offered::state_withheld;
 pub use offered::{
     Beside, Named, Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
     offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
-    offer_set_link, offer_tool_loader, state_confinement, state_read_output_answer,
-    state_vet_content_answer, state_what_is_beside, state_withheld_variables,
+    offer_set_link, offer_tool_loader, offer_web_search, state_confinement,
+    state_read_output_answer, state_vet_content_answer, state_what_is_beside,
+    state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -98,13 +101,14 @@ pub struct Entries {
     /// one reference at a time rather than as a number: handed a listing of files alone it sees a
     /// tree with no branches.
     pub directories: usize,
-    /// How many files were left out of each directory the per-directory cap cut (LIST-5), in the
-    /// order of the last of `paths`, which are those directories. Counts of directory entries,
-    /// released with `count`, so the turn can say beside the references how much each one holds
-    /// that is not listed.
-    pub left_out: Vec<usize>,
-    /// Whether the listing reached the cap over the whole walk, as against leaving files out by
-    /// the per-directory cap alone. Shape like `count`, from the same release.
+    /// How many files and how many subdirectories were left out of each directory a per-directory
+    /// cap cut (LIST-5), in the order of the last of `paths`, which are those directories. Counts
+    /// of directory entries, released with `count`, so the turn can say beside the references how
+    /// much each one holds that is not listed.
+    pub left_out: Vec<(usize, usize)>,
+    /// Whether the listing reached the cap over the whole walk, as against leaving files or
+    /// subdirectories out by the per-directory caps alone. Shape like `count`, from the same
+    /// release.
     pub at_the_cap: bool,
 }
 
@@ -263,12 +267,13 @@ pub struct Output {
     /// vouched for. A turn that reported only its own rounds would understate what it cost by
     /// however much those wrote.
     pub usage: Usage,
-    /// Whether [`Output::usage`] is what a check over content nobody vouched for cost.
+    /// Whether [`Output::usage`] is what a check over content nobody vouched for cost, or what a
+    /// processor cost.
     ///
-    /// Set by the tool that made the check, whether or not the check was made, so it is never
-    /// decided from what the check said. The turn counts such usage in what it spent and leaves it
-    /// out of what a delegate's budget counts (DELEGATE-29).
-    pub usage_is_a_check: bool,
+    /// Set by the tool that made the check or ran the processor, whether or not it was made, so it
+    /// is never decided from what the check or the processor said. The turn counts such usage in
+    /// what it spent and leaves it out of what a delegate's budget counts (DELEGATE-29).
+    pub usage_is_unbudgeted: bool,
     /// When the call waited on the model, where it called one.
     ///
     /// Travels beside [`Output::usage`] and for the same reason. A processor is a request like any
@@ -342,6 +347,10 @@ pub struct Output {
     ///
     /// Travels back for the reason a link does: the list is held by whatever owns the session.
     pub references: Vec<crate::links::Reference>,
+    /// The kind of item the command this call ran created, where it ran, exited cleanly and its
+    /// words were `gh pr create`, `gh issue create` or `pr-fix.py open` (PANEL-18). Read from the
+    /// planner's own command and never from what the program printed.
+    pub created: Option<crate::links::LinkKind>,
     /// The delegates the kernel approved, for the turn to start.
     ///
     /// Started by the turn because a delegate outlives the call that asked for one: the call
@@ -1505,7 +1514,10 @@ impl Jobs {
         .unwrap();
         self.keep(
             running,
-            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            JobLines::new(
+                &plan.display(),
+                &crate::cmdline::display_as_written(&plan, None),
+            ),
             label,
             FileAuthority::new(TrustStore::new(&root)),
             0,
@@ -1924,8 +1936,9 @@ struct Produced {
     /// What the tool spent at the model. Only a processor, an advisor, a delegate and a check spend
     /// anything.
     usage: Usage,
-    /// Whether `usage` is a check's, which a delegate's token budget does not count.
-    usage_is_a_check: bool,
+    /// Whether `usage` is a check's or a processor's, which a delegate's token budget does not
+    /// count.
+    usage_is_unbudgeted: bool,
     /// Retained so a parent can clip delegate requests to its own waits.
     inference_interval: Option<crate::timing::Interval>,
     /// Set where the check waited on could not be made, so no request completed.
@@ -1954,6 +1967,8 @@ struct Produced {
     link: Option<crate::links::LinkSet>,
     /// The issues and pull requests the call's arguments named, as [`Output::references`].
     references: Vec<crate::links::Reference>,
+    /// The kind of item the command created, as [`Output::created`].
+    created: Option<crate::links::LinkKind>,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -2031,7 +2046,7 @@ impl Produced {
             task_list: None,
             content: false,
             usage: Usage::default(),
-            usage_is_a_check: false,
+            usage_is_unbudgeted: false,
             inference_interval: None,
             unanswered: false,
             printed_by: None,
@@ -2048,6 +2063,7 @@ impl Produced {
             watch: None,
             link: None,
             references: Vec::new(),
+            created: None,
             delegate: Vec::new(),
             wake_after: 1,
             loaded: None,
@@ -2290,7 +2306,17 @@ impl Produced {
     /// budget counts (DELEGATE-29).
     fn checking(mut self, usage: Usage) -> Self {
         self.usage = usage;
-        self.usage_is_a_check = true;
+        self.usage_is_unbudgeted = true;
+        self
+    }
+
+    /// Say what a processor cost. Set by the tool whether or not the processor answered, so the
+    /// turn adds it to what it spent and never to what a delegate's token budget counts: the
+    /// processor read content nobody vouched for, and how much it wrote depends on that content
+    /// (DELEGATE-29, PROC-16).
+    fn processing(mut self, usage: Usage) -> Self {
+        self.usage = usage;
+        self.usage_is_unbudgeted = true;
         self
     }
 
@@ -2335,6 +2361,7 @@ impl Produced {
         self.link = Some(crate::links::LinkSet {
             kind,
             url: url.into(),
+            inferred: false,
         });
         self
     }
@@ -2428,6 +2455,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "load_skill" | "load_tool" => Some("name"),
         "search_skills" => Some("query"),
         "fetch_url" => Some("url"),
+        "web_search" => Some("q"),
         "job_output" => Some("job"),
         "vet_content" => Some("ref"),
         "run" => Some("command"),
@@ -3102,6 +3130,7 @@ const READ_THOUGH_UNDECLARED: &[(&str, &str)] = &[
     ("watch_file", "path_ref"),
     ("download_url", "path_ref"),
     ("fetch_url", "read"),
+    ("web_search", "read"),
     ("spawn_processor", "read"),
     ("schedule_next", "stop"),
 ];
@@ -3400,6 +3429,27 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         },
         // The same refusal for the same reason, and a write on top of it.
         "download_url" if !tools.delegated => download_url(policy, tools, confirmer, &arguments),
+        // Offered only where a variable or a key file offered a key when the turn started, and never
+        // to a delegate: a call to it from anywhere else is answered as an unknown name is. Refused
+        // here as well as absent from the list. The list the turn settled decides it, and the
+        // environment is not asked again, so a variable removed since is reported as a key that
+        // cannot be used and not as an unknown tool. `read` asks for vet_content's release in the
+        // result, as fetch_url's does (WEBSEARCH-9).
+        "web_search"
+            if !tools.delegated
+                && tools.offered.is_some_and(|list| {
+                    list.iter().any(|tool| tool.function.name == "web_search")
+                }) =>
+        {
+            match read_asked_of(&arguments) {
+                Ok(read_asked) => {
+                    let mut produced = web_search(policy, tools, confirmer, &arguments);
+                    produced.read_asked = read_asked;
+                    produced
+                }
+                Err(refusal) => *refusal,
+            }
+        }
         "job_output" => job_output(policy, tools, reporter, &arguments),
         // A delegate ends when it answers, a tick the person timed has its next look coming
         // already, and a turn nothing will ask again has nowhere for a wait to go, so none of the
@@ -3571,7 +3621,7 @@ fn output_of(
         run_may_change_files: produced.run_may_change_files,
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
-        usage_is_a_check: produced.usage_is_a_check,
+        usage_is_unbudgeted: produced.usage_is_unbudgeted,
         inference_interval: produced.inference_interval,
         unanswered: produced.unanswered,
         printed_by: produced.printed_by,
@@ -3588,6 +3638,7 @@ fn output_of(
         watch: produced.watch,
         link: produced.link,
         references: produced.references,
+        created: produced.created,
         delegate: produced.delegate,
         wake_after: produced.wake_after,
         loaded: produced.loaded,
@@ -4356,7 +4407,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // map, so all of them ask about that name and not about the spelling.
     let keyed = workspace.trust_key(&proposed_path);
 
-    let media = bravebot_filetype::by_name::media_for(&proposed_path);
+    // Taken from a name the planner typed alone. The name behind a reference came out of a
+    // directory nobody vouched for, so a picture's reference for a `.png` and the text of a `.txt`
+    // would tell the planner what the hidden name ends in. A reference to a file that may be read
+    // is read like any such file, and what it holds decides the answer (READ-3, READ-5).
+    let media = (destination == Destination::Named)
+        .then(|| bravebot_filetype::by_name::media_for(&proposed_path))
+        .flatten();
 
     // What a check over this file cost, where one was made. Carried out of the block so it can be
     // put on whatever this call ends up handing back: a check is a model request, and the turn's
@@ -4370,18 +4427,23 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // not land rather than reading as the file simply being quarantined.
     let mut approval_outlived = false;
 
+    // The extension and `stat` of a name decide whether the question is put only where the name is
+    // the planner's own words. The name behind a reference came out of a directory nobody vouched
+    // for, so a decision made from it would put the question for a `.txt` and not for a `.png`, and
+    // under a mode that answers the question for the person the planner would be handed text in one
+    // case and told the file holds none in the other. A reference to a file nobody vouched for is
+    // offered like any other. The listing that issued it gave references to files only.
+    let is_askable = destination == Destination::Reference
+        || (media.is_none() && workspace.names_a_file(&proposed_path));
+
     // The other names the file has are looked up only for a quarantined file the person could be
     // asked about. A read of it is asked under all of them (TRUST-2), and a yes writes a rule about
     // one name, so where another is distrusted, or the lookup of them did not finish, a yes would
     // change nothing and the question is not put.
-    if policy.read_is_quarantined(&keyed)
-        && media.is_none()
-        && workspace.names_a_file(&proposed_path)
-        && {
-            let other_names = workspace.other_trust_keys(&proposed_path);
-            policy.should_offer_vouch(&keyed, &other_names.keys, other_names.complete)
-        }
-    {
+    if policy.read_is_quarantined(&keyed) && is_askable && {
+        let other_names = workspace.other_trust_keys(&proposed_path);
+        policy.should_offer_vouch(&keyed, &other_names.keys, other_names.complete)
+    } {
         // Whether the question is put has already been settled. What the file holds shapes the
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
@@ -4548,7 +4610,8 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         ));
     }
 
-    // A picture, decided from the extension: the driver's own table, so nothing read chooses this.
+    // A picture, decided from the extension of a name the planner typed: the driver's own table, so
+    // nothing read chooses this. Never for a reference, whose name is not the planner's to learn.
     //
     // Handed back as a reference whatever the trust map says, unlike text. A processor may look at
     // it and the planner may not, for the reason PASTE-2 gives: a picture in a planner's context
@@ -4881,6 +4944,27 @@ fn materialise_held<S: Sink>(
         let mut opened = Vec::new();
         for slot in wanted {
             let was_unread = slots.is_unread(slot);
+            if was_unread {
+                // A rule covers the file, not the spelling of it (PERM-7). The name the slot
+                // stored was judged when it was issued, and the file it lands on may have
+                // changed since: a link put there afterwards reaches a file a rule covers under
+                // a name no rule spells. The same question a `path_ref` is asked, before the
+                // file is opened, and worded about the slot because the path came out of a
+                // directory nobody vouched for. Decided from the path and the rules, never from
+                // anything the file holds.
+                let stored = policy
+                    .promote_reference_for_read(tool, "slot", slot, slots)
+                    .map_err(|denial| format!("refused: {denial}"))?
+                    .into_trusted()
+                    .map_err(|_| "error: the reference was not promoted".to_string())?;
+                refuse_denied_path_as(
+                    policy,
+                    workspace,
+                    Purpose::Read,
+                    &stored,
+                    &slot.to_string(),
+                )?;
+            }
             // A picture or PDF is opened as one, from the driver's table of extensions as
             // `read_file` decides it, so nothing read chooses. Read as text it would be refused
             // as binary, and a slot that holds one has to say so for a check to look at the file.
@@ -5059,6 +5143,19 @@ fn refuse_denied_path<S: Sink>(
     path: &str,
 ) -> Result<(), String> {
     refuse_denied_path_as(policy, workspace, purpose, path, path)
+}
+
+/// Whether a `deny` rule refuses a write to `path` now: the walk every write tool makes before
+/// it asks the person, asked again by the workspace right before the bytes are released, so a link
+/// put at the destination while the question was open is judged by the file it leads to
+/// (PERM-7, TRUST-10). The refusal text is not used: the workspace words its own, about the name
+/// the person was shown.
+pub(crate) fn refuse_write_by_rules<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &str,
+) -> Result<(), String> {
+    refuse_denied_path(policy, workspace, Purpose::Effect, path)
 }
 
 /// Whether a `deny` rule refuses a read of `path`, asked exactly as a read tool asks it, for a
@@ -5866,8 +5963,8 @@ fn list_files<S: Sink>(
                 // The second is what keeps the quarantined listing describing the same tree the
                 // trusted one does, where a directory is rendered with a trailing slash among the
                 // files. The third says whether a pattern selected anything.
-                // The fourth is how many files each directory the per-directory cap cut left out,
-                // a count of directory entries like the others.
+                // The fourth is how many files and how many subdirectories each directory a
+                // per-directory cap cut left out, counts of directory entries like the others.
                 let (count, directories, files, left_out, at_the_cap) = {
                     let shaped = policy.render_in_place("list_files", &listing, |listing| {
                         (
@@ -5879,27 +5976,32 @@ fn list_files<S: Sink>(
                             listing
                                 .partly_listed
                                 .iter()
-                                .map(|(_, left_out)| *left_out)
-                                .collect::<Vec<usize>>(),
+                                .map(|(_, files, directories)| (*files, *directories))
+                                .collect::<Vec<(usize, usize)>>(),
                             listing.at_the_cap,
                         )
                     });
                     let proof = policy.authorise_display_release(
                         "how many entries a listing has, how many of them it stopped at, how \
-                         many are files, how many files each directory it cut left out and \
-                         whether it reached the cap over the whole walk",
+                         many are files, how many files and subdirectories each directory it cut \
+                         left out and whether it reached the cap over the whole walk",
                     );
                     shaped.declassify(&proof)
                 };
                 // The directories last, which is the order the kernel reads the two apart by. A
-                // directory the per-directory cap cut is a directory reference like one the walk
+                // directory a per-directory cap cut is a directory reference like one the walk
                 // stopped at, so it is named the only way a quarantined listing names anything.
                 // Those come after the ones the walk stopped at, so which references they are is
                 // decided by the counts alone and `left_out` lines up with the last of them.
                 let paths = policy.render_in_place("list_files", &listing, |listing| {
                     let mut paths = listing.files.clone();
                     paths.extend(listing.directories.iter().cloned());
-                    paths.extend(listing.partly_listed.iter().map(|(name, _)| name.clone()));
+                    paths.extend(
+                        listing
+                            .partly_listed
+                            .iter()
+                            .map(|(name, _, _)| name.clone()),
+                    );
                     paths
                 });
                 // A call that asked to read gets the listing as one document too, under the
@@ -5936,7 +6038,7 @@ fn list_files<S: Sink>(
                     listing
                         .partly_listed
                         .iter()
-                        .map(|(name, _)| format!("{name}/")),
+                        .map(|(name, _, _)| format!("{name}/")),
                 );
                 entries.sort();
                 entries.join("\n")
@@ -5954,6 +6056,30 @@ fn list_files<S: Sink>(
     }
 }
 
+/// What a directory a per-directory cap cut left out, worded for the end of its line in a listing:
+/// its files, its subdirectories, or both. A count of directory entries and no name. `more` puts
+/// "more" before the noun, as a listing's own line does, and leaves it out of the sentence a
+/// quarantined listing carries beside its references.
+pub(crate) fn left_out_clause(files: usize, directories: usize, more: bool) -> String {
+    let (file, many_files, directory, many_directories) = if more {
+        (
+            "more file",
+            "more files",
+            "more subdirectory",
+            "more subdirectories",
+        )
+    } else {
+        ("file", "files", "subdirectory", "subdirectories")
+    };
+    let files = (files > 0).then(|| tally(files, file, many_files));
+    let directories = (directories > 0).then(|| tally(directories, directory, many_directories));
+    [files, directories]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>()
+        .join(" and ")
+}
+
 /// A listing as the planner reads it where it may: one entry a line, a directory with a trailing
 /// slash, and the driver's sentences about a cap, a pattern that matched nothing, a directory that
 /// could not be opened and links not entered. Rendered inside the kernel under the listing's label.
@@ -5969,16 +6095,26 @@ fn render_listing<S: Sink>(
         let selected_no_file = listing.files.is_empty();
         let mut entries: Vec<String> = listing.files.clone();
         entries.extend(listing.directories.iter().map(|name| format!("{name}/")));
-        // A directory the per-directory cap cut, with how many of its files are not shown,
-        // so the planner knows to list it by name for the rest (LIST-5).
-        entries.extend(listing.partly_listed.iter().map(|(name, left_out)| {
-            format!(
-                "{name}/ ({} not listed)",
-                tally(*left_out, "more file", "more files")
-            )
-        }));
+        // A directory a per-directory cap cut, with how many of its files and subdirectories are
+        // not shown, so the planner knows the listing of it is incomplete (LIST-5).
+        entries.extend(
+            listing
+                .partly_listed
+                .iter()
+                .map(|(name, files, directories)| {
+                    format!(
+                        "{name}/ ({} not listed)",
+                        left_out_clause(*files, *directories, true)
+                    )
+                }),
+        );
         entries.sort();
         let cut_per_directory = !listing.partly_listed.is_empty();
+        let files_cut = listing.partly_listed.iter().any(|(_, files, _)| *files > 0);
+        let directories_cut = listing
+            .partly_listed
+            .iter()
+            .any(|(_, _, directories)| *directories > 0);
         let listing = Listing {
             files: entries,
             directories: Vec::new(),
@@ -6002,9 +6138,10 @@ fn render_listing<S: Sink>(
         } else if listing.truncated {
             // Said plainly, because a model given a silently capped listing will treat
             // it as the whole tree and conclude a file does not exist. Each cap that left
-            // files out has its own sentence, as `listing_capped_note` does for a
-            // quarantined listing: "stopped at N files" misstates a per-directory cut,
-            // and the per-directory sentence alone hides that the walk stopped as well.
+            // files or subdirectories out has its own sentence, as `listing_capped_note`
+            // does for a quarantined listing: "stopped at N files" misstates a
+            // per-directory cut, and the per-directory sentences alone hide that the walk
+            // stopped as well.
             let mut body = listing.files.join("\n");
             if listing.at_the_cap || !cut_per_directory {
                 body.push_str(&format!(
@@ -6013,7 +6150,7 @@ fn render_listing<S: Sink>(
                     listing.files.len()
                 ));
             }
-            if cut_per_directory {
+            if files_cut {
                 // A listing of that directory with a depth is cut the same way, so the
                 // rest is reached with none.
                 body.push_str(&format!(
@@ -6021,6 +6158,19 @@ fn render_listing<S: Sink>(
                      is incomplete; to see the rest of a directory marked \"not \
                      listed\", list that directory by its name with no depth)",
                     crate::workspace::MAX_FILES_PER_DIRECTORY
+                ));
+            }
+            if directories_cut {
+                // A listing with no depth walks into every subdirectory and names files only, so
+                // it shows what is under the subdirectories left out and none of them by name.
+                // No other tool is named: this sentence is written without the turn's list of
+                // tools (TOOL-6).
+                body.push_str(&format!(
+                    "\n\n(this listing took at most {} subdirectories from any one directory \
+                     and is incomplete; for a directory marked \"not listed\", list it by its \
+                     name with no depth to see the files under all of its subdirectories, \
+                     since a listing with no depth names files only)",
+                    crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
                 ));
             }
             body
@@ -6638,7 +6788,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // and the question is put again for.
     let mut edited_by_person = false;
 
-    let (scanned, reviewed) = loop {
+    let (scanned, reviewed, reach) = loop {
         let body_label = body.label();
 
         // What this would leave in the tree, before it is put to anybody and before a byte of it is
@@ -6696,6 +6846,10 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         // below is drawn from it and so is the line the person is told afterwards, which is the
         // same comparison and so is made once.
         let landed = landing_of(workspace, &proposed_path);
+        // What the destination reaches as the question is drawn, which the write compares with
+        // what it reaches when the bytes are released. Taken before the questions below, so a link
+        // put in place between them and the write is not read as what was asked.
+        let reach = workspace.reach_of(&proposed_path);
         let reviewed = review_a_write(
             policy,
             "write_file",
@@ -6788,7 +6942,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
             }
             standing.keep(policy, answer);
         }
-        break (scanned, reviewed);
+        break (scanned, reviewed, reach);
     };
     // Read once the loop is done, since an edit replaced the body and its label with the person's.
     let body_label = body.label();
@@ -6797,7 +6951,13 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // this exact value. Issued for the path the question named, which an edit does not change.
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
-    match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_at)) {
+    match workspace.write_endorsed_at_revision(
+        policy,
+        &path,
+        &body,
+        Some(approved_at),
+        Some(&reach),
+    ) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -6908,6 +7068,9 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         )
     });
     let intent = Intent::of_a_write(replaces);
+    // What the destination reaches as the question is drawn, which the write compares with what it
+    // reaches when the bytes are released.
+    let reach = workspace.reach_of(&proposed_path);
 
     // How many bytes the file will hold, counted where the URI is turned back into them and shown
     // to the person who is asked. A count, as a reference's byte count is.
@@ -6965,6 +7128,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         &path,
         label,
         Some(approved_at),
+        Some(&reach),
         |file, proof| {
             use std::io::Write;
             // No detail of why it did not decode: the error would name a byte of the URI.
@@ -7569,6 +7733,11 @@ fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
         .ok_or("error: every entry of 'edits' needs 'old_text' and 'new_text' strings")
 }
 
+/// What `edit_file` says of `cell` on a file that is not a `.ipynb` (EDIT-8). Fixed text, said
+/// for a typed name at once and for a reference only once the file is known to be trusted.
+const NOT_A_NOTEBOOK: &str = "error: 'cell' addresses a cell of a .ipynb notebook, and this is \
+     not one. Give 'old_text' and 'new_text' for a passage";
+
 /// Replace an exact passage in a file, after a person approves the diff.
 ///
 /// Same endorsement shape as [`write_file`], since the model never decides a write destination,
@@ -7618,11 +7787,17 @@ fn edit_file<S: Sink, C: Confirmer>(
     };
     let pairs = match &cell_request {
         // A cell edit carries its text in `new_text` alone and locates nothing by it.
-        Some(_) if !crate::notebook::is_notebook_path(&proposed_path) => {
-            return Produced::problem(
-                "error: 'cell' addresses a cell of a .ipynb notebook, and this is not one. Give \
-                 'old_text' and 'new_text' for a passage",
-            );
+        //
+        // The extension is tested here only for a name the planner typed, which is its own
+        // words. The name behind a reference came out of a directory nobody vouched for, so
+        // testing it before the trust check below would tell the planner whether that name ends
+        // in `.ipynb`: a `.txt` would be refused as not a notebook and a `.ipynb` as closed to
+        // editing. For a reference the test is made once the file is known to be trusted.
+        Some(_)
+            if destination == Destination::Named
+                && !crate::notebook::is_notebook_path(&proposed_path) =>
+        {
+            return Produced::problem(NOT_A_NOTEBOOK);
         }
         Some(_) => Vec::new(),
         None => match edit_pairs(arguments) {
@@ -7726,7 +7901,13 @@ fn edit_file<S: Sink, C: Confirmer>(
         // `read_file` asks before it does, from the path, the map, the mode and the turn's list.
         // A run with nobody to ask outside bypass gets no question from a read, so it is not sent
         // to one.
-        let read = if !nobody_to_ask
+        //
+        // Not named for a reference. Whether a read would put the question depends on the
+        // extension of the name and on what the file system says of it, and the name behind a
+        // reference came out of a directory nobody vouched for, so the sentence would differ by
+        // a name the planner was not shown. A reference gets the vouch as the person's to give.
+        let read = if destination == Destination::Named
+            && !nobody_to_ask
             && policy.reading_files_is_offered()
             && bravebot_filetype::by_name::media_for(&proposed_path).is_none()
             && workspace.names_a_file(&proposed_path)
@@ -7745,6 +7926,15 @@ fn edit_file<S: Sink, C: Confirmer>(
         };
         return Produced::problem(closed_to_editing(policy, source.label(), read));
     };
+
+    // The file is trusted, so a name a person vouched for may be tested. For a reference this is
+    // the first moment the extension may be looked at (see the check above for a typed name).
+    if cell_request.is_some()
+        && destination == Destination::Reference
+        && !crate::notebook::is_notebook_path(&proposed_path)
+    {
+        return Produced::problem(NOT_A_NOTEBOOK);
+    }
 
     // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair
     // has applied, so a refusal part-way leaves the file as it was.
@@ -7824,6 +8014,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // and inside the kernel. The pre-image is the labelled value the read produced rather than
     // the copy released to locate the passage in.
     let landed = landing_of(workspace, &proposed_path);
+    let reach = workspace.reach_of(&proposed_path);
     let reviewed = review_a_write(
         policy,
         "edit_file",
@@ -7889,7 +8080,14 @@ fn edit_file<S: Sink, C: Confirmer>(
     let occurrences = replaced.occurrences;
     // The path as the planner gave it, not the copy promoted above for the read. A write routed
     // on a promoted value would be routed by the model's own proposal.
-    match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current, read_at) {
+    match workspace.write_endorsed_if_unchanged_reaching(
+        policy,
+        &proposed,
+        &body,
+        &current,
+        read_at,
+        Some(&reach),
+    ) {
         Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
@@ -10988,6 +11186,9 @@ struct Settled {
     unasked_writes: bool,
     asking: bool,
     covered_by_record: bool,
+    /// A stage is lent a credential scope a person kept at an earlier prompt, so the line is
+    /// labelled as one that asked for the scope is.
+    lent_a_kept_scope: bool,
 }
 
 /// The other names each file a `run` line's audited steps read has, by the operand as the line
@@ -11021,10 +11222,9 @@ fn operand_names_of<S: Sink>(
         if found.contains_key(&operand) {
             continue;
         }
-        let looked_up = match std::path::Path::new(&operand).strip_prefix(workspace.root()) {
-            Ok(relative) => relative.to_string_lossy().into_owned(),
-            Err(_) => operand.clone(),
-        };
+        let looked_up = workspace
+            .below_root(&operand)
+            .unwrap_or_else(|| operand.clone());
         let others = workspace.other_trust_keys(&looked_up);
         found.insert(operand, (others.keys, others.complete));
     }
@@ -11106,6 +11306,17 @@ fn settle_the_confinement<S: Sink>(
             .is_some_and(|confinement| confinement.writes_without_a_request());
 
     let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
+    // The credential scopes the person's own record attaches to the stages of this line, from the
+    // grants and the compiled steps and nothing a program printed. Asked of the confinement as
+    // built here, before a directory's trust replaces it below, and empty for a line run with no
+    // profile, which carries no grant.
+    let kept: Vec<&'static str> = confinement
+        .as_ref()
+        .map(|confinement| confinement.remembered_scopes(&plan.steps()))
+        .unwrap_or_default()
+        .into_iter()
+        .map(bravebot_sandbox::scope::Scope::name)
+        .collect();
     // How the sandbox holds the line, said from the compiled steps and the session's own settings:
     // the person's trust of the directory answers only for a line it holds (RUN-5).
     //
@@ -11124,7 +11335,7 @@ fn settle_the_confinement<S: Sink>(
         });
     let asking = match unconfined {
         true => policy.plan_needs_approval_unconfined(),
-        false => policy.plan_needs_approval_held(plan, &names, containment),
+        false => policy.plan_needs_approval_lent(plan, &names, &kept, containment),
     };
     // A line the person's trust of the directory let through runs as it was judged: with the
     // network closed for this line, where the session's is open. A line any other road answered
@@ -11148,6 +11359,7 @@ fn settle_the_confinement<S: Sink>(
         unasked_writes,
         asking,
         covered_by_record,
+        lent_a_kept_scope: !kept.is_empty(),
     })
 }
 
@@ -11367,6 +11579,16 @@ fn run_call<S: Sink>(
     })
 }
 
+/// Whether a stage of `plan` is lent a credential scope the person's own record holds, worked out
+/// from the confinement the run is started with and the compiled steps, never from the line's
+/// words (SANDBOX-27).
+fn is_lent_a_kept_scope(
+    confinement: Option<&crate::confine::Confinement>,
+    plan: &bravebot_core::command::Plan,
+) -> bool {
+    confinement.is_some_and(|confinement| !confinement.remembered_scopes(&plan.steps()).is_empty())
+}
+
 /// What the sandbox does to the stages of a line, as far as the auto mode's classifier is
 /// concerned (AUTO-3).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -11423,11 +11645,11 @@ fn consult_about_a_run<S: Sink>(
     requested: &[bravebot_sandbox::scope::Requested],
     stdin: bool,
     unconfined: bool,
-    profile: Profile,
+    confinement: Option<&crate::confine::Confinement>,
     protected: bool,
 ) -> crate::confirm::Classified {
     if unconfined
-        || profile != Profile::Holding
+        || profile_of(confinement, plan) != Profile::Holding
         || tools.permission_mode.get() != crate::PermissionMode::Auto
     {
         return crate::confirm::Classified::NotAsked;
@@ -11438,8 +11660,14 @@ fn consult_about_a_run<S: Sink>(
         return crate::confirm::Classified::NotAsked;
     }
     // Only a line it can be shown whole: nothing fed to it from a reference, no name in `scopes`
-    // (a credential scope, a toolchain list, `loopback` or `ssh-key`), nothing private released.
-    if !requested.is_empty() || stdin || plan.releases_private() {
+    // (a credential scope, a toolchain list, `loopback` or `ssh-key`), nothing private released,
+    // and no stage lent a credential scope a person kept at an earlier prompt: the classifier is
+    // shown the words of the line, which do not say what the stage is lent (SANDBOX-27).
+    if !requested.is_empty()
+        || is_lent_a_kept_scope(confinement, plan)
+        || stdin
+        || plan.releases_private()
+    {
         return crate::confirm::Classified::NotAsked;
     }
     let Some(classifying) = tools.classifying.as_ref() else {
@@ -11515,6 +11743,9 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // argument list, so the order is a matter of reading rather than of correctness.
     let varied = policy.arguments_have_varied(plan);
     policy.asked_about(plan);
+    // Whether a stage is lent a credential scope the person's own record holds, worked out from
+    // the confinement the prompt is drawn from and the compiled steps, as the policy was told.
+    let lent_a_kept_scope = is_lent_a_kept_scope(confinement.as_ref(), plan);
     let classified = consult_about_a_run(
         policy,
         tools,
@@ -11523,7 +11754,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         requested,
         stdin.is_some(),
         unconfined,
-        profile_of(confinement.as_ref(), plan),
+        confinement.as_ref(),
         protected,
     );
     let request = crate::confirm::RunRequest {
@@ -11535,7 +11766,12 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         // still one of its refusals. The path is what the prompt shows, since a person cannot
         // endorse a record they were not shown.
         record: record
-            .filter(|_| policy.may_remember(plan) && requested.is_empty() && !unconfined)
+            .filter(|_| {
+                policy.may_remember(plan)
+                    && requested.is_empty()
+                    && !lent_a_kept_scope
+                    && !unconfined
+            })
             .filter(|_| crate::remembered::may_be_added_to())
             .map(|store| store.path().to_path_buf()),
         // Said only where a key at this prompt will not finish the asking, only where a rule
@@ -11549,7 +11785,11 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         pattern: tools
             .home
             .filter(|_| {
-                varied && policy.a_rule_could_answer(plan) && requested.is_empty() && !unconfined
+                varied
+                    && policy.a_rule_could_answer(plan)
+                    && requested.is_empty()
+                    && !lent_a_kept_scope
+                    && !unconfined
             })
             .map(bravebot_config::user_settings_file),
         // The reference, so the person reads what is going in as well as that something is.
@@ -11662,17 +11902,31 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
                 .map(|confinement| confinement.with_chosen_key(chosen));
         }
     }
-    remember_the_answer(policy, tools, plan, record, requested, unconfined, &answer);
+    remember_the_answer(
+        policy,
+        tools,
+        plan,
+        record,
+        requested,
+        lent_a_kept_scope,
+        unconfined,
+        &answer,
+    );
     Ok(())
 }
 
 /// Write down what a run's answer asked to have remembered, where the policy allows it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy is an exclusive borrow and the rest is the line's own structure and the answer, so none of them can share a bundle"
+)]
 fn remember_the_answer<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &Tools<'_>,
     plan: &bravebot_core::command::Plan,
     record: Option<&crate::remembered::Store>,
     requested: &[bravebot_sandbox::scope::Requested],
+    lent_a_kept_scope: bool,
     unconfined: bool,
     answer: &crate::confirm::RunDecision,
 ) {
@@ -11685,6 +11939,7 @@ fn remember_the_answer<S: Sink>(
     // RUN-20 is asked of the table again by `scope_to_record`.
     if policy.may_remember(plan)
         && requested.is_empty()
+        && !lent_a_kept_scope
         && !unconfined
         && let (Some(store), Some(session)) = (record, tools.remembering)
     {
@@ -11812,6 +12067,40 @@ fn noted_failure_text<S: Sink>(
         tools.confined_failures.note();
     }
     failed_line_text(said, error, unconfined_is_offered(policy, tools))
+}
+
+/// The entry a refusal to confine kept apart from its sentence, with control characters made
+/// visible, as the person is told it (SANDBOX-24).
+///
+/// A `sandbox.network.deniedHosts` entry that is not a host name is a string a checkout wrote, so
+/// it is never in the sentence the planner reads ([`failed_line_text`]). The error holds it beside
+/// that sentence, and this is the only place it is read: the note goes to the person's screen and
+/// the trail, and nothing branches on it.
+fn entry_note(error: &crate::exec::ExecError) -> Option<String> {
+    use crate::exec::{ExecError, SubstitutionFailure};
+    match error {
+        ExecError::NotConfined {
+            entry: Some(entry), ..
+        } => Some(format!(
+            "sandbox.network.deniedHosts has an entry that is not a host name, so the line was \
+             refused: {}",
+            crate::confirm::printable(entry)
+        )),
+        ExecError::Substitution {
+            failure: SubstitutionFailure::Inside(inner),
+            ..
+        } => entry_note(inner),
+        _ => None,
+    }
+}
+
+/// A failed line's result: the sentence for the planner, and where the error holds an entry for
+/// the person alone, that entry in the note ([`entry_note`]).
+fn failed_line_result(text: String, error: &crate::exec::ExecError) -> Produced {
+    match entry_note(error) {
+        Some(note) => Produced::refused_with_a_note(text, note),
+        None => Produced::problem(text),
+    }
 }
 
 /// Run a program, after a person approves the exact arguments.
@@ -12139,6 +12428,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         unasked_writes,
         asking,
         covered_by_record,
+        lent_a_kept_scope,
     } = match settle_the_confinement(
         policy,
         tools,
@@ -12176,7 +12466,8 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     let authority = policy.file_authority();
     // A vouch was for the programs as they ran under their profile with nothing added, so what a
     // line prints that was lent a credential, or run with no sandbox, is not trusted on its account.
-    let requesting = !requested.is_empty() || unconfined;
+    // That includes a credential a person kept at an earlier prompt (SANDBOX-27).
+    let requesting = !requested.is_empty() || unconfined || lent_a_kept_scope;
 
     // Shared: the revision and the label `before_plan` reads from the map have to be of one state,
     // which an effect entering would break, and nothing here enters one. The gates (capability,
@@ -12225,7 +12516,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // What the planner is told the line was: the plan with its operands as the line wrote them. A
     // glob in the line has been replaced by the names it matched, which came out of a directory
     // nobody may have vouched for, and the planner is not shown those (CMDLINE-4).
-    let said = in_directory(crate::cmdline::display_as_written(&plan), &told_directory);
+    let said = in_directory(
+        crate::cmdline::display_as_written(
+            &plan,
+            (!at_the_root).then_some(told_directory.as_str()),
+        ),
+        &told_directory,
+    );
 
     // What this line reaches that nothing here holds, which the person approving it was shown at
     // the prompt. Worked out from the same plan the prompt drew, so the record and the grant
@@ -12259,6 +12556,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         .and_then(|confinement| confinement.requested_for_the_trail(&plan.steps()))
     {
         policy.record_requested_scopes(detail);
+    }
+    if let Some(detail) = confinement
+        .as_ref()
+        .and_then(|confinement| confinement.kept_for_the_trail(&plan.steps()))
+    {
+        policy.record_kept_scopes(detail);
     }
 
     // A program opens files the line never names, so nothing tells the authority which it rewrites.
@@ -12311,13 +12614,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // the same request (SANDBOX-17, SANDBOX-29). Read off the error's kind, which the
             // driver chose.
             Err(error) => {
-                let text = match error {
+                let text = match &error {
                     crate::exec::ExecError::NotConfined { .. } => {
                         noted_failure_text(policy, tools, &said, &error)
                     }
                     _ => format!("error: `{said}` did not start: {error}"),
                 };
-                Produced::problem(text).having_started_a_program()
+                failed_line_result(text, &error).having_started_a_program()
             }
         };
     }
@@ -12772,6 +13075,11 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             produced.ran_a_program = true;
             produced.changed_a_file = changed_a_file;
             produced.command_failed = !ran.succeeded();
+            // What the line created, from its own words and only where it ran and exited cleanly
+            // (PANEL-18). The line is the one the planner wrote, which the gate above released.
+            if ran.succeeded() && tools.keeping_links {
+                produced.created = crate::links::creation_in_command(&line);
+            }
             produced.started_a_program = true;
             produced.ran_git_in = plan
                 .steps()
@@ -12796,7 +13104,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 (!at_the_root).then_some(told_directory.as_str()),
             );
             let text = noted_failure_text(policy, tools, &said, &error);
-            let mut produced = Produced::problem(text);
+            let mut produced = failed_line_result(text, &error);
             produced.changed_a_file = changed_a_file;
             match stopped {
                 true => {
@@ -13243,6 +13551,9 @@ fn download_url<S: Sink, C: Confirmer>(
         )
     });
     let intent = Intent::of_a_write(replaces);
+    // What the destination reaches as the question is drawn, which the write compares with what it
+    // reaches when the bytes are released.
+    let reach = workspace.reach_of(&proposed_path);
 
     // Always put to the person, whatever the trust map would have said about the path: the bytes
     // are nobody's and the file is somebody's, so the pair is the one thing they can answer for.
@@ -13318,6 +13629,7 @@ fn download_url<S: Sink, C: Confirmer>(
         &path,
         label,
         Some(approved_at),
+        Some(&reach),
         |file, proof| {
             use std::io::Write;
             loop {
@@ -13409,6 +13721,7 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
         tool,
         arguments,
         Some(slots),
+        false,
     ) {
         crate::mcp::Called::Answered(output) => (
             output.text,
@@ -14004,7 +14317,7 @@ fn spawn_processor<S: Sink>(
                     origin,
                     format!("an isolated processor chose one entry of {over}"),
                 )
-                .costing(done.usage)
+                .processing(done.usage)
                 .waiting(waited);
                 produced.substituted = done.substituted;
                 produced
@@ -14045,7 +14358,7 @@ fn spawn_processor<S: Sink>(
                     ),
                     "produced no document",
                 )
-                .costing(done.usage)
+                .processing(done.usage)
                 .waiting(waited);
                 produced.said = done.note;
                 produced.substituted = substituted;
@@ -14067,7 +14380,7 @@ fn spawn_processor<S: Sink>(
                 )
             };
             let mut produced = Produced::new(document, origin, note)
-                .costing(done.usage)
+                .processing(done.usage)
                 .waiting(waited)
                 .of_content();
             produced.answers_for = Some(spec.clone());
@@ -14096,7 +14409,11 @@ fn processor_failed(
             produced
         }
         crate::processor::ProcessorError::Chat(error) => {
-            model_request_failed("processor", &error, waited)
+            // What a failed request completed is a processor's usage as well, and is kept out of
+            // the figure a delegate's budget counts for the same reason.
+            let mut produced = model_request_failed("processor", &error, waited);
+            produced.usage_is_unbudgeted = true;
+            produced
         }
         crate::processor::ProcessorError::Denied(error) => request_denied(&error, waited),
     }
@@ -15228,8 +15545,8 @@ fn patterns_in(arguments: &Value) -> Vec<Labelled<String>> {
 ///
 /// - The **locations** are a path and two integers read off the server's index. The two integers
 ///   are structure. The path is a name out of a tree nobody need have vouched for, so the kernel
-///   labels the answer from the trust map's entry for each path it names: read as written where
-///   every one is vouched for, and a reference where any is not.
+///   labels the answer from the trust map's entry for each path it names and for the file it was
+///   asked at: read as written where every one is vouched for, and a reference where any is not.
 /// - The **text**, where an operation reports any, is bytes a file chose, and no answer says which
 ///   file chose them: a hover response carries a position and no file. So it is untrusted and comes
 ///   back as a reference, in a vouched-for tree as much as in `vendor/`.
@@ -15436,13 +15753,16 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         }
         // Locations only, which is every operation but hover. The names in it are bytes out of the
         // tree the server indexed, so the kernel labels it from the trust map's entry for each path
-        // and an answer naming a file nobody vouched for is quarantined, as a listing is. A
+        // and for the file it was asked at, and an answer naming or asked at a file nobody vouched
+        // for is quarantined, as a listing is. A
         // `diagnostics` answer names no path the server reported, so it carries no taint.
         None => {
-            let label = match crate::lsp::label_for_locations(policy, tools.workspace, &answer) {
-                Ok(label) => label,
-                Err(denial) => return Produced::problem(format!("refused: {denial}")),
-            };
+            let asked = crate::lsp::asked_file(operation, &relative);
+            let label =
+                match crate::lsp::label_for_locations(policy, tools.workspace, &answer, asked) {
+                    Ok(label) => label,
+                    Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                };
             let origin = format!("what the language server said about {relative}");
             let mut produced = Produced::new(Labelled::new(described, label), relative, note)
                 .marked_untrusted(!label.is_trusted());
@@ -16404,6 +16724,7 @@ mod tests {
             detail: "the network is closed for this session (run.network)".into(),
             before,
             network_closed: false,
+            entry: None,
         };
         let alone = failed_line_text("python3 script.py", &refused(StartedBefore::Nothing), true);
         assert!(!alone.contains("may have run in part"), "{alone}");
@@ -16481,6 +16802,7 @@ mod tests {
             detail: "the network is closed for this session (run.network)".into(),
             before: StartedBefore::Nothing,
             network_closed: true,
+            entry: None,
         };
         let offered = failed_line_text("python3 script.py", &closed, true);
         assert!(offered.contains("'unconfined': true"), "{offered}");
@@ -16625,7 +16947,10 @@ mod tests {
             let mut jobs = Jobs::new();
             jobs.keep(
                 running,
-                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+                JobLines::new(
+                    &plan.display(),
+                    &crate::cmdline::display_as_written(&plan, None),
+                ),
                 Label::trusted_public(),
                 authority.clone(),
                 0,
@@ -16677,7 +17002,10 @@ mod tests {
         .unwrap();
         jobs.keep(
             running,
-            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            JobLines::new(
+                &plan.display(),
+                &crate::cmdline::display_as_written(&plan, None),
+            ),
             Label::trusted_public(),
             FileAuthority::new(TrustStore::new(&root)),
             0,
@@ -16772,7 +17100,10 @@ mod tests {
         .unwrap();
         jobs.keep(
             running,
-            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            JobLines::new(
+                &plan.display(),
+                &crate::cmdline::display_as_written(&plan, None),
+            ),
             Label::trusted_public(),
             FileAuthority::new(TrustStore::new(root)),
             0,
@@ -17173,7 +17504,10 @@ mod tests {
             .unwrap();
             let (_, stop) = jobs.keep(
                 running,
-                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+                JobLines::new(
+                    &plan.display(),
+                    &crate::cmdline::display_as_written(&plan, None),
+                ),
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,
@@ -17255,7 +17589,10 @@ mod tests {
             .unwrap();
             let (name, stop) = jobs.keep(
                 running,
-                JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+                JobLines::new(
+                    &plan.display(),
+                    &crate::cmdline::display_as_written(&plan, None),
+                ),
                 Label::trusted_public(),
                 FileAuthority::new(TrustStore::new(&root)),
                 0,
@@ -18167,10 +18504,12 @@ mod tests {
         }
     }
 
-    /// PLUGIN-1: no tool the planner or a delegate is offered installs, removes, enables, disables
-    /// or lists a plugin. The only way is the typed `/plugin` command.
+    /// PLUGIN-1: no tool the planner or a delegate is offered installs, updates, removes, enables,
+    /// disables or lists a plugin. The only way is the typed `/plugin` command. A tool that updates
+    /// a plugin is about plugins, so the same check refuses it as the one for an install does.
     ///
-    /// Rejects: a tool added to any offered list whose name or description is about plugins.
+    /// Rejects: a tool added to any offered list whose name or description is about plugins,
+    /// including one named for updating them.
     #[test]
     fn no_tool_offered_installs_or_changes_a_plugin() {
         use bravebot_core::delegate::{Definitions, Kind};
@@ -20159,7 +20498,7 @@ mod tests {
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
-            for reaching in ["fetch_url", "download_url"] {
+            for reaching in ["fetch_url", "download_url", "web_search"] {
                 assert!(
                     !offered.iter().any(|t| t == reaching),
                     "a {name} was offered {reaching}, a way to reach a host of its own"
@@ -24765,6 +25104,46 @@ mod tests {
             !loaded.contains("outside-the-workspace"),
             "a path outside the workspace was named: {loaded}"
         );
+    }
+
+    /// LOAD-4: where a project skill's directory is a link, each file is judged by the trust map
+    /// under the name the link gives it and under the name where it lands. The regression it
+    /// rejects: the files being judged under one of the two names only, so a file the map
+    /// distrusts under the other name is still offered. `ok.md` is the control: it is trusted
+    /// under both names.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_of_a_linked_skill_is_judged_under_both_the_link_name_and_the_landed_name() {
+        let fixture = SkillFixture::new("skill-files-link-both-names");
+        let target = fixture.project.join("shared/lint");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(
+            target.join("SKILL.md"),
+            "---\nname: lint\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        for file in ["ok.md", "distrusted-landed.md", "distrusted-link.md"] {
+            std::fs::write(target.join(file), "x").unwrap();
+        }
+        std::fs::create_dir_all(fixture.project.join(".bravebot/skills")).unwrap();
+        std::os::unix::fs::symlink(&target, fixture.project.join(".bravebot/skills/lint")).unwrap();
+
+        let workspace = fixture.workspace();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("shared/lint/distrusted-landed.md");
+        store.distrust(".bravebot/skills/lint/distrusted-link.md");
+        let catalogue = crate::skills::resolved(
+            &workspace,
+            None,
+            store,
+            bravebot_core::permissions::Permissions::default(),
+            &mut RecordingSink::new(),
+        );
+
+        let skill = catalogue.get("lint").expect("offered");
+        assert_eq!(skill.landed.as_deref(), Some("shared/lint"));
+        assert_eq!(skill.files, ["ok.md"]);
     }
 
     /// LOAD-4: a link that lands where the trust map distrusts the directory is named no landing,

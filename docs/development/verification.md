@@ -16,15 +16,49 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | `Labelled::into_trusted` | The value comes out exactly when the label is `(T,pub)`, and otherwise the labelled value comes back unchanged |
 | `Labelled::relabel` | It succeeds exactly when the new label is a degradation, and keeps the value |
 | `Policy::refuse_untrusted`, `Policy::read_trusted_content` | Each refuses exactly when the label is untrusted |
-| `Plan::can_be_remembered` | It allows a line exactly when everything that decides what each step does is in the entry `a` records, as `spec::plan_is_its_entries` states over every field of `Plan` and `Step`: no file written or read by name, no reference fed in, no assignment, and no route that opens a file |
+| `policy::shown_to_the_planner` | `Policy::present` shows the planner content exactly where it is trusted and not a picture, and every other value reaches it as a reference |
+| `Context::absorb`, `Context::hold`, `Context::fresh` | A turn's context starts trusted and public. Integrity only meets and confidentiality only joins, so nothing shown later restores what was already lost. `Policy::absorb` meets `spec_context` with what was observed |
+| `Grants::spend`, `Grants::issue` | An endorsement is spent only for exactly the tool, field and value it was issued for, and a spent one is gone, so it cannot authorise a second action or another value. `Policy::consume_grant` spends from `spec_grants` |
+| `Labelled::new`, `Labelled::trusted`, `Label::new` | Each builds the value and label it is given, `trusted` at `(T,pub)` |
+| `Policy::read_planner_argument`, `Policy::promote_confined_read` | Each passes exactly when the argument is public and the planner's context has met nothing untrusted, and `promote_confined_read` returns `(T,pub)` |
+| `Policy::declassify`, `Policy::declassify_into_place` | Each releases exactly the slots the release plan named before any content was seen, `declassify_into_place` only to the destination named with the slot |
+| `Policy::declassify_into_workspace`, `Policy::declassify_written_into_workspace`, `Policy::declassify_checkout_into_workspace` | Each returns the value at public with the integrity it had, so a release never raises integrity |
+| `Policy::endorsed_for_reading` | `read_output`, `promote_vetted` and `promote_vetted_picture` hand a slot to the planner only where it is the kind the gate serves and a single-use endorsement for it was issued |
+| `Policy::promote_a_tool_list`, `Policy::promote_a_server_move` | Each passes exactly when a single-use endorsement for the server's alias was issued, and returns `(T,pub)` |
+| `Policy::adopt_edited_body` | It adopts a body a person edited exactly when the proposed body was `(T,pub)`, and records the saved body at `(T,pub)` |
+| `Policy::record_answers` | It records a reply exactly when the questions were trusted, at the questions' own label |
+| `Policy::label_user_command_output`, `Policy::label_user_configuration`, `Policy::label_kept_fact` | Each gives the first label its provenance names: `(T,priv)` for a command the person typed, `(T,pub)` for their configuration, and trusted at the confidentiality the fact was kept at |
+| `Plan::can_be_remembered` | It allows a line exactly when everything that decides what each step does is in the entry `a` records, as `spec::plan_is_its_entries` states over every field of `Plan` and `Step`: no file written or read by name, no reference fed in, no assignment, and no route that opens a file. A route that opens none (a stream sent to `/dev/null`, or `2>&1`) is allowed because the entry holds it: `spec::command_is` compares routes, so the entry made for `sh check.sh > /dev/null` does not cover `sh check.sh` |
 | `Plan::can_be_remembered_as` | It allows a request exactly when its plan can be remembered and it asked for no scope, did not ask to run with no profile, and writes no protected path. `Plan::vouch` makes the only `Vouch`, and `Policy::remember_vouch` records only from one |
 | `policy::run_reason` | Private input, a requested scope, a write, an assignment, and a line outside the root that no entry names are always put to a person, and so is a line an `ask` or `deny` rule matches. A line goes unasked only on the answer that covers it, and a fed reference only on an `allow` rule or the audited table |
 | `policy::output_label` | Output is trusted only on a proof from the audited table or a vouch for every step, never for a line that asked for a scope or to run unconfined, and never on a vouch for a line carrying an assignment or fed untrusted content |
+| `policy::write_reason`, `WriteReason::asks` | A write to a destination nobody has read or to a protected path is always put to a person, whatever a rule says, and so is one an `ask` or `deny` rule matches. A write goes unasked only on an `allow` rule, or on the trust map where it answers: never into a path nobody has vouched for, and never with untrusted data into a trusted path |
+| `policy::fetch_reason`, `FetchReason::asks` | A fetch goes unasked exactly where an `allow` rule names its host |
+| `policy::mcp_reason`, `McpReason::asks` | A call to a server's tool is always put to a person where the server's declaration asks about every call or the arguments are private, whatever a rule or a standing answer says, and so is one an `ask` or `deny` rule matches. It goes unasked only on an `allow` rule or, where no rule matched, on an approved plan or the person having said to stop asking |
+| `policy::search_reason`, `SearchReason::asks` | A search goes unasked only where an `allow` rule for the family answers and the planner's context is public. A context that holds private content is always put to a person, whatever a rule says, and so is a search an `ask` or `deny` rule matches |
 | `trust::meet_of_rules`, `policy::weakest_name` | A subtree or a file asked about under several names is trusted only where every rule bearing on it, and every name, answers trusted. An undecided boundary, a name nothing answers, and a file with no name count as untrusted, so a rule can only lower the answer (`spec::a_meet_of_rules_is_trusted_only_where_every_rule_is`) |
 | `trust::weakest_decision`, `trust::weaker`, `trust::strength` | Where several spellings of one name hold a decision, the one that grants least decides: a distrust before an undecided boundary before a trust |
+| `TrustedPrograms::covers_every_step` | Every step a plan runs, including each step inside a `$(...)`, has an entry equal to it in file, start path, arguments, routes and tree |
+| `Remembered::covers`, `RememberedStep::matches`, `Shape::matches` | A remembered line covers a plan exactly where the lines are joined the same way and each step matches in name, file, start path, assignments, routes and arguments, with a number slot admitting only a number, and the step carries no expansion |
+| `permissions::ruling_of` | A matching `deny` decides over every other rule, an `ask` over an `allow`, and an `allow` only where nothing restricts |
+| `permissions::pipeline_decision` | A `deny` on any stage denies a pipeline, an `ask` on any stage asks, and a pipeline is allowed only where it has stages and every one is allowed |
 
 `verify/mutations.txt` lists a defect for each, and `make check-verus` requires Verus to refuse
 every one.
+
+`contrib/check-verus-sweep.py` makes the defects nobody listed. It changes one token at a time in
+the body of each function Verus proves against a contract: `==` and `!=`, `&&` and `||`, `true`
+and `false`, a dropped `!`, `<` and `<=`, `>` and `>=`, `Integrity::Trusted` and `Untrusted`,
+`Confidentiality::Public` and `Private`, and `Ruling::Allow` and `Ask`. A change Verus verifies
+survives, and `make check-verus` fails unless `verify/survivors.txt` lists it with the reason it is
+acceptable. It fails as well where a listed change no longer survives.
+
+Most contracts here state one direction: what a gate always asks about or refuses, and when output
+may be trusted. They do not state that a gate lets through what it may. A change that makes a gate
+stricter meets such a contract and survives, and its entry in `verify/survivors.txt` says so. A
+unit test is what pins that a gate is not stricter than it has to be. A survivor that lets more
+through is a contract that does not say what it is for, so strengthen the contract instead of
+listing it.
 
 `verify/history.rs` is a copy of three fixes from the history, 3facf14a, e0cd1903 and 20ce6086,
 with a contract each, written before the crates they are in carried contracts. Verus refuses each
@@ -100,8 +134,9 @@ Then:
   attribute, an `assume` or `admit`, or an `assume_specification`. Verus verifies a crate with
   any of these, so the ledger is what shows a reviewer each one. CI runs it in the Security job.
 - `make check-verus` runs Verus. Each crate in `CRATES` in `contrib/check-verus.py` has to verify,
-  each mutation has to be refused, and `verify/history.rs` has to verify and be refused under each
-  `before_<commit>` cfg.
+  each mutation has to be refused, each change `contrib/check-verus-sweep.py` makes has to be
+  refused or listed in `verify/survivors.txt`, and `verify/history.rs` has to verify and be refused
+  under each `before_<commit>` cfg.
 
 CI's `Verus` job runs `make check-verus` on a pull request that changes `crates/core/`, `verify/`
 or the scripts that run them, on the merge queue's branch, and on `main`. It installs the release
@@ -109,9 +144,10 @@ or the scripts that run them, on the merge queue's branch, and on `main`. It ins
 `VERUS_SHA256`, and the toolchain `VERUS_TOOLCHAIN` names. A bump of the release changes all three
 together.
 
-`crates/core/src/spec.rs`, `verify/` and the two scripts have code owners in `.github/CODEOWNERS`.
-A contract that is removed or weakened in the crate has to change `verify/contracts.txt` to pass,
-and a definition a contract names lives in `spec.rs`, so either change needs an owner's approval.
+`crates/core/src/spec.rs`, `verify/` and the three scripts have code owners in
+`.github/CODEOWNERS`. A contract that is removed or weakened in the crate has to change
+`verify/contracts.txt` to pass, and a definition a contract names lives in `spec.rs`, so either
+change needs an owner's approval. A survivor listed in `verify/survivors.txt` needs one as well.
 The body a contract holds needs none, because Verus checks it.
 
 ## Running
@@ -137,4 +173,16 @@ make check-verus
   code with access to the private fields, which `check_labelled_impls` in the security-audit skill
   refuses.
 - That a closure handed to `render_in_place` or `render_pair_in_place` decides nothing.
+- What `read_output`, `promote_vetted` and `promote_vetted_picture` return. `SlotStore` is opaque
+  to Verus, so their contract is the one on `endorsed_for_reading`, the question each asks before it
+  reads the slot.
+- That a release plan, an endorsement or the context integrity is what the session holds.
+  `Policy` is opaque to Verus, so `precommitted`, `precommitted_into`, `consume_grant` and
+  `context_integrity` are assumed to answer the uninterpreted `spec_precommitted`,
+  `spec_precommitted_into`, `spec_granted` and `spec_context`. `Policy::absorb` is assumed to meet
+  `spec_context` by handing the observation to its `Context`, whose `absorb` is proved, and
+  `consume_grant` to spend from `spec_grants` by handing the call to its `Grants`, whose `spend` is
+  proved.
+- `Policy::record_note` and `Policy::promote_reference_for_read`. The first keeps the note in
+  `Policy`, which is opaque to Verus, and the second reads the path out of `SlotStore`.
 - Any gate without a row above.

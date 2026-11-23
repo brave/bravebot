@@ -46,6 +46,16 @@ def die(message):
     sys.exit(1)
 
 
+def script_command(path):
+    """`python3` and the absolute path of the script at `path` as one shell word, for a step to print.
+
+    A relative path would run whichever copy is in the session's directory, which in a pull request's
+    worktree is the pull request's own. `resolve` expands symlinks, so the path differs from the one
+    the script was started by only where that path was reached through a symlink.
+    """
+    return f"python3 {shlex.quote(str(Path(path).resolve()))}"
+
+
 def printed(done):
     """A finished command's stderr, then its stdout with a JSON error object cut to `message` and `errors`."""
     # gh api states the reason in that JSON and only a one-line status on stderr; a partial GraphQL response also carries `data`.

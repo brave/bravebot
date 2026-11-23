@@ -159,6 +159,7 @@ VERUS_FILES = frozenset({
     "crates/ui-files/src/short_name.rs",
     "contrib/check-verus.py",
     "contrib/check-verus-contracts.py",
+    "contrib/check-verus-sweep.py",
 })
 
 # The package that fuzzes the crates its manifest names, and everything those name. It is a
@@ -468,6 +469,8 @@ CASES = (
     ("verify/history.rs", {"verus"}),
     ("contrib/check-verus.py", {"verus"}),
     ("contrib/check-verus-contracts.py", {"verus"}),
+    ("contrib/check-verus-sweep.py", {"verus"}),
+    ("verify/survivors.txt", {"verus"}),
     ("crates/agent/src/regex.rs", {"rust", "fuzz"}),
     ("crates/agent/Cargo.toml", {"rust", "build", "deps", "fuzz"}),
     ("crates/tui/Cargo.toml", {"rust", "build", "deps"}),

@@ -151,7 +151,10 @@ A delegate naming a tool that reaches the network anyway is answered the way any
 name is. The capability is held, so no gate refuses that call, which is why the absence from the
 tool list is written out a second time as a refusal. The planner is told in the `spawn_agent`
 description that a delegate cannot call `fetch_url` or `download_url`
-([AGENT-1](tools/spawn-agent.md#AGENT-1)).
+([AGENT-1](tools/spawn-agent.md#AGENT-1)). The description does not name `web_search`, which a
+planner is offered only where a key source is configured, a variable `webSearch.env` names that holds
+text or a key file ([WEBSEARCH-4](tools/web-search.md#WEBSEARCH-4)); a delegate that is told to call
+it is answered as for any unknown name ([WEBSEARCH-8](tools/web-search.md#WEBSEARCH-8)).
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
@@ -161,6 +164,7 @@ description that a delegate cannot call `fetch_url` or `download_url`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
+`verified-by: bravebot_agent::web_search::a_delegate_naming_web_search_is_answered_as_an_unknown_name_and_sends_nothing`
 `verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 `verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
@@ -401,17 +405,19 @@ included, is a definition that does not load, and the notice names its file, as 
 and keeps the lower, so a project file can lower a person's own budget and cannot remove it.
 
 The budget is spent when the tokens the delegate's backend reported, those of the delegates it
-collected included, reach it. The tokens of a check over content nobody vouched for are not
-counted: what a check writes depends on the content it read, which the delegate cannot, so its
-size must not decide what the delegate is told or when it loses its tools. They are still part of
-what the turn spent ([RUN-22](tools/run.md#RUN-22)). The driver keeps a second total. Check usage is
-never added to it, and the budget is compared with that total. A tool decides which usage is a
-check's, and the check's reply is not read to decide it. The delegate then loses its tools for
-its next request and answers with what it has, as it does on its limiting round
-([DELEGATE-6](#DELEGATE-6)). It is not asked the session limit's question
-([TURN-8](turns.md#TURN-8)): that question goes to a person, and a delegate has none. What a
-processor spends on content nobody vouched for is counted in both totals, because a processor is
-not a check; [#4013](https://github.com/brave/bravebot/issues/4013) tracks that.
+collected included, reach it. The tokens of a check over content nobody vouched for and of a
+processor are not counted: what a check or a processor writes depends on the content it read,
+which the delegate cannot, so its size must not decide what the delegate is told or when it loses
+its tools. They are still part of what the turn spent ([RUN-22](tools/run.md#RUN-22)). The driver
+keeps a second total. Check and processor usage is never added to it, and the budget is compared
+with that total. A tool decides which usage is a check's or a processor's, and the reply is not
+read to decide it. A processor request that failed after its service reported usage is a
+processor's usage as well. The delegate then loses its tools for its next request and answers
+with what it has, as it does on its limiting round ([DELEGATE-6](#DELEGATE-6)). It is not asked
+the session limit's question
+([TURN-8](turns.md#TURN-8)): that question goes to a person, and a delegate has none. What an
+advisor spends is counted in both totals, because the advisor is asked from the planner's own
+context and reads nothing the planner may not read.
 
 **The warning ahead of it.** A delegate with a budget is warned once, in the request after the
 first round at which its total is within a fifth of the budget, or leaves fewer tokens than two
@@ -442,16 +448,18 @@ both ended it.
 parent has left under its own budget when the child starts. The delegates of one fan-out divide
 what is left between them, so together they carry no more than the parent had. A parent with
 nothing left starts no delegate, and the refusal takes no number. What a child spends, its
-checks excluded, is added to its parent's budgeted total when the parent collects its report,
-and all of it to the parent's spend, so a parent cannot spend more than its budget by handing
-work down. A child still running when its parent's budget is reached keeps
+checks and processors excluded, is added to its parent's budgeted total when the parent collects
+its report, and all of it to the parent's spend, so a parent cannot spend more than its budget by
+handing work down. A child still running when its parent's budget is reached keeps
 running to its own figure, which is at most what the parent had left.
 
 **Known limits.** Tokens are known only after a request completes, so a delegate may pass its
 budget by one request. A backend that reports no usage is counted from the words of its replies
 ([TURN-5](turns.md#TURN-5)), and a budget is compared with that count. Credits are a session-wide
 counter and cannot be attributed to one delegate while its siblings run, so a budget is in tokens
-only.
+only. The tokens a delegate's checks and processors spend are not bounded by its budget either, so
+a delegate whose work is mostly checks or processor calls spends more than its budget names. They
+are in the turn's spend, which the person's own limits read ([TURN-8](turns.md#TURN-8)).
 
 **Why a call may set it though the call sets no round bound.** [DELEGATE-6](#DELEGATE-6) keeps
 the round bound out of the planner's call because a number that lengthens a bound is authority a
@@ -460,10 +468,9 @@ most it can do is stop its own delegate sooner, and the delegate's capabilities 
 reach are exactly what they were.
 
 **What the comparison reads.** Two counts the driver holds, the tokens its backends reported for
-requests that are not checks and a figure from a vouched definition or a public call field. It
-reads no reply or tool result, so no decision is taken from untrusted bytes
-([LABEL-5](labels.md#LABEL-5)). The size of what a processor wrote is the one exception: it still
-counts toward the budget ([#4013](https://github.com/brave/bravebot/issues/4013)).
+requests that are neither checks nor processors and a figure from a vouched definition or a public
+call field. It reads no reply or tool result, so no decision is taken from untrusted bytes
+([LABEL-5](labels.md#LABEL-5)).
 
 `verified-by: bravebot_core::delegate::a_later_definition_meets_the_budget_of_the_one_it_replaces`
 `verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
@@ -473,6 +480,13 @@ counts toward the budget ([#4013](https://github.com/brave/bravebot/issues/4013)
 `verified-by: bravebot_core::policy::a_child_is_never_given_more_than_its_parent_has_left`
 `verified-by: bravebot_core::policy::a_run_with_no_budget_left_starts_no_delegate`
 `verified-by: bravebot_agent::outcome::a_check_is_part_of_the_cost_and_not_of_the_budgeted_figure`
+`verified-by: bravebot_agent::outcome::a_processor_is_part_of_the_cost_and_not_of_the_budgeted_figure`
+`verified-by: bravebot_agent::turn::a_processors_document_size_does_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_that_marked_no_document_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_that_chose_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::the_tokens_of_a_processor_request_that_failed_do_not_change_what_a_delegate_is_told`
+`verified-by: bravebot_agent::turn::a_processors_tokens_do_not_end_a_delegate_that_called_it`
+`verified-by: bravebot_agent::turn::a_delegates_own_rounds_still_spend_its_budget_beside_a_processor`
 `verified-by: bravebot_agent::turn::a_checks_tokens_do_not_warn_a_delegate_that_read_its_command_output`
 `verified-by: bravebot_agent::turn::a_checks_tokens_do_not_warn_a_delegate_whose_run_read_its_own_output`
 `verified-by: bravebot_agent::turn::the_tools_a_delegate_is_left_after_a_round_do_not_depend_on_a_check`
@@ -656,6 +670,7 @@ The parent is told beside each report how many commands the delegate ran and wri
 
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_delegates_rounds_time_and_cause_in_the_trail_never_reach_the_planner`
 
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
@@ -675,6 +690,9 @@ Delegation saves context. It never saves an approval.
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
+`verified-by: bravebot_agent::mcp::a_rule_decides_a_workers_call_to_a_servers_tool_as_the_turns_own`
+`verified-by: bravebot_agent::mcp::a_standing_answer_for_a_servers_tool_decides_a_workers_call_unasked`
+`verified-by: bravebot_agent::mcp::an_approval_given_to_a_turn_or_a_worker_decides_no_other_call`
 
 <a id="DELEGATE-11"></a>
 ### DELEGATE-11: what a person vouched for outlives the delegate
@@ -857,6 +875,8 @@ something unrelated to it.
 `verified-by: bravebot_agent::shared::a_question_the_mode_does_not_answer_still_waits_for_the_open_one`
 `verified-by: bravebot_agent::shared::the_mode_in_force_when_a_question_is_decided_answers_it`
 `verified-by: bravebot_agent::shared::the_mode_view_reaches_only_a_confirmer_lent_with_one_and_passes_to_nested_handles`
+`verified-by: bravebot_agent::shared::two_delegates_reporting_at_once_are_taken_one_call_at_a_time`
+`verified-by: bravebot_agent::shared::two_delegates_recording_at_once_are_taken_one_call_at_a_time`
 
 <a id="DELEGATE-17"></a>
 ### DELEGATE-17: a delegate does not outlive the turn that spawned it

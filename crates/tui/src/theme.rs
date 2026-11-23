@@ -1005,20 +1005,25 @@ fn rgb(channels: Rgb) -> Color {
 }
 
 fn light_background(out: &mut impl Write) -> bool {
-    if let Some(light) = colorfgbg() {
-        return light;
-    }
-    #[cfg(unix)]
-    {
-        if let Some(light) = query_osc11(out) {
-            return light;
-        }
-    }
     #[cfg(not(unix))]
-    {
-        let _ = out;
-    }
-    false
+    let _ = out;
+    light_from(colorfgbg(), || {
+        #[cfg(unix)]
+        {
+            query_osc11(out)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    })
+}
+
+/// Whether the terminal is light, from what it said. `COLORFGBG` is taken first and the query of
+/// the terminal is made only when it said nothing. A terminal that said nothing either way gets the
+/// shade for a dark background.
+fn light_from(colorfgbg: Option<bool>, osc11: impl FnOnce() -> Option<bool>) -> bool {
+    colorfgbg.or_else(osc11).unwrap_or(false)
 }
 
 /// `COLORFGBG` is `foreground;background`, each an ANSI colour index. 7 and 15 are white.
@@ -1231,6 +1236,91 @@ mod tests {
         assert!(!painted.add_modifier.contains(Modifier::REVERSED));
     }
 
+    /// The variable that makes a run of this test binary the child of
+    /// `the_live_path_reads_no_color_from_the_environment_by_presence`. Its value says whether the
+    /// child was started with `NO_COLOR` set.
+    #[cfg(unix)]
+    const LIVE_CHILD: &str = "BRAVEBOT_TEST_NO_COLOR_LIVE_CHILD";
+
+    /// The functions the running program calls, in a process whose environment has `NO_COLOR` set
+    /// or does not: `sense_no_color` stores the answer, and the palette in force, the row a cursor
+    /// is on and the question put to the terminal read it.
+    ///
+    /// The statics those read are one per process and every test in this binary shares them, and
+    /// the crate forbids the unsafe code that setting a variable in process takes. The test
+    /// therefore starts this binary again with the variable set on that command alone, and the
+    /// child makes the assertions. A child with the variable unset or empty is the control: the
+    /// same assertions have to say colour is drawn. A wrong variable name, `NO_COLOR=0` read as a
+    /// switch that is off, or an answer that never reaches the palette, the cursor row or the
+    /// query passes every test that hands the flag in as an argument and fails here.
+    #[cfg(unix)]
+    #[test]
+    fn the_live_path_reads_no_color_from_the_environment_by_presence() {
+        const THIS: &str =
+            "theme::tests::the_live_path_reads_no_color_from_the_environment_by_presence";
+        const CHECKED: &str = "live path checked:";
+
+        if let Ok(expectation) = std::env::var(LIVE_CHILD) {
+            let asked = expectation == "asked";
+            sense_no_color();
+            assert_eq!(no_color(), asked, "no_color() after sense_no_color()");
+            assert_eq!(
+                palette() == plain_palette(),
+                asked,
+                "the palette in force: {:?}",
+                palette()
+            );
+            let cursor = picked_out();
+            assert_eq!(
+                cursor.add_modifier.contains(Modifier::REVERSED),
+                asked,
+                "the cursor row: {cursor:?}"
+            );
+            assert_eq!(cursor.bg.is_none(), asked, "the cursor row: {cursor:?}");
+            let mut out = Vec::new();
+            sense(&mut out);
+            let query: &[u8] = b"\x1b]11;?\x07";
+            match asked {
+                true => assert!(out.is_empty(), "the terminal was asked: {out:?}"),
+                false => assert_eq!(out, query, "the terminal was not asked its background"),
+            }
+            println!("{CHECKED} {expectation}");
+            return;
+        }
+
+        for (value, expectation) in [
+            (Some("1"), "asked"),
+            (Some("0"), "asked"),
+            (Some(""), "declined"),
+            (None, "declined"),
+        ] {
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", THIS, "--test-threads=1", "--nocapture"])
+                .env(LIVE_CHILD, expectation)
+                .env_remove("NO_COLOR")
+                .env_remove("NO_MOTION")
+                .env_remove("COLORFGBG");
+            if let Some(value) = value {
+                command.env("NO_COLOR", value);
+            }
+            let what = format!("the child run with NO_COLOR {value:?}");
+            let output = crate::testutil::output_within(
+                &mut command,
+                std::time::Duration::from_secs(60),
+                &what,
+            );
+            let said = String::from_utf8_lossy(&output.stdout);
+            let failed = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{what} failed:\n{said}\n{failed}");
+            assert!(
+                said.contains(&format!("{CHECKED} {expectation}")),
+                "{what} did not reach its assertions:\n{said}\n{failed}"
+            );
+        }
+    }
+
     /// A row filled with brand primary needs text picked for the fill, and a fill of the
     /// terminal's own background is not a fill: the row is the page it sits on, so black over it
     /// would be this program painting it after all.
@@ -1339,6 +1429,28 @@ mod tests {
         assert!(!light_from_rgb(
             parse_osc11(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07").expect("dark")
         ));
+    }
+
+    /// A terminal that sets no `COLORFGBG` and does not answer the background query must get the
+    /// shades picked for a dark background. An implementation that answers light for silence draws
+    /// the deeper shades on a dark screen. What either source says outranks silence, `COLORFGBG`
+    /// outranks the query, and the query is not made once `COLORFGBG` has answered.
+    #[test]
+    fn a_terminal_that_will_not_say_gets_the_dark_shade() {
+        let silent = light_from(None, || None);
+        assert!(!silent, "a terminal that said nothing was taken for light");
+        assert_eq!(
+            brave_palette(silent).primary,
+            Color::Rgb(0x76, 0x86, 0xEC),
+            "a terminal that said nothing did not get the brand primary for a dark background"
+        );
+
+        assert!(light_from(None, || Some(true)));
+        assert!(!light_from(None, || Some(false)));
+        assert!(light_from(Some(true), || panic!("COLORFGBG had answered")));
+        assert!(!light_from(Some(false), || panic!(
+            "COLORFGBG had answered"
+        )));
     }
 
     /// Keys typed while the background query waits are read with its reply. They are kept, in the

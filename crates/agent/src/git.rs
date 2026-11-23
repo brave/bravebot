@@ -4527,6 +4527,35 @@ mod tests {
             }
         }
 
+        /// A setting that has git read attributes from a file or a tree other than the ones in the
+        /// repository refuses the checkout before anything is written, whichever way its section
+        /// and key are cased. An implementation that read only the attributes files inside the
+        /// repository would make the checkout and write files as stored that git would convert.
+        #[test]
+        fn a_config_naming_an_attributes_file_elsewhere_refuses_the_checkout() {
+            for config in [
+                "[core]\n\tattributesFile = /tmp/attributes\n",
+                "[Core]\n\tATTRIBUTESFILE = /tmp/attributes\n",
+                "[attr]\n\ttree = HEAD\n",
+                "[ATTR]\n\tTree = HEAD\n",
+            ] {
+                let repo = Repo::new("checkout-attributes-elsewhere");
+                let readme = repo.blob("hello\n");
+                committed(&repo, &[("100644", "README", readme)]);
+                repo.put("config", config);
+                let refused = made(&repo).expect_err(config);
+                assert_eq!(refused, Refused::Declined(Declined::Elsewhere), "{config}");
+                nothing_written(&repo, &refused);
+            }
+
+            // A setting that names no attributes source does not refuse.
+            let repo = Repo::new("checkout-attributes-in-repository");
+            let readme = repo.blob("hello\n");
+            committed(&repo, &[("100644", "README", readme)]);
+            repo.put("config", "[core]\n\tbare = false\n");
+            made(&repo).expect("made");
+        }
+
         /// An attribute that turns a conversion off, or one that writes a file as it is stored
         /// here, does not refuse.
         #[test]
@@ -4598,7 +4627,7 @@ mod tests {
                     Bound::FIXED,
                 )
                 .expect_err(name);
-                assert_eq!(refused, Refused::AttributesUntrusted, "{name}");
+                assert_eq!(refused, Refused::Distrusted, "{name}");
                 nothing_written(&repo, &refused);
 
                 let trusted = made(&repo);
@@ -4611,6 +4640,30 @@ mod tests {
                     }
                 }
             }
+        }
+
+        /// CHECKOUT-4. An attributes file under a path the map does not trust is the fixed refusal
+        /// also where a deny rule covers it, since the refusal for a covered file says that the
+        /// file exists. A deny rule alone keeps its own refusal.
+        #[test]
+        fn a_distrusted_attributes_file_a_deny_rule_also_covers_is_the_fixed_refusal() {
+            let repo = Repo::new("checkout-attributes-withheld-distrusted");
+            let readme = repo.blob("hello\n");
+            let rules = repo.blob("* filter=x\n");
+            let inner = repo.tree(&[("100644", ".gitattributes", rules)]);
+            committed(
+                &repo,
+                &[("100644", "README", readme), ("40000", "incoming", inner)],
+            );
+            let covered = |path: &str| path.starts_with("incoming/");
+            let refused =
+                made_by(&repo, &covered, &outside_incoming, Bound::FIXED).expect_err("both");
+            assert_eq!(refused, Refused::Distrusted);
+            nothing_written(&repo, &refused);
+
+            let refused = made_by(&repo, &covered, &|_| true, Bound::FIXED).expect_err("deny rule");
+            assert_eq!(refused, Refused::AttributesWithheld);
+            nothing_written(&repo, &refused);
         }
 
         /// A tree entry git's own checks refuse to write is refused here before anything is
@@ -4890,8 +4943,385 @@ mod tests {
             let untrusted = |path: &str| path != ".GitAttributes";
             let refused =
                 made_by(&repo, &|_| false, &untrusted, Bound::FIXED).expect_err("untrusted");
-            assert_eq!(refused, Refused::AttributesUntrusted);
+            assert_eq!(refused, Refused::Distrusted);
             nothing_written(&repo, &refused);
+        }
+
+        /// What the map does not trust in the tests below: `incoming` and all beneath it.
+        fn outside_incoming(path: &str) -> bool {
+            path != "incoming" && !path.starts_with("incoming/")
+        }
+
+        /// A checkout over `entries` with `incoming` the one path the map does not trust, and the
+        /// same checkout with every path trusted.
+        fn refused_both_ways(
+            repo: &Repo,
+            bound: Bound,
+        ) -> (Result<Made, Refused>, Result<Made, Refused>) {
+            let distrusted = made_by(repo, &|_| false, &outside_incoming, bound);
+            if distrusted.is_err() {
+                nothing_written(repo, distrusted.as_ref().expect_err("refused"));
+            }
+            let _ = std::fs::remove_dir_all(target(repo));
+            let _ = std::fs::remove_dir_all(admin(repo));
+            let trusted = made_by(repo, &|_| false, &|_| true, bound);
+            (distrusted, trusted)
+        }
+
+        /// CHECKOUT-4. A tree an entry under a path the map does not trust refuses is refused with
+        /// one fixed refusal, whichever check the entry failed: the entry's name, a name held
+        /// twice, and the count of files, of directories and of bytes. The same tree under a path
+        /// the map trusts keeps the refusal that names the check.
+        #[test]
+        fn a_refusal_caused_by_an_entry_under_a_distrusted_path_does_not_say_which_check_failed() {
+            let names: [(&[u8], Name); 4] = [
+                (b"..", Name::Dot),
+                (b".GIT", Name::DotGit),
+                (b"a/b", Name::Separator),
+                (b"caf\xe9", Name::NotUtf8),
+            ];
+            for (name, expected) in names {
+                let repo = Repo::new("checkout-distrusted-name");
+                let readme = repo.blob("hello\n");
+                let mut bytes = b"100644 ".to_vec();
+                bytes.extend_from_slice(name);
+                bytes.push(0);
+                bytes.extend_from_slice(readme.as_bytes());
+                let inner = repo.object(Kind::Tree, &bytes);
+                committed(
+                    &repo,
+                    &[("100644", "README", readme), ("40000", "incoming", inner)],
+                );
+                let (distrusted, trusted) = refused_both_ways(&repo, Bound::FIXED);
+                let shown = name.escape_ascii().to_string();
+                assert_eq!(
+                    distrusted.expect_err(&shown),
+                    Refused::Distrusted,
+                    "{shown}"
+                );
+                assert_eq!(
+                    trusted.expect_err(&shown),
+                    Refused::Name(expected),
+                    "{shown}"
+                );
+            }
+
+            // The same name directly in the root tree is keyed by the root's own path.
+            let repo = Repo::new("checkout-distrusted-twice");
+            let secret = repo.blob("token\n");
+            let mut bytes = Vec::new();
+            for _ in 0..2 {
+                bytes.extend_from_slice(b"100644 secret\0");
+                bytes.extend_from_slice(secret.as_bytes());
+            }
+            let inner = repo.object(Kind::Tree, &bytes);
+            committed(&repo, &[("40000", "incoming", inner)]);
+            let (distrusted, trusted) = refused_both_ways(&repo, Bound::FIXED);
+            assert_eq!(distrusted.expect_err("twice"), Refused::Distrusted);
+            assert_eq!(trusted.expect_err("twice"), Refused::Name(Name::Folded));
+
+            let repo = Repo::new("checkout-distrusted-files");
+            let a = repo.blob("hello\n");
+            let b = repo.blob("world\n");
+            let inner = repo.tree(&[("100644", "a", a), ("100644", "b", b)]);
+            committed(&repo, &[("40000", "incoming", inner)]);
+            let files = Bound {
+                files: 1,
+                bytes: 1 << 20,
+            };
+            let (distrusted, trusted) = refused_both_ways(&repo, files);
+            assert_eq!(distrusted.expect_err("files"), Refused::Distrusted);
+            assert_eq!(trusted.expect_err("files"), Refused::TooManyFiles);
+            let bytes = Bound {
+                files: 10,
+                bytes: 11,
+            };
+            let (distrusted, trusted) = refused_both_ways(&repo, bytes);
+            assert_eq!(distrusted.expect_err("bytes"), Refused::Distrusted);
+            assert_eq!(trusted.expect_err("bytes"), Refused::TooManyBytes);
+
+            let repo = Repo::new("checkout-distrusted-directories");
+            let empty = repo.tree(&[]);
+            let inner = repo.tree(&[
+                ("40000", "d1", empty),
+                ("40000", "d2", empty),
+                ("40000", "d3", empty),
+            ]);
+            committed(&repo, &[("40000", "incoming", inner)]);
+            let dirs = Bound {
+                files: 2,
+                bytes: 1 << 20,
+            };
+            let (distrusted, trusted) = refused_both_ways(&repo, dirs);
+            assert_eq!(distrusted.expect_err("dirs"), Refused::Distrusted);
+            assert_eq!(trusted.expect_err("dirs"), Refused::TooManyDirectories);
+        }
+
+        /// CHECKOUT-4. A bound passed by a tree that holds trusted and distrusted entries together
+        /// is refused with the fixed refusal, since the trusted entries alone may not pass it, and a
+        /// bound the trusted entries pass by themselves keeps its own refusal even where a
+        /// distrusted entry comes later.
+        #[test]
+        fn a_bound_passed_over_trusted_and_distrusted_entries_together_is_the_fixed_refusal() {
+            let repo = Repo::new("checkout-distrusted-mixed");
+            let a = repo.blob("hello\n");
+            let b = repo.blob("world\n");
+            let inner = repo.tree(&[("100644", "b", b)]);
+            committed(
+                &repo,
+                &[
+                    ("100644", "README", a),
+                    ("100644", "TOP", a),
+                    ("40000", "incoming", inner),
+                ],
+            );
+            let bound = Bound {
+                files: 2,
+                bytes: 1 << 20,
+            };
+            let (together, _) = refused_both_ways(&repo, bound);
+            assert_eq!(together.expect_err("together"), Refused::Distrusted);
+
+            // The directory that passes the bound is a trusted one (`z`), listed after the
+            // distrusted `incoming` was counted.
+            let repo = Repo::new("checkout-distrusted-then-trusted");
+            let a = repo.blob("hello\n");
+            let one = repo.tree(&[("100644", "f", a)]);
+            committed(
+                &repo,
+                &[
+                    ("40000", "a", one),
+                    ("40000", "incoming", one),
+                    ("40000", "z", one),
+                ],
+            );
+            let (together, _) = refused_both_ways(&repo, bound);
+            assert_eq!(together.expect_err("later"), Refused::Distrusted);
+
+            let repo = Repo::new("checkout-trusted-alone");
+            let a = repo.blob("hello\n");
+            let inner = repo.tree(&[("100644", "b", a)]);
+            committed(
+                &repo,
+                &[
+                    ("100644", "README", a),
+                    ("100644", "TOP", a),
+                    ("100644", "ZED", a),
+                    ("40000", "incoming", inner),
+                ],
+            );
+            let alone = made_by(&repo, &|_| false, &outside_incoming, bound)
+                .expect_err("the trusted files pass the bound alone");
+            assert_eq!(alone, Refused::TooManyFiles);
+        }
+
+        /// A tree of one file named `name`, written as tree bytes since `tree` would not take
+        /// every name the tests below use.
+        fn tree_named(repo: &Repo, name: &[u8], id: ObjectId) -> ObjectId {
+            let mut bytes = b"100644 ".to_vec();
+            bytes.extend_from_slice(name);
+            bytes.push(0);
+            bytes.extend_from_slice(id.as_bytes());
+            repo.object(Kind::Tree, &bytes)
+        }
+
+        /// A checkout whose only distrusted path is `path`, itself and nothing beneath it, so the
+        /// path a refusal asks the map about is the one that decides.
+        fn refused_except(repo: &Repo, path: &str) -> Refused {
+            made_by(repo, &|_| false, &|asked| asked != path, Bound::FIXED).expect_err(path)
+        }
+
+        /// CHECKOUT-4. The map is asked about the entry's own path where its name can be keyed, and
+        /// about the path of the tree that holds it where it cannot (empty, `.`, `..`, one holding
+        /// a separator, one that is not UTF-8), for a tree below the root and for the root.
+        #[test]
+        fn a_refused_name_is_asked_about_under_its_own_path_or_its_trees() {
+            let unkeyed: [(&[u8], Name); 5] = [
+                (b"..", Name::Dot),
+                (b".", Name::Dot),
+                (b"", Name::Dot),
+                (b"a/b", Name::Separator),
+                (b"caf\xe9", Name::NotUtf8),
+            ];
+            for (name, expected) in unkeyed {
+                let shown = name.escape_ascii().to_string();
+                let lossy = String::from_utf8_lossy(name);
+
+                let repo = Repo::new("checkout-keyed-unkeyed");
+                let blob = repo.blob("hello\n");
+                let inner = tree_named(&repo, name, blob);
+                committed(&repo, &[("40000", "incoming", inner)]);
+                assert_eq!(
+                    refused_except(&repo, "incoming"),
+                    Refused::Distrusted,
+                    "{shown}"
+                );
+                assert_eq!(
+                    refused_except(&repo, &format!("incoming/{lossy}")),
+                    Refused::Name(expected),
+                    "{shown}"
+                );
+
+                // The root is asked about as `.`.
+                let repo = Repo::new("checkout-keyed-unkeyed-root");
+                let blob = repo.blob("hello\n");
+                let root = tree_named(&repo, name, blob);
+                let commit = repo.commit(root, &[], T1, "first");
+                repo.point("refs/heads/main", commit);
+                assert_eq!(refused_except(&repo, "."), Refused::Distrusted, "{shown}");
+                // A distrusted path spelled out of the name itself does not decide, except that
+                // the name `.` spells the root's own.
+                if lossy != "." {
+                    assert_eq!(
+                        refused_except(&repo, &lossy),
+                        Refused::Name(expected),
+                        "{shown}"
+                    );
+                }
+            }
+
+            let repo = Repo::new("checkout-keyed-keyable");
+            let blob = repo.blob("hello\n");
+            let inner = tree_named(&repo, b".GIT", blob);
+            committed(&repo, &[("40000", "incoming", inner)]);
+            assert_eq!(refused_except(&repo, "incoming/.GIT"), Refused::Distrusted);
+            assert_eq!(
+                refused_except(&repo, "incoming"),
+                Refused::Name(Name::DotGit)
+            );
+
+            let repo = Repo::new("checkout-keyed-keyable-root");
+            let blob = repo.blob("hello\n");
+            let root = tree_named(&repo, b".GIT", blob);
+            let commit = repo.commit(root, &[], T1, "first");
+            repo.point("refs/heads/main", commit);
+            assert_eq!(refused_except(&repo, ".GIT"), Refused::Distrusted);
+            assert_eq!(refused_except(&repo, "."), Refused::Name(Name::DotGit));
+        }
+
+        /// CHECKOUT-4. A tree nested deeper than the walk goes is refused as one that cannot be
+        /// read, and as the fixed refusal where the tree at that depth is under a path the map
+        /// does not trust.
+        #[test]
+        fn a_tree_nested_past_the_depth_bound_is_the_fixed_refusal_under_a_distrusted_path() {
+            let repo = Repo::new("checkout-distrusted-deep");
+            let mut inner = repo.tree(&[]);
+            for _ in 0..crate::git::TREE_DEPTH + 4 {
+                inner = repo.tree(&[("40000", "d", inner)]);
+            }
+            committed(&repo, &[("40000", "d", inner)]);
+            let distrusted = made_by(
+                &repo,
+                &|_| false,
+                &|path| path != "d" && !path.starts_with("d/"),
+                Bound::FIXED,
+            );
+            assert_eq!(distrusted.expect_err("deep"), Refused::Distrusted);
+            let trusted = made(&repo);
+            assert_eq!(
+                trusted.expect_err("deep"),
+                Refused::Declined(Declined::Unreadable)
+            );
+        }
+
+        /// CHECKOUT-4. An object under a path the map does not trust that cannot be read is the
+        /// fixed refusal as well, and says which it was where the path is trusted.
+        #[test]
+        fn an_unreadable_object_under_a_distrusted_path_is_the_fixed_refusal() {
+            let repo = Repo::new("checkout-distrusted-unreadable");
+            let missing =
+                ObjectId::from_hex(b"2222222222222222222222222222222222222222").expect("hex");
+            let readme = repo.blob("hello\n");
+            let inner = repo.tree(&[("100644", "gone", missing)]);
+            committed(
+                &repo,
+                &[("100644", "README", readme), ("40000", "incoming", inner)],
+            );
+            let (distrusted, trusted) = refused_both_ways(&repo, Bound::FIXED);
+            assert_eq!(distrusted.expect_err("missing"), Refused::Distrusted);
+            assert_eq!(
+                trusted.expect_err("missing"),
+                Refused::Declined(Declined::Unreadable)
+            );
+
+            let repo = Repo::new("checkout-distrusted-unparsable");
+            let readme = repo.blob("hello\n");
+            let inner = repo.object(Kind::Tree, b"not a tree");
+            committed(
+                &repo,
+                &[("100644", "README", readme), ("40000", "incoming", inner)],
+            );
+            let (distrusted, trusted) = refused_both_ways(&repo, Bound::FIXED);
+            assert_eq!(distrusted.expect_err("unparsable"), Refused::Distrusted);
+            assert_eq!(
+                trusted.expect_err("unparsable"),
+                Refused::Declined(Declined::Unreadable)
+            );
+        }
+
+        /// CHECKOUT-4. A file name the file system will not hold, and two names it takes for one,
+        /// found while writing a file under a path the map does not trust, are the fixed refusal
+        /// and leave nothing behind. Where the same files are trusted each keeps its own refusal.
+        #[test]
+        fn a_refusal_while_writing_under_a_distrusted_path_is_the_fixed_refusal() {
+            let repo = Repo::new("checkout-distrusted-long");
+            let readme = repo.blob("hello\n");
+            let long = "a".repeat(300);
+            let inner = repo.tree(&[("100644", &long, readme)]);
+            committed(
+                &repo,
+                &[("100644", "README", readme), ("40000", "incoming", inner)],
+            );
+            let (distrusted, trusted) = refused_both_ways(&repo, Bound::FIXED);
+            assert_eq!(distrusted.expect_err("too long"), Refused::Distrusted);
+            assert_eq!(trusted.expect_err("too long"), Refused::Unwritable);
+
+            let repo = Repo::new("checkout-distrusted-folded");
+            std::fs::write(repo.root.join("probe"), "").expect("probe");
+            if !repo.root.join("PROBE").exists() {
+                eprintln!(
+                    "names here are case-sensitive, so no folded pair is found while writing"
+                );
+                return;
+            }
+            let upper = repo.blob("upper\n");
+            let lower = repo.blob("lower\n");
+            let inner = repo.tree(&[("100644", "A", upper), ("100644", "a", lower)]);
+            committed(
+                &repo,
+                &[("100644", "README", upper), ("40000", "incoming", inner)],
+            );
+            let (distrusted, trusted) = refused_both_ways(&repo, Bound::FIXED);
+            assert_eq!(distrusted.expect_err("folded"), Refused::Distrusted);
+            assert_eq!(trusted.expect_err("folded"), Refused::Name(Name::Folded));
+        }
+
+        /// CHECKOUT-4. The fixed refusal reads the same for every cause and names no check.
+        #[test]
+        fn the_fixed_refusal_names_no_check_and_differs_from_the_ones_that_do() {
+            let fixed = Refused::Distrusted.describe("the working directory");
+            for word in [
+                "bound",
+                "UTF-8",
+                "git",
+                "files",
+                "bytes",
+                "directories",
+                "name",
+            ] {
+                assert!(!fixed.contains(word), "{word}: {fixed}");
+            }
+            assert!(fixed.starts_with("No checkout was made"), "{fixed}");
+            for other in [
+                Refused::TooManyFiles,
+                Refused::TooManyDirectories,
+                Refused::TooManyBytes,
+                Refused::Name(Name::DotGit),
+                Refused::Unwritable,
+                Refused::Declined(Declined::Unreadable),
+            ] {
+                assert_ne!(other.describe("the working directory"), fixed, "{other:?}");
+            }
         }
 
         /// `config.worktree` is the main worktree's, so a conversion it sets does not refuse a

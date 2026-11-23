@@ -65,10 +65,14 @@ const HOMES_DIRECTORY: &str = "mcp-home";
 const MAX_BYTES: u64 = 64 * 1024;
 
 /// The longest alias, which is also the first half of every tool name a server offers.
-const MAX_ALIAS: usize = 64;
+pub const MAX_ALIAS: usize = 64;
 
 /// What the digested form starts with, so a later change to that form cannot collide with this one.
 const DIGEST_FORM: &str = "bravebot-mcp-declaration-1";
+
+/// What a plugin server's approval digest is tagged with, so it is never a digest made for a
+/// declaration in `mcp.json`.
+const PLUGIN_DIGEST_FORM: &str = "bravebot-mcp-plugin-declaration-1";
 
 /// The longest word a server's tool may be offered under.
 pub const MAX_TOOL: usize = 64;
@@ -285,11 +289,33 @@ pub enum Problem {
     /// `backend` is not `openshell`, or `image` is missing, empty or not one image reference, or
     /// given without the backend that reads it. The value is the key that is wrong.
     Backend(&'static str),
+    /// `apply_arguments` is not an object of tool words, each with an object of argument words
+    /// and their kinds.
+    Apply,
+    /// `apply_arguments` names an argument to a server that asks about every call.
+    ApplyWhileAsking,
+    /// `covered_tools` is not a list of tool words, or names a tool with no `apply_arguments`.
+    PlanCovers,
 }
 
 /// The arguments of a server's tools a declaration says take a choice, by tool (SERVERS-22). Each
 /// is a tool word with the argument words it names, in an order that carries no meaning.
 pub type ChoiceArguments = BTreeMap<String, BTreeSet<String>>;
+
+/// The arguments of a server's tools a declaration says a row of an `apply` step may fill, by
+/// tool, each with the kind it may take: `entry`, a value copied from a list; `entries`, that value
+/// of several entries of one list as an array; `new`, short text for a value the call sets; or
+/// `row`, the new text an earlier row of the step gave (`docs/design/manifest-apply.md`).
+pub type ApplyArguments = BTreeMap<String, BTreeMap<String, String>>;
+
+/// The tools a declaration marks plan-covered in an `apply` step: a step whose tools are all marked
+/// makes its calls on a person's approval of the plan, with no list put
+/// (`docs/design/manifest-apply.md`). Each is a tool with [`ApplyArguments`].
+pub type CoveredTools = BTreeSet<String>;
+
+/// The kinds an argument of [`ApplyArguments`] may take. A declaration may name several for one
+/// argument, joined by commas, and a row then gives whichever of them it chooses.
+pub const APPLY_KINDS: [&str; 4] = ["entry", "entries", "new", "row"];
 
 /// How long a server has for its handshake and for each call, where a declaration says.
 ///
@@ -414,6 +440,11 @@ pub enum Declaration {
         choice_arguments: ChoiceArguments,
         /// Where it runs.
         backend: Backend,
+        /// The arguments of its tools a row of an `apply` step may fill, with their kinds. Empty
+        /// where `ask_every_call` is set, since such a server keeps a question for each call.
+        apply_arguments: ApplyArguments,
+        /// The tools of `apply_arguments` whose calls may run on a person's approval of the plan.
+        covered_tools: CoveredTools,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
@@ -452,6 +483,8 @@ impl std::fmt::Debug for Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -466,6 +499,8 @@ impl std::fmt::Debug for Declaration {
                 .field("ask_every_call", ask_every_call)
                 .field("choice_arguments", choice_arguments)
                 .field("backend", backend)
+                .field("apply_arguments", apply_arguments)
+                .field("covered_tools", covered_tools)
                 .finish(),
             Self::Http {
                 url,
@@ -511,6 +546,8 @@ pub enum Field {
     ChoiceArguments,
     /// The backend, or the image an OpenShell backend is made from.
     Backend,
+    ApplyArguments,
+    CoveredTools,
 }
 
 impl Field {
@@ -531,6 +568,8 @@ impl Field {
             Self::AskEveryCall => "ask_every_call",
             Self::ChoiceArguments => "choice_arguments",
             Self::Backend => "backend",
+            Self::ApplyArguments => "apply_arguments",
+            Self::CoveredTools => "covered_tools",
         }
     }
 }
@@ -562,6 +601,8 @@ impl Declaration {
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
             backend: Backend::Native,
+            apply_arguments: ApplyArguments::new(),
+            covered_tools: CoveredTools::new(),
         })
     }
 
@@ -582,6 +623,8 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -614,6 +657,8 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
+            covered_tools,
         })
     }
 
@@ -631,6 +676,8 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -661,6 +708,8 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
+            covered_tools,
         })
     }
 
@@ -679,6 +728,8 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -693,6 +744,8 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
             },
             Self::Http {
                 url,
@@ -712,6 +765,58 @@ impl Declaration {
                 ask_every_call,
             },
         }
+    }
+
+    /// This declaration with `change` applied to each word of a local server's program and
+    /// arguments and to nothing else: not the stored values, the variables, the files it may read,
+    /// the directory or a url. A remote declaration is returned as it was.
+    ///
+    /// A plugin's `${PLUGIN_ROOT}` is replaced this way (PLUGIN-13), before [`Self::digest`] is
+    /// taken, so an approval binds to the path that runs.
+    #[must_use]
+    pub fn mapping_argv(mut self, change: impl Fn(&str) -> String) -> Self {
+        if let Self::Stdio { argv, .. } = &mut self {
+            *argv = argv.iter().map(|word| change(word)).collect();
+        }
+        self
+    }
+
+    /// The program and its arguments of a local server, empty for a remote one.
+    pub fn argv(&self) -> &[String] {
+        match self {
+            Self::Stdio { argv, .. } => argv,
+            Self::Http { .. } => &[],
+        }
+    }
+
+    /// Where a remote server is, as the file wrote it. `None` for a local one.
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Http { url, .. } => Some(url),
+            Self::Stdio { .. } => None,
+        }
+    }
+
+    /// The directory a local server runs in, where the declaration named one.
+    pub fn directory(&self) -> Option<&str> {
+        match self {
+            Self::Stdio { directory, .. } => directory.as_deref(),
+            Self::Http { .. } => None,
+        }
+    }
+
+    /// The variables a local server receives with the value the declaration gave, by name. For a
+    /// declaration a person wrote this is a secret to keep off the screen. A plugin's declaration
+    /// is drawn in the install listing with its values, since a value can name code to load.
+    pub fn stored_values(&self) -> impl Iterator<Item = (&str, &str)> {
+        let env = match self {
+            Self::Stdio { env, .. } => Some(env),
+            Self::Http { .. } => None,
+        };
+        env.into_iter().flat_map(|env| {
+            env.iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+        })
     }
 
     /// The tool names this server offers where a filter was given, or empty where every tool is
@@ -750,6 +855,8 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -764,6 +871,8 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
             },
             Self::Http {
                 url,
@@ -816,6 +925,8 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -852,6 +963,8 @@ impl Declaration {
             ask_every_call,
             choice_arguments,
             backend,
+            apply_arguments,
+            covered_tools,
         })
     }
 
@@ -911,6 +1024,8 @@ impl Declaration {
                 allowed_hosts,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
                 ..
             } => Self::Stdio {
                 argv,
@@ -929,6 +1044,14 @@ impl Declaration {
                     false => ChoiceArguments::new(),
                 },
                 backend,
+                apply_arguments: match ask {
+                    true => ApplyArguments::new(),
+                    false => apply_arguments,
+                },
+                covered_tools: match ask {
+                    true => CoveredTools::new(),
+                    false => covered_tools,
+                },
             },
             Self::Http {
                 url,
@@ -982,6 +1105,8 @@ impl Declaration {
             allowed_hosts,
             ask_every_call,
             backend,
+            apply_arguments,
+            covered_tools,
             ..
         } = self
         else {
@@ -1014,7 +1139,145 @@ impl Declaration {
             ask_every_call,
             choice_arguments: choices,
             backend,
+            apply_arguments,
+            covered_tools,
         })
+    }
+
+    /// The arguments of its tools a row of an `apply` step may fill, with their kinds. Empty for
+    /// a remote server.
+    pub fn apply_arguments(&self) -> &ApplyArguments {
+        static NONE: ApplyArguments = BTreeMap::new();
+        match self {
+            Self::Stdio {
+                apply_arguments, ..
+            } => apply_arguments,
+            Self::Http { .. } => &NONE,
+        }
+    }
+
+    /// This declaration with `applies` as the arguments of its tools a row of an `apply` step may
+    /// fill, checked as a file's entry is.
+    ///
+    /// Each tool and argument is a word a tool may be offered under, each kind one of
+    /// [`APPLY_KINDS`], and a tool names at least one argument. A remote server takes none, and a
+    /// local one takes them only where it does not ask about every call: such a server keeps a
+    /// question for each of its calls, so it is not called by an `apply` step. The declaration is
+    /// built with [`Declaration::asking_every_call`] before this.
+    pub fn applying(self, applies: ApplyArguments) -> Result<Self, Problem> {
+        if applies.is_empty() {
+            return Ok(self);
+        }
+        let Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+            ask_every_call,
+            choice_arguments,
+            backend,
+            covered_tools,
+            ..
+        } = self
+        else {
+            return Err(Problem::Remote("apply_arguments"));
+        };
+        for (tool, arguments) in &applies {
+            let fine = arguments.iter().all(|(argument, kind)| {
+                is_tool_word(argument)
+                    && argument.len() <= MAX_CHOICE_ARGUMENT
+                    && kind
+                        .split(',')
+                        .all(|word| APPLY_KINDS.contains(&word.trim()))
+            });
+            if !is_tool_word(tool) || arguments.is_empty() || !fine {
+                return Err(Problem::Apply);
+            }
+        }
+        if ask_every_call {
+            return Err(Problem::ApplyWhileAsking);
+        }
+        Ok(Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+            ask_every_call,
+            choice_arguments,
+            backend,
+            apply_arguments: applies,
+            covered_tools,
+        })
+    }
+
+    /// The tools whose calls may run on a person's approval of the plan. Empty for a remote
+    /// server.
+    pub fn covered_tools(&self) -> &CoveredTools {
+        static NONE: CoveredTools = BTreeSet::new();
+        match self {
+            Self::Stdio { covered_tools, .. } => covered_tools,
+            Self::Http { .. } => &NONE,
+        }
+    }
+
+    /// This declaration with `tools` marked plan-covered, checked as a file's entry is.
+    ///
+    /// A mark is taken only for a tool the declaration already gives `apply_arguments`, so it is
+    /// built with [`Declaration::applying`] before this. A remote server takes none.
+    pub fn marking_covered(self, tools: CoveredTools) -> Result<Self, Problem> {
+        if tools.is_empty() {
+            return Ok(self);
+        }
+        match self {
+            Self::Stdio {
+                ref apply_arguments,
+                ..
+            } if !tools.iter().all(|tool| apply_arguments.contains_key(tool)) => {
+                Err(Problem::PlanCovers)
+            }
+            Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools: offered,
+                exclude_tools,
+                allowed_hosts,
+                ask_every_call,
+                choice_arguments,
+                apply_arguments,
+                backend,
+                ..
+            } => Ok(Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools: offered,
+                exclude_tools,
+                allowed_hosts,
+                ask_every_call,
+                choice_arguments,
+                apply_arguments,
+                backend,
+                covered_tools: tools,
+            }),
+            Self::Http { .. } => Err(Problem::Remote("covered_tools")),
+        }
     }
 
     /// An HTTP declaration, checked as a file's entry is.
@@ -1196,6 +1459,8 @@ impl Declaration {
                 ask_every_call,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -1235,6 +1500,12 @@ impl Declaration {
                 // before there was a choice, and the approval given it still stands.
                 if let Backend::OpenShell { image } = backend {
                     form.push(serde_json::json!({ "backend": Backend::OPENSHELL, "image": image }));
+                }
+                if !apply_arguments.is_empty() {
+                    form.push(serde_json::json!({ "apply_arguments": apply_arguments }));
+                }
+                if !covered_tools.is_empty() {
+                    form.push(serde_json::json!({ "covered_tools": covered_tools }));
                 }
                 serde_json::Value::Array(form)
             }
@@ -1277,6 +1548,26 @@ impl Declaration {
         Digest(Sha256::digest(form.to_string().as_bytes()).into())
     }
 
+    /// What an approval of this declaration as the server of an installed plugin binds to.
+    ///
+    /// The digest of the declaration as the plugin's reader returns it, with `${PLUGIN_ROOT}`
+    /// already replaced (PLUGIN-13), and with the plugin's name, the directory it is installed in
+    /// and the digest of its tree the install recorded.
+    /// Two plugins declaring the same server, or one plugin installed in two places, digest apart
+    /// even where the declaration never names its own directory, so an answer about one is not an
+    /// answer about the other. The same declaration in `mcp.json` digests as [`Self::digest`] says,
+    /// so a home approval is no answer about a plugin's server either.
+    pub fn plugin_digest(&self, plugin: &str, install_dir: &str, tree: &str) -> Digest {
+        let form = serde_json::json!([
+            PLUGIN_DIGEST_FORM,
+            plugin,
+            install_dir,
+            tree,
+            self.digest().to_string()
+        ]);
+        Digest(Sha256::digest(form.to_string().as_bytes()).into())
+    }
+
     /// The fields that differ between this declaration and `other`, in the file's order.
     ///
     /// A change of transport is that one field, since nothing else of one transport compares with
@@ -1300,6 +1591,8 @@ impl Declaration {
                     ask_every_call,
                     choice_arguments,
                     backend,
+                    apply_arguments,
+                    covered_tools,
                     ..
                 },
                 Self::Stdio {
@@ -1314,6 +1607,8 @@ impl Declaration {
                     ask_every_call: other_ask_every_call,
                     choice_arguments: other_choice_arguments,
                     backend: other_backend,
+                    apply_arguments: other_apply_arguments,
+                    covered_tools: other_covered_tools,
                     ..
                 },
             ) => {
@@ -1341,6 +1636,11 @@ impl Declaration {
                         Field::ChoiceArguments,
                     ),
                     (backend != other_backend, Field::Backend),
+                    (
+                        apply_arguments != other_apply_arguments,
+                        Field::ApplyArguments,
+                    ),
+                    (covered_tools != other_covered_tools, Field::CoveredTools),
                 ]
                 .into_iter()
                 .filter_map(|(changed, field)| changed.then_some(field))
@@ -1417,6 +1717,8 @@ impl Declaration {
                 allowed_hosts,
                 choice_arguments,
                 backend,
+                apply_arguments,
+                covered_tools,
                 ..
             } => {
                 entry.insert("argv".into(), argv.clone().into());
@@ -1448,6 +1750,12 @@ impl Declaration {
                 if let Backend::OpenShell { image } = backend {
                     entry.insert("backend".into(), Backend::OPENSHELL.into());
                     entry.insert("image".into(), image.clone().into());
+                }
+                if !apply_arguments.is_empty() {
+                    entry.insert("apply_arguments".into(), serde_json::json!(apply_arguments));
+                }
+                if !covered_tools.is_empty() {
+                    entry.insert("covered_tools".into(), serde_json::json!(covered_tools));
                 }
             }
             Self::Http {
@@ -1488,7 +1796,7 @@ impl Declaration {
     /// The declaration an entry states, or what is wrong with it.
     fn from_value(value: &serde_json::Value) -> Result<Self, Problem> {
         let entry = value.as_object().ok_or(Problem::NotAnObject)?;
-        const LOCAL: [&str; 8] = [
+        const LOCAL: [&str; 10] = [
             "variables",
             "env",
             "reads",
@@ -1497,6 +1805,8 @@ impl Declaration {
             "choice_arguments",
             "backend",
             "image",
+            "apply_arguments",
+            "covered_tools",
         ];
         let allowed: &[&str] = match entry.get("transport").and_then(|word| word.as_str()) {
             Some("stdio") => &[
@@ -1513,6 +1823,8 @@ impl Declaration {
                 "choice_arguments",
                 "backend",
                 "image",
+                "apply_arguments",
+                "covered_tools",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -1648,6 +1960,33 @@ impl Declaration {
                 .collect::<Result<_, Problem>>()?,
             Some(_) => return Err(Problem::Choice),
         };
+        let applies = match entry.get("apply_arguments") {
+            None => ApplyArguments::new(),
+            Some(serde_json::Value::Object(by_tool)) => by_tool
+                .iter()
+                .map(|(tool, arguments)| {
+                    let kinds = arguments.as_object().ok_or(Problem::Apply)?;
+                    let kinds = kinds
+                        .iter()
+                        .map(|(name, kind)| {
+                            kind.as_str().map(|kind| (name.clone(), kind.to_string()))
+                        })
+                        .collect::<Option<BTreeMap<_, _>>>()
+                        .ok_or(Problem::Apply)?;
+                    Ok((tool.clone(), kinds))
+                })
+                .collect::<Result<_, Problem>>()?,
+            Some(_) => return Err(Problem::Apply),
+        };
+        let covered = match entry.get("covered_tools") {
+            None => CoveredTools::new(),
+            Some(serde_json::Value::Array(tools)) => tools
+                .iter()
+                .map(|tool| tool.as_str().map(str::to_string))
+                .collect::<Option<CoveredTools>>()
+                .ok_or(Problem::PlanCovers)?,
+            Some(_) => return Err(Problem::PlanCovers),
+        };
         Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
             .reading(reads)?
@@ -1656,6 +1995,8 @@ impl Declaration {
             .asking_every_call(ask_every_call)
             .choosing(choices)?
             .running_in(backend)?
+            .applying(applies)?
+            .marking_covered(covered)?
             .timing(timeouts))
     }
 }
@@ -1978,11 +2319,28 @@ fn entry(alias: &str, value: &serde_json::Value) -> Entry {
 ///
 /// A `tools` line, which an earlier version wrote as a vouch for a tool list, is passed over and
 /// dropped the next time the file is written: a list is asked about every session (SERVERS-8).
+///
+/// A server an installed plugin carries is approved on a line of its own kind, which names the
+/// plugin and the alias the plugin's file gave the server (PLUGIN-7):
+///
+/// ```text
+/// plugin 9be2d1c4...  demo-plugin  weather
+/// ```
+///
+/// Its digest is [`Declaration::plugin_digest`], so it is never one a declaration in `mcp.json`
+/// has, and [`Approvals::approves`] does not read it. No declaration in `mcp.json` resolves to it,
+/// so [`Approvals::keep_only`] keeps these lines as they are and a person's own `mcp add` or
+/// `mcp remove` does not drop them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Approvals {
     approved: BTreeMap<Digest, BTreeSet<String>>,
     changed: BTreeSet<String>,
+    /// The approvals of plugins' servers: the digest, and the plugin and the alias it was given.
+    plugins: BTreeSet<(Digest, String, String)>,
 }
+
+/// The word a line approving a plugin's server starts with.
+const PLUGIN_LINE: &str = "plugin";
 
 /// The word a line recording a changed declaration starts with.
 const CHANGED: &str = "changed";
@@ -2007,10 +2365,19 @@ impl Approvals {
     pub fn parse(text: &str) -> Self {
         let mut approvals = Self::default();
         for line in text.lines() {
-            let words: Vec<&str> = line.split_whitespace().take(4).collect();
+            let words: Vec<&str> = line.split_whitespace().take(5).collect();
             match words.as_slice() {
                 [CHANGED, alias] if is_alias(alias) => {
                     approvals.changed.insert(alias.to_string());
+                }
+                [PLUGIN_LINE, hex, plugin, alias]
+                    if crate::plugin::is_valid_name(plugin) && is_alias(alias) =>
+                {
+                    if let Some(digest) = Digest::parse(hex) {
+                        approvals
+                            .plugins
+                            .insert((digest, plugin.to_string(), alias.to_string()));
+                    }
                 }
                 [hex, alias @ ..] if alias.len() <= 1 && alias.iter().all(|a| is_alias(a)) => {
                     let Some(digest) = Digest::parse(hex) else {
@@ -2028,6 +2395,41 @@ impl Approvals {
     /// Whether this digest was approved.
     pub fn approves(&self, digest: &Digest) -> bool {
         self.approved.contains_key(digest)
+    }
+
+    /// Whether the person approved the server of a plugin that this digest
+    /// ([`Declaration::plugin_digest`]) is of. A digest approved for a declaration in `mcp.json` is
+    /// not an answer about a plugin's server, and the reverse.
+    pub fn approves_plugin(&self, digest: &Digest) -> bool {
+        self.plugins.iter().any(|(held, _, _)| held == digest)
+    }
+
+    /// Record an approval of a plugin's server: `digest` is [`Declaration::plugin_digest`], and
+    /// `alias` is the name the plugin's own file gave the server. An earlier approval of the same
+    /// plugin's server of that name, for a declaration that has since changed, is replaced.
+    pub fn approve_plugin(&mut self, plugin: &str, alias: &str, digest: Digest) {
+        self.plugins
+            .retain(|(_, held, named)| !(held == plugin && named == alias));
+        self.plugins
+            .insert((digest, plugin.to_string(), alias.to_string()));
+    }
+
+    /// Whether the person approved the server `alias` of `plugin` as something other than `digest`,
+    /// so what the plugin declares now is one they have not seen.
+    pub fn plugin_changed(&self, plugin: &str, alias: &str, digest: &Digest) -> bool {
+        !self.approves_plugin(digest)
+            && self
+                .plugins
+                .iter()
+                .any(|(_, held, named)| held == plugin && named == alias)
+    }
+
+    /// How many approvals are held for servers of the plugin called `plugin`.
+    pub fn plugin_count(&self, plugin: &str) -> usize {
+        self.plugins
+            .iter()
+            .filter(|(_, held, _)| held == plugin)
+            .count()
     }
 
     /// Whether `alias` was approved as something other than `digest`, so the declaration it names
@@ -2059,7 +2461,10 @@ impl Approvals {
     /// nothing. Called whenever the declarations are rewritten, so the two files agree about what
     /// is approved.
     pub fn keep_only(&mut self, declarations: &Declarations) {
-        let mut kept = Self::default();
+        let mut kept = Self {
+            plugins: self.plugins.clone(),
+            ..Self::default()
+        };
         for Entry { alias, declaration } in declarations.entries() {
             let digest = declaration.as_ref().ok().map(Declaration::digest);
             match digest {
@@ -2096,8 +2501,50 @@ impl Approvals {
         for alias in &self.changed {
             text.push_str(&format!("{CHANGED} {alias}\n"));
         }
+        for (digest, plugin, alias) in &self.plugins {
+            text.push_str(&format!("{PLUGIN_LINE} {digest} {plugin} {alias}\n"));
+        }
         text
     }
+}
+
+/// Remove every line approving a server of the plugin called `plugin` from the approvals file in
+/// `directory`, so a later install of that name is asked about again (PLUGIN-9). Every other line
+/// is kept exactly as it is, including a line that does not read and a missing final newline, and
+/// the file keeps its permissions. The file is written beside itself and renamed over, so a reader
+/// sees the old file or the new one. No file, or no line for the plugin, writes nothing.
+pub fn withdraw_plugin(directory: &Path, plugin: &str) -> std::io::Result<()> {
+    let path = approvals_file(directory);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let kept: String = text
+        .split_inclusive('\n')
+        .filter(|line| !is_plugin_line_for(line, plugin))
+        .collect();
+    if kept == text {
+        return Ok(());
+    }
+    let permissions = std::fs::metadata(&path)?.permissions();
+    let temporary = directory.join(format!(".{APPROVALS_FILE}.plugin.tmp"));
+    std::fs::write(&temporary, kept)
+        .and_then(|()| std::fs::set_permissions(&temporary, permissions))
+        .and_then(|()| std::fs::rename(&temporary, &path))
+        .inspect_err(|_| {
+            std::fs::remove_file(&temporary).ok();
+        })
+}
+
+/// Whether `line` is one [`Approvals::parse`] reads as an approval of a server of `plugin`.
+fn is_plugin_line_for(line: &str, plugin: &str) -> bool {
+    let mut words = line.split_whitespace();
+    matches!(
+        (words.next(), words.next(), words.next(), words.next(), words.next()),
+        (Some(PLUGIN_LINE), Some(hex), Some(name), Some(alias), None)
+            if name == plugin && Digest::parse(hex).is_some() && is_alias(alias)
+    )
 }
 
 /// The projects in which answer 2 said to use every future server, one path per line.
@@ -3950,6 +4397,139 @@ mod tests {
         assert!(weather().choosing(ChoiceArguments::new()).is_ok());
     }
 
+    /// The arguments a row of an `apply` step may fill are taken on a local server that does not
+    /// ask every call, with each kind the install output of a server prints, `entries` and a
+    /// choice of kinds included, and refused on a remote server, on one that asks every call, and
+    /// for a kind that is not one. The regression it rejects is a kind the install output prints
+    /// that the declaration then refuses, which left a declared tool unusable.
+    #[test]
+    fn apply_arguments_take_every_kind_on_a_local_server_that_does_not_ask_every_call() {
+        let applies = |kind: &str| -> ApplyArguments {
+            BTreeMap::from([(
+                "group_tabs".to_string(),
+                BTreeMap::from([("urls".to_string(), kind.to_string())]),
+            )])
+        };
+        for kind in ["entry", "entries", "new", "row", "row,entry", "entry,new"] {
+            let built = weather().applying(applies(kind)).expect(kind);
+            assert_eq!(built.apply_arguments(), &applies(kind), "{kind}");
+        }
+        assert_eq!(weather().applying(applies("url")), Err(Problem::Apply));
+        assert_eq!(
+            weather()
+                .asking_every_call(true)
+                .applying(applies("entries")),
+            Err(Problem::ApplyWhileAsking)
+        );
+        let remote = Declaration::http("https://example.com/mcp".into()).unwrap();
+        assert_eq!(
+            remote.applying(applies("entries")),
+            Err(Problem::Remote("apply_arguments"))
+        );
+    }
+
+    /// SERVERS-26. `apply_arguments` that are not tools with argument words, each with a kind, are a
+    /// problem of that entry: a value that is not an object, a tool or argument that is not a tool
+    /// word, a tool with no argument, an argument too long to offer beside a reference, and a kind
+    /// that is not text. The regression it rejects is a malformed declaration read as one that lets
+    /// a row fill nothing, or fill an argument its tool does not have.
+    #[test]
+    fn apply_arguments_that_are_not_tools_with_argument_words_are_a_problem_of_that_entry() {
+        let long = "a".repeat(MAX_TOOL + 1);
+        let too_long_to_offer_beside = "a".repeat(MAX_CHOICE_ARGUMENT + 1);
+        for value in [
+            r#""group_tabs:urls=entries""#.to_string(),
+            "null".to_string(),
+            "[]".to_string(),
+            r#"{"group_tabs": "urls"}"#.to_string(),
+            r#"{"group_tabs": ["urls"]}"#.to_string(),
+            r#"{"group_tabs": {}}"#.to_string(),
+            r#"{"group_tabs": {"urls": 1}}"#.to_string(),
+            r#"{"group_tabs": {"urls": null}}"#.to_string(),
+            r#"{"group_tabs": {"": "entries"}}"#.to_string(),
+            r#"{"group_tabs": {"tab urls": "entries"}}"#.to_string(),
+            r#"{"": {"urls": "entries"}}"#.to_string(),
+            r#"{"group tabs": {"urls": "entries"}}"#.to_string(),
+            r#"{"alias:group_tabs": {"urls": "entries"}}"#.to_string(),
+            format!(r#"{{"group_tabs": {{"{too_long_to_offer_beside}": "entries"}}}}"#),
+            format!(r#"{{"{long}": {{"urls": "entries"}}}}"#),
+        ] {
+            let text = format!(
+                r#"{{"servers": {{"srv": {{"transport": "stdio", "argv": ["tool"],
+                    "apply_arguments": {value}}}}}}}"#
+            );
+            let declarations = Declarations::parse(&text).unwrap();
+            assert_eq!(
+                declarations.get("srv").unwrap().declaration,
+                Err(Problem::Apply),
+                "{value}"
+            );
+        }
+    }
+
+    /// SERVERS-26. What a row may fill is part of what an approval binds to only where the
+    /// declaration names any, so a declaration with none digests as it did before; a change of it is
+    /// named as the field that changed; and it survives the file. The regressions it rejects are an
+    /// edit that adds an argument a row may fill and keeps the approval, and a file that drops it.
+    #[test]
+    fn apply_arguments_are_in_the_digest_only_where_there_are_any() {
+        let applies: ApplyArguments = BTreeMap::from([(
+            "group_tabs".to_string(),
+            BTreeMap::from([("urls".to_string(), "entries".to_string())]),
+        )]);
+        let none = weather().applying(ApplyArguments::new()).expect("none");
+        let some = weather().applying(applies).expect("some");
+        assert_eq!(none.digest(), weather().digest());
+        assert_ne!(some.digest(), none.digest());
+        assert_eq!(none.changes(&some), vec![Field::ApplyArguments]);
+        let read = Declaration::from_value(&some.to_value()).expect("what was written reads back");
+        assert_eq!(read, some);
+        assert!(none.to_value().get("apply_arguments").is_none());
+    }
+
+    /// SERVERS-26. A tool is marked plan-covered only where the declaration gives it
+    /// `apply_arguments`, on a local server, and the mark is kept through the file and is part of
+    /// the digest. The regressions it rejects are a mark on a tool a row cannot fill, which would
+    /// run calls nobody declared, a mark on a remote server, and one an edit could add without
+    /// asking again.
+    #[test]
+    fn plan_covers_marks_only_a_tool_with_an_apply_declaration_on_a_local_server() {
+        let applies: ApplyArguments = BTreeMap::from([(
+            "move_bookmark".to_string(),
+            BTreeMap::from([("url".to_string(), "entry".to_string())]),
+        )]);
+        let marked = |tools: &[&str]| -> CoveredTools {
+            tools.iter().map(|tool| (*tool).to_string()).collect()
+        };
+        let built = weather()
+            .applying(applies.clone())
+            .and_then(|declaration| declaration.marking_covered(marked(&["move_bookmark"])))
+            .expect("a marked tool with apply arguments");
+        assert_eq!(built.covered_tools(), &marked(&["move_bookmark"]));
+        assert_ne!(
+            built.digest(),
+            weather().applying(applies.clone()).unwrap().digest(),
+            "the mark is not part of what the approval binds to"
+        );
+        assert_eq!(
+            weather()
+                .applying(applies)
+                .and_then(|declaration| declaration.marking_covered(marked(&["pin_tab"]))),
+            Err(Problem::PlanCovers)
+        );
+        let remote = Declaration::http("https://example.com/mcp".into()).unwrap();
+        assert_eq!(
+            remote.marking_covered(marked(&["move_bookmark"])),
+            Err(Problem::Remote("covered_tools"))
+        );
+        let text = r#"{"servers": {"b": {"transport": "stdio", "argv": ["b"],
+            "apply_arguments": {"move_bookmark": {"url": "entry"}},
+            "covered_tools": ["move_bookmark"]}}}"#;
+        let declarations = Declarations::parse(text).unwrap();
+        let read = declarations.get("b").unwrap().declaration.clone().unwrap();
+        assert_eq!(read.covered_tools(), &marked(&["move_bookmark"]));
+    }
+
     /// SERVERS-22. The arguments are part of what an approval binds to only where there are any, so
     /// a declaration that asks every call and names none digests as it did before, and the order
     /// they were written in is not part of it while the pairing of a tool with an argument is. The
@@ -4101,5 +4681,123 @@ mod tests {
             weather().moved_to("https://b.example.com".into()),
             Err(Problem::Transport)
         );
+    }
+
+    /// PLUGIN-7: a plugin's server digests over its name, its install directory and its tree, and
+    /// apart from the same declaration in `mcp.json`.
+    ///
+    /// Rejects a digest that leaves one of the four out, which would let an answer about one
+    /// install or one plugin stand for another.
+    #[test]
+    fn a_plugin_servers_digest_names_the_plugin_its_directory_and_its_tree() {
+        let declaration = weather();
+        let digest = declaration.plugin_digest("demo", "/state/plugins/demo", "aa");
+        assert_eq!(
+            digest,
+            declaration.plugin_digest("demo", "/state/plugins/demo", "aa")
+        );
+        for other in [
+            declaration.plugin_digest("other", "/state/plugins/demo", "aa"),
+            declaration.plugin_digest("demo", "/elsewhere/plugins/demo", "aa"),
+            declaration.plugin_digest("demo", "/state/plugins/demo", "bb"),
+            declaration.digest(),
+        ] {
+            assert_ne!(digest, other);
+        }
+        let changed =
+            Declaration::stdio(words(&["weather-mcp", "--more"]), Vec::new(), None).unwrap();
+        assert_ne!(
+            digest,
+            changed.plugin_digest("demo", "/state/plugins/demo", "aa"),
+            "a changed declaration"
+        );
+    }
+
+    /// PLUGIN-7: a plugin's approval is a line of its own kind that reads back, approves only its
+    /// own digest, and survives the rewrite a person's own `mcp add` or `mcp remove` makes.
+    ///
+    /// Rejects an approval that `approves` reads as a home one, one a rewrite from the declarations
+    /// drops, and one whose line cannot be read back.
+    #[test]
+    fn a_plugins_approval_is_its_own_line_and_a_home_rewrite_keeps_it() {
+        let declaration = weather();
+        let digest = declaration.plugin_digest("demo", "/state/plugins/demo", "aa");
+        let mut approvals = Approvals::default();
+        approvals.approve_plugin("demo", "weather", digest);
+        approvals.approve("home-weather", declaration.digest());
+
+        assert!(approvals.approves_plugin(&digest));
+        assert!(
+            !approvals.approves(&digest),
+            "a plugin line is no home approval"
+        );
+        assert!(!approvals.approves_plugin(&declaration.digest()));
+
+        let mut declarations = Declarations::default();
+        declarations.insert("home-weather", &declaration);
+        approvals.keep_only(&declarations);
+        assert!(
+            approvals.approves_plugin(&digest),
+            "the home rewrite dropped it"
+        );
+
+        let again = Approvals::parse(&approvals.to_text());
+        assert_eq!(again, approvals);
+        assert!(
+            approvals
+                .to_text()
+                .contains(&format!("plugin {digest} demo weather"))
+        );
+
+        let mut renewed = approvals.clone();
+        let next = declaration.plugin_digest("demo", "/state/plugins/demo", "bb");
+        assert!(renewed.plugin_changed("demo", "weather", &next));
+        renewed.approve_plugin("demo", "weather", next);
+        assert!(
+            !renewed.approves_plugin(&digest),
+            "the old answer was replaced"
+        );
+        assert_eq!(renewed.plugin_count("demo"), 1);
+    }
+
+    /// S32: withdrawing a plugin's server answers removes that plugin's lines and leaves every
+    /// other line as it was, byte for byte, including one that does not read, a plugin whose name
+    /// begins with the removed one's, and a missing final newline.
+    ///
+    /// Rejects a withdraw that rewrites from the parsed set, one that matches by prefix, and one
+    /// that removes a line of the person's own.
+    #[test]
+    fn withdrawing_a_plugins_answers_leaves_every_other_line_as_it_was() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/config-mcp-withdraw");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let declaration = weather();
+        let ours = declaration.plugin_digest("demo", "/s/demo", "aa");
+        let longer = declaration.plugin_digest("demo-two", "/s/demo-two", "aa");
+        let own = declaration.digest();
+        let text = format!(
+            "{own} weather\n  not a line anyone wrote\nplugin {ours} demo weather\nplugin {longer} demo-two weather\nchanged docs"
+        );
+        std::fs::write(approvals_file(&root), &text).unwrap();
+
+        withdraw_plugin(&root, "demo").unwrap();
+
+        let after = std::fs::read_to_string(approvals_file(&root)).unwrap();
+        assert_eq!(
+            after,
+            format!(
+                "{own} weather\n  not a line anyone wrote\nplugin {longer} demo-two weather\nchanged docs"
+            )
+        );
+        withdraw_plugin(&root, "demo").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(approvals_file(&root)).unwrap(),
+            after
+        );
+        let nothing = root.join("nowhere");
+        withdraw_plugin(&nothing, "demo").unwrap();
+        assert!(!approvals_file(&nothing).exists(), "no file means no write");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

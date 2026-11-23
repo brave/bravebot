@@ -112,14 +112,36 @@ pub closed spec fn spec_value_of<T>(v: &Labelled<T>) -> T {
 }
 }
 
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl<T> Labelled<T> {
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            spec_value_of(&r) == value,
+            spec_label_of(&r) == label,
+    ))]
     pub fn new(value: T, label: Label) -> Self {
-        Self { value, label }
+        // A line of its own, so the mutation in verify/mutations.txt can rewrite it.
+        let given = label;
+        Self {
+            value,
+            label: given,
+        }
     }
 
     /// A value derived only from trusted input, safe for routing.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            spec_value_of(&r) == value,
+            spec_label_of(&r) == crate::spec::trusted_public(),
+    ))]
     pub fn trusted(value: T) -> Self {
-        Self::new(value, Label::trusted_public())
+        Self::new(
+            value,
+            Label {
+                integrity: crate::label::Integrity::Trusted,
+                confidentiality: crate::label::Confidentiality::Public,
+            },
+        )
     }
 
     #[cfg_attr(verus_keep_ghost, verus_spec(r =>

@@ -48,6 +48,10 @@ written readable by their owner alone and are read through the trust map.
 roster of sessions running in the background, `jobs/` ([BG-4](background-sessions.md#BG-4)).
 The Sessions screen keeps three small files there, the grouping of its list, the sessions pinned
 in it and the sessions archived from it, each holding only ids and words ([SCREEN-11](sessions-screen.md#SCREEN-11)).
+The plugins a person installed live in `plugins/`, one directory and one record for each
+([plugins.md](plugins.md)), and the answers about them live in two files beside the MCP ones:
+`hooks-approved`, one line for each hook of a plugin the person said yes to, and the `plugin` lines of
+`mcp-approved` ([HOOK-11](hooks.md#HOOK-11), [SERVERS-27](mcp-servers.md#SERVERS-27)).
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered
@@ -55,7 +59,8 @@ command lines, [sandboxing.md](sandboxing.md#SANDBOX-23) for the remembered reac
 [permissions.md](permissions.md) for the granted rules,
 [trust-map.md](trust-map.md) for the kept answers to the startup question,
 [skills.md](skills.md) and [instructions.md](instructions.md) for what is read out of
-the directory,
+the directory, [hooks.md](hooks.md) and [mcp-servers.md](mcp-servers.md) for the files that record what
+a person approved,
 [premium-credentials.md](premium-credentials.md) for the premium key,
 [chatgpt-sign-in.md](chatgpt-sign-in.md) and [xai-sign-in.md](xai-sign-in.md) for the sign-ins,
 [tools/lsp.md](tools/lsp.md) for the index and why sitting here confers nothing on it, and

@@ -271,10 +271,14 @@ const CARDS = {
     // and the question is put before the server is started, so nothing a server wrote is on it.
     why: 'the declaration the person wrote, the settings file that requested it and the agent’s own lines about it, asked about before the server has said anything',
   },
-  // SERVERS-8: a tool's description is the server's own text, released for a person to read.
+  // SERVERS-8: the values an argument takes are the server's own text, released for a person to read.
   'mcp-tools': {
-    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [FORGED_CHROME], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
-    marks: 'class="mcp-tool-description"',
+    entry: () => t.askedMcpTools({ request: 1, alias: 'weather', tools: [{ name: 'weather:get_forecast', arguments: [{ text: 'unit (string)', choices: [FORGED_CHROME] }], description: FORGED_CHROME }], refused: 0, changed: false, vetting: { verdict: 'safe', reason: 'the descriptions are plain' } }),
+    // The values an argument takes sit in their own marked block, one to a value, with the class
+    // `mcp-tool-description mcp-tool-choice`. The tool's own description keeps the block
+    // `mcp-tool-description`, which is the second mark.
+    marks: 'class="mcp-tool-description mcp-tool-choice"',
+    alsoMarks: ['class="mcp-tool-description"'],
   },
   'mcp-call': {
     entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true, askedForPrivateArguments: false, also: [] }),
@@ -380,6 +384,12 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
         // just the same if the mark were drawn once and the content once, side by side, outside
         // it entirely.
         assert.ok(nestedWithin(drawn, card.marks, ESCAPED_FORGED_CHROME), where)
+        // A card that draws more than one kind of block owes each its own mark, once, around
+        // the forged content.
+        for (const mark of card.alsoMarks ?? []) {
+          assert.equal(occurrences(drawn, mark), 1, where)
+          assert.ok(nestedWithin(drawn, mark, ESCAPED_FORGED_CHROME), where)
+        }
       }
       // The head belongs to the one card that draws it. Anywhere else it would be content
       // having painted the chrome the reader is meant to trust.

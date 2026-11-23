@@ -289,7 +289,7 @@ fn a_mode_over_the_box_reads_ctrl_z_itself_and_does_not_suspend() {
 
     let mut session = a_box_with_something_in_it();
     let before = what_the_box_holds(&session);
-    open_effort_picker(&mut session);
+    open_effort_picker(&mut session, crate::model_prompt::Scope::EverySession);
     assert!(session.picking().is_some(), "the fixture opened no picker");
     assert_ne!(handle_key(&mut session, ctrl('z')), Action::Suspend);
     assert!(session.picking().is_some(), "the key closed the picker");

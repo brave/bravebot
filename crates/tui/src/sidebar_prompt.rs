@@ -134,6 +134,7 @@ fn panel() -> Panel {
     Panel {
         title: t!(sidebar_picker_title),
         keys: t!(sidebar_picker_keys),
+        scope_line: None,
         width: 42,
     }
 }
@@ -161,6 +162,40 @@ mod tests {
 
     fn pressed(picker: &mut Picker, code: KeyCode) -> Outcome {
         press(picker, code, KeyModifiers::NONE)
+    }
+
+    /// VIEW-46. The sidebar checklist has no scope: no scope line is drawn for it, Tab leaves it with
+    /// none and changes no section, and the cursor stays where it was.
+    ///
+    /// Rejects: a panel given a scope line, which draws an Enter and Tab row that does nothing here,
+    /// and a Tab that gives the picker a scope, moves its cursor or toggles a section.
+    #[test]
+    fn the_sidebar_checklist_has_no_scope_and_ignores_tab() {
+        let mut picker = Picker::new(Sections::default());
+        pressed(&mut picker, KeyCode::Down);
+        assert_eq!(panel().scope_line, None);
+        assert_eq!(picker.scope(), None);
+        for (code, modifiers) in [
+            (KeyCode::Tab, KeyModifiers::NONE),
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(press(&mut picker, code, modifiers), Outcome::Continue);
+            assert_eq!(picker.scope(), None, "{code:?}");
+            assert_eq!(at_row(&picker), Some(Section::Model), "{code:?}");
+            assert_eq!(picker.sections(), Sections::default(), "{code:?}");
+        }
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, &picker))
+            .expect("draw succeeds");
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!drawn.contains("Tab:"), "{drawn}");
     }
 
     /// The list has a row for each section of the panel in the panel's order, `[x]` for the ones the

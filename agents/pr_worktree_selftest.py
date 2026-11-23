@@ -6,6 +6,8 @@ import importlib.util
 import io
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
@@ -876,6 +878,79 @@ def test_a_pull_request_from_a_remote_this_clone_lacks_names_the_script_that_add
     for script in ("python3 one.py", "python3 two.py"):
         code, out = quietly(pr_worktree.pull, 9, view, Path("."), remotes, False, script)
         assert code == 1 and f"`{script} start 9` adds one" in out, out
+
+
+SCRIPT_SKILLS = ("rebase", "pr-fix", "implement-issues", "update-docs")
+# A spelling of either script that a session would resolve against its own directory: after `python3`
+# and its flags, a path that does not start with `<clone>/` or `/`, or any path to either script that
+# is not absolute, such as `./agents/skills/pr-fix/pr-fix.py` or `.claude/skills/rebase/rebase.py`.
+RELATIVE_SCRIPT = re.compile(
+    r"python3 (?:-\w+ )*(?![\"']?(?:<clone>/|/))[^\s`]*(?:rebase|pr-fix)\.py"
+    r"|(?<![^\s`'\"(])(?!<clone>/|/)[^\s`'\"()]*[/.](?:rebase|pr-fix)\.py"
+)
+
+
+def test_a_spelling_of_the_rebase_or_pr_fix_script_that_a_session_resolves_against_its_own_directory_is_found():
+    for line in (
+        "python3 agents/skills/pr-fix/pr-fix.py start 9",
+        "python3 ./agents/skills/pr-fix/pr-fix.py start 9",
+        "python3 .claude/skills/pr-fix/pr-fix.py start 9",
+        "python3 ../clone/agents/skills/rebase/rebase.py start 9",
+        "python3 -I 'agents/skills/rebase/rebase.py' start 9",
+        "python3 rebase.py start 9",
+        "Bash(python3 agents/skills/rebase/rebase.py *)",
+        "`./agents/skills/pr-fix/pr-fix.py start 9`",
+    ):
+        assert RELATIVE_SCRIPT.search(line), line
+    for line in (
+        "python3 <clone>/agents/skills/pr-fix/pr-fix.py start 9",
+        "Bash(python3 /path/to/clone/agents/skills/rebase/rebase.py *)",
+        "python3 -I /a/clone/agents/skills/rebase/rebase.py start 9",
+        "`pr-fix.py` does everything that needs no judgement",
+        "python3 agents/skills/pr-fix/selftest.py",
+    ):
+        assert not RELATIVE_SCRIPT.search(line), line
+
+
+def test_no_skill_pre_approves_or_tells_the_session_to_run_the_rebase_or_pr_fix_script_by_a_relative_path():
+    # A relative path runs whichever copy is in the session's directory, which in a pull request's
+    # worktree is the pull request's own script.
+    for text_file in sorted((HERE / "skills").glob("*/SKILL.md")):
+        text = text_file.read_text(encoding="utf-8")
+        found = [one.group(0) for one in RELATIVE_SCRIPT.finditer(text)]
+        assert not found, f"{text_file.parent.name}: a step or grant names a script by a relative path: {found}"
+    for skill in SCRIPT_SKILLS:
+        text = (HERE / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+        frontmatter = text.split("\n---\n", 1)[0]
+        grants = [line for line in frontmatter.splitlines() if line.startswith("allowed-tools:")]
+        assert len(grants) == 1, f"{skill}: one allowed-tools line"
+        # A grant naming either script, or a wildcard over the skills directory, would also match the
+        # copy inside .worktrees/pr-<n>.
+        assert not re.search(r"rebase\.py|pr-fix\.py|agents/skills/(?:rebase|pr-fix)|python3 \*", grants[0]), (
+            f"{skill}: allowed-tools names a script a worktree also holds: {grants[0]}"
+        )
+    for skill, script in (("rebase", "rebase.py"), ("pr-fix", "pr-fix.py")):
+        text = (HERE / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+        assert f"python3 <clone>/agents/skills/{skill}/{script} start <pr>" in text, f"{skill}: step 1 is not absolute"
+
+
+def test_a_script_is_printed_as_python_and_one_shell_word_naming_its_file_by_absolute_path():
+    # Both scripts build their printed command with this, so a relative path or a path with a space
+    # that is not quoted would send a session to another copy or split the path in two.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        script = root / "a clone" / "agents" / "skills" / "x" / "x.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("")
+        assert shlex.split(pr_worktree.script_command(script)) == ["python3", str(script)]
+        here = os.getcwd()
+        os.chdir(script.parent.parent)
+        try:
+            relative = pr_worktree.script_command(Path("x") / "x.py")
+        finally:
+            os.chdir(here)
+        assert shlex.split(relative) == ["python3", str(script)], "a relative path is printed in full"
+        assert pr_worktree.script_command("/a/b.py") == "python3 /a/b.py", "a plain path is not quoted"
 
 
 FAKE_SSH = """\

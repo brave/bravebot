@@ -545,6 +545,7 @@ fn a_login_file_on_the_allow_read_list_passes() {
             path: "~/.aws/credentials".to_string(),
             by: None,
             pinned: false,
+            from_a_checkout: false,
         }],
         ..Lists::default()
     };
