@@ -3731,9 +3731,6 @@ watch-refused-unreadable =
 watch-already = la veille { $number } porte déjà sur { $path }
 watch-refused-directory =
     aucune veille n'est posée sur { $path } : c'est un dossier, et une veille porte sur un fichier
-watch-wait-for-the-turn =
-    aucune veille n'est posée pendant qu'un tour tourne. Tapez à nouveau /watch et le chemin une
-    fois qu'il est fini
 watch-fired =veille { $number } : { $path } semble avoir été écrit
 watch-fired-removed = veille { $number } : { $path } n'existe plus
 watch-fired-appeared = veille { $number } : { $path } existe maintenant

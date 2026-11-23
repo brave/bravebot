@@ -171,8 +171,8 @@ The same rules apply as to a watch a turn arms:
 
 While a loop is running or a goal is set, `/watch <path>` arms nothing and tells you how to end the
 loop (`/loop stop`) or the goal (`/goal clear`) first, so arming a watch never ends your own loop or
-goal. While a turn is running it arms nothing and asks you to type it again once the turn ends.
-Listing and stopping work at any time.
+goal. Typed while a turn is running, it waits in the queue and arms the watch once the turn ends,
+so you do not type it again. Listing and stopping work at any time.
 
 `/status` and `/watch` list a watch you armed as **armed by you** instead of naming a turn. It fires,
 ages and ends like any other.

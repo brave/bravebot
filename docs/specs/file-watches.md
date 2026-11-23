@@ -473,8 +473,9 @@ watched arms nothing new and names the watch that is on it. A ninth watch is ref
 ([FSWATCH-8](#FSWATCH-8)).
 
 Under a loop or a goal it arms nothing, and the refusal says how to end the loop (`/loop stop`) or
-the goal (`/goal clear`). While a turn is running it arms nothing and says to type it again once
-the turn ends; listing and stopping still work then. The report shows the watch as armed by you
+the goal (`/goal clear`). Typed while a turn is running, the line arms nothing then: it waits
+in the queue ([CMD-8](commands.md#CMD-8)) and arms the watch once the turn ends, so the person
+does not type it again; listing and stopping are carried out at once. The report shows the watch as armed by you
 ([FSWATCH-10](#FSWATCH-10)), and it fires, coalesces, ages and ends like any other. Its fire's
 prompt is the same sentence a turn's watch fires with ([FSWATCH-4](#FSWATCH-4)): the path in it is
 one the person typed, so it is not untrusted bytes either, and it cannot have changed since.
@@ -485,7 +486,8 @@ the person's own loop or goal to arm a watch, which is a larger consequence than
 suggests. Refusing and naming the command that clears it leaves the choice with them.
 
 **Why nothing is armed while a turn runs.** The first look may need the trust map, which a running
-turn holds ([FSWATCH-7](#FSWATCH-7)), and the window refuses the same request at the same moment.
+turn holds ([FSWATCH-7](#FSWATCH-7)). The terminal already holds the line, so it keeps it until the
+turn ends, as it does a `/loop` or a `/goal` that would start something.
 
 **Why a person may arm one at all.** Nothing about a watch needs a planner until it fires, and a
 watch on a path the person typed is one they named, which answers the cost below of a week-long
@@ -499,7 +501,7 @@ channel opened on a path nobody named.
 `verified-by: bravebot_tui::app::typing_watch_and_a_path_arms_a_watch_that_fires_on_a_write`
 `verified-by: bravebot_tui::app::typing_watch_on_a_directory_is_refused`
 `verified-by: bravebot_tui::app::typing_watch_on_a_path_outside_the_project_is_refused_outside_bypass`
-`verified-by: bravebot_tui::app::typing_watch_with_a_path_while_a_turn_runs_says_to_wait`
+`verified-by: bravebot_tui::app::typing_watch_with_a_path_while_a_turn_runs_waits_for_the_turn`
 `verified-by: bravebot_tui::app::a_watch_the_person_armed_under_a_relative_path_ends_on_cd`
 `verified-by: bravebot_tui::state::a_person_arms_a_watch_and_it_fires_like_any_other`
 `verified-by: bravebot_tui::state::a_person_cannot_arm_a_watch_under_a_loop_or_a_goal_and_is_told_how_to_clear_it`

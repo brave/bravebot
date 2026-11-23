@@ -709,7 +709,7 @@ pub fn commands() -> Vec<Command> {
             name: WATCH_COMMAND,
             argument: "[<path> | stop <n>]",
             description: t!(command_watch),
-            mid_turn: MidTurn::Runs,
+            mid_turn: MidTurn::RunsUnlessItStarts,
         },
         Command {
             name: JOBS_COMMAND,
@@ -1185,7 +1185,8 @@ pub(crate) fn is_a_command_given_words(line: &str) -> bool {
 ///
 /// Read off the table's column, and for the words that both read and start, off the form the
 /// argument takes: `/loop stop` ends what is standing, and `/loop 5m check the deploy` would start
-/// a loop while the turn in flight is still the session's work. `/mcp` and `/mcp list` read the
+/// a loop while the turn in flight is still the session's work. `/watch` and `/watch stop 1` run at
+/// once, and `/watch notes.md` waits, since its first look needs the trust map the turn holds. `/mcp` and `/mcp list` read the
 /// servers, and every other word after `/mcp` waits. Only the words the person typed are read.
 pub(crate) fn runs_while_working(line: &str) -> bool {
     let Some(command) = row_typed(line) else {
@@ -1203,6 +1204,10 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
                 GOAL_COMMAND => {
                     !matches!(crate::goals::parse(argument), crate::goals::Asked::Set(_))
                 }
+                WATCH_COMMAND => !matches!(
+                    crate::watch_command::parse(argument),
+                    crate::watch_command::Asked::Arm(_)
+                ),
                 SCHEDULE_COMMAND => bravebot_schedule::words::reads_only(argument),
                 MCP_COMMAND => crate::mcp_command::only_lists(argument),
                 _ => false,
@@ -1286,9 +1291,11 @@ const REPLACES_THE_RECORD: &[&str] = &[
 /// `/model`, `/effort` and `/advisor` are not named: the level a model reads depends on the model,
 /// so each of them reads what the others set. `/style`, `/rename`, `/note`, `/issue`, `/pr`,
 /// `/forget-trust` and `/sandbox` write the session's own settings and the record, and none of
-/// the three. A command added to the table is placed against this list by
+/// the three. `/watch` arms a watch whose fires begin turns later, built with whatever is chosen
+/// then. A command added to the table is placed against this list by
 /// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
 const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
+    WATCH_COMMAND,
     CLEAR_COMMAND,
     UNDO_COMMAND,
     REWIND_COMMAND,
@@ -1323,9 +1330,11 @@ const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
 /// record. `/note` and `/rename` leave each other
 /// alone: the first writes the notes and the second the name and the points. `/cd` is not named,
 /// since it moves the record to the new directory, nor `/hunks`, which puts a hunk back against the
-/// last point a rename gives up. A command added to the table is placed against this list by
+/// last point a rename gives up. `/watch` arms a watch on the session and begins no turn as it does.
+/// A command added to the table is placed against this list by
 /// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
 const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
+    WATCH_COMMAND,
     ADD_DIR_COMMAND,
     MEMORY_COMMAND,
     UNFINISHED_COMMAND,
@@ -1369,9 +1378,11 @@ const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
 /// whichever of the two is carried out first. `/clear` and `/branch` are not named: the first
 /// closes the directories added and the checkouts kept, and each ends the reach programs were let,
 /// so a file that landed in the reach before it is read after it. `/cd`, `/add-dir` and `/reach`
-/// move the reach itself. A command added to the table is placed against this list by
+/// move the reach itself. `/watch` looks at one path through the reach it finds and moves none. A
+/// command added to the table is placed against this list by
 /// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
 const LEAVES_THE_STYLE_ALONE: &[&str] = &[
+    WATCH_COMMAND,
     COMPACT_COMMAND,
     BTW_COMMAND,
     RECAP_COMMAND,
@@ -1419,9 +1430,11 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
 /// and a write the person approved into an added directory that holds the working directory may have
 /// made the `.git` entry there, which a rewind removes. `/mcp` starts a server that may write the
 /// directory its declaration names. Neither has been shown unable to make or remove the `.git`
-/// entry that moves the root around the directory. A command added to the table is placed against
+/// entry that moves the root around the directory. `/watch` reads the trust map for its first look,
+/// records no promotion and starts no program. A command added to the table is placed against
 /// this list by `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
 const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
+    WATCH_COMMAND,
     COMPACT_COMMAND,
     BTW_COMMAND,
     RECAP_COMMAND,
@@ -2038,6 +2051,7 @@ mod tests {
             (HUNKS_COMMAND, false, false, true, false, true),
             (EXIT_COMMAND, true, true, true, true, true),
             (MCP_COMMAND, false, false, false, false, true),
+            (WATCH_COMMAND, false, false, false, false, false),
             (PLUGIN_COMMAND, false, true, true, true, true),
             (LOOP_COMMAND, false, true, true, true, true),
             (AFTER_COMMAND, false, false, true, false, false),

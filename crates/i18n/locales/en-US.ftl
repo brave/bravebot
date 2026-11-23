@@ -4886,8 +4886,6 @@ watch-refused-unreadable =
 watch-already = watch { $number } is already on { $path }
 watch-refused-directory =
     no watch is armed on { $path }: it is a directory, and a watch is on one file
-watch-wait-for-the-turn =
-    no watch is armed while a turn is running. Type /watch with the path again once it ends
 watch-fired =watch { $number }: { $path } looks written to
 watch-fired-removed = watch { $number }: { $path } no longer exists
 watch-fired-appeared = watch { $number }: { $path } now exists

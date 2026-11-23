@@ -831,20 +831,16 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     // The command that sends nothing either. Listing and stopping are answered here at any time.
     // Arming goes to the loop, which owns the workspace, the live mode and the trust map the first
-    // look needs, and waits for an idle session, so the look never runs while a turn holds the
-    // trust map (FSWATCH-7).
+    // look needs. A line that arms waits in the queue while a turn runs (CMD-8) and reaches here
+    // once the session is idle, so the look never runs while a turn holds the trust map
+    // (FSWATCH-7).
     if let Some(argument) = argument_to(line, WATCH_COMMAND) {
         match crate::watch_command::parse(argument) {
             crate::watch_command::Asked::List => session.report_watches(),
             crate::watch_command::Asked::Stop(number) => {
                 session.stop_watch(number);
             }
-            crate::watch_command::Asked::Arm(path) => {
-                if session.status == Status::Idle {
-                    return Action::ArmWatch(path);
-                }
-                session.note(t!(watch_wait_for_the_turn));
-            }
+            crate::watch_command::Asked::Arm(path) => return Action::ArmWatch(path),
             crate::watch_command::Asked::Unreadable => session.note(t!(watch_command_takes)),
         }
         return Action::Redraw;
@@ -30912,7 +30908,6 @@ mod tests {
             ("/copy two", 1),
             ("/watch", 1),
             ("/watch stop 1", 1),
-            ("/watch everything", 1),
             ("/jobs", 1),
             ("/jobs stop job:1", 1),
             ("/jobs everything", 1),
@@ -45893,20 +45888,31 @@ mod tests {
     }
 
     /// Nothing is armed while a turn runs, so the first look never runs while the turn holds the
-    /// trust map (FSWATCH-7). Listing still answers.
+    /// trust map (FSWATCH-7). The line waits in the queue (CMD-8) and is carried out once the turn
+    /// ends, so the person does not type it again. Listing and stopping still answer at once.
     #[test]
-    fn typing_watch_with_a_path_while_a_turn_runs_says_to_wait() {
-        let mut session = Session::new("none");
-        session.status = Status::Working;
+    fn typing_watch_with_a_path_while_a_turn_runs_waits_for_the_turn() {
+        assert!(runs_while_working("/watch"));
+        assert!(runs_while_working("/watch stop 1"));
+        assert!(!runs_while_working("/watch notes.md"));
 
-        assert_eq!(
-            dispatch_command(&mut session, commanded("/watch notes.md")),
-            Action::Redraw
-        );
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/watch notes.md");
         assert!(session.watches().is_empty());
+        let said = said_under_the_turn(&session);
         assert!(
-            noted(&session, t!(watch_wait_for_the_turn)),
-            "the refusal said nothing"
+            said.len() == 1 && said[0].contains("waits for the turn to end"),
+            "/watch notes.md was carried out mid-turn: {said:?}"
+        );
+
+        session.complete("answered", Vec::new(), 0);
+        let taken = session
+            .take_queued_command()
+            .expect("/watch notes.md did not wait to be carried out");
+        assert_eq!(taken.line, "/watch notes.md");
+        assert_eq!(
+            dispatch_command(&mut session, taken),
+            Action::ArmWatch("notes.md".to_string())
         );
     }
 

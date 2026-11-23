@@ -48,7 +48,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
-| `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/watch` | `[<path> \| stop <n>]` | Watch a file, list the watched files, or stop one by its number |
 | `/schedule` | `[<subcommand>]` | List and manage the entries `bravebot schedule` keeps on this machine |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
@@ -804,18 +804,19 @@ clean`, spends all ten rounds and gives up, and nothing warns you in advance. Ev
 the whole conversation, so ten rounds of a long session cost more than ten ordinary turns.
 :::
 
-## `/watch [stop <n>]`
+## `/watch [<path> | stop <n>]`
 
-Lists the files this session is watching, and ends one by its number.
+Lists the files this session is watching, ends one by its number, and arms one on a path you type.
 
 ```
 /watch             # what is live, numbered
 /watch stop 2      # end that one, leaving the others
+/watch notes.md    # watch notes.md, armed by you
 ```
 
-**It arms none.** A watch is asked for in a prompt, and what a command is needed for is the half you
-cannot read off the transcript: which watches are live, and how to end one. See
-[Watches](../using/watches.md) for what a watch observes and what a firing puts in the conversation.
+Typed while a turn runs, `/watch <path>` waits in the queue and arms the watch once the turn ends.
+See [Watches](../using/watches.md) for what a watch observes, which paths can be armed and what a
+firing puts in the conversation.
 
 | Bound | Value |
 |---|---|
@@ -1786,7 +1787,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch` in every form but `/watch <path>`, `/outputs`, `/sessions`, `/panel`, `/sidebar`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, `/issues`, `/prs`, `/mcp` in the two forms that only list (the bare word and `list`), and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
