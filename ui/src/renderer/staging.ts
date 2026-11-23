@@ -13,7 +13,7 @@
  */
 
 import type { DropOutcome, DroppedFile } from '../shared/drops'
-import type { PastedPicture, PastedText } from '../shared/pastes'
+import { FOLDED_TEXT_MAX, type PastedPicture, type PastedText } from '../shared/pastes'
 import { summonMarker } from '../shared/summons'
 import { btwQuestion, isRecap } from '../shared/aside'
 import { scheduleArgument } from '../shared/schedule'
@@ -108,11 +108,11 @@ export function foldedMarker(number: number, lines: number): string {
  * Fold a pasted `text` behind a marker written at `caret`, numbered from the counter drops and
  * pictures share. A selection from `caret` to `end` is replaced by the marker, as the browser's own
  * paste replaces it. Line endings are normalised first, as the terminal's `normalised` does. `null`
- * for a paste below the threshold, which the browser inserts itself.
+ * for a paste below the threshold, or longer than `FOLDED_TEXT_MAX`, which the browser inserts.
  */
 export function stageText(staging: Staging, text: string, draft: string, caret: number, end = caret): StagedPaste | null {
   const normal = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  if (normal.split('\n').length - 1 < FOLD_AT_NEWLINES) return null
+  if (normal.split('\n').length - 1 < FOLD_AT_NEWLINES || normal.length > FOLDED_TEXT_MAX) return null
   const made = staging.made + 1
   const lines = linesIn(normal)
   const marker = foldedMarker(made, lines)

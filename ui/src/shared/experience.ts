@@ -1,5 +1,5 @@
 import { parseProviderPreferences, type ProviderPreferences } from './model-preferences'
-import type { PastedText } from './pastes'
+import { FOLDED_TEXT_MAX, type PastedText } from './pastes'
 
 export interface ConversationPreferences {
   botSlug: string | null
@@ -46,7 +46,7 @@ function parseFolded(value: unknown[]): PastedText[] {
   return value.slice(0, 1000).flatMap((entry) => {
     const e = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {}
     if (typeof e.marker !== 'string' || e.marker.length === 0 || e.marker.length > 200) return []
-    if (typeof e.text !== 'string' || e.text.length > 200000 || !counted(e.number) || !counted(e.lines)) return []
+    if (typeof e.text !== 'string' || e.text.length > FOLDED_TEXT_MAX || !counted(e.number) || !counted(e.lines)) return []
     return [{ marker: e.marker, text: e.text, number: e.number, lines: e.lines }]
   })
 }

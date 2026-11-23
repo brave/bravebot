@@ -558,7 +558,8 @@ start a line. `N` comes from the one counter a draft's drops and pasted pictures
 `#3`, and a number is not used again after a send. The marker is written at the caret as a pasted
 picture's is, and the words around it stay as they were. A paste over a selection writes the marker
 in its place, as the browser's own paste would. A shorter paste is left to the browser
-and lands whole. A paste the preload took as a picture is not read as text. The window has no shell
+and lands whole, and so is one longer than 200000 characters, the most a saved folded paste holds,
+so every folded paste survives a reopen. A paste the preload took as a picture is not read as text. The window has no shell
 mode, so PASTE-1's command line has no case here.
 
 The words are put back wherever the draft leaves the box: a send, a message queued behind a turn, a
@@ -591,7 +592,9 @@ opened. It sends nothing to a model and adds nothing to the transcript.
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/pastes.test.mjs test "a paste of fewer newlines than the threshold is left to the browser, and one at it folds" pins the threshold and the \r\n and \r forms; make check-ui runs the test)`
 `verified-by: by-construction (ui/scripts/pastes.test.mjs test "lines are counted as a person would count them" pins that a trailing newline starts no line; make check-ui runs the test)`
 `verified-by: by-construction (ui/scripts/pastes.test.mjs test "a folded paste lands at the caret and leaves the words around it as they were" pins where the marker is written; make check-ui runs the test)`
-`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a folded paste over a selection replaces the selected words" pins that the selection is replaced; make check-ui runs the test)``verified-by: by-construction (ui/scripts/pastes.test.mjs test "a drop, a picture and a folded paste share one counter, and a number never comes round again" pins the shared counter; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a folded paste over a selection replaces the selected words" pins that the selection is replaced; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a paste longer than a saved folded paste may be is left to the browser" pins the length cap and that the longest folded paste is saved whole; make check-ui runs the test)`
+`verified-by: by-construction (ui/scripts/pastes.test.mjs test "a drop, a picture and a folded paste share one counter, and a number never comes round again" pins the shared counter; make check-ui runs the test)`
 `verified-by: by-construction (ui/scripts/pastes.test.mjs test "unfolding puts back every copy of a marker, drops a deleted one, and leaves pictures alone" pins unfolding and that a folded paste is never a grant; make check-ui runs the test)`
 `verified-by: by-construction (ui/scripts/pastes.test.mjs test "the folded paste under the caret is found at its start, inside it and at its end" pins which marker the chord finds, and none on plain text or a picture's marker; make check-ui runs the test)`
 `verified-by: by-construction (ui/scripts/pastes.test.mjs test "a draft leaving the box carries the words, and what it names is found on the folded draft" pins the words a draft leaves with and the staged items found on the folded draft; make check-ui runs the test)`

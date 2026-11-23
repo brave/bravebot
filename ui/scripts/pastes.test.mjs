@@ -114,6 +114,14 @@ test('a folded paste over a selection replaces the selected words', () => {
   assert.equal(folded.caret, 'look at [Pasted text #1 +4 lines] '.length)
   assert.equal(staging.stageText(staging.EMPTY_STAGING, '1\n2\n3\n4', 'replace all', 0, 11).draft, '[Pasted text #1 +4 lines] ')
 })
+
+test('a paste longer than a saved folded paste may be is left to the browser', () => {
+  const at = (length) => '\n\n\n'.padEnd(length, 'x')
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, at(200000), '', 0).staging.staged[0].pasted.text.length, 200000)
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, at(200001), '', 0), null)
+  const kept = { marker: '[Pasted text #1 +4 lines]', text: at(200000), number: 1, lines: 4 }
+  assert.deepEqual(experience.parseConversation({ draft: kept.marker, folded: [kept] }).folded, [kept], 'the longest paste that folds is saved whole')
+})
 test('a drop, a picture and a folded paste share one counter, and a number never comes round again', () => {
   const drop = staging.stageDrop(staging.EMPTY_STAGING, [dropped('d')], '', 0)
   const shot = staging.stagePaste(drop.staging, picture('p'), drop.draft, drop.caret)
