@@ -108,6 +108,12 @@ test('a folded paste lands at the caret and leaves the words around it as they w
   assert.deepEqual(folded.staging.staged[0].pasted, { marker: '[Pasted text #1 +4 lines]', text: '1\n2\n3\n4', number: 1, lines: 4 })
 })
 
+test('a folded paste over a selection replaces the selected words', () => {
+  const folded = staging.stageText(staging.EMPTY_STAGING, '1\n2\n3\n4', 'look at OLD this', 8, 12)
+  assert.equal(folded.draft, 'look at [Pasted text #1 +4 lines] this')
+  assert.equal(folded.caret, 'look at [Pasted text #1 +4 lines] '.length)
+  assert.equal(staging.stageText(staging.EMPTY_STAGING, '1\n2\n3\n4', 'replace all', 0, 11).draft, '[Pasted text #1 +4 lines] ')
+})
 test('a drop, a picture and a folded paste share one counter, and a number never comes round again', () => {
   const drop = staging.stageDrop(staging.EMPTY_STAGING, [dropped('d')], '', 0)
   const shot = staging.stagePaste(drop.staging, picture('p'), drop.draft, drop.caret)

@@ -556,7 +556,10 @@ export function Transcript({
   /** Fold a long text paste behind a marker. False for a short one, which the browser inserts. */
   const pastedText = useEvent((text: string): boolean => {
     if (!live) return false
-    const next = stageText(live.staging ?? EMPTY_STAGING, text, draft, caret())
+    // A paste over a selection replaces it, as the browser's paste this one stands in for would.
+    const area = input.current?.shadowRoot?.querySelector('textarea')
+    const start = area?.selectionStart ?? draft.length
+    const next = stageText(live.staging ?? EMPTY_STAGING, text, draft, start, area?.selectionEnd ?? start)
     if (!next) return false
     restage(live.handle, next)
     return true

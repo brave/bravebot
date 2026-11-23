@@ -106,17 +106,21 @@ export function foldedMarker(number: number, lines: number): string {
 
 /**
  * Fold a pasted `text` behind a marker written at `caret`, numbered from the counter drops and
- * pictures share. Line endings are normalised first, as the terminal's `normalised` does. `null`
+ * pictures share. A selection from `caret` to `end` is replaced by the marker, as the browser's own
+ * paste replaces it. Line endings are normalised first, as the terminal's `normalised` does. `null`
  * for a paste below the threshold, which the browser inserts itself.
  */
-export function stageText(staging: Staging, text: string, draft: string, caret: number): StagedPaste | null {
+export function stageText(staging: Staging, text: string, draft: string, caret: number, end = caret): StagedPaste | null {
   const normal = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   if (normal.split('\n').length - 1 < FOLD_AT_NEWLINES) return null
   const made = staging.made + 1
   const lines = linesIn(normal)
   const marker = foldedMarker(made, lines)
   const pasted: PastedText = { marker, text: normal, number: made, lines }
-  return { staging: { made, staged: [...staging.staged, { marker, via: 'text', pasted }] }, ...writtenAt(draft, caret, [marker]) }
+  const start = Math.max(0, Math.min(caret, end, draft.length))
+  const stop = Math.max(start, Math.min(Math.max(caret, end), draft.length))
+  const kept = draft.slice(0, start) + draft.slice(stop)
+  return { staging: { made, staged: [...staging.staged, { marker, via: 'text', pasted }] }, ...writtenAt(kept, start, [marker]) }
 }
 
 /**
