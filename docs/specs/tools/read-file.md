@@ -416,6 +416,7 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::turn::a_read_repeated_after_its_result_was_dropped_sends_the_lines_again`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_shown_before_a_resume_sends_the_lines_again`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`
+`verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_window_keys_and_a_leading_dot_slash_changes_none`
 
 <a id="READ-9"></a>
 ### READ-9: a notebook the planner may read is shown as its cells, without their outputs

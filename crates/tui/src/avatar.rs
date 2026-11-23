@@ -694,9 +694,19 @@ pub fn look_now() -> Look {
     let (seed, seconds) = clock();
     let own = held(seed, seconds, crate::indicator::stilled());
     match poke::last() {
-        Some((motion, at)) => poked(own, motion, at.elapsed()),
+        Some((motion, at)) => poked(own, motion, since_click(at)),
         None => own,
     }
+}
+
+/// How long ago a click was made. A test holds it, so that a click is read at an age the test
+/// chooses and not at the age its own speed gave it.
+fn since_click(at: Instant) -> Duration {
+    #[cfg(all(test, unix))]
+    if let Some(held) = sampled::since_click() {
+        return held;
+    }
+    at.elapsed()
 }
 
 /// The seed this process draws and how many seconds it has been drawing it, which is what its
@@ -865,42 +875,64 @@ mod pinned {
 #[cfg(test)]
 pub(crate) use pinned::holding as with_face_held;
 
-/// A seed and a second held fixed for the calling thread, so a test can read the live path of
-/// [`look_now`] at any second of a process's life without waiting for it. Unix only, like the one
-/// test that reads it, which starts a child process.
+/// A seed, a second and the age of the last click, held fixed for the calling thread, so a test can
+/// read the live path of [`look_now`] at any second of a process's life, and a click at any age,
+/// without waiting for either. Unix only, like the one test that reads it, which starts a child
+/// process.
 #[cfg(all(test, unix))]
 mod sampled {
     use super::Look;
     use std::cell::Cell;
+    use std::time::Duration;
 
     type Clock = Option<(&'static str, f64)>;
 
     thread_local! {
         static SAMPLED: Cell<Clock> = const { Cell::new(None) };
+        static SINCE_CLICK: Cell<Option<Duration>> = const { Cell::new(None) };
     }
 
     pub(super) fn get() -> Clock {
         SAMPLED.with(Cell::get)
     }
 
-    /// Restores the previous clock when dropped, so a panic in the test leaves nothing behind.
-    struct Restore(Clock);
+    pub(super) fn since_click() -> Option<Duration> {
+        SINCE_CLICK.with(Cell::get)
+    }
+
+    /// Restores the previous clock and click age when dropped, so a panic in the test leaves
+    /// nothing behind.
+    struct Restore(Clock, Option<Duration>);
 
     impl Drop for Restore {
         fn drop(&mut self) {
             SAMPLED.with(|sampled| sampled.set(self.0));
+            SINCE_CLICK.with(|since| since.set(self.1));
         }
     }
 
     /// What [`super::look_now`] answers `seconds` into the life of a process whose seed is `seed`.
     pub(crate) fn look_at(seed: &'static str, seconds: f64) -> Look {
-        let _restore = Restore(SAMPLED.with(|sampled| sampled.replace(Some((seed, seconds)))));
+        looked_at(seed, seconds, None)
+    }
+
+    /// The same, with the last click made `since` ago and not as long ago as the test took to get
+    /// here.
+    pub(crate) fn look_after_click(seed: &'static str, seconds: f64, since: Duration) -> Look {
+        looked_at(seed, seconds, Some(since))
+    }
+
+    fn looked_at(seed: &'static str, seconds: f64, since: Option<Duration>) -> Look {
+        let _restore = Restore(
+            SAMPLED.with(|sampled| sampled.replace(Some((seed, seconds)))),
+            SINCE_CLICK.with(|held| held.replace(since)),
+        );
         super::look_now()
     }
 }
 
 #[cfg(all(test, unix))]
-pub(crate) use sampled::look_at as look_now_at;
+pub(crate) use sampled::{look_after_click as look_now_after_click, look_at as look_now_at};
 
 /// [`look_at`], or the face at rest where no motion was asked for. Taken as an argument so the rule
 /// can be checked without putting a process-wide switch in force under every other test.
@@ -1460,19 +1492,20 @@ mod tests {
                 .find(|(_, look)| **look == Look::default())
                 .map(|(at, _)| *at)
                 .expect("a second at which the schedule holds the face at rest");
-            // A click's blink lasts 200 ms of real time, so a stall between the click and the look
-            // could end it before it is read: click and look again, a few times, before the blink
-            // is called missing. A face asked to stand still never blinks, so it is held to all of
-            // them.
-            let clicked = (0..5)
-                .map(|_| {
-                    poke();
-                    look_now_at(SEED, at_rest)
-                })
-                .any(|look| look.blink);
+            // A click moves the face for a moment, unless no motion was asked for. The click's age
+            // is held, so the blink is read at once and again at an age well past a blink of the
+            // schedule, whatever the speed of this process. The second age is written out and not
+            // built from the click's own constant, so a click that lasts too long is caught.
+            poke();
+            let clicked = look_now_after_click(SEED, at_rest, Duration::ZERO);
             assert_eq!(
-                clicked, !asked,
+                clicked.blink, !asked,
                 "the face after a click, at a second its schedule holds it at rest"
+            );
+            let over = look_now_after_click(SEED, at_rest, Duration::from_millis(500));
+            assert!(
+                !over.blink,
+                "the face was still blinking half a second after the click"
             );
 
             println!("{CHECKED} {expectation}");

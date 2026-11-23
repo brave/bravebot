@@ -36802,8 +36802,8 @@ fn a_quarantined_read_says_nothing_about_vouching_for_a_command() {
 
     // The first request is the planner's, the second is the check that ran before the read could
     // be offered, and the last is the planner's follow-up that holds the read's result. The
-    // check's request holds neither the result nor a tool definition, so asserting on it, as this
-    // test once did, passes whatever the result says.
+    // check's request holds neither the result nor a tool definition, so an assertion on it would
+    // pass whatever the result says.
     let sent: Vec<String> = received.try_iter().collect();
     let follow_up = sent.last().expect("the planner's follow-up");
     let told = message_from(follow_up, "Result of read_file could not be shown to you");

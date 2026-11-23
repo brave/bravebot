@@ -6624,6 +6624,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// The window a read is recorded under (READ-8) tells two files the volume holds apart from one
+    /// file with two spellings. A step that joins two files, such as dropping a trailing dot or space
+    /// as a Windows host does, gives both one window, and a read of the second is then answered with
+    /// a notice about lines the planner was shown of the first. Every pair of names in the shared
+    /// list is made side by side in a directory and asked for its two keys. A pair the volume opens as
+    /// one file is skipped, as the pair test of the trust key in `tests/workspace.rs` skips it. The
+    /// leading `./` is the one thing the key takes off, so each name has the same key with it as
+    /// without.
+    #[test]
+    fn two_names_the_volume_holds_apart_have_two_window_keys_and_a_leading_dot_slash_changes_none()
+    {
+        let root = crate::testutil::scratch_dir(&format!("window-keys-{}", std::process::id()));
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("create scratch");
+            Workspace::new(&root).unwrap()
+        };
+        let names = crate::testutil::aliases::held_names();
+
+        let workspace = fresh();
+        for (name, _) in &names {
+            assert_eq!(
+                workspace.window_key(&format!("./{name}")),
+                workspace.window_key(name),
+                "a leading ./ changed the window of {name:?}"
+            );
+        }
+
+        let mut asked = 0;
+        for (index, (first, _)) in names.iter().enumerate() {
+            for (second, _) in &names[index + 1..] {
+                let workspace = fresh();
+                if !crate::testutil::aliases::two_files(&root, first, second) {
+                    continue;
+                }
+                asked += 1;
+                assert_ne!(
+                    workspace.window_key(first),
+                    workspace.window_key(second),
+                    "{first:?} and {second:?} are two files and have one window"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            asked > crate::testutil::aliases::least_pairs(),
+            "only {asked} pairs were two files: the alphabet is not being used"
+        );
+    }
+
     /// The name the workspace hands back and the key it asks the map about are both spelled from
     /// `/` on a host that separates with a backslash, and both keep the name as it arrived on one
     /// that does not: there a backslash is a legal filename byte, so the file is one at the top of
