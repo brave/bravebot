@@ -65,9 +65,14 @@ pub fn normalise(host: &str) -> String {
 }
 
 /// `host` as a record may carry it: the normalised name where it is a host name or an IP address,
-/// and `None` for anything else. A program chooses the name it asks a proxy for, so a record that
-/// held it verbatim would let a program put any bytes, a newline included, into a trail.
+/// and `None` for anything else, a host holding a byte outside ASCII included. [`normalise`] trims
+/// a non-ASCII space, so without the check a host such as `\u{3000}example.com` would be recorded
+/// as the name left after the trim. A program chooses the name it asks a proxy for, so a record
+/// that held it verbatim would let a program put any bytes, a newline included, into a trail.
 pub fn recordable(host: &str) -> Option<String> {
+    if !host.is_ascii() {
+        return None;
+    }
     let name = normalise(host);
     (valid_name(&name) || name.parse::<std::net::IpAddr>().is_ok()).then_some(name)
 }
@@ -167,11 +172,20 @@ impl HostList {
 
     /// The decision for `host`, from the name and nothing else.
     ///
+    /// A host holding a byte outside ASCII is refused as not listed, whatever the lists hold. An
+    /// entry reads ASCII only, so no entry can name such a spelling, and a resolver may read one as
+    /// an ASCII name a denied entry does name (`ｅxample.com` as `example.com`, `bücher.de` as
+    /// `xn--bcher-kva.de`). The check is on the host as the program wrote it, before [`normalise`]
+    /// trims a non-ASCII space or lowercases anything.
+    ///
     /// A host that is an IP address, in brackets or not, is compared in one form, an IPv4 address
     /// inside an IPv6 one (IPv4-mapped or NAT64) as that IPv4 address, so the spelling a program
     /// chose cannot pass a denied entry. Only an exact allowed entry names an address, as in
     /// [`Self::names_address`].
     pub fn decide(&self, host: &str) -> Verdict {
+        if !host.is_ascii() {
+            return Verdict::Refused(Refusal::NotListed);
+        }
         let host = normalise(host);
         let address = address_of(&host).map(|address| ipv4_form(address).to_string());
         let host = address.clone().unwrap_or(host);
@@ -320,6 +334,8 @@ mod tests {
             "x\u{1b}[2J.example",
             "a..b",
             "-.é",
+            "\u{3000}example.com",
+            "\u{a0}10.0.0.1",
         ] {
             assert_eq!(recordable(bad), None, "{bad:?}");
         }
@@ -563,6 +579,68 @@ mod tests {
         assert!(!cargo.decide("registry.npmjs.org").is_allowed());
         assert!(registry_hosts(Toolchain::Maven).is_empty());
     }
+
+    /// A host holding a byte outside ASCII is refused as not listed, whatever the lists hold. An
+    /// entry reads ASCII only, so no denied entry can name such a spelling, and a resolver may read
+    /// it as an ASCII name a denied entry does name. The regression it rejects is comparing the
+    /// spelling as written, where an allowed wildcard covers it and the denied name does not:
+    /// fullwidth `ｅxample.com` under `*.com`, `bücher.example` under `*.example`, a full stop
+    /// spelled U+3002 or U+FF0E, and a non-ASCII space that `normalise` trims away and so leaves
+    /// an allowed ASCII name.
+    #[test]
+    fn a_host_holding_a_byte_outside_ascii_is_refused_as_not_listed() {
+        let wildcards = list(
+            &["*.com", "*.example", "*.de", "example.com"],
+            &["example.com", "xn--bcher-kva.example", "xn--bcher-kva.de"],
+        );
+        let exact = list(&["example.com", "api.example.com"], &[]);
+        for host in [
+            "\u{ff45}xample.com",
+            "\u{ff25}XAMPLE.COM",
+            "b\u{fc}cher.example",
+            "B\u{dc}CHER.example",
+            "b\u{fc}cher.de",
+            "example\u{3002}com",
+            "example\u{ff0e}com",
+            "\u{3000}example.com",
+            "example.com\u{a0}",
+            "\u{a0}api.example.com.",
+            "a.\u{1f600}.com",
+        ] {
+            for list in [&wildcards, &exact] {
+                assert_eq!(
+                    list.decide(host),
+                    Verdict::Refused(Refusal::NotListed),
+                    "{host:?}"
+                );
+            }
+        }
+    }
+
+    /// A name in ASCII, an `xn--` name included, is decided by the entries as before: a denied
+    /// `xn--` entry refuses that name and no other, and an allowed wildcard still allows an `xn--`
+    /// name no denied entry names. The regression it rejects is a check that refuses every name
+    /// that looks international, which stops a program reaching a name a person listed.
+    #[test]
+    fn an_xn_name_is_decided_by_its_entries_like_any_other_ascii_name() {
+        let list = list(&["*.example", "*.de"], &["xn--bcher-kva.example"]);
+        assert_eq!(
+            list.decide("xn--bcher-kva.example"),
+            Verdict::Refused(Refusal::Denied(
+                HostRule::parse("xn--bcher-kva.example").unwrap()
+            ))
+        );
+        assert_eq!(
+            list.decide("XN--BCHER-KVA.example."),
+            Verdict::Refused(Refusal::Denied(
+                HostRule::parse("xn--bcher-kva.example").unwrap()
+            ))
+        );
+        for host in ["xn--tda.example", "xn--bcher-kva.de"] {
+            assert!(list.decide(host).is_allowed(), "{host}");
+        }
+    }
+
     #[test]
     fn a_denied_entry_overlapping_a_rule_at_all_denies_some_name_of_it() {
         let (list, invalid) = HostList::parse(
