@@ -140,6 +140,38 @@ test('manifest.started then manifest.done leaves the chat not running, with the 
   assert.equal(done.entries.at(-1).text, 'Listed 3 files.')
 })
 
+test('the plan card replaces the agent’s narration of the same steps, and the goal stays', async () => {
+  const seen = windowWith(live())
+  await running.planRun(seen.on, 's', 't', '/manifest t')
+  const steps = ['1. [act] write NOTES.md: new file, 1 line']
+  let state = heard(seen.state, { event: 'narration', session: 's', data: { text: 'Goal, as understood:\nWrite the notes.' } })
+  state = heard(state, { event: 'narration', session: 's', data: { text: `Plan, fixed before anything runs:\n  ${steps[0]}\n` } })
+  state = heard(state, { event: 'manifest.request', session: 's', data: { request: 1, task: 't', steps } })
+  assert.deepEqual(state.entries.map((entry) => entry.kind), ['user', 'plan-task', 'narration', 'manifest'])
+  assert.match(state.entries[2].text, /^Goal, as understood/)
+
+  // A narration whose lines are not the card's steps is kept.
+  let other = heard(seen.state, { event: 'narration', session: 's', data: { text: 'Plan, fixed before anything runs:\n  1. [act] write OTHER.md\n' } })
+  other = heard(other, { event: 'manifest.request', session: 's', data: { request: 1, task: 't', steps } })
+  assert.deepEqual(other.entries.map((entry) => entry.kind), ['user', 'plan-task', 'narration', 'manifest'])
+})
+
+const composer = load("export { queuedRow, queueNote } from './src/renderer/components/Composer'")
+
+test('a queued /manifest line is marked as a plan, and the caption does not call a command a turn', () => {
+  const prompt = composer.queuedRow({ prompt: 'hello', attachments: [], staged: [] })
+  const plan = composer.queuedRow({ prompt: '/manifest t', attachments: [], staged: [], manifest: 't' })
+  const schedule = composer.queuedRow({ prompt: '/schedule list', attachments: [], staged: [], schedule: 'list' })
+  assert.deepEqual(prompt, { text: 'hello', plan: false, command: false })
+  assert.deepEqual(plan, { text: '/manifest t', plan: true, command: true })
+  assert.deepEqual(schedule, { text: '/schedule list', plan: false, command: true })
+  assert.equal(composer.queueNote([prompt], false), 'Each starts a turn of its own after this one')
+  assert.equal(composer.queueNote([prompt, plan], false), 'Each starts after this one')
+  assert.equal(composer.queueNote([plan], true), 'Held until you resume')
+  const markup = readFileSync('src/renderer/components/Composer.tsx', 'utf8')
+  assert.match(markup, /\{plan && <span className="tray-mark plan-task-mark">Plan<\/span>\}/)
+})
+
 test('every composer path and the queue start a /manifest line as a run, never as a prompt', () => {
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
   for (const name of ['const queueDraft', 'const submit', 'const interjectDraft']) {

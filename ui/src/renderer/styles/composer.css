@@ -444,6 +444,8 @@
 }
 .tray-action { flex: none; }
 .tray-row { display: flex; align-items: center; gap: var(--leo-spacing-m); min-height: var(--hit); }
+/* A queued `/manifest` line carries the plan mark its row in the transcript will carry. */
+.tray-row .tray-mark { flex: none; align-self: center; margin: 0; }
 .tray-text {
   flex: 1;
   min-width: 0;

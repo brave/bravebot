@@ -8,7 +8,8 @@
 //   no prompt bubble, and the session list then holds a "Plan run" row;
 // - queued: a `/manifest` line typed while a turn is held waits in the queue, and starts once the
 //   turn ends;
-// - declined: the plan is declined, nothing is written, and the row that ends the run shows the plan.
+// - declined: the plan is declined, nothing is written, and the run ends on one caption line under
+//   the decided card, which still shows the plan.
 //
 // Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`).
 // Pass `--theme dark` or `--theme light` to take the screenshots in that theme.
@@ -107,6 +108,15 @@ try {
   assert.match(await card.locator('.manifest-steps').innerText(), /plan-alpha\.md/, 'the card lists the step')
   assert.equal(await page.locator('.plan-task', { hasText: 'TASK-alpha' }).count(), 1, 'the task is drawn as a plan row')
   assert.equal(await promptBubbles('TASK-alpha'), 0, 'the task is no prompt bubble')
+  // The card lists the steps, so the agent's narration of them is not drawn as well; the goal is.
+  assert.ok(!(await transcript()).includes('Plan, fixed before anything runs'), 'the narrated plan gave way to the card')
+  assert.ok((await transcript()).includes('Goal, as understood'), 'the goal stays')
+  // At 1200×800 the card's yes sits above the composer once the transcript is at its end.
+  await page.locator('.entries').evaluate((entries) => entries.scrollTo({ top: entries.scrollHeight, behavior: 'instant' }))
+  await page.waitForTimeout(200)
+  const yes = await card.locator(APPROVE_BUTTON).boundingBox()
+  const box = await page.locator('footer.composer').boundingBox()
+  assert.ok(yes && box && yes.y + yes.height <= box.y, `Run this plan is above the composer: ${JSON.stringify({ yes, box })}`)
   await page.screenshot({ path: join(output, `manifest-plan-${theme}.png`) })
   await approve(card)
   await approveWrites(async () => (await rows('plan-reply')) === 1)
@@ -116,6 +126,17 @@ try {
   // The reply is marked as the run's result, apart from the agent's own words (MANIFEST-11).
   assert.match(await page.locator('.plan-reply .plan-reply-head').last().textContent(), /run result/)
   assert.match(await page.locator('.plan-reply').last().innerText(), /Ran the 1 step/)
+  // The result wraps inside its box, and starts where the head and the foot start.
+  const fit = await page.locator('.plan-reply').last().evaluate((reply) => {
+    const left = (selector) => {
+      const element = reply.querySelector(selector)
+      return element.getBoundingClientRect().left + parseFloat(getComputedStyle(element).paddingLeft)
+    }
+    const preview = reply.querySelector('.preview')
+    return { overflow: preview.scrollWidth - preview.clientWidth, text: left('.preview'), head: left('.plan-reply-head'), foot: left('.plan-reply-foot') }
+  })
+  assert.ok(fit.overflow <= 0, `the result runs off its box: ${JSON.stringify(fit)}`)
+  assert.ok(Math.abs(fit.text - fit.head) < 1 && Math.abs(fit.text - fit.foot) < 1, `the result's left edge: ${JSON.stringify(fit)}`)
   await showSessions(page)
   await until(async () => (await page.locator('.session .plan-run').count()) > 0, 'the session list holds a Plan run row')
   await page.screenshot({ path: join(output, `manifest-approved-${theme}.png`) })
@@ -133,6 +154,8 @@ try {
   assert.equal(await page.locator('.confirm.manifest', { hasText: 'TASK-beta' }).count(), 0, 'no plan while the turn runs')
   assert.equal(await page.locator('.plan-task', { hasText: 'TASK-beta' }).count(), 0, 'no plan row while it waits')
   assert.equal(rounds.length, asked, 'the planner was not asked while the turn runs')
+  assert.equal(await queue.locator('.tray-row .plan-task-mark').innerText(), 'PLAN', 'the waiting line carries the plan mark')
+  assert.equal(await queue.locator('.tray-note').innerText(), 'Each starts after this one', 'the caption calls no plan run a turn')
   await page.screenshot({ path: join(output, `manifest-queued-${theme}.png`) })
   release()
   const second = page.locator('.confirm.manifest', { hasText: 'TASK-beta' })
@@ -150,14 +173,16 @@ try {
   const third = page.locator('.confirm.manifest', { hasText: 'TASK-gamma' })
   await third.waitFor({ state: 'visible', timeout: 60000 })
   await third.locator(REJECT_BUTTON).click()
-  const ended = page.locator('.plan-ended').last()
+  // The decided card above shows the plan, so the ending is one caption line with no fold.
+  const ended = page.locator('.plan-ended-note').last()
   await ended.waitFor({ state: 'visible', timeout: 60000 })
-  assert.match(await ended.innerText(), /The plan was declined, so nothing ran/)
-  await ended.locator('summary', { hasText: 'The plan' }).click()
-  assert.match(await ended.locator('.plan-text').first().innerText(), /plan-gamma\.md/, 'the ended row shows the declined plan')
+  assert.match(await ended.innerText(), /^Nothing was read or written\. Saved as run \S+\.$/)
+  assert.equal(await page.locator('.plan-ended').count(), 0, 'no plan-ended box for a declined plan')
+  await page.screenshot({ path: join(output, `manifest-declined-${theme}.png`) })
+  await third.getByText('Show', { exact: true }).click()
+  assert.match(await third.locator('.manifest-steps').innerText(), /plan-gamma\.md/, 'the decided card still shows the declined plan')
   assert.ok(!existsSync(join(project, file('gamma'))), 'a declined plan wrote nothing')
   assert.equal(await promptBubbles('TASK-gamma'), 0, 'the declined task is no prompt bubble')
-  await page.screenshot({ path: join(output, `manifest-declined-${theme}.png`) })
 
   assert.deepEqual(errors, [])
   console.log(`PASS: /manifest approved, queued while a turn ran, and declined. Screenshots in ${output}/manifest-*-${theme}.png`)

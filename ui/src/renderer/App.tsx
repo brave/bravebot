@@ -1,6 +1,6 @@
 import { SettingsView, type SettingsPage } from './components/SettingsView'
 import { BotDetails } from './components/BotDetails'
-import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
+import { queuedRow, type ComposerFooterProps, type ProjectChoice } from './components/Composer'
 import { botHistory, homeConversation } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -1301,7 +1301,7 @@ export function App(): React.JSX.Element {
         onStaging={(handle, staging) => updateSession(handle, (old) => old ? { ...old, staging } : old)}
         queuePaused={live?.queuePaused ?? false}
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
-        queued={live?.queued?.map((message) => message.prompt) ?? []}
+        queued={live?.queued?.map(queuedRow) ?? []}
         onInterject={interjectDraft}
         onEnhance={() => { const handle = handleRef.current; if (handle) void enhancement.enhance(handle) }}
         onStopEnhance={() => { const handle = handleRef.current; if (handle) enhancement.stop(handle) }}

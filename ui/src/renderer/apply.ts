@@ -101,7 +101,7 @@ export function apply(
       case 'server.request':
         return { ...old, entries: [...old.entries, t.askedServer(message.data)] }
       case 'manifest.request':
-        return { ...old, entries: [...old.entries, t.askedManifest(message.data, t.narrowing(old.rules))] }
+        return { ...old, entries: [...t.withoutNarratedPlan(old.entries, message.data.steps), t.askedManifest(message.data, t.narrowing(old.rules))] }
       case 'exposure.request':
         return { ...old, entries: [...old.entries, t.askedExposure(message.data)] }
       case 'mcp-server.request':
