@@ -46,6 +46,11 @@ export interface Queued {
    * (CMD-16). It is asked of the bridge when the turn ends and is never sent as a prompt.
    */
   aside?: 'recap'
+  /**
+   * Set for a typed `/manifest` line that waits for the turn, which the bridge refused while it ran:
+   * its task. It starts a plan run when the turn ends and is never sent as a prompt (MANIFEST-9).
+   */
+  manifest?: string
 }
 
 /** A line sent into the running turn, kept as written until the turn says it has read it. */
