@@ -102,18 +102,38 @@ try {
   assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').textContent(), '/test/.bravebot/logs')
   await diagnostics.getByText('Logs are written here when something fails. The folder may be empty until then.', { exact: true }).waitFor()
   await diagnostics.scrollIntoViewIfNeeded()
-  for (const theme of ['light', 'dark']) {
-    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
-    await page.waitForTimeout(300)
-    await diagnostics.screenshot({ path: join(output, `01-log-directory-${theme}.png`) })
+  // The log box comes first, then the sentence, then the button that sentence is about.
+  assert.deepEqual(await diagnostics.evaluate(block => [...block.children].map(child => child.tagName === 'DIV' ? child.className : child.tagName)),
+    ['H3', 'DL', 'P', 'settings-actions'])
+  // The value's paragraphs carry no outer margin, so the box padding is even and the first line
+  // shares the label's baseline; the path and the note are one spacing step apart.
+  const margins = () => diagnostics.locator('dd.settings-log > p').evaluateAll(ps => ps.map(p => [getComputedStyle(p).marginTop, getComputedStyle(p).marginBottom]))
+  const step = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--leo-spacing-m').trim())
+  assert.deepEqual(await margins(), [['0px', '0px'], [step, '0px']])
+  assert.equal(await diagnostics.locator('.settings-log-note').evaluate(p => getComputedStyle(p).color),
+    await page.evaluate(() => { const probe = document.createElement('span'); probe.style.color = 'var(--ink-secondary)'; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color }),
+    'the note under the path is in secondary ink')
+  const shoot = async name => {
+    for (const theme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
+      await page.waitForTimeout(300)
+      await diagnostics.screenshot({ path: join(output, `${name}-${theme}.png`) })
+    }
+    await page.emulateMedia({ colorScheme: null, reducedMotion: 'reduce' })
   }
-  await page.emulateMedia({ colorScheme: null, reducedMotion: 'reduce' })
+  await shoot('01-log-directory')
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.report.logs.writing = false })
   await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
   await diagnostics.getByText('This session keeps nothing, so no log is written.', { exact: true }).waitFor()
   assert.equal(await diagnostics.locator('[data-test="settings-log-directory"]').count(), 0, 'a process that writes no log names no folder')
-  await diagnostics.screenshot({ path: join(output, '01-log-not-written.png') })
-  await app.evaluate(() => { globalThis.agentSettingsFixture.state.report.logs.writing = true })
+  assert.deepEqual(await margins(), [['0px', '0px']])
+  await shoot('01-log-not-written')
+  await app.evaluate(() => { const { logs } = globalThis.agentSettingsFixture.state.report; logs.directory = null; logs.writing = false })
+  await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
+  await diagnostics.getByText('No state directory is set, so no log is kept.', { exact: true }).waitFor()
+  assert.deepEqual(await margins(), [['0px', '0px']])
+  await shoot('01-log-no-state-directory')
+  await app.evaluate(() => { const { logs } = globalThis.agentSettingsFixture.state.report; logs.directory = '/test/.bravebot/logs'; logs.writing = true })
   await diagnostics.getByRole('button', { name: 'Refresh diagnostics' }).click()
   await diagnostics.locator('[data-test="settings-log-directory"]').waitFor()
   // The model service and the accounts are the Providers page, the second in the list.
