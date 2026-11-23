@@ -861,6 +861,7 @@ the list from `also` on `mcp-call.request`.
 `verified-by: bravebot_agent::mcp::answer_two_is_not_offered_or_recorded_for_a_call_asked_for_private_arguments`
 `verified-by: bravebot_tui::confirm::mcp::a_call_asked_for_private_arguments_is_drawn_with_its_own_reason_for_offering_no_lasting_answer`
 `verified-by: bravebot_approval::lib::a_call_asked_for_private_arguments_says_so_and_a_declaration_wins`
+`verified-by: bravebot_cli::plain::a_call_draws_the_servers_description_behind_the_margin_with_its_escape_pictured`
 `verified-by: bravebot_ui_bridge::acp::a_call_asked_for_private_arguments_reads_to_the_editor_with_its_reason`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`

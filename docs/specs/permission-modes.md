@@ -83,6 +83,9 @@ decision somebody made; this one is what holds when they have made none.
 `verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
 `verified-by: bravebot_cli::auto_start::the_flag_opens_a_session_in_auto_and_a_start_without_it_asks`
 `verified-by: bravebot_cli::running::a_one_shot_run_with_no_flag_and_no_setting_opens_asking`
+`verified-by: bravebot_cli::scheduled_runs::a_scheduled_run_opens_asking_where_the_home_settings_open_sessions_in_auto`
+`verified-by: bravebot_cli::skill_eval::a_run_that_would_write_is_refused_where_the_home_settings_open_sessions_in_auto`
+`verified-by: bravebot_cli::auto_start::only_the_terminal_client_and_the_windows_bridge_read_the_setting`
 
 <a id="MODE-2"></a>
 ### MODE-2: accepting edits answers the write prompt and no other, except where the write would create a credential or lands on a protected path
