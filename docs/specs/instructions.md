@@ -573,6 +573,7 @@ change of the file.
 `verified-by: bravebot_agent::turn::a_style_in_force_is_not_sent_to_the_aside_the_goal_judge_or_the_summariser`
 `verified-by: bravebot_agent::aside::a_question_is_sent_under_its_own_system_prompt_and_no_style`
 `verified-by: bravebot_agent::compact::the_summariser_is_sent_under_its_own_system_prompt_and_no_style`
+`verified-by: bravebot_agent::manifest::a_style_in_force_is_not_sent_to_the_planner_of_a_manifest_run`
 
 <a id="INSTR-13"></a>
 ### INSTR-13: a project's skill directories are read least specific first, at the root only
