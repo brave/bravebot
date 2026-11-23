@@ -232,7 +232,9 @@ try {
   await copyWords('first line\nsecond line')
   await reopened.focus()
   await menuPaste()
-  await page.waitForTimeout(500)
+  // The paste resolves in the main process before the renderer has handled it: wait for the field.
+  const shortBy = Date.now() + 10000
+  while ((await reopened.inputValue()) !== 'first line\nsecond line' && Date.now() < shortBy) await new Promise((resolve) => setTimeout(resolve, 50))
   assert.equal(await reopened.inputValue(), 'first line\nsecond line', 'a short text paste is inserted whole')
   assert.equal(await textChips.count(), 0)
   await reopened.fill('')
