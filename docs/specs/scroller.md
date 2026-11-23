@@ -289,6 +289,7 @@ under Known costs rather than left to be found.
 `verified-by: bravebot_tui::render::the_footer_says_which_match_the_view_is_on_after_it_has_moved`
 `verified-by: bravebot_tui::render::two_matches_in_one_quarantined_row_are_counted_as_two`
 `verified-by: bravebot_tui::render::a_quarantined_row_is_marked_in_the_scroller_as_it_is_in_the_transcript`
+`verified-by: bravebot_tui::render::a_quarantined_row_carries_the_margin_under_full_detail_as_under_a_preview`
 
 
 <a id="SCROLL-6"></a>
@@ -319,6 +320,7 @@ side, keeping a copy, or grepping the lot, is a text editor's job, and the user 
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_never_read_back`
 `verified-by: bravebot_tui::editor::showing_a_transcript_reads_no_file_back`
 `verified-by: bravebot_tui::editor::the_file_goes_when_the_editor_exits`
+`verified-by: by-construction (editor::show in crates/tui/src/editor.rs returns Result<(), Failure>, so no text the editor wrote can leave it; its one caller, show_transcript in crates/tui/src/app/terminal.rs, uses that result only to say a failure, and the scan above holds the chain from the key to the written file free of a read)`
 
 
 <a id="SCROLL-7"></a>
@@ -432,6 +434,7 @@ left out. Without a key the rest is reachable only by rerunning the command or o
 `verified-by: bravebot_tui::state::a_session_holds_a_bounded_number_of_lines_for_expansion`
 `verified-by: bravebot_tui::state::a_session_holds_twenty_thousand_lines_for_expansion_and_no_more`
 `verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
+`verified-by: bravebot_agent::turn::a_result_of_more_than_five_hundred_lines_is_kept_for_expansion_to_five_hundred`
 
 ## Known costs
 

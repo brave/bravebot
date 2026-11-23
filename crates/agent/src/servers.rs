@@ -4284,6 +4284,114 @@ mod tests {
         assert!(note.contains("state\u{241b}[2J"), "{note:?}");
     }
 
+    /// SERVERS-10: a server whose own directory cannot be made is not started, and the one note
+    /// says which server, where the directory was to be made and the reason the system gave.
+    /// `start_under` takes no way to put a question to the person, so none is put at this step.
+    ///
+    /// Rejects an error from making the directory being ignored, the note naming the directory
+    /// keyed by the digest instead of the `mcp-home` directory that could not be made, and the note
+    /// leaving the reason out.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_whose_own_directory_cannot_be_made_is_not_started_and_the_note_says_where_and_why()
+    {
+        let root = scratch("server-home-not-made");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::write(state.join("mcp-home"), "").expect("a file where the directory goes");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let declared = digested(&["weather-mcp"]);
+
+        // The directory itself: the error names the one that stands in the way, and says why.
+        let Err((place, error)) = own_home(&home, &declared) else {
+            panic!("a directory was made where a file stands in the way");
+        };
+        assert_eq!(place, state.join("mcp-home"));
+        assert!(
+            !error.to_string().trim().is_empty(),
+            "the error says nothing: {error:?}"
+        );
+        // The same state directory with nothing in the way gives the directory keyed by the digest.
+        let open = root.join("open");
+        std::fs::create_dir_all(&open).expect("open");
+        let (made, throwaway) = own_home(
+            &Home {
+                directory: Some(open.clone()),
+                writable: true,
+            },
+            &declared,
+        )
+        .expect("a directory can be made where nothing is in the way");
+        assert_eq!(made, mcp::server_home(&open, &declared));
+        assert!(made.is_dir(), "{made:?} was not made");
+        assert!(throwaway.is_none(), "a throwaway directory was made");
+
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let program = installed(&root.join("bin"), "weather-mcp");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work),
+            declared,
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+            allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
+            apply_arguments: Default::default(),
+            covered_tools: Default::default(),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, None),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert!(started.is_empty(), "the server started: {notes:?}");
+        let sentinel = "REASON-SENTINEL";
+        let drawn = t!(
+            servers_no_home,
+            alias = "weather",
+            path = crate::confirm::shown_path(&state.join("mcp-home")),
+            reason = sentinel
+        )
+        .to_string();
+        let (before, after) = drawn.split_once(sentinel).expect("the reason is drawn");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        let reason = notes[0]
+            .strip_prefix(before)
+            .and_then(|rest| rest.strip_suffix(after))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the note does not name the server and the directory the way {drawn:?} does: {:?}",
+                    notes[0]
+                )
+            });
+        assert!(
+            !reason.trim().is_empty(),
+            "the note gives no reason: {:?}",
+            notes[0]
+        );
+    }
+
     /// A checkout can make `.bravebot/settings.json` a link to a file inside it whose name holds
     /// control characters, and the question names the file the link leads to. The question is
     /// printed to the terminal as it is, so the name is drawn when it is made.
@@ -4536,6 +4644,85 @@ mod tests {
         assert!(person.screen.is_empty());
     }
 
+    /// SERVERS-13, SERVERS-1: a request nobody declared starts nothing in any mode, bypassing
+    /// included. `weather` is declared and a checkout asks for `docs`, which is not, so skipping the
+    /// questions has no declaration to answer them for. At a terminal, in a one-shot run and
+    /// bypassing the request is reported once and starts nothing, draws no question and records
+    /// nothing. The control asks for `weather`, which bypassing starts unasked, so the refusal is
+    /// the missing declaration's and not a platform that cannot start anything.
+    ///
+    /// Rejects a bypass that resolves an undeclared request to a declared server.
+    #[test]
+    fn a_request_nobody_declared_starts_nothing_in_any_mode_bypassing_included() {
+        for asking in [Asking::Person, Asking::OneShot, Asking::Bypass] {
+            let (home, project, declaration) =
+                declared("cli-servers-undeclared-modes", &["/bin/cat"]);
+            let file = project.join(".bravebot/settings.json");
+            let requested = vec![(file.clone(), "docs".to_string())];
+
+            let settled = settled_on_asking(
+                &requested,
+                &project,
+                &home,
+                asking,
+                "1\n",
+                Prelude::current(),
+            );
+
+            assert!(
+                settled.plans.is_empty(),
+                "{asking:?} started a server nobody declared: {:?}",
+                started(&settled)
+            );
+            assert_eq!(
+                settled.notes,
+                vec![
+                    t!(
+                        servers_not_declared,
+                        file = ".bravebot/settings.json",
+                        alias = "docs"
+                    )
+                    .to_string()
+                ],
+                "{asking:?}"
+            );
+            assert_eq!(settled.screen, "", "{asking:?} drew a question");
+            assert!(
+                !Approvals::read(&home).approves(&declaration.digest()),
+                "{asking:?} recorded an approval"
+            );
+            assert!(
+                !mcp::approvals_file(&home).exists(),
+                "{asking:?} wrote an approvals file"
+            );
+            assert_eq!(
+                recorded_projects(&home),
+                "",
+                "{asking:?} recorded a project"
+            );
+
+            let requested = vec![(file, "weather".to_string())];
+            let settled = settled_on_asking(
+                &requested,
+                &project,
+                &home,
+                asking,
+                "1\n",
+                Prelude::current(),
+            );
+            let expected = match asking {
+                Asking::OneShot => Vec::new(),
+                _ => vec!["weather"],
+            };
+            assert_eq!(
+                started(&settled),
+                expected,
+                "the control, {asking:?}: {:?}",
+                settled.notes
+            );
+        }
+    }
+
     #[test]
     fn an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one() {
         let (home, project, declaration) = declared("cli-servers-standing", &["weather-mcp"]);
@@ -4657,6 +4844,91 @@ mod tests {
         assert!(settled.screen.is_empty(), "{}", settled.screen);
         assert!(!mcp::approvals_file(&home).exists());
         assert_eq!(recorded_projects(&home), "");
+    }
+
+    /// SERVERS-13: skipping the question about a server does not widen what the server is started
+    /// with. This process holds a value for every name it is asked about, and the environment the
+    /// plan carries is the names the declaration lists and the values it stores, the same as where
+    /// a person answered the question. The regression it rejects is a bypassed start that hands the
+    /// server more of this process's environment than the declaration names.
+    #[test]
+    fn a_server_started_in_bypass_gets_the_named_variables_and_the_stored_values_and_no_more() {
+        let root = scratch("cli-servers-bypass-environment");
+        let home = root.join("home");
+        let project = root.join("project");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+        let bin = root.join("bin");
+        installed(&bin, "weather-mcp");
+        let stored = [("WEATHER_TOKEN".to_string(), "stored".to_string())].into();
+        let declaration =
+            Declaration::stdio(words(&["weather-mcp"]), words(&["PATH", "REGION"]), None)
+                .and_then(|declaration| declaration.storing(stored))
+                .expect("a declaration");
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &declaration);
+        std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("mcp.json");
+        let requested = vec![(
+            project.join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+        let managed = Managed::at(&managed_beside(&home));
+        let state = Home {
+            directory: Some(home.clone()),
+            writable: true,
+        };
+        let path = bin.as_os_str().to_owned();
+        let asked = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        let environment = |name: &str| {
+            asked.borrow_mut().insert(name.to_string());
+            Some(match name {
+                "PATH" => path.clone(),
+                other => OsString::from(format!("from {other}")),
+            })
+        };
+        let expected = Variables::new()
+            .with("PATH", &bin)
+            .with("REGION", "from REGION")
+            .with("WEATHER_TOKEN", "stored");
+
+        // Bypass first: it records nothing, so the person's yes after it is still asked for.
+        for (asking, typed) in [(Asking::Bypass, ""), (Asking::Person, "1\n")] {
+            let mut person = Person {
+                answers: typed.as_bytes(),
+                screen: Vec::new(),
+                present: true,
+            };
+            let mut notes = Vec::new();
+            let plans = settle(
+                &requested,
+                &project,
+                &state,
+                &managed,
+                asking,
+                &mut person,
+                &environment,
+                Prelude::current(),
+                &mut notes,
+            );
+
+            assert_eq!(plans.len(), 1, "{asking:?}: {notes:?}");
+            let Plan::Stdio { variables, .. } = &plans[0].1 else {
+                panic!("{asking:?}: a stdio plan");
+            };
+            assert_eq!(variables, &expected, "{asking:?}");
+            assert_eq!(
+                person.screen.is_empty(),
+                asking == Asking::Bypass,
+                "{asking:?}: the question was drawn or skipped as the mode says"
+            );
+        }
+        let asked = asked.into_inner();
+        assert!(
+            asked
+                .iter()
+                .all(|name| ["PATH", "PATHEXT", "REGION"].contains(&name.as_str())),
+            "this process's environment was read for a name the declaration does not list: {asked:?}"
+        );
     }
 
     /// An administrator's refusal is not a question put to the person running the program, so no
@@ -5654,6 +5926,18 @@ mod tests {
         typed: &str,
         prelude: Option<Prelude>,
     ) -> Settled {
+        settled_on_asking(requested, project, home, Asking::Person, typed, prelude)
+    }
+
+    /// [`settled_on`], the session asking as `asking` says.
+    fn settled_on_asking(
+        requested: &[(PathBuf, String)],
+        project: &Path,
+        home: &Path,
+        asking: Asking,
+        typed: &str,
+        prelude: Option<Prelude>,
+    ) -> Settled {
         let home = Home {
             directory: Some(home.to_path_buf()),
             writable: true,
@@ -5670,7 +5954,7 @@ mod tests {
             project,
             &home,
             &Managed::default(),
-            Asking::Person,
+            asking,
             &mut person,
             &environment,
             prelude,
@@ -5703,6 +5987,63 @@ mod tests {
 
         let settled = settled_on(&requested, &project, &home, "1\n", Prelude::current());
         assert_eq!(started(&settled), vec!["weather"], "{:?}", settled.notes);
+    }
+
+    /// SERVERS-13, MCP-3: a stdio server nothing can confine is not started in any mode, and
+    /// skipping the prompts is one of them. At a terminal, in a one-shot run and bypassing, a
+    /// platform with no confinement starts nothing, draws no question, says so once and records no
+    /// approval. The control is the same declaration where a confinement base exists, which
+    /// bypassing starts unasked, so the refusal is the platform's and not the mode's.
+    #[test]
+    fn bypassing_does_not_start_a_server_nothing_can_confine() {
+        for asking in [Asking::Person, Asking::OneShot, Asking::Bypass] {
+            let (home, project, declaration) =
+                declared("cli-servers-unconfinable-modes", &["/bin/cat"]);
+            let requested = vec![(
+                project.join(".bravebot/settings.json"),
+                "weather".to_string(),
+            )];
+
+            let settled = settled_on_asking(&requested, &project, &home, asking, "1\n", None);
+
+            assert!(
+                settled.plans.is_empty(),
+                "{asking:?} started a server nothing can confine"
+            );
+            assert_eq!(settled.screen, "", "{asking:?} drew a question");
+            assert_eq!(
+                settled.notes,
+                vec![t!(servers_no_confinement_here, alias = "weather").to_string()],
+                "{asking:?}"
+            );
+            assert!(
+                !Approvals::read(&home).approves(&declaration.digest()),
+                "{asking:?} recorded an approval"
+            );
+            assert!(
+                !mcp::approvals_file(&home).exists(),
+                "{asking:?} wrote an approvals file"
+            );
+
+            let settled = settled_on_asking(
+                &requested,
+                &project,
+                &home,
+                asking,
+                "1\n",
+                Prelude::current(),
+            );
+            let expected = match asking {
+                Asking::OneShot => Vec::new(),
+                _ => vec!["weather"],
+            };
+            assert_eq!(
+                started(&settled),
+                expected,
+                "the control, {asking:?}: {:?}",
+                settled.notes
+            );
+        }
     }
 
     /// A name a checkout wrote is drawn at the person's terminal. Left bare, a name with an escape
@@ -7622,6 +7963,192 @@ while {answering}"#
         assert!(!approvals.approves(&redirected.declared.digest()));
     }
 
+    /// SERVERS-11: a server the person moved at its handshake whose new address redirects it again
+    /// is not asked about a second time. The title is drawn once, the second hop is refused with a
+    /// note that names the server, nothing is sent to the third server, the server is not started
+    /// and the declaration stays as it was. The regression it rejects is a second hop put through
+    /// the same question, which a server could repeat to walk a person's yes to an address they
+    /// were never shown.
+    #[test]
+    fn a_handshake_redirected_again_off_where_it_was_moved_is_refused_and_not_asked_about() {
+        let (third_url, third) = serving(weather, String::new());
+        let (moved_to, second) = serving(redirecting, third_url.clone());
+        let (declared_url, first) = serving(redirecting, moved_to.clone());
+        let redirected = redirected_at(
+            "cli-servers-move-twice",
+            |declared| declared,
+            declared_url,
+            moved_to,
+            first,
+            second,
+        );
+
+        let (reached, screen) =
+            reached_redirected(&redirected, Asking::Person, true, true, "y\ny\n");
+
+        assert_eq!(
+            screen.matches(t!(mcp_move_title)).count(),
+            1,
+            "the second hop was put to the person: {screen}"
+        );
+        assert!(
+            reached.aliases().is_empty(),
+            "a server redirected twice was started: {:?}",
+            reached.aliases()
+        );
+        assert_eq!(
+            reached.notes,
+            vec![t!(mcp_move_again, alias = "weather").to_string()]
+        );
+        let sent: Vec<String> = third.try_iter().collect();
+        assert!(
+            sent.is_empty(),
+            "something was sent where the second hop pointed: {sent:?}"
+        );
+        let second: Vec<String> = redirected.second.try_iter().collect();
+        assert!(
+            second
+                .first()
+                .is_some_and(|body| body.contains(r#""initialize""#)),
+            "the first hop was not followed, so the rows above prove nothing: {second:?}"
+        );
+        assert_eq!(
+            declared_in(&redirected.home),
+            redirected.declared,
+            "the declaration was rewritten"
+        );
+        assert!(
+            Approvals::read(&redirected.home).approves(&redirected.declared.digest()),
+            "the declaration lost its approval"
+        );
+    }
+
+    /// SERVERS-11, SERVERS-12: a yes to a move does not start the server at a destination the
+    /// machine's managed layer denies. The declaration is at `127.0.0.1` and its handshake points
+    /// at `localhost`, which the layer denies, so the person is asked, the answer is yes, and the
+    /// note is the layer's own reason. Nothing is sent where the reply pointed, the server is not
+    /// started and nothing is written. The control is the same layer over a reply pointing at
+    /// `127.0.0.1`, which the layer does not name, where the same yes moves the server.
+    #[test]
+    fn a_handshake_redirected_to_a_host_the_managed_layer_denies_is_not_moved_on_a_yes() {
+        let (second_url, second) = serving(weather, String::new());
+        let port = second_url
+            .rsplit(':')
+            .next()
+            .and_then(|rest| rest.strip_suffix("/mcp"))
+            .expect("the port of the second server")
+            .to_string();
+        let denied = format!("http://localhost:{port}/mcp");
+        let (declared_url, first) = serving(redirecting, denied.clone());
+        let redirected = redirected_at(
+            "cli-servers-move-managed-denied",
+            |declared| declared,
+            declared_url,
+            denied.clone(),
+            first,
+            second,
+        );
+        let managed = managed_beside(&redirected.home);
+        std::fs::write(&managed, r#"{"mcp": {"deny": [{"host": "localhost"}]}}"#)
+            .expect("managed.json");
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        let reason = crate::mcp::managed_refusal(&Managed::at(&managed), Server::Remote(&denied))
+            .expect("the layer denies localhost, so the test proves nothing otherwise");
+        assert_eq!(
+            reached.notes,
+            vec![
+                t!(
+                    mcp_move_refused_by_managed,
+                    alias = "weather",
+                    reason = reason
+                )
+                .to_string()
+            ]
+        );
+        assert!(
+            screen.contains(t!(mcp_move_title)),
+            "the move was not put to the person: {screen}"
+        );
+        assert!(
+            reached.aliases().is_empty(),
+            "a server the layer denies was started: {:?}",
+            reached.aliases()
+        );
+        let sent: Vec<String> = redirected.second.try_iter().collect();
+        assert!(
+            sent.is_empty(),
+            "something was sent where the reply pointed: {sent:?}"
+        );
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+        assert!(Approvals::read(&redirected.home).approves(&redirected.declared.digest()));
+
+        let control =
+            redirected_declaring("cli-servers-move-managed-not-denied", |declared| declared);
+        std::fs::write(
+            managed_beside(&control.home),
+            r#"{"mcp": {"deny": [{"host": "localhost"}]}}"#,
+        )
+        .expect("managed.json");
+        let (reached, _) = reached_redirected(&control, Asking::Person, true, true, "y\n");
+        assert_eq!(
+            reached.aliases(),
+            vec!["weather"],
+            "the control was refused: {:?}",
+            reached.notes
+        );
+    }
+
+    /// SERVERS-11: a destination that names no socket cannot be declared, so a yes to it moves
+    /// nothing. The reply points at an address carrying a user and a password, which a declaration
+    /// never holds, so the person is asked, the answer is yes, and the note says the address
+    /// cannot be declared and why. The server is not started and nothing is written.
+    #[test]
+    fn a_handshake_redirected_to_an_address_carrying_credentials_is_not_moved_on_a_yes() {
+        let (second_url, second) = serving(weather, String::new());
+        let credentialed = second_url.replacen("http://", "http://user:pw@", 1);
+        let (declared_url, first) = serving(redirecting, credentialed.clone());
+        let redirected = redirected_at(
+            "cli-servers-move-userinfo-destination",
+            |declared| declared,
+            declared_url,
+            credentialed,
+            first,
+            second,
+        );
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(
+            reached.notes,
+            vec![
+                t!(
+                    mcp_move_undeclarable,
+                    alias = "weather",
+                    problem = t!(mcp_problem_credentials)
+                )
+                .to_string()
+            ]
+        );
+        assert!(
+            screen.contains(t!(mcp_move_title)),
+            "the move was not put to the person: {screen}"
+        );
+        assert!(
+            reached.aliases().is_empty(),
+            "a server at an address that cannot be declared was started: {:?}",
+            reached.aliases()
+        );
+        let sent: Vec<String> = redirected.second.try_iter().collect();
+        assert!(
+            sent.is_empty(),
+            "something was sent where the reply pointed: {sent:?}"
+        );
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+        assert!(Approvals::read(&redirected.home).approves(&redirected.declared.digest()));
+    }
+
     /// SERVERS-21: a server moved where its reply pointed is still asked about at every call, in
     /// the session that moved it and in the declaration the move rewrites. The regression it
     /// rejects is a rewrite that keeps the bounds and drops the property, which would leave the
@@ -7803,6 +8330,63 @@ while {answering}"#
         assert_eq!(
             std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals"),
             approved
+        );
+    }
+
+    /// SERVERS-11: `y` is the only yes to a move at a handshake. The call road's yes is answer 1 or
+    /// 2, and a person who types either here, or a longer word that starts with `y`, or nothing,
+    /// has not agreed to declare the server where its reply pointed. Each of those starts nothing,
+    /// sends nothing where the reply pointed and rewrites neither the declaration nor its
+    /// approval; `y` is the control that the move is made. The regression it rejects is a move
+    /// that reads a yes more loosely than a lone `y`, which lets a reflex answer rewrite a
+    /// declaration to an address nobody read.
+    #[test]
+    fn only_a_y_moves_a_server_on_the_handshake_road() {
+        for typed in ["1\n", "2\n", "yes\n", "ok\n", "\n", ""] {
+            let redirected = redirected("cli-servers-move-only-y");
+            let approved =
+                std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals");
+
+            let (reached, screen) =
+                reached_redirected(&redirected, Asking::Person, true, true, typed);
+
+            assert!(
+                screen.contains(t!(mcp_move_title)),
+                "{typed:?}: the move was not put to the person: {screen}"
+            );
+            assert!(
+                reached.aliases().is_empty(),
+                "{typed:?} moved the server: {:?}",
+                reached.notes
+            );
+            assert_eq!(
+                reached.notes,
+                vec![t!(mcp_move_not_started, alias = "weather").to_string()],
+                "{typed:?}"
+            );
+            assert!(
+                redirected.second.try_iter().next().is_none(),
+                "{typed:?}: something was sent where the reply pointed"
+            );
+            assert_eq!(
+                declared_in(&redirected.home),
+                redirected.declared,
+                "{typed:?}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals"),
+                approved,
+                "{typed:?}"
+            );
+        }
+
+        let control = redirected("cli-servers-move-only-y-control");
+        let (reached, _) = reached_redirected(&control, Asking::Person, true, true, "y\n");
+        assert_eq!(
+            reached.aliases(),
+            vec!["weather"],
+            "the control was not moved: {:?}",
+            reached.notes
         );
     }
 

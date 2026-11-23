@@ -4733,6 +4733,44 @@ fn the_setting_that_opens_sessions_in_auto_leaves_a_one_shot_run_asking() {
     );
 }
 
+/// MODE-1: a one-shot run given no mode flag, with no setting, opens asking. A write nobody can
+/// approve is refused on status 4 and the file is not written, and the planner is not told it is in
+/// plan mode, which refuses a write too and so would give the same status. The faults it rejects are
+/// a default that answers the write (accepting edits, auto or bypass: the file appears) and a
+/// default of plan mode (the system prompt carries its instruction).
+#[test]
+fn a_one_shot_run_with_no_flag_and_no_setting_opens_asking() {
+    let gateway = a_gateway_asking_for_a_write();
+    let scratch =
+        Scratch::new("cli-running-one-shot-opens-asking").with_settings(&settings_for(&gateway));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "write out.txt"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a one-shot run with no flag wrote the file"
+    );
+    let asked: Vec<String> = gateway.asked.try_iter().collect();
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains(r#""name":"write_file""#)),
+        "the planner was never offered the write: {asked:?}"
+    );
+    for body in &asked {
+        assert!(
+            !body.contains("so writing is refused while it lasts"),
+            "a one-shot run with no flag opened in plan mode: {body}"
+        );
+    }
+}
+
 /// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4
 /// and says `BB1004`, however calmly the planner then reports it. The reply still reaches stdout.
 ///
@@ -9893,6 +9931,43 @@ fn an_exported_key_is_importable_and_the_refusal_names_the_command() {
         !scratch.settings().exists(),
         "a one-shot run wrote settings"
     );
+}
+
+/// IMPORT-8: `--json` is one of the cases that never ask, and its refusal is the same refusal, so
+/// with a key exported it names the command that asks, on stderr and in the result object on
+/// stdout. A refusal that left the line out where `--json` was given passes the tests that run
+/// `-p` alone.
+#[test]
+fn a_json_first_run_names_the_import_command_and_asks_nothing() {
+    let scratch = Scratch::new("cli-running-import-json");
+    let environment = [
+        NOTHING_CONFIGURED,
+        &[("OPENAI_API_KEY", "sk-proj-exported-nobody-may-see")],
+    ]
+    .concat();
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("An API key for a model service bravebot can use is exported here")
+            && stderr.contains("bravebot auth login import"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("bravebot auth login import"),
+        "the result object did not name the command: {stdout}"
+    );
+    assert!(
+        !stdout.contains("nobody-may-see") && !stderr.contains("nobody-may-see"),
+        "the key was shown: {stdout}{stderr}"
+    );
+    assert!(!scratch.settings().exists(), "a --json run wrote settings");
 }
 
 /// IMPORT-4, IMPORT-8: a key exported beside a host of its own cannot be written at the endpoint
@@ -20648,19 +20723,64 @@ fn a_question_with_no_words_after_the_name_is_not_recorded() {
     );
 }
 
+/// SHELLINT-2. A question typed after white space is a question as much as one typed at the margin,
+/// with words after the name or none, and it is not recorded. The regression this rejects is a
+/// hook that takes off only the two spaces `history` puts between its number and the line: an
+/// indented question would be recorded after it ran and would head the lines of the next one.
+#[cfg(unix)]
+#[test]
+fn an_indented_question_is_not_recorded() {
+    let scratch = Scratch::new("cli-running-shell-init-indented-question");
+    let output = a_bash_session(
+        &scratch,
+        &[
+            "echo first-command",
+            "  @bravebot \"what did I run?\"",
+            "echo second-command",
+            "   @bravebot",
+            "echo third-command",
+            "@bravebot \"and now?\"",
+        ],
+    );
+
+    let (arguments, given) = what_a_question_was_given(&output, 0);
+    assert_eq!(arguments, "-p what did I run?", "{output}");
+    assert!(
+        given.contains(&"echo first-command".to_string()),
+        "the line before the indented question was not given: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 1);
+    assert_eq!(arguments, "-p", "{output}");
+    assert_eq!(
+        given,
+        ["echo second-command"],
+        "the indented question was recorded: {output}"
+    );
+    let (arguments, given) = what_a_question_was_given(&output, 2);
+    assert_eq!(arguments, "-p and now?", "{output}");
+    assert_eq!(
+        given,
+        ["echo third-command"],
+        "the indented bare question was recorded: {output}"
+    );
+}
+
 /// SHELLINT-2. The suite runs the bash hook in a real `bash` and does not run zsh or fish, so the
-/// text of the two other hooks is read: the function each shell calls before a command records
-/// nothing for an empty line, for `@bravebot`, and for `@bravebot` followed by a space, and it
-/// says so before it writes. The regression this rejects is a hook of either shell that drops one
-/// of the three, which would record a question as part of the next one in that shell only.
+/// text of the two other hooks is read: the function each shell calls before a command takes the
+/// leading white space off the line, as the bash hook does, records nothing for an empty line, for
+/// `@bravebot`, and for `@bravebot` followed by a space, and does all of that before it writes. The
+/// regressions this rejects are a hook of either shell that drops one of the three, which would
+/// record a question as part of the next one in that shell only, and one that judges the line as
+/// typed, which would record an indented question where bash does not.
 #[test]
 fn the_zsh_and_fish_hooks_skip_a_question_line_before_they_record() {
     let scratch = Scratch::new("cli-running-shell-init-skip-arms");
-    for (shell, header, closing, skipped, write) in [
+    for (shell, header, closing, trimmed, skipped, write) in [
         (
             "zsh",
             "__bravebot_record() {",
             "}",
+            "line=${line#\"${line%%[![:space:]]*}\"}",
             "''|'@bravebot'|'@bravebot'[[:space:]]*) ;;",
             "print -r --",
         ),
@@ -20668,6 +20788,7 @@ fn the_zsh_and_fish_hooks_skip_a_question_line_before_they_record() {
             "fish",
             "function __bravebot_record --on-event fish_preexec",
             "end",
+            "string trim --left",
             "case '' '@bravebot' '@bravebot *'",
             "printf '%s\\n'",
         ),
@@ -20679,10 +20800,18 @@ fn the_zsh_and_fish_hooks_skip_a_question_line_before_they_record() {
             "{shell} defines no `{header}`: {script}"
         );
         let body: Vec<&str> = lines.take_while(|line| *line != closing).collect();
+        let trim = body
+            .iter()
+            .position(|line| line.contains(trimmed))
+            .unwrap_or_else(|| panic!("{shell} never trims with `{trimmed}`: {body:?}"));
         let skip = body
             .iter()
             .position(|line| line.trim() == skipped)
             .unwrap_or_else(|| panic!("{shell} does not skip `{skipped}`: {body:?}"));
+        assert!(
+            trim < skip,
+            "{shell} judges the line before it takes the leading white space off: {body:?}"
+        );
         let record = body
             .iter()
             .position(|line| line.contains(write))
@@ -21873,6 +22002,88 @@ fn a_one_shot_run_shows_nothing_a_servers_stderr_writes() {
     assert_none_of_what_a_noisy_server_writes_was_shown(&stdout, "a one-shot run's stdout");
 }
 
+/// SERVERS-15: a server whose handshake is not answered within the bound its declaration gives
+/// is left out of a one-shot run, with a line on stderr giving the reason.
+///
+/// The server reads what it is sent and never answers. Its declaration gives `startup_timeout_secs`
+/// of 1, so the handshake is over after one second, where the default of 60 seconds would hold the
+/// run for a minute. The controls are the model's request, which was made without the server's
+/// tool, so the run went on without the server and did not stop at the handshake, and the run's
+/// length, which is under the 8 seconds a handshake is given up on after (three times the bound and
+/// five seconds) and far under the default.
+///
+/// The wrong implementations this rejects are a run that leaves the server out and says nothing
+/// (the note is built in `agent::servers` and written by the one-shot start), and one that reads the
+/// declaration's bound as the default, which waits a minute and says it was 60 seconds.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_says_why_a_server_that_never_answered_its_handshake_was_left_out() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return skipped("confinement is unavailable, so the server cannot be started");
+    }
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = settings_for(&gateway).replacen('{', r#"{"mcp": {"request": ["weather"]},"#, 1);
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "while IFS= read -r line; do :; done".to_string(),
+    ];
+    let declared = serde_json::json!({"servers": {"weather": {
+        "transport": "stdio", "argv": argv, "variables": ["PATH"],
+        "startup_timeout_secs": 1}}})
+    .to_string();
+    let declaration = bravebot_config::mcp::Declarations::parse(&declared)
+        .expect("the declarations read")
+        .get("weather")
+        .expect("an entry for weather")
+        .declaration
+        .expect("a declaration");
+    assert_eq!(
+        declaration.timeouts().startup(),
+        Duration::from_secs(1),
+        "the declaration did not carry its bound"
+    );
+    let scratch = Scratch::new("cli-running-oneshot-slow-handshake")
+        .with_settings(&settings)
+        .with_state("mcp.json", &declared)
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let started = std::time::Instant::now();
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["--dangerously-skip-permissions", "-p", "say something"],
+    );
+    let took = started.elapsed();
+    let offered = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run went on to the gateway without the server");
+    let (_, stderr) = said(&output);
+
+    assert!(
+        !offered.contains("mcp__weather__forecast"),
+        "a server that never answered was kept: {offered}"
+    );
+    let about_it: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("weather") && line.contains("handshake"))
+        .collect();
+    let [note] = about_it.as_slice() else {
+        panic!("the run did not say once why weather was left out: {stderr:?}");
+    };
+    assert!(
+        note.contains("initialize timed out after 1 seconds"),
+        "the note does not give the reason and the declared bound: {note:?}"
+    );
+    assert!(
+        took < Duration::from_secs(40),
+        "the run waited on a handshake past the bound its declaration gave: {took:?}\n{stderr}"
+    );
+}
+
 /// CLI-26: a list that names nothing, a name that is no tool, and the flags where nothing offers a
 /// tool are each refused as a bad argument before any configuration is read.
 #[test]
@@ -21906,18 +22117,25 @@ fn a_tool_limit_that_limits_nothing_is_refused_by_name() {
 
 /// CLI-26: the commands that start neither a session nor a task are refused both flags, each with
 /// the argument status and its own name in the refusal. The `doctor` row of the test above is one of
-/// twelve, and a list that lost any other would take the flag and ignore it.
+/// seventeen written out here, by name and not read from the list the code refuses by, and a list
+/// that lost any of them would take the flag and ignore it. `bug-report` is the one command of that
+/// kind that is not refused (`the_commands_that_start_no_session_refuse_every_flag_that_shapes_one`
+/// in main.rs pins it).
 #[test]
 fn the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task() {
     let scratch = Scratch::new("cli-running-tools-refused-commands");
     for command in [
+        "acp",
         "doctor",
+        "update",
         "auth",
         "mcp",
         "permissions",
         "sessions",
         "stats",
         "schedule",
+        "skill",
+        "trigger",
         "attach",
         "reply",
         "import-leo-creds",

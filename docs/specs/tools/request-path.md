@@ -82,7 +82,8 @@ program should not have put.
 A person's yes marks nothing trusted ([TRUST-9](../trust-map.md#TRUST-9)) and writes no file;
 where the mode that answers every question grants the request, it opens the directory
 and trusts it as [PATHREQ-7](#PATHREQ-7) says. The trace
-carries one `path_reach` record for it, and `/status` lists it. The record says who answered: that
+carries one `path_reach` record for it, and `/status` lists the paths the session's grant holds,
+worded as `/reach paths` words them ([SANDBOX-28](../sandboxing.md#SANDBOX-28)). The record says who answered: that
 the user let programs reach the path, or, where the mode that answers every question did, the name
 of that mode and that nobody was asked. A record that credited a person with an answer the mode gave
 would be a person's word nobody said.
@@ -90,6 +91,7 @@ would be a person's word nobody said.
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_marks_nothing_trusted_and_is_recorded`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
+`verified-by: bravebot_tui::app::the_status_of_a_session_lists_the_paths_programs_were_let_reach`
 
 <a id="PATHREQ-5"></a>
 ### PATHREQ-5: nothing is accepted under `off` or in an untrusted workspace, and no write under `read-only`

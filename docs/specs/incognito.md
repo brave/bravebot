@@ -69,6 +69,9 @@ made deliberately.
 
 `verified-by: bravebot_tui::incognito::a_choice_applies_to_the_session_and_is_not_recorded`
 `verified-by: bravebot_tui::incognito::a_choice_takes_effect_for_the_session_and_the_startup_reads_the_recorded_one`
+`verified-by: bravebot_tui::incognito::the_startup_opens_an_incognito_session_on_the_recorded_theme`
+`verified-by: bravebot_tui::app::a_theme_chosen_in_an_incognito_session_takes_effect_and_is_not_recorded`
+`verified-by: bravebot_tui::incognito::a_language_chosen_is_not_saved_and_the_command_says_so`
 
 <a id="INCOG-3"></a>
 ### INCOG-3: no record of the session, and none that it happened
@@ -273,7 +276,7 @@ more than what it leaves behind:
   recorded under `~/.bravebot`, naming its path and nothing else, so that no later session reads
   what this one left untrusted as trusted. [MEMORY-5](definition-memory.md#MEMORY-5) governs it.
 
-[CHECKOUT-6](checkouts.md#CHECKOUT-6), which nothing yet builds, would add an eleventh: a delegate's
+[CHECKOUT-6](checkouts.md#CHECKOUT-6) adds an eleventh: a delegate's
 checkout, made in the system temporary directory and gone with the session, and its entry under
 the person's `.git/worktrees/`, which goes with it and which a session killed outright leaves.
 

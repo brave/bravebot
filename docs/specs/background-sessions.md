@@ -526,7 +526,7 @@ loop.
 the way a delegate's checkout is made ([checkouts.md](checkouts.md)), and the session works in it:
 its file tools reach it, and its programs start in it. The session keeps the checkout, the record
 lists it, and a person removes it as they remove any other. A running session holds the checkout's
-lock, so the opening sweep ([CHECKOUT-16](checkouts.md#CHECKOUT-16), which nothing yet builds)
+lock, so the opening sweep ([CHECKOUT-16](checkouts.md#CHECKOUT-16), built for Unix)
 does not take it.
 
 Outside a git repository the session works in the directory it was started in. The list shows the

@@ -4680,9 +4680,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // been written since (READ-8). Looked up by the path as the trust map keys it and the window as
     // the read applies it, so a spelling or a limit that comes to the same lines is the same read.
     let (first_line, line_limit) = crate::workspace::window_of(offset, limit);
+    let window_key = workspace.window_key(&proposed_path);
     let earlier = tools
         .reads
-        .token_of(&keyed, first_line, line_limit)
+        .token_of(&window_key, first_line, line_limit)
         .map(str::to_string);
     let shown_token;
     let page = match workspace.read_page_unless_unchanged(
@@ -4799,7 +4800,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     priced(Produced {
         glimpsed: Some(glimpsed),
         window: Some(crate::conversation::ReadWindow {
-            file: keyed,
+            file: window_key,
             offset: first_line,
             limit: line_limit,
             token: shown_token,
@@ -8134,9 +8135,16 @@ fn edit_file<S: Sink, C: Confirmer>(
             //
             // Only where that label is trusted. A quarantined excerpt would take the confirmation
             // down with it, and a planner that cannot be told its edit landed is worse off than
-            // one that is told only that. The file itself is always trusted by this point:
-            // `read_trusted_content` above refuses to locate a passage in anything else.
-            if body_label.is_trusted() {
+            // one that is told only that.
+            //
+            // The label is the context's, which is not the file's. The file is trusted by this
+            // point because `read_trusted_content` above refuses to locate a passage in anything
+            // else. A context that has met something untrusted is refused earlier still, by
+            // `read_planner_argument` and `Policy::promote_confined_read`, so no turn reaches the
+            // count-alone arm today. It stays as a second refusal, the way a resumed context's
+            // refusal does in `Policy`, and `what_an_edit_result_shows` is the one place that
+            // chooses: it reads a `Label` and nothing else.
+            if what_an_edit_result_shows(body_label) == EditResultShows::LinesAndCount {
                 let region = policy.render_in_place("edit_file", &body, |contents| {
                     crate::replace::changed_region(&current, &contents)
                 });
@@ -8209,6 +8217,27 @@ fn edit_file<S: Sink, C: Confirmer>(
             &e,
             &shown_path,
         ),
+    }
+}
+
+/// What an edit's result holds (EDIT-4 in docs/specs/tools/edit-file.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditResultShows {
+    /// The lines the edit produced, then the count of replacements.
+    LinesAndCount,
+    /// The count of replacements alone, marked untrusted.
+    CountAlone,
+}
+
+/// Which of the two an edit's result is, chosen from the label of the edited body alone.
+///
+/// The body carries the integrity of the context the edit was worked out in. The function takes
+/// that label and no bytes, so the choice is not a decision taken from the file's contents.
+fn what_an_edit_result_shows(body_label: Label) -> EditResultShows {
+    if body_label.is_trusted() {
+        EditResultShows::LinesAndCount
+    } else {
+        EditResultShows::CountAlone
     }
 }
 
@@ -14110,6 +14139,11 @@ fn advise<S: Sink>(
                  without it."
             }
         })
+        .waiting(waited),
+        Err(crate::advisor::AdviceError::NotServed) => Produced::problem(
+            "refused: no configured service answers for the advisor model, so it is not asked. \
+             Carry on without it.",
+        )
         .waiting(waited),
         Err(crate::advisor::AdviceError::Denied(error)) => request_denied(&error, waited),
     }
@@ -21082,6 +21116,28 @@ mod tests {
                 "{name}: {line}"
             );
         }
+    }
+
+    /// AGENT-5: an `each` that names no delegate is refused with a sentence saying it was empty. An
+    /// empty array is not read as a missing `each`, which would be one delegate on the shared task,
+    /// and is not accepted as naming zero delegates, which would start nothing and answer nothing.
+    ///
+    /// Rejects: `tasks_in` returning `Ok` for an empty `each`, either the empty list or the shared
+    /// task alone, and a refusal that does not say the list was empty.
+    #[test]
+    fn an_empty_each_is_refused_with_a_sentence_saying_it_was_empty() {
+        let refusal = tasks_in(&json!({"task": "t", "each": []}))
+            .map(|tasks| tasks.len())
+            .expect_err("an empty each named no delegate and was accepted");
+        assert!(
+            refusal.contains("'each' was empty"),
+            "the planner is not told the list was empty: {refusal}"
+        );
+        assert_eq!(
+            tasks_in(&json!({"task": "t"})).map(|tasks| tasks.len()),
+            Ok(1),
+            "a call with no each at all is the one task, which the empty list must not be read as"
+        );
     }
 
     /// AGENT-5: a planner told the most one call starts splits a fan-out into calls of that size,

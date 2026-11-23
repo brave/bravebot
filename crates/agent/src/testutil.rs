@@ -89,6 +89,15 @@ pub(crate) mod casefold_layouts;
 #[path = "../test-support/no_repository.rs"]
 pub(crate) mod no_repository;
 
+/// The awkward file names the integration tests make files of, and the check of whether the volume
+/// holds two of them as two files. The unit tests use `held_names`, `least_pairs` and `two_files`.
+#[allow(
+    dead_code,
+    reason = "test-support/aliases.rs is shared with the integration tests, and the unit tests use only part of it"
+)]
+#[path = "../test-support/aliases.rs"]
+pub(crate) mod aliases;
+
 /// What a stage puts at the name of a directory once it has moved the directory.
 #[cfg(unix)]
 pub(crate) type PutThere<'a> = Box<dyn Fn(&Path) + 'a>;

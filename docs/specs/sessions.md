@@ -1076,6 +1076,8 @@ run to arrive.
 `verified-by: bravebot_agent::turn::an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down`
 `verified-by: bravebot_tui::app::a_btw_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
 `verified-by: bravebot_tui::app::a_btw_asked_beside_a_turn_over_an_untrusted_exchange_reaches_the_record_as_a_question_alone`
+`verified-by: bravebot_tui::sessions::a_record_from_before_asides_were_kept_reads_as_a_session_with_no_questions`
+`verified-by: bravebot_tui::state::a_resume_puts_the_asides_in_the_view_and_neither_half_in_the_transcript`
 
 
 <a id="SESSION-21"></a>
@@ -1830,6 +1832,9 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_ui_bridge::handing_off::a_handoff_from_a_chat_with_a_turn_running_is_refused_and_the_bridge_goes_on_answering`
 `verified-by: bravebot_agent::aside::a_handoff_is_refused_without_a_goal_an_ended_turn_or_a_record`
 `verified-by: bravebot_ui_bridge::handoff::a_brief_is_offered_only_where_the_exchange_kept_it`
+`verified-by: bravebot_agent::turn::a_handoff_brief_past_four_thousand_characters_is_cut_to_four_thousand`
+`verified-by: bravebot_tui::app::the_brief_is_sent_as_a_line_the_person_typed_and_is_recalled_as_one`
+`verified-by: bravebot_tui::app::the_record_a_handoff_came_from_is_untouched_by_the_new_one_and_still_resumes`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/handoff.test.mjs asserts that a handoff is armed with the brief, keeps the draft it replaced, is dropped by Escape or an emptied box and is taken on send; make check-ui runs it)`
 
 ## Known costs
