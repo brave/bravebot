@@ -2,6 +2,7 @@
 """The decisions rebase.py makes without a model, against real repositories where git decides."""
 
 import importlib.util
+import shlex
 import shutil
 import sys
 import tempfile
@@ -65,12 +66,18 @@ def world(root, signed=False):
     return lambda: rebase.pull(9, view, clone, remotes), seed, fork
 
 
+# The command a person or a session runs next names the file that is running, by its absolute path, so a
+# session whose directory is a pull request's worktree does not run that worktree's copy of the script.
+RUNNING = f"python3 {shlex.quote(str(HERE / 'rebase.py'))}"
+
+
 def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own():
     with tempfile.TemporaryDirectory() as tmp:
         pr, _, fork = world(Path(tmp).resolve())
         code, out = quietly(rebase.start, pr())
         assert code == 1, out
         assert "  a.txt:1-5" in out and "main moves" in out, out
+        assert f"resolve each range, then: {RUNNING} continue 9\n" in out, out
         tree = pr().tree
         assert tree == Path(tmp).resolve() / "bravebot" / ".worktrees" / "pr-9", tree
 
@@ -79,7 +86,7 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
 
         (tree / "a.txt").write_text("from main and the pull request\n")
         code, out = quietly(rebase.resume, pr())
-        assert code == 0 and "push 9" in out, out
+        assert code == 0 and f"next: {RUNNING} push 9\n" in out, out
         assert rebase.resolved(tree) == ["a.txt"], "a resolved file is what a check is chosen from"
 
         code, out = quietly(rebase.check, pr(), [])
@@ -92,6 +99,43 @@ def test_a_conflict_is_reported_resolved_and_pushed_from_a_worktree_of_its_own()
 
         code, out = quietly(rebase.start, pr())
         assert code == 0 and "nothing to push" in out, out
+
+
+def test_every_command_a_step_prints_names_the_running_file_by_absolute_path():
+    assert rebase.SCRIPT == RUNNING, rebase.SCRIPT
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, seed, _ = world(root)
+        quietly(rebase.start, pr())
+        code, out = quietly(rebase.check, pr(), [])
+        assert code == 1 and f"finish the rebase first: `{RUNNING} continue 9`" in out, out
+        code, out = quietly(rebase.push, pr())
+        assert code == 1 and f"finish the rebase first: `{RUNNING} continue 9`" in out, out
+
+        (pr().tree / "a.txt").write_text("resolved\n")
+        quietly(rebase.resume, pr())
+        (seed / "c.txt").write_text("later\n")
+        git("add", "c.txt", cwd=seed)
+        git("commit", "-q", "-m", "main moves again", cwd=seed)
+        git("push", "-q", "origin", "main", cwd=seed)
+        git("fetch", "-q", "upstream", cwd=root / "bravebot")
+        for step in (rebase.resume, rebase.push):
+            code, out = quietly(step, pr())
+            assert code == 1 and f"`{RUNNING} start 9`" in out, out
+
+
+def test_a_pull_request_whose_fork_has_no_remote_names_the_running_file_to_add_one():
+    with tempfile.TemporaryDirectory() as tmp:
+        pr, _, _ = world(Path(tmp).resolve())
+        brave = pr().main / ".." / "brave.git"
+        view = {
+            "url": "https://github.com/brave/bravebot/pull/9", "state": "OPEN", "baseRefName": "main",
+            "headRefName": "feature", "headRepository": {"name": "bravebot"},
+            "headRepositoryOwner": {"login": "someone"},
+        }
+        remotes = {"brave/bravebot": ("upstream", str(brave))}
+        code, out = quietly(rebase.pull, 9, view, pr().here, remotes)
+        assert code == 1 and f"`{RUNNING} start 9` adds one" in out, out
 
 
 def test_a_push_made_since_start_is_refused_rather_than_overwritten():

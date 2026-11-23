@@ -43,12 +43,13 @@ pub(super) fn capped_note(tool: &str, incomplete: bool, paging: Option<Paging>) 
 
 /// What a quarantined listing says about a cap, beside its references for the reason `capped_note`
 /// is. `at_the_cap` is whether the listing holds as many entries as the cap over the whole walk
-/// allows, and `cut` is each directory the per-directory cap cut, as its reference and how many of
-/// its files were left out (LIST-5). References and numbers, never a name.
+/// allows, and `cut` is each directory a per-directory cap cut, as its reference, how many of its
+/// files were left out and how many of its subdirectories were left out (LIST-5). References and
+/// numbers, never a name.
 pub(super) fn listing_capped_note(
     incomplete: bool,
     at_the_cap: bool,
-    cut: &[(String, usize)],
+    cut: &[(String, usize, usize)],
 ) -> String {
     if !incomplete {
         return String::new();
@@ -61,26 +62,53 @@ pub(super) fn listing_capped_note(
         );
     }
     if !cut.is_empty() {
+        let files_cut = cut.iter().any(|(_, files, _)| *files > 0);
+        let directories_cut = cut.iter().any(|(_, _, directories)| *directories > 0);
+        // What the caps were and what each left out, in the words of the cut that happened.
+        let caps = match (files_cut, directories_cut) {
+            (true, true) => format!(
+                "{} files and {} subdirectories",
+                crate::workspace::MAX_FILES_PER_DIRECTORY,
+                crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
+            ),
+            (false, true) => format!(
+                "{} subdirectories",
+                crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
+            ),
+            _ => format!("{} files", crate::workspace::MAX_FILES_PER_DIRECTORY),
+        };
+        let left_out = match (files_cut, directories_cut) {
+            (true, true) => "files and subdirectories",
+            (false, true) => "subdirectories",
+            _ => "files",
+        };
         let each: Vec<String> = cut
             .iter()
-            .map(|(reference, left_out)| {
+            .map(|(reference, files, directories)| {
                 format!(
                     "{} of [{reference}]",
-                    crate::tools::tally(*left_out, "file", "files")
+                    crate::tools::left_out_clause(*files, *directories, false)
                 )
             })
             .collect();
         said.push_str(&format!(
-            " The listing took at most {} files from any one directory and is incomplete. Not \
+            " The listing took at most {caps} from any one directory and is incomplete. Not \
              listed: {}. Each of those references is a directory the walk entered and cut, not \
-             one it stopped at, and the files left out are in it. No argument takes a reference \
-             to a directory, so to see the rest of one, list it by its name with no depth if you \
-             know the name; otherwise list the directory you named with no depth, which walks the \
-             whole tree up to {} entries.",
-            crate::workspace::MAX_FILES_PER_DIRECTORY,
+             one it stopped at, and the {left_out} left out are in it. No argument takes a \
+             reference to a directory, so to see the rest of one, list it by its name with no \
+             depth if you know the name; otherwise list the directory you named with no depth, \
+             which walks the whole tree up to {} entries.",
             each.join(", "),
             crate::workspace::MAX_ENTRIES
         ));
+        if directories_cut {
+            // A walk with no depth names files only, so it does not name the subdirectories left
+            // out. It reaches the files under them, which is the same as for the files.
+            said.push_str(
+                " A listing with no depth names files only, so it shows what is under the \
+                 subdirectories left out and names none of them.",
+            );
+        }
     }
     said
 }
@@ -504,7 +532,7 @@ mod tests {
     /// or paired with the wrong reference, and the sentence said for a complete listing.
     #[test]
     fn a_listing_cut_per_directory_names_each_reference_with_what_it_left_out() {
-        let cut = [("ref:7".to_string(), 1_801), ("ref:8".to_string(), 1)];
+        let cut = [("ref:7".to_string(), 1_801, 0), ("ref:8".to_string(), 1, 0)];
         let said = listing_capped_note(true, false, &cut);
         assert_eq!(
             said,
@@ -525,6 +553,67 @@ mod tests {
         assert!(
             both.contains("stopped at that many entries") && both.contains("1 file of [ref:8]"),
             "a listing cut both ways did not say both: {both}"
+        );
+    }
+
+    /// LIST-5: a quarantined listing whose directories were cut only for their subdirectories
+    /// names each reference with how many subdirectories were left out, says what a listing with
+    /// no depth shows, and says nothing about files. The regressions it rejects: the count
+    /// worded as files, the cap worded as 200 files, the sentence about files left out in it, no
+    /// sentence about what a listing with no depth names, and the whole-walk wording for a listing
+    /// that stopped at no such cap.
+    #[test]
+    fn a_listing_cut_for_subdirectories_names_each_reference_with_what_it_left_out() {
+        let cut = [("ref:7".to_string(), 0, 1_801), ("ref:8".to_string(), 0, 1)];
+        assert_eq!(
+            listing_capped_note(true, false, &cut),
+            " The listing took at most 200 subdirectories from any one directory and is \
+             incomplete. Not listed: 1801 subdirectories of [ref:7], 1 subdirectory of [ref:8]. \
+             Each of those references is a directory the walk entered and cut, not one it stopped \
+             at, and the subdirectories left out are in it. No argument takes a reference to a \
+             directory, so to see the rest of one, list it by its name with no depth if you know \
+             the name; otherwise list the directory you named with no depth, which walks the whole \
+             tree up to 2000 entries. A listing with no depth names files only, so it shows what \
+             is under the subdirectories left out and names none of them."
+        );
+        let both_caps = listing_capped_note(true, true, &cut);
+        assert!(
+            both_caps.starts_with(" The listing stopped at that many entries and is incomplete: ")
+                && both_caps.contains("1 subdirectory of [ref:8]"),
+            "a listing cut for subdirectories and at the whole-walk cap did not say both: \
+             {both_caps}"
+        );
+    }
+
+    /// LIST-5: a quarantined listing with a directory cut for both files and subdirectories names
+    /// it once with both counts, beside the directories cut one way, and names both caps. The
+    /// regressions it rejects: one count dropped, the counts swapped between files and
+    /// subdirectories, a count paired with the wrong reference, the cap worded for one kind of cut
+    /// only, and the sentence about a listing with no depth missing where subdirectories were cut.
+    /// A listing cut for files only has none of that wording.
+    #[test]
+    fn a_listing_cut_for_files_and_subdirectories_names_each_reference_with_both_counts() {
+        let cut = [
+            ("ref:7".to_string(), 1_801, 3),
+            ("ref:8".to_string(), 1, 0),
+            ("ref:9".to_string(), 0, 1),
+        ];
+        assert_eq!(
+            listing_capped_note(true, false, &cut),
+            " The listing took at most 200 files and 200 subdirectories from any one directory \
+             and is incomplete. Not listed: 1801 files and 3 subdirectories of [ref:7], 1 file of \
+             [ref:8], 1 subdirectory of [ref:9]. Each of those references is a directory the walk \
+             entered and cut, not one it stopped at, and the files and subdirectories left out \
+             are in it. No argument takes a reference to a directory, so to see the rest of one, \
+             list it by its name with no depth if you know the name; otherwise list the directory \
+             you named with no depth, which walks the whole tree up to 2000 entries. A listing \
+             with no depth names files only, so it shows what is under the subdirectories left \
+             out and names none of them."
+        );
+        let files_only = listing_capped_note(true, false, &[("ref:7".to_string(), 2, 0)]);
+        assert!(
+            !files_only.contains("subdirector") && !files_only.contains("names files only"),
+            "a listing cut for files only spoke of subdirectories: {files_only}"
         );
     }
 

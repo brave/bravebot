@@ -73,7 +73,13 @@ const GCLOUD: &str = "gcloud";
 ///   opener (`crates/tui/src/opener.rs`) and the AWS start (`crates/bedrock/src/credentials.rs`).
 ///   `XDG_DATA_DIRS` is also in the generic list and is repeated here so this list reads as
 ///   complete.
-const CODE_SELECTORS: [(&str, Names); 16] = [
+/// - `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` are where `gio open`, which `xdg-open` runs
+///   under a GNOME session, finds the session bus (`$XDG_RUNTIME_DIR/bus` when the address is not
+///   set). A service a stage runs on a socket it can create answers as the bus. They are judged as
+///   the opener judges them: the directory as one directory and the address as a
+///   [`Names::BusAddress`]. Whether a service on such a socket can make `gio open` run code or
+///   choose a handler was not shown ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
+const CODE_SELECTORS: [(&str, Names); 18] = [
     ("CLOUDSDK_PYTHON", Names::Program),
     ("CLOUDSDK_CONFIG", Names::Directory),
     ("CLOUDSDK_PYTHON_ARGS", Names::Options),
@@ -96,6 +102,8 @@ const CODE_SELECTORS: [(&str, Names); 16] = [
     ("XDG_DATA_DIRS", Names::Directories),
     ("XDG_CONFIG_HOME", Names::Directory),
     ("XDG_CONFIG_DIRS", Names::Directories),
+    selectors::XDG_RUNTIME_DIR,
+    selectors::DBUS_SESSION_BUS_ADDRESS,
 ];
 
 /// Why no token could be had.
@@ -693,17 +701,105 @@ mod tests {
 
     /// The variables the login is run to read are left as the person set them.
     #[test]
-    fn the_gcloud_start_keeps_the_display_and_runtime_directory_a_login_reads() {
+    fn the_gcloud_start_keeps_the_display_a_login_reads() {
         let (session, _safe, planted, _genuine) = planted_and_genuine("gcloud-display");
 
-        for name in [
-            "DISPLAY",
-            "WAYLAND_DISPLAY",
-            "XDG_RUNTIME_DIR",
-            "XDG_SESSION_TYPE",
-        ] {
+        for name in ["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"] {
             assert!(!withheld(name, &planted, &session), "{name} was removed");
         }
+    }
+
+    /// SANDBOX-30, `gio open` under `gcloud auth application-default login`: the session bus it
+    /// connects to, judged where the socket is on the disk. The regressions it rejects: the start
+    /// left without the two names (a start that keeps both whatever they hold), a name
+    /// removed whatever it holds, which takes the person's own bus from the login, a bus address
+    /// compared as written so a link under an installed directory to a socket a stage may write is
+    /// kept, and `DBUS_SESSION_BUS_ADDRESS` judged as a path, which no address is.
+    #[test]
+    fn a_runtime_directory_or_bus_address_that_leads_to_a_socket_a_stage_may_write_is_not_the_one_the_gcloud_login_uses()
+     {
+        let (session, safe, planted, genuine) = planted_and_genuine("gcloud-bus");
+        let (planted_dir, genuine_dir) = (planted.parent().unwrap(), genuine.parent().unwrap());
+        let planted_bus = planted_dir.join("bus");
+        let genuine_bus = genuine_dir.join("bus");
+        let linked_bus = safe.join("linked-bus");
+        std::fs::write(&planted_bus, "").unwrap();
+        std::fs::write(&genuine_bus, "").unwrap();
+        std::os::unix::fs::symlink(&planted_bus, &linked_bus).unwrap();
+        let address = |path: &Path| PathBuf::from(format!("unix:path={}", path.display()));
+
+        assert!(withheld("XDG_RUNTIME_DIR", planted_dir, &session));
+        assert!(withheld("XDG_RUNTIME_DIR", Path::new("run"), &session));
+        assert!(!withheld("XDG_RUNTIME_DIR", genuine_dir, &session));
+
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            &address(&planted_bus),
+            &session
+        ));
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            &address(&linked_bus),
+            &session
+        ));
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            &address(&safe.join("not-yet")),
+            &session
+        ));
+        let mixed = format!(
+            "unix:path={};unix:path={}",
+            genuine_bus.display(),
+            planted_bus.display()
+        );
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            Path::new(&mixed),
+            &session
+        ));
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            Path::new("unix:abstract=/tmp/dbus-x"),
+            &session
+        ));
+        assert!(!withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            &address(&genuine_bus),
+            &session
+        ));
+        assert!(!withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            Path::new("unix:runtime=yes"),
+            &session
+        ));
+    }
+
+    /// A runtime directory or bus address that is not text is judged as the bytes it is. The
+    /// regression it rejects: a bus address with a byte that is not UTF-8 after a safe path read
+    /// lossily as that path and kept, and a directory name judged by its lossy rendering.
+    #[test]
+    fn a_gcloud_runtime_directory_or_bus_address_that_is_not_text_is_judged_by_its_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (session, safe, _planted, genuine) = planted_and_genuine("gcloud-bus-not-text");
+        let genuine_bus = genuine.parent().unwrap().join("bus");
+        std::fs::write(&genuine_bus, "").unwrap();
+        let mut bytes = format!("unix:path={}", genuine_bus.display()).into_bytes();
+        bytes.push(0xff);
+        let lookalike = safe.join("run-\u{FFFD}");
+        std::fs::create_dir_all(&lookalike).unwrap();
+
+        assert!(withheld(
+            "DBUS_SESSION_BUS_ADDRESS",
+            Path::new(OsStr::from_bytes(&bytes)),
+            &session
+        ));
+        assert!(withheld(
+            "XDG_RUNTIME_DIR",
+            &safe.join(OsStr::from_bytes(b"run-\xff")),
+            &session
+        ));
+        assert!(!withheld("XDG_RUNTIME_DIR", &lookalike, &session));
     }
 
     /// The regression it rejects: starting `gcloud` with `PYTHONPATH` as the person set it, so the

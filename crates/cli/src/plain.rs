@@ -828,7 +828,11 @@ fn run(
     // first prompt is not yet read (HOOK-10). Run before the stderr lock is taken: the lock is for
     // writing the sentences, not for the length of a hook.
     if let Some(moments) = &mut moments {
-        let said = moments.started();
+        // The lines session can put a question to the person, so a plugin's hook on this moment is
+        // asked about first, through the decision every moment of a plugin's hook goes through. The
+        // answers are the session's, so the same ones count at its end (PLUGIN-7).
+        moments.keep_answers(running.account.clone());
+        let said = moments.started_asking(&mut asking);
         crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
     }
     // The streams themselves rather than a lock on each. A lock held for the length of the session
@@ -892,6 +896,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                     said.not_served.is_some(),
                 ),
                 not_served: said.not_served.as_deref(),
+                draw_the_reply: false,
             },
         );
     }
@@ -1877,14 +1882,29 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         self.ask(&lines, t!(expose_title))
     }
 
-    /// The whole list, each description behind the margin and none of it cut.
+    /// The whole list, each description and each value of an argument behind the margin and none
+    /// of it cut.
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        let arguments: Vec<Vec<bravebot_approval::Argument<'_>>> = request
+            .tools
+            .iter()
+            .map(|tool| {
+                tool.arguments
+                    .iter()
+                    .map(|argument| bravebot_approval::Argument {
+                        text: &argument.text,
+                        choices: &argument.choices,
+                    })
+                    .collect()
+            })
+            .collect();
         let tools: Vec<bravebot_approval::Tool<'_>> = request
             .tools
             .iter()
-            .map(|tool| bravebot_approval::Tool {
+            .zip(&arguments)
+            .map(|(tool, arguments)| bravebot_approval::Tool {
                 name: &tool.name,
-                arguments: &tool.arguments,
+                arguments,
                 description: tool.description.as_deref(),
                 read_only: tool.read_only,
             })
@@ -1989,6 +2009,23 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         });
         self.about(Held::Move);
         self.ask(&lines, t!(mcp_move_title))
+    }
+
+    /// A line session has somebody at it, so the question is put in lines (PLUGIN-7). The end of the
+    /// input is a refusal, as at every question here.
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    fn confirm_hook(&mut self, request: &bravebot_agent::confirm::HookRequest) -> Decision {
+        let lines = bravebot_approval::hook_lines(&bravebot_approval::Hook {
+            plugin: &request.plugin,
+            moment: request.moment,
+            argv: &request.argv,
+            records: request.records,
+        });
+        self.about(Held::Question);
+        self.ask(&lines, t!(plugin_hook_title))
     }
 
     /// The plan, before anything has run.
@@ -2628,6 +2665,102 @@ mod tests {
                 asking.put(&["something".to_string()], "do it?"),
                 expected,
                 "{answer:?} was not read as {expected:?}"
+            );
+        }
+    }
+
+    /// PLUGIN-7, S11, S15 in lines: a session in lines has somebody at it, so it says so, puts the
+    /// hook question, and only the affirmative approves. A line that is anything else and the end of
+    /// the input refuse. The question carries the plugin's argv behind the margin.
+    ///
+    /// Rejects: a lines session that cannot be asked (it would fire no hook for a person who is
+    /// there), a yes taken from anything but yes, and an end of input read as a yes.
+    #[test]
+    fn a_plugin_hook_is_asked_in_lines_and_only_a_yes_approves() {
+        use bravebot_agent::confirm::{Confirmer, HookRequest};
+        let request = HookRequest {
+            plugin: "demo".to_string(),
+            moment: "turn-started",
+            argv: vec!["/h/hook.sh".to_string()],
+            records: true,
+        };
+        for (typed, expected) in [
+            ("y\n", Decision::Approve),
+            ("Y\n", Decision::Approve),
+            ("n\n", Decision::Reject),
+            ("yes please\n", Decision::Reject),
+            ("\n", Decision::Reject),
+            ("", Decision::Reject),
+        ] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            assert!(asking.can_ask_about_a_hook());
+            assert_eq!(asking.confirm_hook(&request), expected, "{typed:?}");
+            let said = String::from_utf8(asking.output).expect("utf-8");
+            assert!(
+                said.contains("demo") && said.contains("1. /h/hook.sh"),
+                "{said}"
+            );
+        }
+    }
+
+    /// PLUGIN-7, S10, S11 at `session-started` in lines: the start of the session asks through the
+    /// lines confirmer, and the hook runs after a typed yes and not after a no or the end of the
+    /// input. The question was printed with the plugin's name, and a no is not recorded.
+    ///
+    /// Rejects: a lines session whose start fires a plugin's hook without the question, one that
+    /// fires after a no or an end of input, and one that records a no.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_hook_at_the_start_of_a_lines_session_is_asked_and_runs_only_after_a_yes() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::test_support::Scratch::new("plain-plugin-hook-session-started");
+        let marker = scratch.path.join("marker");
+        let source = scratch.path.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("plugin.toml"),
+            "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("hooks.json"),
+            r#"{"hooks":[{"on":"session-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+        )
+        .unwrap();
+        let script = source.join("hook.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = scratch.path.join("state");
+        bravebot_agent::plugins::install(&source, &home).unwrap();
+
+        for (typed, fires) in [("n\n", false), ("", false), ("y\n", true)] {
+            let _ = std::fs::remove_file(&marker);
+            let _ = std::fs::remove_file(home.join("hooks-approved"));
+            let mut moments =
+                bravebot_agent::hooks::SessionMoments::read(Some(&home), &scratch.path);
+            moments.keep_answers(bravebot_agent::chatgpt::AccountSession::begin());
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            moments.started_asking(&mut asking);
+            assert_eq!(marker.exists(), fires, "{typed:?}");
+            assert_eq!(
+                home.join("hooks-approved").exists(),
+                fires,
+                "{typed:?} left a record"
+            );
+            let said = String::from_utf8(asking.output).expect("utf-8");
+            assert!(
+                said.contains("demo") && said.contains("session-started"),
+                "{said}"
             );
         }
     }
@@ -4373,6 +4506,7 @@ mod tests {
                 declaration: &declaration,
                 program: None,
                 changed: false,
+                plugin: None,
             });
 
             assert_eq!(answer, expected, "{typed:?}");
@@ -5107,6 +5241,50 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// SERVERS-8 in lines: each value an argument takes is on a row of its own behind the margin,
+    /// directly under that argument, and the argument's own text is not.
+    ///
+    /// A wrong implementation reads the wrong field of the argument, or leaves the values out, so
+    /// a value is drawn on no row at all or beside the argument with no margin.
+    #[test]
+    fn the_values_an_argument_takes_are_asked_about_behind_the_margin_in_lines() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+            Vec::new(),
+        );
+        asking.confirm_tool_list(&ToolListRequest {
+            alias: "weather".to_string(),
+            tools: vec![bravebot_agent::confirm::ListedTool {
+                name: "weather:get_forecast".to_string(),
+                arguments: vec![bravebot_agent::confirm::ListedToolArgument {
+                    text: "unit (string)".to_string(),
+                    choices: vec!["metric".to_string(), "a), y (string".to_string()],
+                }],
+                description: None,
+                read_only: false,
+            }],
+            refused: 0,
+            withheld: 0,
+            verdict: Verdict::Safe,
+            reason: None,
+        });
+        let drawn = String::from_utf8(asking.output).expect("text");
+        assert_eq!(
+            behind_the_margin(&drawn),
+            vec!["metric", "a), y (string"],
+            "{drawn}"
+        );
+        let rows: Vec<&str> = drawn.lines().collect();
+        let at = rows
+            .iter()
+            .position(|row| *row == "    unit (string)")
+            .unwrap_or_else(|| panic!("the argument has no row of its own: {drawn}"));
+        assert!(
+            rows[at + 1].ends_with(" metric") && rows[at + 2].ends_with(" a), y (string"),
+            "the values are not directly under the argument: {drawn}"
+        );
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.

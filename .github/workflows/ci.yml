@@ -628,7 +628,8 @@ jobs:
           if-no-files-found: ignore
 
   # The Verus contracts (docs/development/verification.md). `make check-verus` verifies the crates
-  # that carry contracts, requires Verus to refuse every mutation in verify/mutations.txt, and checks
+  # that carry contracts, requires Verus to refuse every mutation in verify/mutations.txt and every
+  # one-token change the sweep makes that verify/survivors.txt does not list, and checks
   # verify/history.rs the same way. Verus runs on a toolchain of its own through rustup, newer than
   # the one the workspace builds on, and the release is checked against its digest before it runs.
   # On a pull request, only where crates/core, verify/ or the scripts that run them changed.
@@ -1204,6 +1205,19 @@ jobs:
             tests::every_awkward_name_is_offered_and_read_back_as_the_file_it_is \
             | tee "$RUNNER_TEMP/mentions.log"
           grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/mentions.log"
+
+      - name: Test a full-path rule inside a workspace the host canonicalizes with a prefix
+        # Windows canonicalizes the workspace to `\\?\C:\..` and a rule is written `C:/..`, a
+        # difference no other host has, so the relative name the file tools ask by is only covered
+        # where this runs (PERM-7).
+        run: |
+          mkdir -p "$RUNNER_TEMP/names"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/names")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-agent --locked --lib -- --exact \
+            permissions::tests::a_full_path_rule_inside_the_workspace_covers_its_relative_names_on_windows \
+            | tee "$RUNNER_TEMP/full-path-rule.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/full-path-rule.log"
 
       - name: Test how a command rule folds the spellings of a program
         run: |

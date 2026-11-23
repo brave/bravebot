@@ -1,7 +1,7 @@
 use super::*;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
-use bravebot_core::label::Integrity;
+use bravebot_core::label::{Integrity, Label};
 use bravebot_core::policy::{ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 
@@ -147,6 +147,35 @@ fn an_edit_from_a_trusted_context_replaces_the_passage() {
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
         "keep\nnew\ntail\n"
+    );
+}
+
+/// The result of an edit holds the lines it produced only where the edited body's label is
+/// trusted. No turn reaches the other case, because a context that has met something untrusted
+/// is refused before the edit is worked out, so the choice is tested where it is made: a body
+/// labelled untrusted gets the count alone and a trusted one gets the lines, whatever its
+/// confidentiality.
+#[test]
+fn an_edit_result_shows_its_lines_only_for_a_trusted_body() {
+    assert_eq!(
+        what_an_edit_result_shows(Label::untrusted_public()),
+        EditResultShows::CountAlone,
+        "an untrusted body was shown as lines"
+    );
+    assert_eq!(
+        what_an_edit_result_shows(Label::untrusted_private()),
+        EditResultShows::CountAlone,
+        "an untrusted private body was shown as lines"
+    );
+    assert_eq!(
+        what_an_edit_result_shows(Label::trusted_public()),
+        EditResultShows::LinesAndCount,
+        "a trusted body lost its lines"
+    );
+    assert_eq!(
+        what_an_edit_result_shows(Label::trusted_private()),
+        EditResultShows::LinesAndCount,
+        "a trusted private body lost its lines"
     );
 }
 
@@ -296,6 +325,148 @@ fn an_edit_by_reference_that_cannot_be_read_does_not_name_the_file() {
         told.contains("ref:1"),
         "the failure does not say which call failed: {told}"
     );
+}
+
+/// A policy that vouches for nothing, so every file is quarantined.
+fn policy_vouching_nothing(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+    Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+        sink,
+    )
+    .expect("policy")
+}
+
+/// One `edit_file` call by `path_ref` on a file named `name` that holds `contents`, under `policy`.
+/// Returns what the planner is told and the file as it is afterwards.
+fn edit_by_reference(
+    policy: &mut Policy<'_, RecordingSink>,
+    name: &str,
+    contents: &str,
+    arguments: &Value,
+) -> (String, String) {
+    let scratch = Scratch::new("cell-by-reference");
+    std::fs::write(scratch.path.join(name), contents).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut slots = SlotStore::new();
+    policy
+        .defer(
+            "list_files",
+            SlotId::new("ref:1"),
+            name,
+            &Labelled::trusted(name.to_string()),
+            contents.len(),
+            &mut slots,
+        )
+        .expect("the file is reserved");
+
+    let produced = edit_file(
+        policy,
+        &workspace,
+        &slots,
+        crate::findings::Recording::default(),
+        crate::PermissionMode::Ask,
+        false,
+        None,
+        &mut crate::confirm::ApproveWrites,
+        arguments,
+    );
+    let told = super::arguments::told(policy, &produced.text);
+    (
+        told,
+        std::fs::read_to_string(scratch.path.join(name)).unwrap(),
+    )
+}
+
+/// EDIT-2. The refusal of an edit by `path_ref` of a file nobody vouched for is the same whether
+/// the name behind the reference has a picture extension or not. The hint that a `read_file`
+/// would put the vouch question is chosen from the extension of the name for a typed `path`,
+/// and the name behind a reference came out of a directory nobody vouched for, so a hint that
+/// differs tells the planner a fact about it. The regression it rejects is choosing the hint from
+/// that name, which sends a `.png` to "ask the person" and any other name to "read it with
+/// read_file".
+#[test]
+fn an_edit_by_reference_of_an_untrusted_file_gives_the_same_hint_whatever_its_extension() {
+    let arguments = json!({"path_ref": "ref:1", "old_text": "old", "new_text": "new"});
+    let mut told = Vec::new();
+    for name in ["zqxleak.png", "zqxleak.txt", "zqxleak"] {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_vouching_nothing(&mut sink);
+        let (said, after) = edit_by_reference(&mut policy, name, "old\n", &arguments);
+        assert_eq!(after, "old\n", "{name} was written");
+        assert!(
+            said.starts_with("refused: this file is closed to edit_file"),
+            "{name} was not refused as an untrusted file: {said}"
+        );
+        assert!(!said.contains("zqxleak"), "{name} was named: {said}");
+        told.push(said);
+    }
+    assert_eq!(told[0], told[1], "the hint depends on the hidden name");
+    assert_eq!(told[1], told[2], "the hint depends on the hidden name");
+}
+
+/// EDIT-8, EDIT-2. A `cell` edit by `path_ref` of a file nobody vouched for gets the same refusal
+/// whatever the name behind the reference is. The name came out of a directory nobody
+/// vouched for, so a sentence that differs between a `.ipynb` and any other name tells the
+/// planner a fact about it. The regression it rejects is testing the extension of the hidden
+/// name before the trust check, which refuses a `.txt` as "not a notebook" and a `.ipynb` as
+/// closed to editing. Neither file is changed.
+#[test]
+fn a_cell_edit_by_reference_of_an_untrusted_file_is_refused_the_same_whatever_its_name() {
+    let arguments = json!({"path_ref": "ref:1", "cell": 1, "new_text": "y"});
+    let mut told = Vec::new();
+    for name in ["zqxleak.ipynb", "zqxleak.txt", "zqxleak"] {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_vouching_nothing(&mut sink);
+        let (said, after) = edit_by_reference(&mut policy, name, "old\n", &arguments);
+        assert_eq!(after, "old\n", "{name} was written");
+        assert!(
+            said.starts_with("refused: this file is closed to edit_file"),
+            "{name} was not refused as an untrusted file: {said}"
+        );
+        assert!(!said.contains("zqxleak"), "{name} was named: {said}");
+        assert!(
+            !said.contains("is not one"),
+            "the extension was tested before the trust check: {said}"
+        );
+        told.push(said);
+    }
+    assert_eq!(told[0], told[1], "the refusal depends on the hidden name");
+    assert_eq!(told[0], told[2], "the refusal depends on the hidden name");
+}
+
+/// EDIT-8. A `cell` edit by `path_ref` of a vouched file that is not a `.ipynb` is refused as
+/// not being a notebook, as it is for a typed `path`, and the same edit of a vouched `.ipynb`
+/// is made. The regression it rejects is dropping the extension test for a reference, which
+/// would let a cell edit rewrite a plain file as a notebook, or making `cell` unusable by
+/// reference.
+#[test]
+fn a_cell_edit_by_reference_of_a_vouched_file_is_made_only_on_a_notebook() {
+    const NOTEBOOK: &str = "{\n \"cells\": [\n  {\n   \"cell_type\": \"markdown\",\n   \
+        \"metadata\": {},\n   \"source\": [\n    \"# Top\"\n   ]\n  }\n ],\n \"metadata\": {},\n \
+        \"nbformat\": 4,\n \"nbformat_minor\": 5\n}\n";
+    let arguments = json!({"path_ref": "ref:1", "cell": 1, "new_text": "# Changed"});
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let (said, after) = edit_by_reference(&mut policy, "n.ipynb", NOTEBOOK, &arguments);
+    assert!(said.contains("ref:1"), "{said}");
+    assert!(!said.contains("n.ipynb"), "the notebook was named: {said}");
+    assert!(
+        after.contains("# Changed"),
+        "the cell was not replaced: {after}"
+    );
+    assert!(!after.contains("# Top"), "the old cell stayed: {after}");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let (said, after) = edit_by_reference(&mut policy, "plain.txt", "old\n", &arguments);
+    assert!(
+        said.starts_with("error: 'cell' addresses a cell of a .ipynb notebook"),
+        "{said}"
+    );
+    assert_eq!(after, "old\n");
 }
 
 /// The same property on the other road a reference's file is opened by. Nothing reads a
@@ -686,6 +857,146 @@ fn a_bounded_listing_cut_per_directory_and_at_the_cap_says_both() {
     );
 }
 
+/// The sentence a bounded listing ends with when a directory lost files to the per-directory cap.
+const SAID_FILES_CUT: &str = "(this listing took at most 200 files from any one directory and is incomplete; to see the rest of a directory marked \"not listed\", list that directory by its name with no depth)";
+
+/// The sentence a bounded listing ends with when a directory lost subdirectories to the
+/// per-directory cap. It says what a listing with no depth shows, since that listing names files
+/// only and does not reveal the subdirectories that were left out.
+const SAID_SUBDIRECTORIES_CUT: &str = "(this listing took at most 200 subdirectories from any one directory and is incomplete; for a directory marked \"not listed\", list it by its name with no depth to see the files under all of its subdirectories, since a listing with no depth names files only)";
+
+/// A listing as the planner reads it: one entry to a line, then each sentence after a blank line.
+fn listing_told(entries: Vec<String>, sentences: &[&str]) -> String {
+    let mut told = entries.join("\n");
+    for sentence in sentences {
+        told.push_str("\n\n");
+        told.push_str(sentence);
+    }
+    told
+}
+
+/// LIST-5 for a listing the planner may read: a directory the per-directory cap cut for its
+/// subdirectories is named with how many are not shown, and the sentence for the planner says what
+/// a listing with no depth does and does not show. The regressions it rejects: the cut directory
+/// missing from the body, its count dropped or worded as files, the sentence about files said for a
+/// directory that lost no file, no sentence about subdirectories, and the whole-walk wording for a
+/// listing that stopped at no such cap.
+#[test]
+fn a_bounded_listing_names_a_directory_it_cut_for_subdirectories_with_how_many_it_left_out() {
+    let scratch = Scratch::new("list-cut-subdirectories-trusted");
+    std::fs::create_dir(scratch.path.join("wide")).unwrap();
+    for n in 0..203 {
+        std::fs::create_dir(scratch.path.join(format!("wide/d{n:03}"))).unwrap();
+    }
+    std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(
+        &mut policy,
+        &workspace,
+        &json!({"directory": ".", "depth": 2}),
+    );
+    assert!(
+        produced.incomplete,
+        "a subdirectory cut was not reported as incomplete"
+    );
+    let told = super::arguments::told(&mut policy, &produced.text);
+
+    let mut entries = vec![
+        "README.md".to_string(),
+        "wide/ (3 more subdirectories not listed)".to_string(),
+    ];
+    entries.extend((0..200).map(|n| format!("wide/d{n:03}/")));
+    assert_eq!(
+        told,
+        listing_told(entries, &[SAID_SUBDIRECTORIES_CUT]),
+        "the listing did not name the directory with its subdirectory count and say what a listing \
+         with no depth shows"
+    );
+}
+
+/// LIST-5 for a listing the planner may read: a directory cut for both its files and its
+/// subdirectories is named once with both counts, and each cut has its own sentence. The
+/// regressions it rejects: one count shown and the other dropped, the two counts swapped, the
+/// directory named twice, and the sentence for one cut standing in for the other.
+#[test]
+fn a_bounded_listing_cut_for_files_and_subdirectories_names_the_directory_once_with_both_counts() {
+    let scratch = Scratch::new("list-cut-both-trusted");
+    std::fs::create_dir(scratch.path.join("mixed")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("mixed/f{n:03}.txt")), "x").unwrap();
+    }
+    for n in 0..202 {
+        std::fs::create_dir(scratch.path.join(format!("mixed/d{n:03}"))).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(
+        &mut policy,
+        &workspace,
+        &json!({"directory": ".", "depth": 2}),
+    );
+    assert!(
+        produced.incomplete,
+        "a cut for both files and subdirectories was not reported as incomplete"
+    );
+    let told = super::arguments::told(&mut policy, &produced.text);
+
+    let mut entries = vec!["mixed/ (1 more file and 2 more subdirectories not listed)".to_string()];
+    entries.extend((0..200).map(|n| format!("mixed/d{n:03}/")));
+    entries.extend((0..200).map(|n| format!("mixed/f{n:03}.txt")));
+    assert_eq!(
+        told,
+        listing_told(entries, &[SAID_FILES_CUT, SAID_SUBDIRECTORIES_CUT]),
+        "the directory was not named once with both counts, or a sentence for one of the cuts was \
+         missing"
+    );
+}
+
+/// LIST-5 for a listing the planner may read: a directory cut for files only reads as it always
+/// has, with a file count, the sentence about files and nothing about subdirectories. The
+/// regressions it rejects: a subdirectory count or the subdirectory sentence added to a listing
+/// that left no subdirectory out, and the file wording changed.
+#[test]
+fn a_bounded_listing_cut_for_files_only_says_nothing_about_subdirectories() {
+    let scratch = Scratch::new("list-cut-files-only-trusted");
+    std::fs::create_dir(scratch.path.join("crowded")).unwrap();
+    for n in 0..201 {
+        std::fs::write(scratch.path.join(format!("crowded/f{n:03}.txt")), "x").unwrap();
+    }
+    std::fs::write(scratch.path.join("README.md"), "x").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink);
+    let produced = list_files(
+        &mut policy,
+        &workspace,
+        &json!({"directory": ".", "depth": 2}),
+    );
+    assert!(produced.incomplete, "a per-directory cut was not reported");
+    let told = super::arguments::told(&mut policy, &produced.text);
+
+    assert!(
+        !told.contains("subdirector"),
+        "a listing that left no subdirectory out spoke of subdirectories: {told}"
+    );
+    let mut entries = vec![
+        "README.md".to_string(),
+        "crowded/ (1 more file not listed)".to_string(),
+    ];
+    entries.extend((0..200).map(|n| format!("crowded/f{n:03}.txt")));
+    assert_eq!(
+        told,
+        listing_told(entries, &[SAID_FILES_CUT]),
+        "a cut for files only was worded differently from before"
+    );
+}
+
 /// LIST-6 for a listing the planner may not read: the count travels beside the references,
 /// because a sentence written into the quarantined body reaches nobody. The regression it
 /// rejects: the count kept only for the trusted rendering.
@@ -932,6 +1243,133 @@ fn a_deferred_read_a_rule_denies_does_not_name_the_file() {
     assert!(
         refusal.contains("ref:1"),
         "the refusal does not say which slot failed: {refusal}"
+    );
+}
+
+/// A rule covers the file, so a reference whose file became a link to a denied one after the
+/// reference was issued is refused when the file is opened, and the slot is left unread. Judged
+/// from the stored path and the rules and never from what the file holds; what comes back names the
+/// slot and not either file.
+#[cfg(unix)]
+#[test]
+fn a_deferred_read_of_a_file_that_became_a_link_to_a_denied_file_is_refused_and_left_unread() {
+    let scratch = Scratch::new("deferred-link-denied");
+    std::fs::write(scratch.path.join("listed.txt"), "text\n").unwrap();
+    std::fs::write(scratch.path.join("secret.txt"), "SECRET-4385").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(secret.txt)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink).with_permissions(permissions);
+    let mut slots = SlotStore::new();
+    policy
+        .defer(
+            "list_files",
+            SlotId::new("ref:1"),
+            "listed.txt",
+            &Labelled::trusted("listed.txt".to_string()),
+            5,
+            &mut slots,
+        )
+        .expect("the file is reserved");
+
+    // The listing was harmless when the reference was issued.
+    std::fs::remove_file(scratch.path.join("listed.txt")).unwrap();
+    std::os::unix::fs::symlink("secret.txt", scratch.path.join("listed.txt")).unwrap();
+
+    let Err(refusal) = materialise(
+        &mut policy,
+        &workspace,
+        &mut slots,
+        "spawn_processor",
+        &[SlotId::new("ref:1")],
+    ) else {
+        panic!("a link to a denied file was opened through a reference");
+    };
+    assert!(
+        refusal.contains("ref:1"),
+        "the refusal does not say which slot failed: {refusal}"
+    );
+    for name in ["listed.txt", "secret.txt"] {
+        assert!(
+            !refusal.contains(name),
+            "the refusal named {name}, which a reference withholds: {refusal}"
+        );
+    }
+    assert!(
+        slots.is_unread(&SlotId::new("ref:1")),
+        "a refused read left the slot filled or marked read"
+    );
+    assert!(
+        slots.take_for_reading(&SlotId::new("ref:1")).is_err(),
+        "a refused read handed out bytes"
+    );
+}
+
+/// The same for a hard link: the other name of a denied file is the file, and no link is followed
+/// to say so, so the walk for a file's other names is what finds it.
+#[cfg(unix)]
+#[test]
+fn a_deferred_read_of_a_file_that_became_a_hard_link_to_a_denied_file_is_refused() {
+    let scratch = Scratch::new("deferred-hard-link-denied");
+    std::fs::write(scratch.path.join("listed.txt"), "text\n").unwrap();
+    std::fs::write(scratch.path.join("secret.txt"), "SECRET-4385").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+        &["Read(secret.txt)".to_string()],
+        &[],
+        &[],
+        &bravebot_core::permissions::Anchors::none(),
+    );
+    assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_vouching(&mut sink).with_permissions(permissions);
+    let mut slots = SlotStore::new();
+    policy
+        .defer(
+            "list_files",
+            SlotId::new("ref:1"),
+            "listed.txt",
+            &Labelled::trusted("listed.txt".to_string()),
+            5,
+            &mut slots,
+        )
+        .expect("the file is reserved");
+
+    std::fs::remove_file(scratch.path.join("listed.txt")).unwrap();
+    std::fs::hard_link(
+        scratch.path.join("secret.txt"),
+        scratch.path.join("listed.txt"),
+    )
+    .unwrap();
+
+    let Err(refusal) = materialise(
+        &mut policy,
+        &workspace,
+        &mut slots,
+        "spawn_processor",
+        &[SlotId::new("ref:1")],
+    ) else {
+        panic!("a hard link to a denied file was opened through a reference");
+    };
+    assert!(
+        refusal.contains("ref:1")
+            && !refusal.contains("listed.txt")
+            && !refusal.contains("secret.txt"),
+        "the refusal does not name the slot alone: {refusal}"
+    );
+    assert!(
+        slots.is_unread(&SlotId::new("ref:1")),
+        "a refused read left the slot filled or marked read"
     );
 }
 

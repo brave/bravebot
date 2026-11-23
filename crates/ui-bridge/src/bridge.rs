@@ -18,6 +18,7 @@ use crate::project_questions::Questions;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
 use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
+use crate::view::Acting;
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::conversation::Address;
@@ -44,6 +45,10 @@ use std::time::Duration;
 /// How long `session.open` waits for what still works for a session this bridge closed, when the
 /// record it was asked for is held or changed (SESSION-38).
 const CLOSED_SESSIONS_WAIT: Duration = Duration::from_secs(2);
+
+/// How long `session.background` waits for a worker that has said it is done to return, before it
+/// counts the chat as running something.
+const AFTER_WORK_WAIT: Duration = Duration::from_millis(500);
 
 /// What opening a stored session came to.
 enum Stored {
@@ -107,6 +112,21 @@ struct Open {
     /// (INPUT-50). Left in place once it has answered: stopping a request that has ended does
     /// nothing, and the next one replaces it.
     enhancing: Option<Cancel>,
+    /// The request to shorten the conversation, while one is running (CMD-34). The conversation is
+    /// out of the state on its worker until it ends, so the session refuses what would read or
+    /// change the conversation, as it does while a turn runs. Cleared by `reap` once the worker has
+    /// put the conversation back.
+    compacting: Option<crate::compaction::Compacting>,
+    /// The stop for the last request for a brief to hand the chat off from (SESSION-34). Left in
+    /// place once it has answered, as `enhancing` is.
+    handing_off: Option<Cancel>,
+    /// The question asked beside the work, while one may be out (CMD-8, CMD-16). One at a time: a
+    /// second is refused until this one has settled.
+    aside: Option<AsideOut>,
+    /// The exchange and the file authority the turn in flight, or the last one, published for a
+    /// question asked beside it (CMD-8). Outside `state`, which the turn's worker holds for the
+    /// whole turn, and emptied when a turn begins.
+    published: crate::turn::Published,
     /// What each `turn.send` was answered, by its `messageId`, for as long as the session is open
     /// (RPCVIEW-11).
     sends: crate::sends::Sends,
@@ -119,6 +139,19 @@ struct Open {
     /// The folders open beside the project, as the state held them when they last changed, for a
     /// `session.folders.list` asked while a turn holds the state.
     folders: Vec<PathBuf>,
+    /// What `/cost`, `/context` and `/request` are answered from, which the session's turns write
+    /// into as they run, so a report asked while a turn holds the state is answered (CMD-8).
+    reports: crate::reports::Shared,
+    /// The state's spend limit, the same shared handle, so `session.limit` sets it while a turn
+    /// holds the state and that turn's next request is held to it (TURN-8).
+    spend_limit: bravebot_agent::SpendLimit,
+    /// The state's token total when its current turn began, which `session.limit` reports while
+    /// that turn holds the state.
+    tokens_at_turn: u64,
+    /// The variant of the model's options the window picked, or `None` for the model's own
+    /// options (BACKEND-66). A person's act that is never recorded, so a session opens, resumes,
+    /// forks and starts new with none.
+    variant: Option<String>,
 }
 
 impl Open {
@@ -134,6 +167,10 @@ impl Open {
         Self {
             project,
             folders: state.directories.clone(),
+            // Measured against no budget until a turn starts, which reads it from the settings.
+            reports: Arc::new(Mutex::new(crate::reports::Held::of(&state, 0))),
+            spend_limit: state.spend_limit.clone(),
+            tokens_at_turn: state.tokens,
             state: Arc::new(Mutex::new(state)),
             answered_trust,
             keeping,
@@ -148,9 +185,14 @@ impl Open {
             sandbox: None,
             offered_definitions: Mutex::new(Vec::new()),
             enhancing: None,
+            compacting: None,
+            handing_off: None,
+            aside: None,
+            published: crate::turn::Published::default(),
             sends: crate::sends::Sends::default(),
             questions: Questions::Settled,
             refused_folders: Vec::new(),
+            variant: None,
         }
     }
 
@@ -185,7 +227,36 @@ impl Open {
                 "a turn is already running in this session",
             ));
         }
+        self.not_compacting()
+    }
+
+    /// Refused while the conversation is being shortened (CMD-34). Its worker holds the
+    /// conversation until it ends, so a turn, a fork, an undo or a note would find it empty.
+    fn not_compacting(&self) -> Result<(), Failure> {
+        if self.compacting.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Wait for the conversation to finish being shortened.",
+            ));
+        }
         Ok(())
+    }
+}
+
+/// A question asked beside the work, from when it is sent until its worker has settled it.
+struct AsideOut {
+    /// Stops the request.
+    cancel: Cancel,
+    /// Set by the worker once the answer is a row and the event has gone, so the next question
+    /// may be asked.
+    settled: Arc<std::sync::atomic::AtomicBool>,
+    /// The target of the turn it was asked beside, so stopping that turn stops it too (CMD-8).
+    beside_turn: Option<u64>,
+}
+
+impl AsideOut {
+    fn is_out(&self) -> bool {
+        !self.settled.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -225,6 +296,12 @@ pub struct Bridge {
     /// The last request id given to one of those questions. Never reused, so a reply meant for
     /// one cannot answer a later one.
     project_questions: u64,
+    /// The name of the host client whose request is being dispatched, for the view to credit
+    /// (RPCVIEW-14). Set only for the duration of [`Bridge::dispatch_as`].
+    acting: Option<String>,
+    /// Reads the background roster for `background.list`, kept so a list read every second reuses
+    /// the records it has already read (BG-17).
+    background_reader: bravebot_session::listing::Reader,
 }
 
 impl Bridge {
@@ -244,6 +321,8 @@ impl Bridge {
             sign_ins: crate::accounts::SignIns::default(),
             putting_project_questions: true,
             project_questions: 0,
+            acting: None,
+            background_reader: bravebot_session::listing::Reader::new(),
         }
     }
 
@@ -290,6 +369,21 @@ impl Bridge {
         self.emitter.send(Event::global("agent.ready", info));
     }
 
+    /// Route one request on behalf of the host client named `actor`, so the view names that client
+    /// for the send, answer or cancel it makes (RPCVIEW-14). The name is the one the person gave
+    /// the client on the host's command line.
+    pub fn dispatch_as(&mut self, actor: &str, request: &Request) -> Result<Value, Failure> {
+        self.acting = Some(actor.to_string());
+        let outcome = self.dispatch(request);
+        self.acting = None;
+        outcome
+    }
+
+    /// The client the request being dispatched is credited to.
+    fn acting(&self) -> Acting<'_> {
+        Acting::from(self.acting.as_deref())
+    }
+
     /// Route one request.
     ///
     /// The match is exhaustive over the methods this version knows; an unknown one is a
@@ -318,6 +412,12 @@ impl Bridge {
                 Ok(crate::models::list(&config))
             }
             "session.list" => self.list(request),
+            "background.list" => Ok(crate::background::list(
+                &mut self.background_reader,
+                &bravebot_session::sessions::sessions_root().unwrap_or_default(),
+                bravebot_session::jobs::Roster::readable().as_ref(),
+            )),
+            "session.stats" => session_stats(request),
             "session.open" => self.open_session(request),
             "session.new" => self.new_session(request),
             "session.view.start" => self.start_view(request),
@@ -330,11 +430,17 @@ impl Bridge {
             "session.close" => self.close_session(request),
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
+            "session.limit" => self.session_limit(request),
+            "session.variant" => self.session_variant(request),
             "session.rewind" => self.rewind_session(request),
             "session.note" => self.note_session(request),
             "session.folders.list" | "session.folders.add" | "session.folders.close" => {
                 self.folders(request)
             }
+            "session.report.cost" | "session.report.context" | "session.report.request" => {
+                self.report(request)
+            }
+            "session.report.status" => self.report_status(request),
             "turn.send" => self.send_turn(request),
             "turn.lookup" => {
                 let id = crate::wire::message_id(request.params.get("messageId"))?;
@@ -387,6 +493,15 @@ impl Bridge {
             "turn.interject" => self.interject_turn(request),
             "session.enhance" => self.enhance_draft(request),
             "session.enhance.cancel" => self.cancel_enhancement(request),
+            "session.compact" => self.compact_session(request),
+            "session.compact.cancel" => self.cancel_compaction(request),
+            "session.handoff" => self.handoff_brief(request),
+            "session.handoff.cancel" => self.cancel_handoff(request),
+            "session.background" => self.background_session(request),
+            "session.background.stop" => Self::stop_background(request),
+            "session.recap" => self.ask_aside(request, false),
+            "session.btw" => self.ask_aside(request, true),
+            "session.aside.cancel" => self.cancel_aside(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -429,6 +544,7 @@ impl Bridge {
             "folder.reply" => self.reply_folder(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
+            "permissions.check" => self.permissions_check(request),
             "settings.inspect" => Ok(crate::settings::report(
                 self.project_of(request),
                 self.settings.as_deref(),
@@ -451,13 +567,21 @@ impl Bridge {
                 let directory = request.optional_string("directory").map(PathBuf::from);
                 let settings =
                     crate::settings::layers(directory.as_deref(), self.settings.as_deref());
-                Ok(crate::effort::get(&settings))
+                // The lock is held only to clone the handle on the session's account session.
+                let began = request
+                    .optional_string("session")
+                    .and_then(|handle| self.open.get(&handle))
+                    .and_then(|open| Some(open.state.lock().ok()?.account.clone()))
+                    .map(|account| account.effort());
+                Ok(crate::effort::get(&settings, began))
             }
             "effort.set" => crate::effort::set(request),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
             "usage_ping.get" => Ok(crate::usage_ping::get()),
             "usage_ping.set" => crate::usage_ping::set(request),
+            "crash_reports.get" => Ok(crate::crash_reports::get()),
+            "crash_reports.set" => crate::crash_reports::set(request),
             "usage_ping.notice_due" => {
                 Ok(json!({"due": bravebot_session::store::usage_ping_notice_due()}))
             }
@@ -466,6 +590,8 @@ impl Bridge {
                 crate::usage_ping::start(self.settings.as_deref());
                 Ok(json!({"shown": bravebot_session::store::usage_ping_notice_shown()}))
             }
+            "crash_reports.notice_due" => Ok(crate::crash_notice::due()),
+            "crash_reports.mark_notice_shown" => Ok(crate::crash_notice::mark_shown()),
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
             "caffeinate.confirmed" => {
@@ -491,6 +617,8 @@ impl Bridge {
                 self.settings.as_deref(),
             )),
             "window.fault" => crate::window_fault::record(request),
+            "window.title" => crate::window_title::title(request),
+            "opener.judge" => crate::opener_names::judge(request),
             "accounts.list" => crate::accounts::list_asked(
                 request,
                 self.project_of(request),
@@ -567,6 +695,15 @@ impl Bridge {
             None => store::list_all(),
         };
 
+        // The roster is read once per call, not once per row.
+        let roster: std::collections::HashMap<String, bravebot_session::jobs::Seen> =
+            bravebot_session::jobs::Roster::readable()
+                .map(|roster| roster.list())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|seen| (seen.job.id.clone(), seen))
+                .collect();
+
         let sessions: Vec<Value> = listed
             .iter()
             .map(|entry| {
@@ -577,12 +714,19 @@ impl Bridge {
                     "branch": entry.summary.branch,
                     // Carried to the row as the string the record holds. Nothing here reads it.
                     "pullRequest": entry.summary.pull_request,
+                    // The session this one was handed off from (SESSION-34), which the summary
+                    // keeps only where it is a session id.
+                    "handedOffFrom": entry.summary.handed_off_from,
                     "title": entry.summary.title,
                     "updated": entry.summary.updated,
                     "bytes": entry.summary.bytes,
                     // Whether the record is a manifest run. A run has no conversation, so it
                     // is read with `manifest.read` and `session.open` refuses it.
                     "manifest": entry.summary.manifest,
+                    // The BG-6 state of the background process that holds or held the record, or
+                    // null where none ever has. A fixed word about the process, so nothing from
+                    // content reaches the row (BG-5).
+                    "background": roster.get(&entry.summary.id).map(|seen| seen.state().word()),
                 })
             })
             .collect();
@@ -656,6 +800,7 @@ impl Bridge {
             Err(held) => return Ok(Stored::Refused(held)),
         };
         state.account = self.account_session(&directory);
+        state.spend_limit = self.spend_limit(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(
@@ -839,6 +984,71 @@ impl Bridge {
         }
     }
 
+    /// `session.report.cost`, `.context` and `.request`, the desktop's `/cost`, `/context` and
+    /// `/request`. Answered from the session's [`crate::reports::Held`] and never from its state,
+    /// so a report asked while a turn holds the state is answered at once (CMD-8).
+    fn report(&self, request: &Request) -> Result<Value, Failure> {
+        let open = self
+            .open
+            .get(&request.string("session")?)
+            .ok_or_else(Failure::no_such_session)?;
+        let held = crate::reports::hold(&open.reports);
+        Ok(match request.method.as_str() {
+            "session.report.cost" => held.cost(),
+            "session.report.request" => held.request(),
+            _ => {
+                // A session none of whose turns has started here measures against the budget the
+                // settings name now, which is the budget its next turn reads.
+                let fallback =
+                    crate::settings::config(Some(&open.project), self.settings.as_deref())
+                        .map_or(0, |config| config.context_budget);
+                held.context(fallback)
+            }
+        })
+    }
+
+    /// `session.report.status`, the desktop's `/status`: the session's project, folders, model,
+    /// definition, permission and sandbox modes, id, title, turns and tokens, none of which is
+    /// read from its state. Between turns the answer also holds the rules, as `permissions.list`
+    /// gives them. While a turn runs it holds the trust map and the vouched programs, so the
+    /// answer says so and gives no rules rather than waiting for the turn (CMD-8).
+    fn report_status(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let model = open.model.clone().or_else(|| {
+            crate::settings::config(Some(&open.project), self.settings.as_deref())
+                .ok()
+                .map(|config| config.default_model)
+        });
+        let mut status = json!({
+            "project": open.project.display().to_string(),
+            "folders": open
+                .folders
+                .iter()
+                .map(|folder| folder.display().to_string())
+                .collect::<Vec<_>>(),
+            "model": model,
+            "definition": open.definition,
+            "permissionMode": wire::permission_mode_name(open.permission_mode.get()),
+            "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&open.project, open.sandbox)),
+        });
+        merge(&mut status, crate::reports::hold(&open.reports).status());
+        let running = open.running.is_some();
+        merge(
+            &mut status,
+            if running {
+                json!({ "rulesHeldByTurn": true, "rules": Value::Null })
+            } else {
+                json!({ "rulesHeldByTurn": false, "rules": self.permissions(request, false)? })
+            },
+        );
+        Ok(status)
+    }
+
     /// What a response that may make a question due adds about it: the question out, if any, and
     /// the rules as they stand. Nothing for a bridge that puts none.
     fn questions_report(&self, handle: &str) -> Value {
@@ -920,6 +1130,14 @@ impl Bridge {
         bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
+    /// The spend limit a session opened in `project` starts with: the `limit` setting, where a
+    /// project's file may only narrow the person's (TURN-8). The terminal seeds its session the
+    /// same way in `Session::adopt_limit`.
+    fn spend_limit(&self, project: &std::path::Path) -> bravebot_agent::SpendLimit {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_agent::SpendLimit::new(settings.limit())
+    }
+
     /// The mode a session opened in `project` starts in: auto where the person's own settings say
     /// `permissions.startInAuto`, and asking otherwise (MODE-1, AUTO-1), and asking always for a
     /// bridge built with [`Bridge::opening_in_ask`]. A checkout's file and the managed file are not
@@ -996,6 +1214,8 @@ impl Bridge {
             "todos": todos,
             // SESSION-36: shown beside the conversation, never sent to the model.
             "notes": notes_json(&record.notes),
+            // CMD-8, CMD-16: the questions asked beside the work, never sent to the model.
+            "asides": crate::aside::stored_json(&record.asides),
             "trust": {
                 "known": record.trust.is_some(),
                 "rules": record.trust.as_ref().map(|rules| {
@@ -1048,6 +1268,7 @@ impl Bridge {
 
     fn new_session(&mut self, request: &Request) -> Result<Value, Failure> {
         let directory = PathBuf::from(request.string("directory")?);
+        let handed_off_from = self.handed_off_from(request)?;
 
         if !directory.is_dir() {
             return Err(Failure::new(
@@ -1093,7 +1314,9 @@ impl Bridge {
         let reported = opening.json(&directory);
         let mut state = State::fresh(opening.trust);
         state.account = self.account_session(&directory);
+        state.spend_limit = self.spend_limit(&directory);
         state.directories = additional;
+        state.handed_off_from = handed_off_from;
         let handle = self.mint(
             Open::opened(
                 directory.clone(),
@@ -1126,6 +1349,48 @@ impl Bridge {
         merge(&mut made, reported);
         merge(&mut made, self.questions_report(&handle));
         Ok(made)
+    }
+
+    /// The id of the record a new chat is handed off from, read from the chat this bridge holds
+    /// open under the `handedOffFrom` handle (SESSION-34).
+    ///
+    /// The id comes from the bridge's own state and never from text the window sent, as
+    /// [`Handle::hand_off_from`] requires. A handle the bridge does not hold, and a chat with no
+    /// record to link back to, are refused before anything is created.
+    fn handed_off_from(&self, request: &Request) -> Result<Option<String>, Failure> {
+        let source = match request.params.get("handedOffFrom") {
+            None | Some(Value::Null) => return Ok(None),
+            Some(Value::String(source)) => source,
+            Some(_) => return Err(Failure::bad_request("`handedOffFrom` must be a string")),
+        };
+        let open = self.open.get(source).ok_or_else(|| {
+            Failure::bad_request("the chat to hand off from is not open in this window")
+        })?;
+        // Tried rather than waited for: a worker holds the chat's state for the whole of its turn
+        // or compaction, and dispatch is one thread, so waiting would stop this bridge answering
+        // anything, including the question that turn may be blocked on.
+        let state = match open.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(Failure::bad_request(
+                    "Wait for what is running in the chat to hand off from to finish first.",
+                ));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(Failure::new(
+                    ErrorCode::Internal,
+                    "the session's state is unavailable",
+                ));
+            }
+        };
+        state
+            .handle
+            .as_ref()
+            .and_then(Handle::resumable)
+            .map(|id| Some(id.to_string()))
+            .ok_or_else(|| {
+                Failure::bad_request("the chat to hand off from has no record to link back to")
+            })
     }
 
     /// Begin a session from part of another one.
@@ -1161,6 +1426,7 @@ impl Bridge {
                 "a turn is running in the session being forked",
             ));
         }
+        open.not_compacting()?;
 
         let project = open.project.clone();
         let answered_trust = open.answered_trust;
@@ -1285,6 +1551,7 @@ impl Bridge {
                     // The map is the parent's, so what the mode answered in it is still the mode's.
                     forked.answered_by_mode = by_mode;
                     forked.account = self.account_session(&project);
+                    forked.spend_limit = self.spend_limit(&project);
                     forked
                 },
                 // Inherited along with the map itself: the same person, in the same directory, in
@@ -1516,7 +1783,7 @@ impl Bridge {
             .collect()
     }
 
-    /// Say which kinds of question the session's controller can answer from now on. A question of
+    /// Say which kinds of question the session's clients can answer from now on. A question of
     /// another kind is refused when it is asked, without being shown; one already waiting is not
     /// touched. An empty list is nobody.
     pub fn set_answerable(&mut self, handle: &str, kinds: &[Kind]) -> Result<(), Failure> {
@@ -1526,51 +1793,66 @@ impl Bridge {
         self.answerers_of(handle).only(kinds)
     }
 
-    /// The session's controller is gone. Nobody can answer from now on, and the question waiting
-    /// is refused and shown as resolved. The turn or run goes on without it: what it asks next is
-    /// refused when asked. Nothing happens to a session with no question waiting.
-    pub fn lose_control(&mut self, handle: &str) {
+    /// A client of the session is gone, and the ones left can answer only `kinds`, which is
+    /// nobody where it is empty. The question waiting is refused and shown as resolved if its kind
+    /// is not among them, and stays waiting if it is. The turn or run goes on either way: what it
+    /// asks next is refused when asked unless its kind is among them. Nothing happens to a session
+    /// with no question waiting beyond the change of who can answer.
+    pub fn narrow_answerable(&mut self, handle: &str, kinds: &[Kind]) {
         if !self.open.contains_key(handle) {
             return;
         }
-        // First, so that a question asked from here on is refused and one asked just before this
-        // is registered where the refusal below finds it.
-        // Where the set cannot be written no question is answerable either, so a failure is the
-        // same refusal.
-        let _ = self.answerers_of(handle).nobody();
-        if let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) {
-            running.refuse_pending_with(|request| self.emitter.view_answered(handle, request));
-        }
+        let answerers = self.answerers_of(handle);
+        let running = self.open.get(handle).and_then(|open| open.running.as_ref());
+        // A turn being cancelled has its question refused by the cancel, and the view keeps the
+        // name of the client that cancelled it.
+        let acting = if running.is_some_and(|running| running.cancel.is_cancelled()) {
+            Acting::Same
+        } else {
+            // Nobody answered it: the clients that could have are gone.
+            Acting::Nobody
+        };
+        crate::running::narrow(&answerers, running, kinds, |request| {
+            self.emitter.view_answered(handle, request, acting);
+        });
     }
 
-    /// Give a session's view to a client that is taking it over.
+    /// Give a session's view to a client that is joining it.
     ///
-    /// `hand_over` switches where the session's events go, and runs between the end of what the
-    /// previous client was sent and the start of what the new one is. The client is sent the
+    /// `hand_over` adds the client to those the session's events go to, and runs between the end
+    /// of what the client was not sent and the start of what it is. The client is sent the
     /// session's current state and most recent rows as `session.view.snapshot`, with the startup
-    /// question again if it is still unanswered, and is then able to answer the `kinds` named. The
+    /// question again if it is still unanswered. The session's clients can answer the `kinds`
+    /// named from then on, which are the kinds of those already there and of the one joining. A
+    /// hand-over that fails puts them back to `before`, the kinds of those already there. The
     /// session must have started a view.
     pub fn attach_view(
         &mut self,
         handle: &str,
         kinds: &[Kind],
+        before: &[Kind],
         hand_over: impl FnOnce() -> Result<(), Failure>,
     ) -> Result<Value, Failure> {
         if !self.open.contains_key(handle) {
             return Err(Failure::no_such_session());
         }
         let answerers = self.answerers_of(handle);
+        // Who can answer is set before the hand-over, so a failure to set it leaves the clients
+        // already there as they were.
         let snapshot = self.emitter.snapshot_view(handle, || {
-            // Who can answer is set first, so a failure to set it leaves the previous controller
-            // as it was. A hand-over that then fails puts it back to nobody, not to the kinds
-            // set here, since no client has the session.
             answerers.only(kinds)?;
-            if let Err(failed) = hand_over() {
-                let _ = answerers.nobody();
+            hand_over()
+        });
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(failed) => {
+                // Outside the update lock, which a question being asked holds its own lock to
+                // take: one registered for a kind only the joining client could answer is
+                // refused here and not left waiting for it.
+                self.narrow_answerable(handle, before);
                 return Err(failed);
             }
-            Ok(())
-        })?;
+        };
         self.ask_about_trust(handle);
         Ok(snapshot_answer(snapshot))
     }
@@ -1640,6 +1922,15 @@ impl Bridge {
         if let Some(enhancing) = &open.enhancing {
             enhancing.cancel();
         }
+        if let Some(compacting) = &open.compacting {
+            compacting.cancel.cancel();
+        }
+        if let Some(handing_off) = &open.handing_off {
+            handing_off.cancel();
+        }
+        if let Some(out) = open.aside.as_ref().filter(|out| out.beside_turn.is_some()) {
+            out.cancel.cancel();
+        }
         let workers = self.workers.remove(&handle).unwrap_or_default();
         // The end of a session that began is one of the workers this returns, so a host that waits for
         // them waits for it, and it follows the turn that was running (HOOK-10).
@@ -1678,6 +1969,71 @@ impl Bridge {
         open.permission_mode
             .set_by(mode, bravebot_agent::ModeCause::Request);
         Ok(json!({ "permissionMode": wire::permission_mode_name(mode) }))
+    }
+
+    /// Set, clear or read the session's spend limit: the desktop window's `/limit` (TURN-8).
+    ///
+    /// `limit` a string is read as the `limit` setting is, `null` is no limit, and absent reads the
+    /// limit without changing it. The handle is the one each turn holds, so a limit set while a
+    /// turn runs applies to that turn's next request.
+    fn session_limit(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let asked = match request.params.get("limit") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(Value::String(text)) => Some(Some(
+                bravebot_config::limit::parse(text, bravebot_config::limit::Unit::Tokens)
+                    .ok_or_else(|| {
+                        Failure::bad_request(format!("`{text}` is not a spend limit"))
+                    })?,
+            )),
+            Some(_) => return Err(Failure::bad_request("`limit` must be a string or null")),
+        };
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(limit) = asked {
+            open.spend_limit.set(limit);
+        }
+        // A turn holds the state while it runs, and adds what it spent when it ends.
+        let tokens = match open.state.try_lock() {
+            Ok(state) => state.tokens,
+            Err(_) => open.tokens_at_turn,
+        };
+        Ok(match open.spend_limit.limit() {
+            Some(limit) => json!({
+                "limit": {"unit": limit.unit.word(), "count": limit.figure},
+                "spent": bravebot_agent::spend_limit::spent_in(limit.unit, &open.spend_limit, tokens),
+            }),
+            None => json!({"limit": null, "spent": tokens}),
+        })
+    }
+
+    /// List, pick or drop the session's variant of the model's options: the desktop window's
+    /// `/variant` (BACKEND-66).
+    ///
+    /// `model` is the window's pick, which reaches the session only with the next `turn.send`, and
+    /// is resolved as `turn.send` resolves it. Answered while a turn runs, since the pick is not
+    /// in the state the turn holds.
+    fn session_variant(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+        let word = crate::variant::word(request)?;
+        let open = self
+            .open
+            .get_mut(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let model = model.unwrap_or_else(|| config.default_model.clone());
+        let choice = config.choose_variant(&model, word);
+        let offered = config.variants_offered(&model);
+        crate::variant::apply(choice, word, &mut open.variant, &model, &offered)
     }
 
     /// Choose the sandbox mode the session's next turn runs its programs under.
@@ -1855,6 +2211,9 @@ impl Bridge {
         // settings layers as BACKEND-43 ranks them, read afresh for every turn so a level picked
         // between turns applies to the next one.
         let effort = recorded_effort(&settings);
+        // The variant the window picked for this session, read when the turn starts so a pick
+        // made while a turn runs applies to the next one (BACKEND-66).
+        let variant = open.variant.clone();
         let output_cap = settings.run_output_cap();
         let download_cap = settings.download_max_bytes();
         let deadlines = bravebot_agent::exec::Deadlines::from_settings(&settings);
@@ -1873,8 +2232,16 @@ impl Bridge {
         let mcp_requested = bravebot_agent::servers::requested_by(&settings);
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
+        let reports = Arc::clone(&open.reports);
         let watches = Arc::clone(&open.watches);
-        let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
+        let (turn_number, tokens_at_turn) = state
+            .lock()
+            .map(|s| (s.turns + 1, s.tokens))
+            .unwrap_or((1, open.tokens_at_turn));
+        // What the last turn published is dropped before anything says this one has started, so
+        // a question asked beside this turn waits for this turn's first request.
+        let published = open.published.clone();
+        published.turn_begins();
 
         let crate::running::Started {
             running,
@@ -1884,7 +2251,13 @@ impl Bridge {
             finished,
             target,
             interjections,
+            actors,
         } = Running::start();
+        if let Some(client) = &self.acting {
+            actors.note(format!(
+                "client {client} sent the message that began this turn"
+            ));
+        }
 
         let emitter = self.emitter.clone();
         let session = handle.clone();
@@ -1908,6 +2281,7 @@ impl Bridge {
                     })
                     .as_ref(),
             ),
+            self.acting(),
         );
         self.emitter.send(Event::new(
             "turn.started",
@@ -1923,6 +2297,7 @@ impl Bridge {
             open.running = Some(running);
             open.model = model;
             open.definition = standing;
+            open.tokens_at_turn = tokens_at_turn;
         }
         self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {
@@ -1935,9 +2310,11 @@ impl Bridge {
                 session,
                 project,
                 state,
+                reports,
                 config,
                 attribution,
                 effort,
+                variant,
                 output_cap,
                 download_cap,
                 deadlines,
@@ -1961,6 +2338,8 @@ impl Bridge {
                 answers: answers_rx,
                 finished,
                 interjections,
+                actors: actors.clone(),
+                published,
             });
         });
 
@@ -2057,6 +2436,462 @@ impl Bridge {
         Ok(json!({}))
     }
 
+    /// Shorten the conversation, as the terminal's `/compact [focus]` does (CMD-34), and return
+    /// before the request ends. `compact.done` says how it ended.
+    ///
+    /// The request is [`agent_turn::compact`], the terminal's own. It needs the conversation for
+    /// the whole request, and a conversation is not `Clone`, so it is moved out of the state here
+    /// and the worker puts it back on every path, a panic included. Until then the session refuses
+    /// a turn, a fork, an undo and a note. The phase and the `compacted` hooks (HOOK-2) reach the
+    /// window through the reporter a turn uses.
+    fn compact_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let focus = match request.params.get("focus") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(focus)) => {
+                Some(focus.trim().to_string()).filter(|focus| !focus.is_empty())
+            }
+            Some(_) => return Err(Failure::bad_request("`focus` must be a string")),
+        };
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let project = open.project.clone();
+        let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
+        let mut workspace =
+            turn_workspace(project.clone(), &settings, open.reads_stay_in_workspace)
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let state = Arc::clone(&open.state);
+        let (conversation, account, trust, turns) = {
+            let mut state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            // The hooks run in the workspace a turn would have, with the folders opened beside it.
+            for directory in &state.directories {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "a folder that can no longer be opened is left out, as a turn leaves it"
+                )]
+                let _ = workspace.add_directory(&directory.display().to_string());
+            }
+            (
+                std::mem::take(&mut state.conversation),
+                state.account.clone(),
+                state.answers.trust.clone(),
+                state.turns,
+            )
+        };
+        let (compacting, finished) = crate::compaction::Compacting::start();
+        let cancel = compacting.cancel.clone();
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.compacting = Some(compacting);
+        }
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        self.workers_of(&handle).spawn(move || {
+            let mut conversation = conversation;
+            let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+            let mut sink = BridgeSink::new(emitter.clone(), &session, turns);
+            let home = bravebot_agent::home::directory();
+            // Caught so the conversation, which is owned out here, goes back whatever happens to
+            // the request.
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                agent_turn::compact(
+                    &config,
+                    &Egress::new(),
+                    &account,
+                    &mut conversation,
+                    model.as_deref(),
+                    &mut reporter,
+                    &mut sink,
+                    trust,
+                    focus.as_deref(),
+                    &cancel,
+                    Some(agent_turn::Hooked {
+                        home: home.as_deref(),
+                        workspace: &workspace,
+                    }),
+                )
+            }));
+            let event = done
+                .ok()
+                .map(|done| crate::compaction::settle(done, cancel.is_cancelled()));
+            if let Ok(mut state) = state.lock() {
+                state.conversation = conversation;
+                // Charged as the terminal charges it: the request was made and spent what it
+                // spent, whether or not a summary was adopted.
+                state.tokens += event.as_ref().map_or(0, |(_, tokens)| *tokens);
+                // The last undo point holds the conversation as it was before it was shortened and
+                // the spend before this request, so it is closed as the terminal closes it.
+                state.rewind.close();
+                // Written as the terminal writes it after `/compact`, with the gates the request
+                // passed. A session with no record yet keeps none.
+                if state.handle.is_some() {
+                    save(&project, &mut state, turns, sink.trail());
+                }
+            }
+            finished.store(true, std::sync::atomic::Ordering::Release);
+            let event = event.map_or_else(crate::compaction::ended_unexpectedly, |(e, _)| e);
+            emitter.send(Event::new("compact.done", &session, event));
+        });
+        Ok(json!({ "started": true }))
+    }
+
+    /// Ask the session's model for a brief to start the next chat from, toward `goal`, as the
+    /// terminal's `/handoff <next goal>` does (SESSION-34, CMD-34), and return before it has
+    /// answered.
+    ///
+    /// The request is [`bravebot_agent::aside::Question::handoff`] over the exchange as it stands
+    /// and with no tools, and the conversation is not changed. The answer comes back as a
+    /// `handoff.done` event. Refused before anything is sent with no goal, and before a turn has
+    /// ended and been recorded, because the new chat links back to the record.
+    fn handoff_brief(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let goal = request.string("goal")?;
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+
+        let state = Arc::clone(&open.state);
+        // Taken here, on the thread that holds the state, because a conversation is not `Clone`
+        // and what crosses to the worker is the request and not the exchange.
+        let (asking, account, trust) = {
+            let state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            let recorded = state.handle.as_ref().and_then(Handle::resumable).is_some();
+            if let Some(why) = crate::handoff::refusal(&goal, state.turns, recorded) {
+                return Err(Failure::bad_request(why));
+            }
+            (
+                bravebot_agent::aside::Question::handoff(&state.conversation, &goal),
+                state.account.clone(),
+                state.answers.trust.clone(),
+            )
+        };
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let cancel = Cancel::new();
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.handing_off = Some(cancel.clone());
+        }
+        self.workers_of(&handle).spawn(move || {
+            let egress = Egress::new();
+            let mut sink = bravebot_session::audit::Trail::new();
+            let done = agent_turn::aside(
+                &config,
+                &egress,
+                &account,
+                asking,
+                model.as_deref(),
+                &mut sink,
+                trust,
+                |_written| {},
+                &cancel,
+            );
+            let (event, tokens) = crate::handoff::settle(done, &goal, cancel.is_cancelled());
+            // Charged as the terminal charges an aside: the request was made and spent what it
+            // spent, whether or not the brief is offered.
+            if tokens > 0
+                && let Ok(mut state) = state.lock()
+            {
+                state.tokens += tokens;
+            }
+            emitter.send(Event::new("handoff.done", &session, event));
+        });
+        Ok(json!({ "started": true }))
+    }
+
+    /// Stop the request for a handoff brief, if one is running. Nothing running is not an error:
+    /// the answer may have arrived first.
+    fn cancel_handoff(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(cancel) = &open.handing_off {
+            cancel.cancel();
+        }
+        Ok(json!({}))
+    }
+
+    /// Stop the request to shorten the conversation, if one is running. Nothing running is not an
+    /// error: it may have ended first.
+    fn cancel_compaction(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(compacting) = &open.compacting {
+            compacting.cancel.cancel();
+        }
+        Ok(json!({}))
+    }
+
+    /// Stop the background session whose whole record id is `id`, as `bravebot sessions stop`
+    /// does, and keep its record so the chat can be opened again (BG-11). A chat open in this
+    /// window has no roster entry, so it is answered as missing or not running and is not touched.
+    fn stop_background(request: &Request) -> Result<Value, Failure> {
+        let id = request.string("id")?;
+        let roster = bravebot_session::jobs::Roster::writable()
+            .ok_or_else(|| Failure::bad_request(crate::background::NO_HOME))?;
+        crate::background::stop(&roster, &id)
+    }
+
+    /// Hand an open chat to a background session, as the terminal's `/bg` does (BG-2, CMD-34), and
+    /// close it here.
+    ///
+    /// Refused with a sentence, and the chat left open, in each case `/bg` is refused that a chat
+    /// can be in ([`crate::background::refusal`]) and where the `bravebot` program is not installed
+    /// beside the bridge. Otherwise the chat is closed first, because the background session
+    /// resumes the record and this process holds the record's lock until the chat's work has ended
+    /// (SESSION-38). The process is then started with the program beside the bridge, in the chat's
+    /// project and mode, and the answer comes once it is listed and listening.
+    fn background_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let workers = self.workers_of(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        // A worker that has said it is done can still be returning, so what has just ended is given
+        // a moment before it counts as running.
+        let busy = open.running.is_some()
+            || open.compacting.is_some()
+            || !workers.wait_idle(AFTER_WORK_WAIT);
+        drop(workers);
+        let watching = open
+            .watches
+            .lock()
+            .map(|watches| !watches.is_empty())
+            .unwrap_or(true);
+        // Read only when nothing is running, since a running turn holds the state. A busy chat is
+        // refused before the record is consulted.
+        let left = match busy {
+            true => None,
+            false => open
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| state.handle.as_ref().and_then(Handle::to_resume)),
+        };
+        let chat = bravebot_session::jobs::Handing {
+            permission_mode: open.permission_mode.get(),
+            sandbox: self.sandbox_mode_in(&open.project, open.sandbox),
+            settled: self.sandbox_mode_in(&open.project, None),
+            busy,
+            // A chat has no loop or goal, so its watches are all it could keep running.
+            keeps_running: watching,
+            recorded: left.is_some(),
+            incognito: bravebot_core::incognito::engaged(),
+        };
+        let mode = crate::background::refusal(&chat).map_err(Failure::bad_request)?;
+        let (Some(left), Some(roster)) = (left, bravebot_session::jobs::Roster::writable()) else {
+            return Err(Failure::bad_request(crate::background::NOTHING_RECORDED));
+        };
+        let program = crate::background::program()
+            .ok_or_else(|| Failure::bad_request(crate::background::NO_PROGRAM))?;
+
+        let closed = self.close(&handle)?;
+        if !closed.wait_idle(CLOSED_SESSIONS_WAIT) {
+            return Err(Failure::new(
+                ErrorCode::Internal,
+                "The chat was closed, and its work did not end in time to continue it in the \
+                 background. Open it again from the list.",
+            ));
+        }
+        bravebot_session::jobs::start_host(
+            &program,
+            &roster,
+            &left.id,
+            "",
+            Some(&left.directory),
+            mode,
+        )
+        .map_err(|err| {
+            Failure::new(
+                ErrorCode::Internal,
+                match err {
+                    bravebot_session::jobs::StartError::Spawn(problem) => format!(
+                        "The chat was closed, and the background session could not be started \
+                             ({problem}). Open it again from the list."
+                    ),
+                    bravebot_session::jobs::StartError::NotStarted => {
+                        "The chat was closed, and the background session did not start in time. \
+                             Open it again from the list."
+                            .to_string()
+                    }
+                    bravebot_session::jobs::StartError::Unsupported => {
+                        "Background sessions are not available on this system.".to_string()
+                    }
+                },
+            )
+        })?;
+        Ok(json!({ "handedOver": left.id, "mode": mode.word() }))
+    }
+
+    /// Ask the session's model a question beside the work, and return before it has answered:
+    /// the person's `question` for `/btw` (CMD-8) when `btw` is set, otherwise a recap (CMD-16).
+    ///
+    /// The request is [`bravebot_agent::aside::Question::about`] or
+    /// [`bravebot_agent::aside::Question::recap`], the ones the terminal's `/btw` and `/recap`
+    /// make at rest, over the exchange as it stands and with no tools. The conversation is not
+    /// changed: the answer is kept as an aside in the session's record and comes back as an
+    /// `aside.done` event. A recap is refused with `turn_in_flight` while a turn runs, because
+    /// `/recap` waits for the turn (CMD-16). A `/btw` while a turn runs is asked with
+    /// [`bravebot_agent::aside::Question::over`] the exchange the turn published at its latest
+    /// request, under the turn's own file authority, and is stopped with the turn (CMD-8). It is
+    /// refused before the turn has sent anything. The answer is said at once and becomes a row
+    /// once the turn lets go of the session's state.
+    fn ask_aside(&mut self, request: &Request, btw: bool) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+        let (question, pasted, dropped) = staged_aside(request, btw)?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        // A `/btw` runs beside a turn (CMD-8); anything else waits for it (CMD-16).
+        let beside_turn = match (&question, &open.running) {
+            (Some(_), Some(running)) => Some(running.target),
+            _ => {
+                open.ready_for_work()?;
+                None
+            }
+        };
+        if open.aside.as_ref().is_some_and(AsideOut::is_out) {
+            return Err(Failure::bad_request(
+                "a question asked beside the work is still out; wait for its answer or stop it",
+            ));
+        }
+        if beside_turn.is_some() && !dropped.is_empty() {
+            return Err(Failure::bad_request(crate::aside::NO_FILES_BESIDE_A_TURN));
+        }
+        // Built before the state is taken below, since building it takes the state itself.
+        let workspace = if dropped.is_empty() {
+            None
+        } else {
+            let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+            Some(session_workspace(open, &settings)?)
+        };
+
+        let (model, config) = crate::models::chosen(
+            requested_model,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let project = open.project.clone();
+        let state = Arc::clone(&open.state);
+        let (asking, account, files) = match (&question, beside_turn) {
+            (Some(question), Some(_)) => asked_beside_turn(&open.published, question, pasted)?,
+            _ => asked_at_rest(
+                &state,
+                question.as_deref(),
+                pasted,
+                workspace.as_ref(),
+                &dropped,
+            )?,
+        };
+        let cancel = Cancel::new();
+        let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.aside = Some(AsideOut {
+                cancel: cancel.clone(),
+                settled: Arc::clone(&settled),
+                beside_turn,
+            });
+        }
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        self.workers_of(&handle).spawn(move || {
+            let egress = Egress::new();
+            let mut sink = bravebot_session::audit::Trail::new();
+            let done = agent_turn::aside_sharing(
+                &config,
+                &egress,
+                &account,
+                asking,
+                model.as_deref(),
+                &mut sink,
+                files,
+                |_written| {},
+                &cancel,
+            );
+            let recap = question.is_none();
+            let asked = question.unwrap_or_else(|| crate::aside::RECAP_LABEL.to_string());
+            let (event, aside, tokens) =
+                crate::aside::settle(done, cancel.is_cancelled(), asked, recap);
+            let say = || {
+                settled.store(true, std::sync::atomic::Ordering::Release);
+                emitter.send(Event::new("aside.done", &session, event));
+            };
+            match state.try_lock() {
+                // Nothing holds the state, so the row is kept before the answer is said.
+                Ok(mut held) => {
+                    keep_aside(&project, &mut held, aside, tokens);
+                    drop(held);
+                    say();
+                }
+                // A turn holds the state. The answer is said now, and becomes a row, with the
+                // record written again, once the turn lets go of it (CMD-8, WATCH-18).
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    say();
+                    if let Ok(mut held) = state.lock() {
+                        keep_aside(&project, &mut held, aside, tokens);
+                    }
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => say(),
+            }
+        });
+        Ok(json!({ "started": true, "besideTurn": beside_turn.is_some() }))
+    }
+
+    /// Stop the question asked beside the work, if one is out. Nothing out is not an error: the
+    /// answer may have arrived first.
+    fn cancel_aside(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(out) = &open.aside {
+            out.cancel.cancel();
+        }
+        Ok(json!({}))
+    }
+
     /// Start a manifest run, and return before it finishes (MANIFEST-11).
     ///
     /// A run plans the whole task, puts the frozen plan to the person, and walks it. It is not a
@@ -2143,6 +2978,7 @@ impl Bridge {
             finished,
             target,
             interjections: _,
+            actors: _,
         } = Running::start();
         // A run plans before anything is read and asks nothing between rounds, so a line typed
         // into it would be taken by nobody.
@@ -2214,6 +3050,7 @@ impl Bridge {
                 "Wait for the current turn to finish before adding a note.",
             ));
         }
+        open.not_compacting()?;
         let mut guard = open
             .state
             .lock()
@@ -2253,6 +3090,7 @@ impl Bridge {
                 "Stop the current turn before undoing one.",
             ));
         }
+        open.not_compacting()?;
         let project = open.project.clone();
         let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
         let mut workspace =
@@ -2350,6 +3188,8 @@ impl Bridge {
                 &bravebot_session::audit::Trail::default(),
             );
         }
+
+        crate::reports::hold(&open.reports).rewound(state);
 
         let standing = state.conversation.snapshot();
         Ok(json!({
@@ -2461,7 +3301,36 @@ impl Bridge {
             None => open.running.as_ref(),
         };
         if let Some(running) = stopping {
+            // Credited to the first cancel of work still running: a second one stops nothing more,
+            // and one that arrives after the work has ended is no part of how it ended.
+            if !running.cancel.is_cancelled()
+                && !running.is_finished()
+                && self.emitter.view_cancelled(&handle, self.acting())
+                && let Some(client) = &self.acting
+            {
+                running
+                    .actors
+                    .note(format!("client {client} cancelled the turn"));
+            }
             running.cancel.cancel();
+            // A question asked beside the turn is stopped with it (CMD-8). One the turn ended
+            // before is left out: the turn it was asked beside is not what this stops.
+            if !running.is_finished()
+                && let Some(out) = open
+                    .aside
+                    .as_ref()
+                    .filter(|out| out.beside_turn == Some(running.target))
+            {
+                out.cancel.cancel();
+            }
+        }
+        // Cancel Turn is the window's stop key, and a compaction is what it stops while one runs
+        // (CMD-34). A cancel that names a target names a turn or a run, and a compaction is
+        // neither.
+        if expected.is_none()
+            && let Some(compacting) = &open.compacting
+        {
+            compacting.cancel.cancel();
         }
         if let Ok(mut watches) = open.watches.lock() {
             watches.stop_firing();
@@ -2543,7 +3412,24 @@ impl Bridge {
             ));
         };
 
-        if running.answer_with(id, reply, || self.emitter.view_answered(&handle, id)) {
+        // A turn that is being stopped throws away what arrives, so an answer now is neither
+        // credited nor recorded as given.
+        if running.cancel.is_cancelled() {
+            return Err(Failure::new(
+                ErrorCode::NoSuchRequest,
+                format!("request {id} is not waiting for an answer"),
+            ));
+        }
+        let acting = self.acting();
+        if running.answer_with(id, reply, || {
+            // Noted before the worker is woken, so the entry that records the answer follows it.
+            if let Some(client) = &self.acting {
+                running
+                    .actors
+                    .note(format!("client {client} answered question {id}"));
+            }
+            self.emitter.view_answered(&handle, id, acting);
+        }) {
             Ok(json!({}))
         } else {
             // Unknown, or already used. An approval is single-use and bound to the one
@@ -2561,6 +3447,7 @@ impl Bridge {
     /// no never is.
     fn reply_trust(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
+        let actor = self.acting.clone();
         let trusted = request
             .params
             .get("trusted")
@@ -2603,7 +3490,8 @@ impl Bridge {
             }
         }
         open.answered_trust = true;
-        self.emitter.view_trusted(&handle);
+        self.emitter
+            .view_trusted(&handle, Acting::from(actor.as_deref()));
         // The question is answered, so what it offered is spent. Offered only where the answer may
         // be written and later honoured, so a directory it may not be kept about writes nothing.
         let keeping = open.keeping.take();
@@ -2787,13 +3675,22 @@ impl Bridge {
                         .params
                         .get("command")
                         .ok_or_else(|| Failure::bad_request("Missing command"))?;
+                    // The tree is part of the entry's key, so a request that names none is
+                    // refused rather than matched on the other three fields, which would pick
+                    // whichever tree sorts first. It is compared as the text the list sent, and
+                    // only against an entry whose directory is that text.
+                    let directory = selected
+                        .get("directory")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Failure::bad_request("Missing command directory"))?;
                     let command = state
                         .answers
                         .programs
                         .iter()
                         .find(|command| {
-                            json!({"program": command.program, "startedAs": command.started_as, "args": command.args})
-                                == *selected
+                            command.directory.to_str() == Some(directory)
+                                && json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "directory": directory})
+                                    == *selected
                         })
                         .cloned()
                         .ok_or_else(|| {
@@ -2817,9 +3714,30 @@ impl Bridge {
                 );
             }
         }
+        // The workspace root is the project with its links resolved, so both spellings of it are
+        // tried.
+        let resolved =
+            std::fs::canonicalize(&open.project).unwrap_or_else(|_| open.project.clone());
         let mut listed = json!({
             "paths": listed_rules(&state.answers.trust),
-            "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
+            // Each entry names the tree it was vouched in: two entries for one command in two
+            // trees are two grants, and a revoke is made with the tree it withdraws.
+            "commands": state.answers.programs.iter().map(|command| json!({
+                "program": command.program,
+                "startedAs": command.started_as,
+                "args": command.args,
+                // The tree as held. A tree with no text spelling is null, which no revoke
+                // matches, so a rendering never decides which entry is withdrawn.
+                "directory": command.directory.to_str(),
+                // The same tree spelled for the screen as `/status` spells it, without the `~`
+                // abbreviation the terminal gives a tree outside the root, and never compared.
+                "shownDirectory": bravebot_agent::confirm::shown_tree(
+                    &command.directory,
+                    &[&resolved, &open.project],
+                    None,
+                ),
+                "display": command.display(),
+            })).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
             "remembered": remembered_json(&open.project),
@@ -2834,14 +3752,138 @@ impl Bridge {
         Ok(listed)
     }
 
+    /// `permissions.check`: which of the session's rules decides a call a person names (CLI-30).
+    ///
+    /// The call is matched against the rules the session holds (PERM-12), not the files read
+    /// again. Nothing is opened, started, fetched, granted or revoked.
+    fn permissions_check(&mut self, request: &Request) -> Result<Value, Failure> {
+        use bravebot_agent::granted::Proposed;
+        use bravebot_agent::rule_check::Call;
+        const USAGE: &str = "Name a call as a family (Read, Edit, Bash, WebFetch, WebSearch or Mcp) \
+            and its words: a path, a command line, a host or URL, nothing, or server:tool.";
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if open.running.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Stop the current turn before checking a call against the rules.",
+            ));
+        }
+        let family = request.string("family")?;
+        let words = request
+            .params
+            .get("words")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Failure::bad_request(USAGE))?;
+        let mut line = vec![family];
+        for word in words {
+            let word = word.as_str().ok_or_else(|| Failure::bad_request(USAGE))?;
+            line.push(word.to_string());
+        }
+        let call = Call::read(&line).ok_or_else(|| Failure::bad_request(USAGE))?;
+        let state = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "Session state unavailable"))?;
+        let rules = &state.answers.rules;
+        let granted: Vec<Proposed> = rules
+            .granted
+            .iter()
+            .map(|rule| Proposed::new(&rule.file, &rule.rule))
+            .collect();
+        let waiting: Vec<Proposed> = rules
+            .proposed
+            .iter()
+            .map(|rule| Proposed::new(&rule.file, &rule.rule))
+            .collect();
+        let profile = bravebot_agent::home::profile();
+        let explained = bravebot_agent::rule_check::explain(
+            &call,
+            &rules.permissions,
+            &rules.sources,
+            &granted,
+            &waiting,
+            profile.as_deref(),
+            &open.project,
+        );
+        drop(state);
+        Ok(Self::permissions_check_answer(&explained))
+    }
+
+    /// The answer `permissions.check` sends for what [`bravebot_agent::rule_check::explain`]
+    /// found: the deciding rule and its file, raw and as shown, and a checkout's rule not in force.
+    fn permissions_check_answer(explained: &bravebot_agent::rule_check::Explained) -> Value {
+        use bravebot_agent::confirm::{shown_path, shown_text};
+        use bravebot_agent::rule_check::{Decision, Origin};
+        use bravebot_core::permissions::Ruling;
+        let mut answer = json!({
+            "decision": "none",
+            "rule": null,
+            "shownRule": null,
+            "file": null,
+            "shownFile": null,
+            "granted": false,
+            "reason": null,
+        });
+        match &explained.decision {
+            Decision::ShortName => answer["decision"] = json!("shortName"),
+            Decision::NoRule => {}
+            Decision::Rule {
+                ruling,
+                written,
+                origin,
+                reason,
+            } => {
+                answer["decision"] = json!(match ruling {
+                    Ruling::Deny => "deny",
+                    Ruling::Ask => "ask",
+                    Ruling::Allow => "allow",
+                });
+                answer["rule"] = json!(written);
+                answer["shownRule"] = json!(shown_text(written));
+                let (file, granted) = match origin {
+                    Some(Origin::File(file)) => (Some(file), false),
+                    Some(Origin::Granted(file)) => (Some(file), true),
+                    None => (None, false),
+                };
+                if let Some(file) = file {
+                    answer["file"] = json!(file.to_string_lossy());
+                    answer["shownFile"] = json!(shown_path(file));
+                }
+                answer["granted"] = json!(granted);
+                // Display text only: nothing compares it.
+                answer["reason"] = json!(reason.as_deref().map(shown_text));
+            }
+        }
+        answer["notInForce"] = match &explained.not_in_force {
+            Some(waiting) => json!({
+                "rule": waiting.rule,
+                "shownRule": shown_text(&waiting.rule),
+                "file": waiting.file.to_string_lossy(),
+                "shownFile": shown_path(&waiting.file),
+            }),
+            None => Value::Null,
+        };
+        answer
+    }
+
     /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
     ///
-    /// The window sends it only for a line a person typed (CMD-1). The session's sandbox mode is
-    /// not read: an entry added here holds read mode whatever mode the session is in.
+    /// `files` and `pictures`, both optional, name the markers on the line, as for
+    /// `turn.interject`. The window sends it only for a line a person typed (CMD-1). The session's
+    /// sandbox mode is not read: an entry added here holds read mode whatever mode the session is
+    /// in.
     fn schedule_command(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
         let argument = request.string("argument")?;
+        // Only names and sentences enter the line: no dropped file is opened, and a pasted
+        // picture is said not to join it (DROP-4).
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
         let open = self
             .open
             .get(&handle)
@@ -2927,6 +3969,7 @@ impl Bridge {
                 continue;
             };
             if open.running.is_some()
+                || open.compacting.is_some()
                 || !open.answered_trust
                 || open.questions.reply_method().is_some()
             {
@@ -3060,6 +4103,14 @@ impl Bridge {
             && open.running.as_ref().is_some_and(Running::is_finished)
         {
             open.running = None;
+        }
+        if let Some(open) = self.open.get_mut(handle)
+            && open
+                .compacting
+                .as_ref()
+                .is_some_and(crate::compaction::Compacting::is_finished)
+        {
+            open.compacting = None;
         }
     }
 
@@ -3278,6 +4329,68 @@ fn addressed_sessions(request: &Request) -> Result<Value, Failure> {
         })
         .collect();
     Ok(json!({ "exchanges": exchanges }))
+}
+
+/// What the recorded sessions spent, for every project or the one `directory` names, and for the
+/// last `days` days or all of them, as `bravebot stats` totals it
+/// ([CLI-37](../../../docs/specs/cli.md#CLI-37)).
+///
+/// Reads the records and writes nothing, so it needs no open session and answers the same under
+/// incognito. The model rows are the ones [`bravebot_session::stats::Totals::by_shown_model`]
+/// gives, already cleaned, with `null` for the row whose records name no model.
+fn session_stats(request: &Request) -> Result<Value, Failure> {
+    use bravebot_session::stats::{Scope, Spent};
+    let directory = match request.param("directory") {
+        Value::Null => None,
+        _ => Some(existing_directory(request)?),
+    };
+    // Bounded as `bravebot stats --days` bounds it.
+    let (days, since) = match request.param("days") {
+        Value::Null => (None, None),
+        days => {
+            let (days, since) = days
+                .as_u64()
+                .and_then(|days| Some((days, bravebot_session::stats::since_days_ago(days)?)))
+                .ok_or_else(|| {
+                    Failure::bad_request("`days` must be a whole number of days from 1")
+                })?;
+            (Some(days), Some(since))
+        }
+    };
+    let totals = bravebot_session::stats::totals(Scope {
+        project: directory.as_deref(),
+        since,
+    });
+
+    let figures = |spent: &Spent| {
+        json!({
+            "sessions": spent.sessions,
+            "turns": spent.turns,
+            "tokens": spent.tokens,
+            "read": spent.split.read,
+            "written": spent.split.written,
+            "unsplit": spent.unsplit(),
+        })
+    };
+    let models: Vec<Value> = totals
+        .by_shown_model()
+        .iter()
+        .map(|(model, spent)| {
+            let mut row = figures(spent);
+            row["model"] = json!(model);
+            row
+        })
+        .collect();
+    Ok(json!({
+        // Cleaned as the terminal's scope sentence cleans it, in case the name holds an escape.
+        "directory": directory.map(|directory| {
+            bravebot_session::search::clean(&directory.display().to_string(), usize::MAX)
+        }),
+        "days": days,
+        "total": figures(&totals.all),
+        "models": models,
+        "unreadable": totals.unreadable,
+    }))
 }
 
 /// List Claude Code's sessions for a project, or copy the ones named (SESSION-32).
@@ -3574,12 +4687,17 @@ struct Work {
     session: String,
     project: PathBuf,
     state: Arc<Mutex<State>>,
+    /// The session's report store, which the turn writes into as it runs (CMD-8).
+    reports: crate::reports::Shared,
     config: Config,
     /// What the settings say a commit message and a pull request this turn writes may carry.
     attribution: bravebot_config::Attribution,
     /// How hard the model is asked to think: the recorded level and the settings layers, ranked as
     /// BACKEND-43 ranks them. `None` asks for the service's own default.
     effort: Option<bravebot_session::store::Effort>,
+    /// The named option set of the model that the window picked through `session.variant`
+    /// (BACKEND-66). `None` asks with the model's options alone.
+    variant: Option<String>,
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
@@ -3626,6 +4744,9 @@ struct Work {
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
     interjections: crate::running::Interjections,
+    actors: crate::turn::ActorNotes,
+    /// Where the turn publishes its exchange and file authority for a `/btw` asked beside it.
+    published: crate::turn::Published,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -3706,9 +4827,11 @@ fn work(work: Work) {
         session,
         project,
         state,
+        reports,
         mut config,
         attribution,
         effort,
+        variant,
         output_cap,
         download_cap,
         deadlines,
@@ -3736,6 +4859,8 @@ fn work(work: Work) {
         answers,
         finished,
         interjections,
+        actors,
+        published,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -3758,8 +4883,11 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut reporter =
-        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
+    crate::reports::hold(&reports).turn_started(turn, config.context_budget);
+    let mut reporter = BridgeReporter::new(emitter.clone(), &session)
+        .sharing(Arc::clone(&state.roster))
+        .holding(Arc::clone(&reports))
+        .publishing(published.exchange_slot());
 
     // The session begins with its first turn (HOOK-10), here on the worker so the request that
     // sent the turn is answered at once, and before anything else the turn does, so a hook that
@@ -3816,11 +4944,16 @@ fn work(work: Work) {
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
         // number would only interrupt work that was going fine (TURN-2).
         .with_rounds(None)
+        // The session's spend limit, which asks the person before a request past it (TURN-8). It
+        // is the only budget a turn here carries: the run limits of TURN-14 end a run without
+        // asking, and a person is in front of this window.
+        .with_spend_limit(state.spend_limit.clone(), state.tokens)
         // This front end writes the links `set_link` records to the session record (SETLINK-2).
         .keeping_links(true)
         .in_front_end(front_end)
         .with_model(model)
         .with_effort(effort)
+        .with_variant(variant)
         .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
@@ -3868,7 +5001,7 @@ fn work(work: Work) {
     } else {
         bravebot_agent::watch::Arming::Allowed { free }
     });
-    let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
+    let mut sink = BridgeSink::new(emitter.clone(), &session, turn).noting(actors);
     let egress = Egress::new();
 
     // Cloned out before the call, because the conversation is borrowed mutably for the
@@ -3876,6 +5009,9 @@ fn work(work: Work) {
     let trust = state.answers.trust.clone();
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
+    // A question asked beside this turn reads files under the turn's own authority (CMD-8).
+    published.keep_files(file_authority.clone());
+    published.keep_account(state.account.clone());
     let programs = state.answers.programs.clone();
     // The session's language servers (LSP-8), taken for this turn and put back after it. The
     // first turn builds the set. Building it starts no server: one starts on the first question
@@ -3997,7 +5133,9 @@ fn work(work: Work) {
             }
 
             state.answered_by_mode |= permission_mode.has_bypassed();
+            sink.write_notes();
             let archived = save(&project, &mut state, turn, sink.trail());
+            crate::reports::hold(&reports).turn_ended(&state, archived);
 
             let rules = rules_json(&state.answers.trust);
             // What the turn said, then each question it did not put because the person had
@@ -4078,7 +5216,9 @@ fn work(work: Work) {
                 began_at.elapsed(),
             );
             state.answered_by_mode |= permission_mode.has_bypassed();
-            let _ = save(&project, &mut state, turn, sink.trail());
+            sink.write_notes();
+            let archived = save(&project, &mut state, turn, sink.trail());
+            crate::reports::hold(&reports).turn_ended(&state, archived);
 
             let notices = [
                 session_began.as_slice(),
@@ -4242,8 +5382,10 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         _ => diagnosis.and_then(|d| d.attempts),
     };
     let kind = match error {
-        // Only a one-shot run gives a turn a limit of its own (TURN-14), so the bridge never sees
-        // this one, and a stop is what it would be: the ending says `Stopped`.
+        // A person who answers stop at the spend-limit question (TURN-8) ends the turn as
+        // `Cancelled`, the way any stop does. `LimitReached` comes only from the run limits a
+        // one-shot run sets (TURN-14), which the bridge never sets, and a stop is what it would be:
+        // the ending says `Stopped`.
         TurnError::Cancelled { .. } | TurnError::LimitReached(_) => "cancelled",
         TurnError::Precommit(_) => "precommit",
         TurnError::Workspace(_) | TurnError::Named { .. } => "workspace",
@@ -4366,9 +5508,10 @@ pub(crate) fn save(
     trail: &bravebot_session::audit::Trail,
 ) -> usize {
     let named = state.named.take();
+    let handed_off_from = state.handed_off_from.take();
     let handle = state
         .handle
-        .get_or_insert_with(|| crate::running::begin_named(named, project));
+        .get_or_insert_with(|| crate::running::begin_named(named, handed_off_from, project));
 
     let checkouts = state
         .kept
@@ -4413,6 +5556,151 @@ pub(crate) fn save(
     );
     handle.append_audit(turn, trail.events());
     archived
+}
+
+/// A `/btw` line's question, pasted pictures and dropped files, as [`staged_aside`] reads them.
+type Staged = (
+    Option<String>,
+    Vec<bravebot_agent::turn::PastedImage>,
+    Vec<bravebot_agent::turn::Attachment>,
+);
+
+/// A question asked beside the work, with the account and file authority it is asked under.
+type Asking = (
+    bravebot_agent::aside::Question,
+    bravebot_agent::chatgpt::AccountSession,
+    bravebot_core::file_authority::FileAuthority,
+);
+
+/// What was staged on a `/btw` line: the person's question, its pasted pictures, and its dropped
+/// pictures and PDFs. A recap (`btw` unset) is the driver's own question and takes none of them.
+fn staged_aside(request: &Request, btw: bool) -> Result<Staged, Failure> {
+    if !btw {
+        return Ok((None, Vec::new(), Vec::new()));
+    }
+    let question = request.string("question")?;
+    if let Some(refused) = crate::aside::refusal(&question) {
+        return Err(Failure::bad_request(refused));
+    }
+    // A text file dropped on the line is its name (DROP-4), put back by its marker.
+    let question = crate::attached::in_words(request, &question)?;
+    // What was staged on the line goes with the question (CMD-5): pasted pictures as they are
+    // (PASTE-2), and dropped pictures and PDFs read before the request exists (DROP-4).
+    if request
+        .params
+        .get("dropped")
+        .and_then(Value::as_array)
+        .is_some_and(|entries| !entries.is_empty())
+    {
+        return Err(Failure::bad_request(crate::aside::TEXT_FILE_IS_ITS_NAME));
+    }
+    let pasted = crate::attached::pasted(request)?;
+    let dropped = crate::attached::dropped(request)?
+        .into_iter()
+        .map(|(path, media)| bravebot_agent::turn::Attachment {
+            path,
+            media: media.to_string(),
+        })
+        .collect();
+    Ok((Some(question), pasted, dropped))
+}
+
+/// The request for a `/btw` asked while a turn runs, with the account and file authority it is
+/// asked under.
+///
+/// The turn holds the state, so the question is asked over the exchange the turn published at its
+/// latest request, under the turn's own file authority and account. It is refused before the turn
+/// has sent anything.
+fn asked_beside_turn(
+    published: &crate::turn::Published,
+    question: &str,
+    pasted: Vec<bravebot_agent::turn::PastedImage>,
+) -> Result<Asking, Failure> {
+    let (Some(fork), Some(files), Some(account)) =
+        (published.exchange(), published.files(), published.account())
+    else {
+        return Err(Failure::bad_request(crate::aside::NOTHING_SENT_YET));
+    };
+    Ok((
+        bravebot_agent::aside::Question::over(fork, question, pasted),
+        account,
+        files,
+    ))
+}
+
+/// The request for a question asked while no turn runs, over the session's conversation, with the
+/// account and file authority it is asked under.
+///
+/// Taken on the thread that holds the state, because a conversation is not `Clone` and what
+/// crosses to the worker is the request and not the exchange.
+fn asked_at_rest(
+    state: &Mutex<State>,
+    question: Option<&str>,
+    pasted: Vec<bravebot_agent::turn::PastedImage>,
+    workspace: Option<&Workspace>,
+    dropped: &[bravebot_agent::turn::Attachment],
+) -> Result<Asking, Failure> {
+    let mut state = state
+        .lock()
+        .map_err(|_| Failure::new(ErrorCode::Internal, "the session's state is unavailable"))?;
+    let asking = match question {
+        Some(question) => {
+            bravebot_agent::aside::Question::about(&state.conversation, question, pasted)
+        }
+        None => bravebot_agent::aside::Question::recap(&state.conversation),
+    };
+    // Read here, under a policy holding the read alone, before the question's own policy exists
+    // (`bravebot_agent::attached`). The rule each drop records is the session's (DROP-2), so it
+    // goes into the session's trust map, which the question's file authority below is built from.
+    let asking = match workspace {
+        Some(workspace) => {
+            let carried = bravebot_agent::attached::read(
+                workspace,
+                dropped,
+                &mut state.answers.trust,
+                &mut bravebot_session::audit::Trail::new(),
+            )
+            .map_err(|error| Failure::bad_request(error.to_string()))?;
+            asking.carrying(carried)
+        }
+        None => asking,
+    };
+    Ok((
+        asking,
+        state.account.clone(),
+        bravebot_core::file_authority::FileAuthority::new(state.answers.trust.clone()),
+    ))
+}
+
+/// Keep what a question asked beside the work came to: its row, if it was answered, and its cost.
+///
+/// The caller holds the session's state, which a turn holds while it runs, so an answer that
+/// arrives during a turn becomes a row once the turn has ended. The record is written again for
+/// the row, where the session has one; a session with none writes its asides with its first turn.
+fn keep_aside(
+    project: &std::path::Path,
+    state: &mut State,
+    aside: Option<bravebot_session::sessions::Aside>,
+    tokens: u64,
+) {
+    if aside.is_none() && tokens == 0 {
+        return;
+    }
+    // Charged to the session as an aside is in the terminal: the request was made and spent what
+    // it spent.
+    state.tokens += tokens;
+    if let Some(aside) = aside {
+        state.asides.push(aside);
+    }
+    if state.handle.is_some() {
+        let turn = state.turns;
+        save(
+            project,
+            state,
+            turn,
+            &bravebot_session::audit::Trail::default(),
+        );
+    }
 }
 
 /// The task lists, keyed by turn as a string, because JSON object keys are.
@@ -4642,7 +5930,7 @@ fn forget_trust(project: &Path) -> Result<(), Failure> {
 
 #[cfg(test)]
 #[path = "../../session/test-support/profile.rs"]
-mod test_profile;
+pub(crate) mod test_profile;
 
 #[cfg(test)]
 mod coverage_tests {
@@ -4673,6 +5961,7 @@ mod coverage_tests {
             "permissions.revoke",
             json!({"session": handle, "kind": "command", "command": {
                 "program": command.program, "startedAs": command.started_as, "args": command.args,
+                "directory": command.directory,
             }}),
         );
 
@@ -5342,6 +6631,7 @@ mod permissions_tests {
                     "program": "/usr/bin/python3",
                     "startedAs": "/work/.venv/bin/python",
                     "args": ["-V"],
+                    "directory": "/work",
                 }
             }})
             .to_string(),
@@ -5357,6 +6647,206 @@ mod permissions_tests {
             after["commands"][0]["startedAs"], "/usr/bin/python3",
             "{after}"
         );
+    }
+
+    /// One command vouched for in two trees is two grants. The list names the tree of each, as the
+    /// path held and spelled relative to the workspace root (`.` for the root, absolute outside
+    /// it), and a revoke names the tree it withdraws, so the grant the person pressed Revoke on is
+    /// the one that goes.
+    #[test]
+    fn a_command_vouched_in_two_trees_is_listed_with_each_tree_and_revoked_by_it() {
+        use bravebot_core::programs::{Command, TrustedPrograms};
+        let seeded = || {
+            let root = Command::new("/bin/sh", vec!["check.sh".into()], "/work");
+            let sub = Command::new("/bin/sh", vec!["check.sh".into()], "/work/sub");
+            let outside = Command::new("/bin/sh", vec!["check.sh".into()], "/elsewhere");
+            let mut state = State::fresh(TrustStore::new("/work"));
+            state.answers.programs = TrustedPrograms::from_iter([root, sub, outside]);
+            let mut bridge = Bridge::new(Box::new(|_| {}));
+            let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
+            (bridge, handle)
+        };
+        let call = |bridge: &mut Bridge, method: &str, params: Value| {
+            let line = json!({"id": 1, "method": method, "params": params}).to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap()).unwrap()
+        };
+        let trees = |listed: &Value| {
+            listed["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|command| {
+                    (
+                        command["directory"].clone(),
+                        command["shownDirectory"].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let revoke = |bridge: &mut Bridge, handle: &str, directory: &str| {
+            call(
+                bridge,
+                "permissions.revoke",
+                json!({"session": handle, "kind": "command", "command": {
+                    "program": "/bin/sh", "startedAs": "/bin/sh",
+                    "args": ["check.sh"], "directory": directory,
+                }}),
+            )
+        };
+
+        let (mut bridge, handle) = seeded();
+        let listed = call(&mut bridge, "permissions.list", json!({"session": handle}));
+        assert_eq!(
+            trees(&listed),
+            [
+                (json!("/elsewhere"), json!("/elsewhere")),
+                (json!("/work"), json!(".")),
+                (json!("/work/sub"), json!("sub")),
+            ],
+            "{listed}"
+        );
+
+        let after = revoke(&mut bridge, &handle, "/work/sub");
+        assert_eq!(
+            trees(&after),
+            [
+                (json!("/elsewhere"), json!("/elsewhere")),
+                (json!("/work"), json!(".")),
+            ],
+            "revoking the row for /work/sub removed another tree: {after}"
+        );
+
+        let (mut bridge, handle) = seeded();
+        let after = revoke(&mut bridge, &handle, "/work");
+        assert_eq!(
+            trees(&after),
+            [
+                (json!("/elsewhere"), json!("/elsewhere")),
+                (json!("/work/sub"), json!("sub")),
+            ],
+            "revoking the row for /work removed another tree: {after}"
+        );
+    }
+
+    /// A tree that is not UTF-8 and the tree its replacement-character rendering spells are two
+    /// entries. The list sends the first with no text spelling, a revoke naming the lookalike
+    /// removes only the lookalike, and no string revokes the first, so a rendering never decides
+    /// which entry is withdrawn (PATH-003).
+    ///
+    /// The invalid byte is `0x80`, so the entry sorts before its lookalike and a revoke that
+    /// compares renderings would find it first.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_that_is_not_text_is_not_revoked_by_the_tree_that_renders_like_it() {
+        use bravebot_core::programs::{Command, TrustedPrograms};
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let invalid = OsStr::from_bytes(b"/work/t\x80");
+        let lookalike = "/work/t\u{FFFD}";
+        assert_eq!(invalid.to_string_lossy(), lookalike);
+        let mut state = State::fresh(TrustStore::new("/work"));
+        state.answers.programs = TrustedPrograms::from_iter([
+            Command::new("/bin/sh", vec!["check.sh".into()], invalid),
+            Command::new("/bin/sh", vec!["check.sh".into()], lookalike),
+        ]);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
+        let call = |bridge: &mut Bridge, method: &str, params: Value| {
+            let line = json!({"id": 1, "method": method, "params": params}).to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap())
+        };
+        let revoke = |bridge: &mut Bridge, directory: &str| {
+            call(
+                bridge,
+                "permissions.revoke",
+                json!({"session": handle, "kind": "command", "command": {
+                    "program": "/bin/sh", "startedAs": "/bin/sh",
+                    "args": ["check.sh"], "directory": directory,
+                }}),
+            )
+        };
+        let directories = |listed: &Value| {
+            listed["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|command| command["directory"].clone())
+                .collect::<Vec<_>>()
+        };
+
+        let listed = call(&mut bridge, "permissions.list", json!({"session": handle})).unwrap();
+        assert_eq!(
+            directories(&listed),
+            [Value::Null, json!(lookalike)],
+            "{listed}"
+        );
+        let shown = |at: usize| listed["commands"][at]["shownDirectory"].clone();
+        assert_ne!(shown(0), shown(1), "{listed}");
+
+        let after = revoke(&mut bridge, lookalike).unwrap();
+        assert_eq!(
+            directories(&after),
+            [Value::Null],
+            "revoking the lookalike did not remove it alone: {after}"
+        );
+        for directory in [lookalike, "/work/t", "/work/t\\x80", "/work/t\u{80}"] {
+            let refused = revoke(&mut bridge, directory).expect_err("refused");
+            assert_eq!(refused.code, ErrorCode::BadRequest, "{directory:?}");
+        }
+        let listed = call(&mut bridge, "permissions.list", json!({"session": handle})).unwrap();
+        assert_eq!(
+            directories(&listed),
+            [Value::Null],
+            "a string revoked the entry whose tree is not text: {listed}"
+        );
+    }
+
+    /// A revoke that names no tree, or one no entry was given in, changes nothing and does not
+    /// fall back to the entry that matches on the other three fields.
+    #[test]
+    fn revoking_a_command_without_its_tree_or_in_a_tree_not_held_changes_nothing() {
+        use bravebot_core::programs::{Command, TrustedPrograms};
+        let mut state = State::fresh(TrustStore::new("/work"));
+        state.answers.programs =
+            TrustedPrograms::from_iter([Command::new("/bin/sh", vec!["check.sh".into()], "/work")]);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened("/work".into(), state, true, None, false));
+        let attempt = |bridge: &mut Bridge, command: Value| {
+            let line = json!({"id": 1, "method": "permissions.revoke", "params": {
+                "session": handle, "kind": "command", "command": command,
+            }})
+            .to_string();
+            bridge.dispatch(&Request::parse(&line).unwrap())
+        };
+        let held = json!({"program": "/bin/sh", "startedAs": "/bin/sh", "args": ["check.sh"]});
+        let with = |directory: Value| {
+            let mut command = held.clone();
+            command["directory"] = directory;
+            command
+        };
+        for command in [
+            held.clone(),
+            with(json!("/work/sub")),
+            with(json!("/work/")),
+            with(json!("work")),
+            with(json!(null)),
+            with(json!(7)),
+        ] {
+            let refused = attempt(&mut bridge, command.clone()).expect_err("refused");
+            assert_eq!(refused.code, ErrorCode::BadRequest, "{command}");
+        }
+        let list = Request::parse(
+            &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
+                .to_string(),
+        )
+        .unwrap();
+        let listed = bridge.dispatch(&list).unwrap();
+        assert_eq!(
+            listed["commands"].as_array().map(Vec::len),
+            Some(1),
+            "{listed}"
+        );
+        assert!(attempt(&mut bridge, with(json!("/work"))).is_ok());
     }
 
     /// PROMPT-1: the list sends each rule's name spelled beside the name as held. The name as held
@@ -5933,6 +7423,7 @@ mod watch_tests {
             target: 1,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             interjections: None,
+            actors: Default::default(),
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open {
@@ -6012,6 +7503,11 @@ mod folders_tests;
 #[path = "completion_tests.rs"]
 mod completion_tests;
 
+// Beside the turn worker rather than the store, because one of them runs a turn.
+#[cfg(test)]
+#[path = "reports_tests.rs"]
+mod reports_tests;
+
 #[cfg(test)]
 #[path = "closing_tests.rs"]
 mod closing_tests;
@@ -6059,6 +7555,10 @@ mod link_tests;
 #[cfg(test)]
 #[path = "account_session_tests.rs"]
 mod account_session_tests;
+
+#[cfg(test)]
+#[path = "published_tests.rs"]
+mod published_tests;
 
 #[cfg(test)]
 #[path = "project_questions_tests.rs"]

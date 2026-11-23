@@ -152,10 +152,11 @@ the version, the operating system and architecture, how bravebot was installed, 
 line and column of the panic. It never holds your prompts, file contents, credentials or paths on your
 machine, or anything a model or a server said, and nothing in it is the same from one report to the
 next. The service sees the network address the report came from, as any server does. Reports are on in
-released builds. Set `BRAVEBOT_CRASH_REPORTS=0`, or `"crashReports": false` in
-`~/.bravebot/settings.json`, to stop them. A build from source sends nothing unless it was built with
-a submission address. See [docs/specs/crash-reports.md](docs/specs/crash-reports.md) for what a report
-may hold.
+released builds, and the terminal, the desktop app and the editor integration each say so once. Set
+`BRAVEBOT_CRASH_REPORTS=0`, or `"crashReports": false` in `~/.bravebot/settings.json`, or turn off
+**Send crash reports to Brave** in the desktop app's Settings, under General, Privacy, to stop them. A
+build from source sends nothing unless it was built with a submission address. See
+[docs/specs/crash-reports.md](docs/specs/crash-reports.md) for what a report may hold.
 
 `bravebot --incognito` runs a session that adds nothing to `~/.bravebot`: no prompt history, no
 session record, no audit trail, and no change to the model or theme you have chosen. It still reads

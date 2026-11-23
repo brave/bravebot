@@ -11,6 +11,7 @@
 //! wrong behaviour for [`crate::turn::BridgeConfirmer`], and why that is a separate type.
 
 use crate::protocol::Event;
+use crate::view::Acting;
 use std::sync::{Arc, Mutex};
 
 /// Whatever a transport does with an event.
@@ -108,9 +109,10 @@ impl Emitter {
     /// every update.
     ///
     /// `hand_over` runs under the lock every update takes, before the snapshot is written. If it
-    /// fails nothing is written and the failure is returned. A client that takes a session over
-    /// passes the switch of its events, so it receives the snapshot first and then each later
-    /// update, and none from before it. A client that missed an update passes nothing to do, and
+    /// fails nothing is written and the failure is returned. A client that joins a session
+    /// passes its addition to those its events go to, so it receives the snapshot first and then
+    /// each later update, and none from before it, while those already there receive each update
+    /// once. A client that missed an update passes nothing to do, and
     /// each update after the snapshot follows it in sequence. Returns the snapshot's sequence number
     /// and how many earlier rows it leaves out.
     pub fn snapshot_view(
@@ -138,30 +140,51 @@ impl Emitter {
         Ok(answer)
     }
 
-    pub fn view_started(&self, session: &str, turn: u64, target: u64, prompt: serde_json::Value) {
+    pub fn view_started(
+        &self,
+        session: &str,
+        turn: u64,
+        target: u64,
+        prompt: serde_json::Value,
+        actor: Acting,
+    ) {
         if let Ok(mut output) = self.0.lock()
             && let Some(view) = output.views.get_mut(session)
         {
-            let update = view.started(turn, target, prompt);
+            let update = view.started(turn, target, prompt, actor);
             output.update(session, update);
         }
     }
 
-    pub fn view_trusted(&self, session: &str) {
+    pub fn view_trusted(&self, session: &str, actor: Acting) {
         if let Ok(mut output) = self.0.lock()
             && let Some(view) = output.views.get_mut(session)
-            && let Some(update) = view.trusted()
+            && let Some(update) = view.trusted(actor)
         {
             output.update(session, update);
         }
     }
 
-    pub fn view_answered(&self, session: &str, request: u64) {
+    pub fn view_answered(&self, session: &str, request: u64, actor: Acting) {
         if let Ok(mut output) = self.0.lock()
             && let Some(view) = output.views.get_mut(session)
-            && let Some(update) = view.answered(request)
+            && let Some(update) = view.answered(request, actor)
         {
             output.update(session, update);
+        }
+    }
+
+    /// Note which client cancelled the turn on screen, for the update that ends it to carry, and
+    /// say whether the cancel is of a turn still running. Decided under the lock every update
+    /// takes, so a turn that has published its end is not credited. A session with no view has no
+    /// end to contradict, so its cancel counts.
+    pub fn view_cancelled(&self, session: &str, actor: Acting) -> bool {
+        match self.0.lock() {
+            Ok(mut output) => output
+                .views
+                .get_mut(session)
+                .is_none_or(|view| view.cancelled_by(actor)),
+            Err(_) => false,
         }
     }
 
@@ -217,8 +240,9 @@ mod tests {
         });
         let (terminal, eligible) = received.recv_timeout(Duration::from_secs(5)).unwrap();
         let next = emitter.clone();
-        let starting =
-            std::thread::spawn(move || next.view_started("s1", 2, 2, json!({"text": "next"})));
+        let starting = std::thread::spawn(move || {
+            next.view_started("s1", 2, 2, json!({"text": "next"}), Acting::Nobody)
+        });
         release.send(()).unwrap();
         ending.join().unwrap();
         starting.join().unwrap();

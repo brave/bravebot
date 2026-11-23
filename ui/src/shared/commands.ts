@@ -39,6 +39,14 @@ export type CommandId =
   | 'mode.cycle'
   | 'turn.rewind'
   | 'session.note'
+  | 'session.status'
+  | 'session.cost'
+  | 'session.context'
+  | 'session.request'
+  | 'spend.report'
+  | 'session.compact'
+  | 'session.handoff'
+  | 'session.background'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -47,6 +55,7 @@ export type CommandId =
   | 'view.theme'
   | 'app.about'
   | 'app.caffeinate'
+  | 'app.sections'
   | 'help.changelog'
   | 'help.doctor'
   | 'help.update'
@@ -188,6 +197,25 @@ export const COMMANDS: readonly Command[] = [
   // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the
   // turn holds the record until it ends.
   { id: 'session.note', label: 'Add Note…', requires: 'forkable' },
+  // The desktop's /status, /cost, /context and /request (CMD-8, CMD-15, CMD-19, TRACE-9). Offered
+  // while a turn runs: the bridge answers them from a store the turn writes into, not from the
+  // state the turn holds (CMD-8). A status asked mid-turn says the rules are held by the turn.
+  { id: 'session.status', label: 'Session Status…', requires: 'session' },
+  { id: 'session.cost', label: 'Token Spend…', requires: 'session' },
+  { id: 'session.context', label: 'Context Breakdown…', requires: 'session' },
+  { id: 'session.request', label: 'Last Request…', requires: 'session' },
+  // `bravebot stats` (CLI-37): what every recorded session spent, in tokens. It reads the records
+  // and belongs to no open chat, so it is offered with nothing open.
+  { id: 'spend.report', label: 'Token Spend Across Chats…', requires: 'always' },
+  // `/compact [focus]` (CMD-34). Not while a turn runs, since the turn holds the conversation. No
+  // accelerator, because it asks for a focus first.
+  { id: 'session.compact', label: 'Compact Conversation…', requires: 'forkable' },
+  // `/handoff <next goal>` (SESSION-34, CMD-34). Not while a turn runs, since the brief is written
+  // from the conversation as it stands. No accelerator, because it asks for the goal first.
+  { id: 'session.handoff', label: 'Hand Off to New Chat…', requires: 'forkable' },
+  // `/bg` (BG-2, CMD-34). Not while a turn runs, since the background session resumes the record
+  // the turn holds. No accelerator, because it asks to confirm first.
+  { id: 'session.background', label: 'Continue in Background…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',
@@ -211,6 +239,9 @@ export const COMMANDS: readonly Command[] = [
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
   // App-wide, and the first time it is turned on a dialog says what it does and does not do.
   { id: 'app.caffeinate', label: 'Keep Computer Awake During Turns', requires: 'always', checkbox: true },
+  // The desktop's /sidebar (PANEL-20): unfolds the context column and opens its Choose sections
+  // checklist. Needs a session, because the column draws no panels without one.
+  { id: 'app.sections', label: 'Choose Sections…', requires: 'session' },
   // The release notes compiled into the agent, shown as plain text. Nothing is fetched.
   { id: 'help.changelog', label: 'Release Notes…', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
@@ -321,7 +352,7 @@ export function menuLabel(item: Command, state: WindowState): string {
  * A closed union rather than a free string, because this is what the renderer is allowed to
  * say when it asks for a popup, and the main process builds the menu from it.
  */
-export type ContextTarget = 'session' | 'entry' | 'entry-user' | 'entry-user-rewindable' | 'directory'
+export type ContextTarget = 'session' | 'session-background' | 'entry' | 'entry-user' | 'entry-user-rewindable' | 'directory'
 
 export type ContextCommandId =
   /** Start a session in a project the main process named, from File > Open Recent. */
@@ -329,6 +360,7 @@ export type ContextCommandId =
   | 'context.session.open'
   | 'context.session.close'
   | 'context.session.copy-path'
+  | 'context.session.stop-background'
   | 'context.entry.copy'
   | 'context.entry.fork'
   | 'context.entry.rewind'
@@ -358,6 +390,11 @@ export type ContextCommandId =
  * A prompt whose turn the session can still be put back to before is a kind of its own, so the
  * menu holds a rewind only where one exists. Rewinding decides nothing either: it asks first, in
  * a dialog naming every file it puts back.
+ *
+ * A chat a background process holds is a kind of its own too (BG-11). It offers no Open, because
+ * the bridge refuses to open it while the process runs, and no Close Chat, because nothing of it
+ * is open here. It offers Stop Background Session, which ends the process as `bravebot sessions
+ * stop` does and keeps the record, so the chat opens again afterwards.
  */
 export const CONTEXT: Record<
   ContextTarget,
@@ -370,6 +407,10 @@ export const CONTEXT: Record<
     { id: 'context.session.open', label: 'Open' },
     { id: 'context.session.close', label: 'Close Chat' },
     { id: 'context.session.copy-path', label: 'Copy Project Path' },
+  ],
+  'session-background': [
+    { id: 'context.session.copy-path', label: 'Copy Project Path' },
+    { id: 'context.session.stop-background', label: 'Stop Background Session' },
   ],
   entry: [{ id: 'context.entry.copy', label: 'Copy' }],
   'entry-user': [

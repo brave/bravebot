@@ -2,6 +2,7 @@
 """Lists the open pull requests a reviewer can pick up now, waiting for GitHub to compute mergeability.
 
     review-ready.py [--repo OWNER/NAME] [--reviewer LOGIN] [--limit N] [--wait SECONDS]
+                    [--eligible-file PATH | --enqueue]
 
 A pull request is ready when it is mergeable, is not a draft, has every check passed or skipped,
 has an approval as the latest review by the reviewer, has no latest review, by anyone, that
@@ -21,6 +22,14 @@ green but still UNKNOWN is pending: the list is read again every INTERVAL second
 are named on stderr as missing from the list. A draft, an unapproved, a failing or a conflicting
 pull request is never waited for. Every field is evaluated again on every read.
 
+A listed pull request is eligible for the merge queue when it also has at least two approvals as
+latest reviews and no unresolved review thread. `--eligible-file` writes the eligible ones to PATH in
+the same `<url>  <title>` form, an empty file when there are none, and leaves stdout as it is.
+`--enqueue` prints nothing of the list and runs `gh pr merge` for each eligible pull request, pinned
+to the head commit that was read so that a push after the read is not queued unreviewed. It prints
+the `<url>  <title>` of each one queued, names each one that `gh` refused on stderr and exits 1 if
+any was refused. A pull request with more than 100 review threads is not eligible.
+
 A failure of `gh` exits 1.
 
 Standard library only, like the other tools in this directory. `review-ready-selftest.py` runs it
@@ -28,7 +37,9 @@ against a stand-in for `gh`.
 """
 
 import argparse
+import io
 import json
+import os
 import sys
 import time
 # gh is run with an argument list and no shell.
@@ -40,11 +51,15 @@ LIMIT = 500
 WAIT = 30.0
 INTERVAL = 3.0
 
-FIELDS = "number,title,url,createdAt,mergeable,latestReviews,isDraft,statusCheckRollup"
+FIELDS = "number,title,url,createdAt,mergeable,latestReviews,isDraft,statusCheckRollup,headRefOid"
 # A pull request in the merge queue needs nobody. gh has no field for queue membership, so GitHub's
 # search leaves them out. The `=` form keeps gh from reading the leading `-` as a flag.
 NOT_QUEUED = "--search=-is:queued"
 PASSED = ("SUCCESS", "NEUTRAL", "SKIPPED")
+MIN_APPROVALS = 2
+THREADS_QUERY = ("query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) "
+                 "{ pullRequest(number: $number) { reviewThreads(first: 100) "
+                 "{ pageInfo { hasNextPage } nodes { isResolved } } } } }")
 
 READY = "ready"
 PENDING = "pending"
@@ -109,6 +124,11 @@ def waiting_since(pr, reviewer):
     return max(approvals, default="") or pr.get("createdAt") or ""
 
 
+def approvals(pr):
+    """How many people's latest review of the pull request is an approval."""
+    return sum(1 for review in pr.get("latestReviews") or [] if review.get("state") == "APPROVED")
+
+
 def numbers(prs):
     return ", ".join(f"#{pr['number']}" for pr in sorted(prs, key=lambda pr: pr["number"]))
 
@@ -121,18 +141,23 @@ class GhFailed(Exception):
     pass
 
 
-def read(repo, limit):
-    """One `gh pr list`, parsed."""
-    command = ["gh", "pr", "list", "--repo", repo, "--limit", str(limit), "--json", FIELDS,
-               NOT_QUEUED]
+def run_gh(arguments):
+    """One `gh` command, its standard output."""
     try:
-        done = subprocess.run(command, capture_output=True, text=True, check=False)
+        done = subprocess.run(["gh", *arguments], capture_output=True, text=True, check=False,
+                              stdin=subprocess.DEVNULL)
     except OSError as error:
         raise GhFailed(f"gh could not be run: {error}") from None
     if done.returncode != 0:
         raise GhFailed(f"gh exited {done.returncode}: {done.stderr.strip()}")
+    return done.stdout
+
+
+def read(repo, limit):
+    """One `gh pr list`, parsed."""
+    output = run_gh(["pr", "list", "--repo", repo, "--limit", str(limit), "--json", FIELDS, NOT_QUEUED])
     try:
-        prs = json.loads(done.stdout)
+        prs = json.loads(output)
     except ValueError:
         raise GhFailed("gh printed something that is not JSON") from None
     if not isinstance(prs, list):
@@ -140,17 +165,67 @@ def read(repo, limit):
     return prs
 
 
+def unresolved_threads(repo, number):
+    """How many review threads of the pull request are not resolved, or None when it has more threads
+    than one read returns, so the count is not known."""
+    owner, _, name = repo.partition("/")
+    output = run_gh(["api", "graphql", "-f", f"query={THREADS_QUERY}", "-f", f"owner={owner}",
+                     "-f", f"name={name}", "-F", f"number={number}"])
+    try:
+        threads = json.loads(output)["data"]["repository"]["pullRequest"]["reviewThreads"]
+        nodes, more = threads["nodes"], threads["pageInfo"]["hasNextPage"]
+        unresolved = sum(1 for node in nodes if node.get("isResolved") is not True)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise GhFailed(f"gh did not print the review threads of #{number}") from None
+    return None if more else unresolved
+
+
+def queue_eligible(repo, ready):
+    """The listed pull requests that have enough approvals and no unresolved review thread, in the order
+    given. The threads of one with too few approvals are not read."""
+    return [pr for pr in ready
+            if approvals(pr) >= MIN_APPROVALS and unresolved_threads(repo, pr["number"]) == 0]
+
+
+def enqueue(repo, prs, out, err):
+    """Adds each pull request to the merge queue, pinned to the head commit that was read. Without a
+    merge strategy, `gh pr merge` queues a pull request whose branch requires the merge queue. Returns 1
+    when `gh` refused any, after trying all of them."""
+    failed = 0
+    for pr in prs:
+        command = ["pr", "merge", str(pr["number"]), "--repo", repo, "--match-head-commit", pr["headRefOid"]]
+        try:
+            run_gh(command)
+        except GhFailed as error:
+            failed = 1
+            print(f"review-ready: #{pr['number']} was not added to the merge queue: {error}", file=err, flush=True)
+            continue
+        print(f"{pr['url']}  {pr['title']}", file=out, flush=True)
+    return failed
+
+
+def write_list(path, prs):
+    """Writes the `<url>  <title>` lines whole or not at all, so a reader never sees half of them."""
+    temporary = f"{path}.{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        for pr in prs:
+            handle.write(f"{pr['url']}  {pr['title']}\n")
+    os.replace(temporary, path)
+
+
 def watch(fetch, reviewer, wait, interval, out, err, clock=time.monotonic, sleep=time.sleep):
     """Reads again while any pull request is pending until `wait` seconds have gone by, then prints each
     ready one once, the one that has waited longest first. Nothing is printed before the last read,
     since a pull request seen later can have waited longer than one seen earlier. `fetch` returns one
-    list of pull requests."""
+    list of pull requests. Returns the ready ones in the order printed."""
     deadline = clock() + wait
     ready = {}
 
     def emit():
-        for pr in sorted(ready.values(), key=lambda pr: (waiting_since(pr, reviewer), pr["number"])):
+        ordered = sorted(ready.values(), key=lambda pr: (waiting_since(pr, reviewer), pr["number"]))
+        for pr in ordered:
             print(f"{pr['url']}  {pr['title']}", file=out, flush=True)
+        return ordered
 
     while True:
         pending = []
@@ -163,15 +238,14 @@ def watch(fetch, reviewer, wait, interval, out, err, clock=time.monotonic, sleep
             elif verdict == PENDING:
                 pending.append(pr)
         if not pending:
-            emit()
-            return
+            return emit()
         remaining = deadline - clock()
         if remaining <= 0:
-            emit()
+            ordered = emit()
             print(f"incomplete: {noun(len(pending))} still not computed as mergeable (UNKNOWN) after "
                   f"{wait:g} seconds, so the list above leaves them out: {numbers(pending)}",
                   file=err, flush=True)
-            return
+            return ordered
         print(f"waiting for {noun(len(pending))} GitHub has not computed as mergeable (UNKNOWN): "
               f"{numbers(pending)}", file=err, flush=True)
         sleep(min(interval, remaining))
@@ -184,12 +258,23 @@ def main(argv):
     parser.add_argument("--limit", type=int, default=LIMIT)
     parser.add_argument("--wait", type=float, default=WAIT, help="seconds to wait in total for UNKNOWN")
     parser.add_argument("--interval", type=float, default=INTERVAL, help="seconds between reads")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--eligible-file", help="write the pull requests eligible for the merge queue here")
+    modes.add_argument("--enqueue", action="store_true",
+                       help="add the pull requests eligible for the merge queue to it")
     args = parser.parse_args(argv)
     try:
-        watch(lambda: read(args.repo, args.limit), args.reviewer, args.wait, args.interval,
-              sys.stdout, sys.stderr)
+        ready = watch(lambda: read(args.repo, args.limit), args.reviewer, args.wait, args.interval,
+                      io.StringIO() if args.enqueue else sys.stdout, sys.stderr)
+        if args.eligible_file:
+            write_list(args.eligible_file, queue_eligible(args.repo, ready))
+        elif args.enqueue:
+            return enqueue(args.repo, queue_eligible(args.repo, ready), sys.stdout, sys.stderr)
     except GhFailed as error:
         print(f"review-ready: {error}", file=sys.stderr)
+        return 1
+    except OSError as error:
+        print(f"review-ready: could not write the eligible list: {error}", file=sys.stderr)
         return 1
     return 0
 

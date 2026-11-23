@@ -199,9 +199,10 @@ later turn behaves.
 
 ## Where they end up
 
-What is resolved goes into the **system prompt**, never into the conversation. A session running many
+What is resolved goes into the **system prompt**, not into the conversation. A session running many
 turns carries one copy of its instructions however long it runs, rather than a copy per turn crowding
-out the task.
+out the task. The one standing text kept in the conversation is the names of your own skills and the
+project's skills that the listing leaves out, which are said once per session in a single message.
 
 Sources are resolved afresh every turn, so editing `AGENTS.md` mid-session takes effect on the next
 thing you send. A source that is not there is not an error. No `AGENTS.md`, no skills directory, no

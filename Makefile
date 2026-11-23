@@ -84,7 +84,7 @@ help:
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
-	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer, longest waiting first; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer, longest waiting first; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)] [ELIGIBLE_FILE=path] [ENQUEUE=1 to add the ones with two approvals and no unresolved thread to the merge queue]"
 	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else or developed only on another platform, assigning you, and labelling bot/in-progress for the session and telling the session when it did [NOTES=\"<instructions for the run>\"] [FORCE=1 to work issues assigned to someone else or labelled develop-on for another platform too] [BYPASS=1 to skip permission prompts and the sandbox] [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
@@ -511,6 +511,8 @@ check-fuzz: fuzz-prerequisites check-fuzz-lints
 # Verus (docs/development/verification.md). contrib/check-verus.py runs Verus on each crate that
 # carries contracts, which has to verify, and on a copy of it under each mutation in
 # verify/mutations.txt, which has to fail, so a contract a broken body also meets fails here.
+# contrib/check-verus-sweep.py changes one token at a time in each contracted function, and fails
+# on a change Verus still verifies that verify/survivors.txt does not list.
 # verify/history.rs holds the fixes from the history that are not yet contracts in their crates,
 # each refused under the `before_<commit>` cfg that restores the code before the fix. Verus brings
 # its own toolchain, so `check` does not run this; the Verus job in ci.yml does.
@@ -529,6 +531,8 @@ VERUS_HISTORY = before_3facf14a before_e0cd1903 before_20ce6086
 check-verus: check-verus-contracts
 	@python3 contrib/check-verus.py --selftest
 	@VERUS="$(VERUS)" python3 contrib/check-verus.py
+	@python3 contrib/check-verus-sweep.py --selftest
+	@VERUS="$(VERUS)" python3 contrib/check-verus-sweep.py
 	$(VERUS) verify/history.rs
 	@set -e; for cfg in $(VERUS_HISTORY); do \
 		out=$$($(VERUS) verify/history.rs --cfg $$cfg 2>&1) && { \
@@ -660,6 +664,10 @@ docs-updated-to-sha:
 # names on stderr any still UNKNOWN at the end. The ready pull requests are printed after the last
 # read, the one that has waited longest first and the most recent last. A pull request waits from the
 # reviewer's latest approval, or from when it was opened if that has no time.
+#
+# ELIGIBLE_FILE=path also writes the listed pull requests that have at least two approvals and no
+# unresolved review thread to that file. ENQUEUE=1 prints no list and adds each such pull request to the
+# merge queue, pinned to the head commit that was read.
 REVIEW_REPO = brave/bravebot
 REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500
@@ -667,7 +675,8 @@ REVIEW_WAIT = 30
 .PHONY: review-ready
 review-ready:
 	@python3 contrib/review-ready.py --repo '$(or $(REPO),$(REVIEW_REPO))' --reviewer '$(or $(REVIEWER),$(REVIEW_REVIEWER))' \
-	  --limit '$(or $(LIMIT),$(REVIEW_LIMIT))' --wait '$(or $(WAIT),$(REVIEW_WAIT))'
+	  --limit '$(or $(LIMIT),$(REVIEW_LIMIT))' --wait '$(or $(WAIT),$(REVIEW_WAIT))' \
+	  $(if $(ELIGIBLE_FILE),--eligible-file '$(ELIGIBLE_FILE)') $(if $(ENQUEUE),--enqueue)
 
 # Opens the implement-issues skill in the terminal client on ISSUES, which the skill receives as
 # written: issue numbers, links and search queries separated by commas. NOTES is the person's
@@ -840,9 +849,11 @@ check-ui-build: check-extension
 
 check-ui-walkthrough:
 	cd ui && if [ "$$(uname -s)" = Linux ]; then \
-		xvfb-run -a node scripts/drive-manual-walkthrough.mjs; \
+		xvfb-run -a node scripts/drive-manual-walkthrough.mjs && \
+		xvfb-run -a node scripts/drive-reports.mjs; \
 	else \
-		node scripts/drive-manual-walkthrough.mjs; \
+		node scripts/drive-manual-walkthrough.mjs && \
+		node scripts/drive-reports.mjs; \
 	fi
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a

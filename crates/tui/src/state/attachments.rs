@@ -675,7 +675,7 @@ impl Session {
             line: put_back_to_words(
                 &put_back_to_names(&commanded.line, &commanded.attached),
                 &commanded.pasted,
-                "a picture cannot join that command",
+                bravebot_filetype::markers::A_PICTURE_CANNOT_JOIN_A_COMMAND,
             ),
             pasted: Vec::new(),
             attached: Vec::new(),

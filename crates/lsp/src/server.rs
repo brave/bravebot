@@ -2589,6 +2589,63 @@ done
         }
     }
 
+    /// LSP-10: nothing the driver does with an index opens a file inside it.
+    ///
+    /// A named pipe stands where a file would be read. Opening one for reading waits until something
+    /// opens it for writing, and nothing does, so a read of the marker or of anything inside an
+    /// index never returns. The two functions that touch an index, the one a server start runs and
+    /// the sweep, run on a thread that has to answer within a bound, so a read shows as a test that
+    /// fails rather than one that hangs. A pipe that stays a pipe was also not replaced.
+    #[cfg(unix)]
+    #[test]
+    fn nothing_the_driver_does_with_an_index_reads_a_file_inside_it() {
+        use std::os::unix::fs::FileTypeExt;
+
+        fn pipe_at(path: &Path) {
+            let made = std::process::Command::new("mkfifo")
+                .arg(path)
+                .status()
+                .expect("mkfifo");
+            assert!(made.success(), "mkfifo {}", path.display());
+        }
+
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-never-read-index");
+        // An index whose marker is a pipe, which is where a read of the marker would wait.
+        let marked_by_a_pipe = scratch.join(CACHE_ROOT).join("00000000000000ee");
+        std::fs::create_dir_all(&marked_by_a_pipe).expect("an index");
+        pipe_at(&marked_by_a_pipe.join(USED_MARKER));
+        // An index that is old enough to be removed and holds a pipe where derived bytes would be,
+        // which is where a read of what is about to be removed would wait.
+        let old = index_last_used(&scratch, "00000000000000ff", 40);
+        pipe_at(&old.join("debug").join("pipe"));
+
+        let (done, finished) = std::sync::mpsc::channel();
+        let state = scratch.to_path_buf();
+        let started_on = marked_by_a_pipe.clone();
+        std::thread::spawn(move || {
+            let started = create_cache(&started_on).is_ok();
+            let removed = remove_unused_indexes(&state, thirty_days_ago(), None);
+            let _ = done.send((started, removed));
+        });
+        let (started, removed) = finished
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the driver waited on a pipe inside an index: it reads what the cache holds");
+
+        assert!(
+            started,
+            "a server could not start on an index with a pipe in it"
+        );
+        assert_eq!(removed, 1, "only the old index goes, pipe and all");
+        assert!(!old.exists(), "an old index holding a pipe was kept");
+        assert!(
+            std::fs::symlink_metadata(marked_by_a_pipe.join(USED_MARKER))
+                .expect("the marker is still there")
+                .file_type()
+                .is_fifo(),
+            "a marker that is not a plain file was replaced"
+        );
+    }
+
     /// A whole-tree query names no file, so it cannot decide a language and must not be answered by
     /// guessing one from the symbol's name.
     #[test]
@@ -4470,6 +4527,169 @@ done
             "work begun after settling makes the answer partial"
         );
         assert!(!server.is_indexed());
+    }
+
+    #[cfg(unix)]
+    const STARTED_OUT_OF_ORDER: &str = "bravebot-lsp-started-out-of-order";
+
+    #[cfg(unix)]
+    fn the_server_started_out_of_order(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(STARTED_OUT_OF_ORDER).join("server"))
+    }
+
+    /// PANEL-13: the roster names the started servers in name order, whatever order they started in.
+    ///
+    /// Seven declared servers are started in the reverse of their name order, and the roster is read
+    /// after each start. The running servers are held in a `HashMap`, so a roster built from its keys
+    /// without a sort comes out in an order set by the map's hash seed, which is name order once in
+    /// 5040 times for seven servers, and a roster kept in start order is reverse name order every
+    /// time.
+    ///
+    /// Rejects: a roster published without sorting its programs.
+    #[cfg(unix)]
+    #[test]
+    fn the_roster_names_the_servers_in_name_order_whatever_order_they_started_in() {
+        let (_launching, scratch, _log, template) =
+            a_workspace_with_a_declared_server(STARTED_OUT_OF_ORDER);
+        let letters = ['g', 'f', 'e', 'd', 'c', 'b', 'a'];
+        let declared: Vec<Declared> = letters
+            .iter()
+            .map(|letter| Declared {
+                name: format!("ls-{letter}"),
+                command: format!("ls-{letter}"),
+                extensions: BTreeMap::from([(format!("z{letter}"), "zed".to_string())]),
+                digest: letter.to_string(),
+                ..template.clone()
+            })
+            .collect();
+        let roster = Roster::default();
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_started_out_of_order,
+            false,
+            Vec::new,
+        );
+        servers.reporting_to(roster.clone());
+        servers.declare(declared);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_holds_the_capability(&mut sink);
+
+        let mut started: Vec<String> = Vec::new();
+        for letter in letters {
+            let file = scratch.join(format!("a.z{letter}"));
+            std::fs::write(&file, "one\n").expect("write the file");
+            let file = file.to_str().expect("a utf-8 path");
+            servers
+                .ask(&mut policy, &definition_in(file), &mut |_, _| true)
+                .expect("the declared server answers");
+            started.push(format!("ls-{letter}"));
+            let mut in_name_order = started.clone();
+            in_name_order.sort();
+            assert_eq!(
+                roster.programs(),
+                in_name_order,
+                "after {} servers the roster is not in name order",
+                started.len()
+            );
+        }
+        assert_eq!(servers.running(), letters.len());
+    }
+
+    #[cfg(unix)]
+    const ROSTER_DURING_A_QUESTION: &str = "bravebot-lsp-roster-during-a-question";
+
+    #[cfg(unix)]
+    fn the_server_asked_about_while_others_run(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(ROSTER_DURING_A_QUESTION).join("server"))
+    }
+
+    /// PANEL-13: the rows stay while a question waits on an approval.
+    ///
+    /// The approval callback reads the roster, which is what the panel reads while a question holds
+    /// the set. A second server is asked about with a yes, and a third with a no. The roster names
+    /// the server already running at each wait, still names it after the refusal, and names the
+    /// second server once it has started.
+    ///
+    /// Rejects: a roster emptied or rebuilt from nothing when a question begins, which draws no
+    /// Language servers section for as long as a person is deciding.
+    #[cfg(unix)]
+    #[test]
+    fn the_roster_keeps_naming_the_running_servers_while_a_question_waits_on_an_approval() {
+        let (_launching, scratch, _log, template) =
+            a_workspace_with_a_declared_server(ROSTER_DURING_A_QUESTION);
+        let declared: Vec<Declared> = ['a', 'b', 'c']
+            .iter()
+            .map(|letter| Declared {
+                name: format!("ls-{letter}"),
+                command: format!("ls-{letter}"),
+                extensions: BTreeMap::from([(format!("z{letter}"), "zed".to_string())]),
+                digest: letter.to_string(),
+                ..template.clone()
+            })
+            .collect();
+        let roster = Roster::default();
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_asked_about_while_others_run,
+            false,
+            Vec::new,
+        );
+        servers.reporting_to(roster.clone());
+        servers.declare(declared);
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_holds_the_capability(&mut sink);
+        let path_for = |letter: char| {
+            let file = scratch.join(format!("a.z{letter}"));
+            std::fs::write(&file, "one\n").expect("write the file");
+            file.to_str().expect("a utf-8 path").to_string()
+        };
+
+        let waiting_on = roster.clone();
+        let seen_while_a_waits = std::cell::RefCell::new(None);
+        servers
+            .ask(&mut policy, &definition_in(&path_for('a')), &mut |_, _| {
+                *seen_while_a_waits.borrow_mut() = Some(waiting_on.programs());
+                true
+            })
+            .expect("the first declared server answers");
+        assert_eq!(seen_while_a_waits.take(), Some(Vec::<String>::new()));
+        assert_eq!(roster.programs(), ["ls-a"]);
+
+        let seen_while_b_waits = std::cell::RefCell::new(None);
+        servers
+            .ask(&mut policy, &definition_in(&path_for('b')), &mut |_, _| {
+                *seen_while_b_waits.borrow_mut() = Some(waiting_on.programs());
+                true
+            })
+            .expect("the second declared server answers");
+        assert_eq!(
+            seen_while_b_waits.take(),
+            Some(vec!["ls-a".to_string()]),
+            "the running server was not named while a question waited on an approval"
+        );
+        assert_eq!(roster.programs(), ["ls-a", "ls-b"]);
+
+        let seen_while_c_waits = std::cell::RefCell::new(None);
+        let refused = servers.ask(&mut policy, &definition_in(&path_for('c')), &mut |_, _| {
+            *seen_while_c_waits.borrow_mut() = Some(waiting_on.programs());
+            false
+        });
+        assert!(
+            matches!(refused, Err(LspError::Refused { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(
+            seen_while_c_waits.take(),
+            Some(vec!["ls-a".to_string(), "ls-b".to_string()]),
+            "the running servers were not named while a question waited on an approval"
+        );
+        assert_eq!(
+            roster.programs(),
+            ["ls-a", "ls-b"],
+            "a refused question changed which servers are named"
+        );
     }
 
     /// LSP-11: a declaration is the person's word about a language, so it wins over the table, and

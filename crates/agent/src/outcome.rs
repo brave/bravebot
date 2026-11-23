@@ -331,12 +331,12 @@ pub struct Spent {
     /// Every round added together, as the service counted them.
     pub tokens: u64,
     /// Of [`Spent::tokens`], what a delegate's token budget counts: everything except the checks
-    /// made over content nobody vouched for (DELEGATE-29).
+    /// made over content nobody vouched for and the processors' calls (DELEGATE-29).
     ///
-    /// Built by adding only what is not a check, and never by taking a check off the total, so no
-    /// check's reply reaches it. It is the only figure a delegate's budget, the warning it is
-    /// sent, the share a child it starts is given and the total a parent counts for a child are
-    /// decided from. [`Spent::tokens`] is what the person is told and what their own limits read.
+    /// Built by adding only what is neither, and never by taking either off the total, so no
+    /// check's or processor's reply reaches it. It is the only figure a delegate's budget, the
+    /// warning it is sent, the share a child it starts is given and the total a parent counts for a
+    /// child are decided from. [`Spent::tokens`] is what the person is told and what their own limits read.
     pub budgeted_tokens: u64,
     /// Of those, the ones the model wrote.
     pub output_tokens: u64,
@@ -362,18 +362,18 @@ impl Spent {
     }
 
     /// Add usage to the cost and not to what a delegate's token budget counts (DELEGATE-29): a
-    /// check over content nobody vouched for, whose reply depends on the content it read, so its
-    /// size must not decide anything a delegate's planner is told or does; and a delegate's own
-    /// cost, whose budgeted part is added to [`Spent::budgeted_tokens`] separately.
+    /// check over content nobody vouched for or a processor, whose reply depends on the content it
+    /// read, so its size must not decide anything a delegate's planner is told or does; and a
+    /// delegate's own cost, whose budgeted part is added to [`Spent::budgeted_tokens`] separately.
     pub fn add_unbudgeted(&mut self, usage: Usage) {
         self.tokens += usage.total();
         self.output_tokens += usage.completion_tokens;
         self.cached.add(usage.cached);
     }
 
-    /// Add a check's usage as [`Spent::add_unbudgeted`] does, counting a request where one
-    /// completed for it.
-    pub fn add_check(&mut self, usage: Usage, completed: bool) {
+    /// Add a check's or a processor's usage as [`Spent::add_unbudgeted`] does, counting a request
+    /// where one completed for it.
+    pub fn add_unbudgeted_call(&mut self, usage: Usage, completed: bool) {
         self.add_unbudgeted(usage);
         if completed {
             self.requests += 1;
@@ -501,13 +501,13 @@ mod tests {
     #[test]
     fn a_check_is_part_of_the_cost_and_not_of_the_budgeted_figure() {
         let mut spent = Spent::default();
-        spent.add_check(a_usage(0, 9_000, 0, 0), true);
+        spent.add_unbudgeted_call(a_usage(0, 9_000, 0, 0), true);
         assert_eq!(spent.tokens, 9_000);
         assert_eq!(spent.output_tokens, 9_000);
         assert_eq!(spent.requests, 1, "a completed check is a request");
         assert_eq!(spent.budgeted_tokens, 0);
 
-        spent.add_check(a_usage(10, 0, 0, 0), false);
+        spent.add_unbudgeted_call(a_usage(10, 0, 0, 0), false);
         assert_eq!(
             spent.requests, 1,
             "a check that did not complete is not one"
@@ -516,6 +516,29 @@ mod tests {
 
         spent.add_unbudgeted(a_usage(5, 5, 0, 0));
         assert_eq!((spent.tokens, spent.budgeted_tokens), (9_020, 0));
+    }
+
+    /// DELEGATE-29, PROC-16: what a processor wrote depends on the content it read, so its usage
+    /// is added to every count of the cost and never to the figure a delegate's budget is
+    /// compared with. A delegate's own request added after it still is.
+    ///
+    /// Rejects: a processor added with `add_call`, which brings its tokens into the budgeted
+    /// figure, a processor that leaves out of the cost any of tokens, output tokens or cached
+    /// tokens, and a figure that stopped counting what is added to it afterwards.
+    #[test]
+    fn a_processor_is_part_of_the_cost_and_not_of_the_budgeted_figure() {
+        let mut spent = Spent::default();
+        spent.add_unbudgeted_call(a_usage(100, 15_000, 20, 30), true);
+        assert_eq!(spent.tokens, 15_100);
+        assert_eq!(spent.output_tokens, 15_000);
+        assert_eq!(spent.cached.read_tokens, 20);
+        assert_eq!(spent.cached.written_tokens, 30);
+        assert_eq!(spent.requests, 1, "a completed processor is a request");
+        assert_eq!(spent.budgeted_tokens, 0);
+
+        spent.add_call(a_usage(10, 5, 0, 0), true);
+        assert_eq!((spent.tokens, spent.budgeted_tokens), (15_115, 15));
+        assert_eq!(spent.requests, 2);
     }
 
     /// A tool that made no request is given an empty usage, so counting from the usage being

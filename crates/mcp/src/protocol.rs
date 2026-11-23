@@ -386,7 +386,10 @@ fn kind(property: &Value) -> Option<&'static str> {
     }
 }
 
-/// The values an `enum` lists, where they are a few short strings.
+/// The values an `enum` lists: up to `MAX_CHOICES` strings of printable text, each up to
+/// `MAX_CHOICE` characters. They are the server's own words, held to a length and to printable
+/// text and not to the alphabet of an argument's name, so a front end draws each one as server
+/// text behind the margin and never joins one into the client's own text (SERVERS-8).
 fn choices(property: &Value) -> Option<Vec<String>> {
     let listed = property.get("enum")?.as_array()?;
     if listed.is_empty() || listed.len() > MAX_CHOICES {
@@ -1306,6 +1309,75 @@ mod tests {
         let text = tools[0].to_string();
         assert!(!text.contains("disregard"), "{text}");
         assert!(!text.contains("say yes"), "{text}");
+    }
+
+    /// An argument's values are kept where it names at most sixteen. An argument naming a
+    /// seventeenth keeps none of them and is still listed by its name, type and whether it is
+    /// required. A bound off by one in either direction, a list cut to its first sixteen values,
+    /// and a list that drops the argument each offer the person a set of values the server did
+    /// not declare.
+    #[test]
+    fn an_argument_naming_more_than_sixteen_values_keeps_none_of_them() {
+        let values =
+            |count: usize| -> Vec<String> { (0..count).map(|n| format!("value{n:02}")).collect() };
+        let listing = |count: usize| {
+            serde_json::json!({"tools": [{
+                "name": "a",
+                "inputSchema": {
+                    "properties": {"unit": {"type": "string", "enum": values(count)}},
+                    "required": ["unit"],
+                },
+            }]})
+            .to_string()
+        };
+
+        let at_the_bound = tools(&listing(16));
+        assert_eq!(
+            at_the_bound[0]["arguments"],
+            serde_json::json!([
+                {"name": "unit", "type": "string", "enum": values(16), "required": true}
+            ])
+        );
+
+        let past_the_bound = tools(&listing(17));
+        assert_eq!(
+            past_the_bound[0]["arguments"],
+            serde_json::json!([{"name": "unit", "type": "string", "required": true}])
+        );
+
+        // An empty `enum` offers no value, so it is no list, and a value is kept up to
+        // `MAX_CHOICE` characters (not bytes): one more makes the whole list unkept.
+        let listing_of = |listed: serde_json::Value| {
+            serde_json::json!({"tools": [{
+                "name": "a",
+                "inputSchema": {
+                    "properties": {"unit": {"type": "string", "enum": listed}},
+                    "required": ["unit"],
+                },
+            }]})
+            .to_string()
+        };
+        let bare = serde_json::json!([{"name": "unit", "type": "string", "required": true}]);
+        assert_eq!(
+            tools(&listing_of(serde_json::json!([])))[0]["arguments"],
+            bare,
+            "an empty enum"
+        );
+        for longest in ["x".repeat(MAX_CHOICE), "\u{e9}".repeat(MAX_CHOICE)] {
+            assert_eq!(
+                tools(&listing_of(serde_json::json!([longest])))[0]["arguments"],
+                serde_json::json!([
+                    {"name": "unit", "type": "string", "enum": [longest], "required": true}
+                ]),
+                "a value of {MAX_CHOICE} characters is kept"
+            );
+        }
+        assert_eq!(
+            tools(&listing_of(serde_json::json!(["x".repeat(MAX_CHOICE + 1)])))[0]["arguments"],
+            bare,
+            "a value of {} characters keeps no value",
+            MAX_CHOICE + 1
+        );
     }
 
     /// An argument name is what a model writes back, so one that is not a plain name makes the

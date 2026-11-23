@@ -913,9 +913,12 @@ fn a_click_on_a_path_waits_for_a_second_press_and_then_asks_for_the_file() {
         "carried out at once"
     );
 
-    let asked = session.take_the_click_due(now + WAIT + std::time::Duration::from_millis(1));
+    // Measured from after the click, which recorded its own time when it was made: a time taken
+    // before it can be earlier than the click's by however long the press took to handle.
+    let after = std::time::Instant::now();
+    let asked = session.take_the_click_due(after + WAIT + std::time::Duration::from_millis(1));
     assert_eq!(asked, Some(path("src/main.rs", Some(3))));
-    assert_eq!(session.take_the_click_due(now + WAIT * 2), None, "twice");
+    assert_eq!(session.take_the_click_due(after + WAIT * 2), None, "twice");
     assert_eq!(session.the_click_due_in(now), None);
 }
 

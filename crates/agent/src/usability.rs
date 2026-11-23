@@ -1546,6 +1546,16 @@ mod tests {
     /// The command the stored-login `gh` is started with, when the environment holds `name` as
     /// `value`.
     fn login_with(name: &OsStr, value: &OsStr, writable: &Path) -> Command {
+        login_in(None, name, value, writable)
+    }
+
+    /// [`login_with`] for the run under `confinement`, or the run with none.
+    fn login_in(
+        confinement: Option<&Confinement>,
+        name: &OsStr,
+        value: &OsStr,
+        writable: &Path,
+    ) -> Command {
         let home = scratch_dir(&format!("usability-login-home-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         login_command(
@@ -1553,7 +1563,7 @@ mod tests {
             &["auth".to_string(), "token".to_string()],
             &home,
             writable,
-            None,
+            confinement,
             [(name.to_os_string(), value.to_os_string())],
             &judged(writable),
         )
@@ -2024,14 +2034,52 @@ mod tests {
     }
 
     /// The regression it rejects: the token variables reaching the login `gh`, which would answer
-    /// from the environment and hide a login the sandbox takes away.
+    /// from the environment and hide a login the sandbox takes away. The four names are spelled
+    /// here and `LOGIN_VARIABLES` must hold exactly them, so a name dropped from the list fails
+    /// instead of shrinking the loop that checks it. Both runs are read, so removing the names only
+    /// where no confinement is given fails too.
     #[test]
     fn the_token_variables_are_removed_from_the_stored_login_gh() {
         let (session, _planted, genuine) = planted_and_genuine("usability-login-token");
+        let tokens = [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+        ];
+        let mut listed = LOGIN_VARIABLES.to_vec();
+        listed.sort_unstable();
+        let mut spelled = tokens.to_vec();
+        spelled.sort_unstable();
+        assert_eq!(listed, spelled);
 
-        for name in LOGIN_VARIABLES {
-            let command = login_with(OsStr::new(name), genuine.as_os_str(), &session);
-            assert!(removed(&command, OsStr::new(name)), "{name}");
+        let home = scratch_dir(&format!(
+            "usability-login-token-home-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        let confinement = Confinement::here(vec![session.clone()], None, Some(&home))
+            .expect("a platform with a base");
+        for (run, confinement) in [("unconfined", None), ("confined", Some(&confinement))] {
+            for name in tokens {
+                let command =
+                    login_in(confinement, OsStr::new(name), genuine.as_os_str(), &session);
+                assert!(
+                    removed(&command, OsStr::new(name)),
+                    "{name} in the {run} run"
+                );
+            }
+            // A name the start keeps shows that `removed` reads a removal and not any name.
+            let command = login_in(
+                confinement,
+                OsStr::new("XDG_DATA_DIRS"),
+                genuine.as_os_str(),
+                &session,
+            );
+            assert!(
+                !removed(&command, OsStr::new("XDG_DATA_DIRS")),
+                "XDG_DATA_DIRS in the {run} run"
+            );
         }
     }
 }

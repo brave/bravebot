@@ -581,6 +581,67 @@ fn a_declined_plan_runs_nothing_and_can_still_be_read() {
     assert_eq!(front.recorded_runs(&scratch), vec![record.to_string()]);
 }
 
+/// SESSION-28: a desktop plan run keeps no backups, so before one begins every rewind point the
+/// session holds records a desktop coverage gap. The plan is declined, so the gap is shown to be
+/// recorded when the run begins and not when it ends well.
+///
+/// Rejects a run that records no gap, one that records it only once the plan is approved, one that
+/// marks only the newest point, and one that marks the points a later turn opens.
+#[test]
+fn a_plan_run_marks_every_rewind_point_the_session_holds_as_uncovered_by_the_desktop() {
+    let scratch = Scratch::new("bridge-manifest-desktop-gap");
+    let (endpoint, rounds) = scripted_planner(vec![
+        json!({"content": "done"}),
+        json!({"content": "done"}),
+        json!({"content": "1. Write the notes file with a fixed body."}),
+        json!({"content": json!({"steps": [{"capability": "FILE_WRITE",
+            "args": {"path": TARGET, "contents": WRITTEN}}]}).to_string()}),
+    ]);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    // The gaps of every point a finished turn reports, newest first.
+    let turn = |front: &mut FrontEnd, prompt: &str| -> Vec<Value> {
+        front.call(
+            "turn.send",
+            message_ids::with_fresh(json!({"session": session, "prompt": prompt})),
+        );
+        let ended = front.question_or_the_end();
+        assert_eq!(ended["event"], "turn.done", "{ended}");
+        ended["data"]["rewind"]
+            .as_array()
+            .expect("the points the turn left")
+            .iter()
+            .map(|point| point["gaps"].clone())
+            .collect()
+    };
+
+    assert_eq!(turn(&mut front, "first"), [json!([])]);
+    assert_eq!(
+        turn(&mut front, "second"),
+        [json!([]), json!([])],
+        "a turn marked a point before any run began"
+    );
+
+    let question = front.plan(&session);
+    front.reply("manifest.reply", &session, &question, "reject");
+    let ended = front.question_or_the_end();
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    assert_eq!(scratch.written(), None, "a declined plan wrote a file");
+
+    assert_eq!(
+        turn(&mut front, "third"),
+        [json!([]), json!(["desktop"]), json!(["desktop"])],
+        "the points held when the run began are marked, newest first, and the one opened after it \
+         is not"
+    );
+    assert_eq!(
+        rounds.try_iter().count(),
+        5,
+        "the script did not line up with the calls the turns and the plan made"
+    );
+}
+
 /// A run the person stopped is not written down, whether the stop arrived at the plan question
 /// or later (MANIFEST-11).
 #[test]
@@ -1356,7 +1417,7 @@ fn stalled_server() -> String {
 }
 
 /// What a person answers while a plan that calls the forecast is made and walked: yes to the
-/// server, to its list, to the plan and to the call.
+/// server, to its list, to the plan and to the call, where one is put.
 const APPROVING_EVERYTHING: [(&str, &str); 4] = [
     ("mcp-server.request", "approve"),
     ("mcp-tools.request", "approve"),
@@ -1378,12 +1439,12 @@ fn a_planner_calling_the_forecast() -> (String, mpsc::Receiver<String>) {
 
 /// MANIFEST-15, SERVERS-9: a plan run in a window before any turn has run starts the session's
 /// servers, putting the question about each to the window, then puts the list of each and plans from
-/// it. A step may then call a tool, and the call is put to the window and reaches the server only
-/// after its yes.
+/// it. A step may then call a tool, and the call reaches the server on the plan's yes, whose line
+/// showed it whole, with no question at its step.
 ///
 /// Rejects a plan run that starts nothing, which leaves the planner no call to offer and the plan
 /// refused as naming a capability that was not offered, one that starts a server without asking, one
-/// that starts them after the plan is made, and one that sends the call without asking about it.
+/// that starts them after the plan is made, and one that asks about the call again at its step.
 #[test]
 fn a_plan_run_before_any_turn_starts_the_sessions_servers_and_calls_a_tool() {
     let scratch = Scratch::new("bridge-manifest-server-first");
@@ -1409,7 +1470,6 @@ fn a_plan_run_before_any_turn_starts_the_sessions_servers_and_calls_a_tool() {
             "mcp.started",
             "mcp-tools.request",
             "manifest.request",
-            "mcp-call.request",
             "manifest.done",
         ]
     );
@@ -1424,8 +1484,8 @@ fn a_plan_run_before_any_turn_starts_the_sessions_servers_and_calls_a_tool() {
         plan.contains("weather:get_forecast") && plan.contains(r#"{\"city\":\"Paris\"}"#),
         "the plan does not show the call whole: {plan}"
     );
-    let call = &named(&events, "mcp-call.request")[0]["data"];
-    assert_eq!(call["name"], "weather:get_forecast");
+    // Approving the plan, whose line showed the call whole, answered it (MANIFEST-15).
+    assert!(named(&events, "mcp-call.request").is_empty(), "{events:?}");
 
     let reached = methods(&received);
     assert_eq!(
@@ -1558,7 +1618,7 @@ fn a_turn_after_a_plan_run_finds_the_servers_the_run_started() {
 }
 
 /// A plan run in a session a turn has started the servers of starts none and puts no list: the
-/// turn's answers stand, and the call is the only question.
+/// turn's answers stand, and the plan is the only question, its yes answering the call it shows.
 ///
 /// Rejects a plan run that starts servers whether or not the session holds them, which asks about
 /// the server again and reaches it a second time.
@@ -1610,10 +1670,10 @@ fn a_plan_run_after_a_turn_finds_the_servers_the_turn_started() {
     );
 
     assert_eq!(run.last().unwrap()["event"], "manifest.done", "{run:?}");
-    assert_eq!(
-        names_starting(&run, &["mcp"]),
-        ["mcp-call.request"],
-        "the run started servers or asked about the list again"
+    assert!(
+        names_starting(&run, &["mcp"]).is_empty(),
+        "the run started servers, asked about the list again, or asked about the call the plan \
+         answered: {run:?}"
     );
     let reached = methods(&received);
     assert_eq!(

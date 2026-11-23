@@ -5,7 +5,7 @@ description:
   the conflicts, and push it back with a lease. Works from a direct clone or a fork clone.
   Triggers on: /rebase <pr>, rebase this PR, PR has bitrot, PR has conflicts.'
 argument-hint: '<pr number or URL>'
-allowed-tools: Bash(python3 agents/skills/rebase/rebase.py *), Bash(git *), Read, Edit
+allowed-tools: Bash(git *), Read, Edit
 ---
 
 # Rebase a pull request
@@ -28,6 +28,19 @@ another one, as [the pr-fix skill](../pr-fix/SKILL.md) says, and the file tools 
 outside the workspace until it is opened with `/add-dir`, except where the person has turned
 permission prompts off, as that skill says. A worktree in the directory `BRAVEBOT_PR_WORKTREES` names
 is used without asking.
+
+Run the script by the absolute path of the main clone's copy, written
+`<clone>/agents/skills/rebase/rebase.py` below, where `<clone>` is the first path `git worktree list`
+prints. A relative path runs the copy in the session's directory, and in `.worktrees/pr-<pr>` that is
+the pull request's own script, which would run with the person's access. The session need not `cd`
+into the worktree, and one that did runs the same lines. Every step the script prints names itself by
+its absolute path, so copy it as printed. The path is the resolved one, so it differs from `<clone>`
+only where `<clone>` is reached through a symlink, which `Path.resolve()` expands. `allowed-tools`
+names no script, so a client that honours that key (bravebot reads it nowhere, and `doctor` reports
+it as unread) asks the person about each call, where a grant for the relative path would have run the
+copy in a worktree with no prompt. A grant that names the main clone's path in full, such as
+`Bash(python3 /path/to/clone/agents/skills/rebase/rebase.py *)` in the person's own
+`.claude/settings.local.json`, does not match the copy in a worktree.
 
 Where the `run` tool takes `scopes` and `unconfined` arguments, give each step the ones below on its
 first call. The person is asked about a line with either argument every time, so the first call has
@@ -57,23 +70,23 @@ the pr-fix skill.
    on the directory `BRAVEBOT_PR_WORKTREES` names, resolved against the main clone and taken from
    the working directory, never from the output of a failed run. `rebase.py` creates and rebases
    worktrees there. With the default `.worktrees/`, skip it.
-1. `python3 agents/skills/rebase/rebase.py start <pr>`
+1. `python3 <clone>/agents/skills/rebase/rebase.py start <pr>`
 2. For each `path:start-end` it prints, Read only that range of the worktree's file and Edit it
    so both sides survive: the base's change and the pull request's. The commits it lists are the
    base's changes to those files; `git show` one only when a hunk alone is ambiguous. Don't
    `git add`. Where the two sides can't both be kept, stop and ask. A conflict in code touching a
    label: read [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-the-rule.md)
    first.
-3. `python3 agents/skills/rebase/rebase.py continue <pr>`, repeating 2 until it prints `next: push`.
+3. `python3 <clone>/agents/skills/rebase/rebase.py continue <pr>`, repeating 2 until it prints `next: push`.
    A pick git could not sign stops with its changes staged; `continue` commits it with its message and
    author, signing as the person's configuration says, and goes on.
-4. `python3 agents/skills/rebase/rebase.py check <pr>` runs only what the files resolved in step 2
+4. `python3 <clone>/agents/skills/rebase/rebase.py check <pr>` runs only what the files resolved in step 2
    call for: for Rust, `cargo fmt --check`, clippy on the crates touched and any resolved test
    binary; `check-spec`, `check-locales`, `check-security` or `check-versions` where a spec, catalog,
    workflow or manifest was resolved. A clean rebase, or a resolved file no rule names (`ui/`,
    website, prose), runs nothing and leaves the checks to CI. Pass make targets to run those
    instead; do not widen it to `check-all-local`, which CI repeats.
-5. `python3 agents/skills/rebase/rebase.py push <pr>`. When GitHub refuses the push because ssh
+5. `python3 <clone>/agents/skills/rebase/rebase.py push <pr>`. When GitHub refuses the push because ssh
    offered a key without access, it retries once with each other key `ssh-add -L` lists and reports
    the one that worked. With no usable key it prints GitHub's refusal. It refuses when the pull
    request has signed commits and the push would leave more of its commits unsigned than it has

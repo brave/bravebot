@@ -300,6 +300,7 @@ fn a_turns_confinement_refuses_a_list_entry_on_the_state_directory_it_runs_under
         path: path.to_string_lossy().into_owned(),
         by: None,
         pinned: false,
+        from_a_checkout: false,
     };
     let _held = scripted_filesystem::hold(Lists {
         allow_read: vec![entry(&moved), entry(&moved.join("gateway-keys.json"))],
@@ -892,7 +893,9 @@ fn run_names_its_own_credentials_and_says_what_an_unset_report_means() {
         "the statement does not say what an unset report means: {run}"
     );
     assert!(
-        run.contains("the person's settings name as a gateway's token or to be withheld, which are not listed"),
+        run.contains(
+            "name as a gateway's token, as a search key or to be withheld, which are not listed"
+        ),
         "the statement does not say that settings add variables it does not list: {run}"
     );
 }

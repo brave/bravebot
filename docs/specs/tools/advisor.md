@@ -107,11 +107,14 @@ A call the service could not answer is reported as the category of the failure a
 service said. A cancelled turn ends as it does anywhere else. A model the machine-level settings
 refuse is not asked, whichever route named it, and the planner is told to carry on without it. A
 model that searches the web before it replies, reached over chat completions
-([LABEL-8](../labels.md#LABEL-8)), is not asked either.
+([LABEL-8](../labels.md#LABEL-8)), is not asked either. A model that no configured service answers
+for is not asked, and the planner is told to carry on without it: sent to Brave's endpoint under a
+name it does not serve, the whole conversation would go to a model that endpoint substitutes.
 
 `verified-by: bravebot_agent::turn::a_failed_advisor_call_tells_the_planner_only_the_category`
 `verified-by: bravebot_agent::turn::an_advisor_model_the_machine_refuses_is_not_asked`
 `verified-by: bravebot_agent::turn::an_advisor_model_that_searches_the_web_is_not_asked`
+`verified-by: bravebot_agent::turn::an_advisor_the_settings_name_that_nothing_serves_is_answered_per_call_and_stops_nothing`
 `verified-by: bravebot_agent::turn::a_stop_while_the_advisor_is_asked_ends_the_turn_as_a_stop_with_what_it_sent`
 `verified-by: bravebot_agent::tools::tests::model_requests::a_cancelled_request_is_worded_as_cancelled_and_carried_as_a_cancellation`
 

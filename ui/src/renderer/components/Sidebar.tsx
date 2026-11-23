@@ -42,6 +42,8 @@ interface Props {
   onNew: (directory?: string) => void
   onPurge: (directory: string, project: string) => void
   onImport: (directory: string, project: string) => void
+  /** Show what the project's recorded sessions spent, in tokens (CLI-37). */
+  onStats: (directory: string, project: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
   /** Said when somebody switches the tab, so the first item of the other list can be opened. */
@@ -74,6 +76,7 @@ export const Sidebar = memo(function Sidebar({
   onNew,
   onPurge,
   onImport,
+  onStats,
   onNewChat,
   onTab,
   bots,
@@ -160,6 +163,7 @@ export const Sidebar = memo(function Sidebar({
           onNew={onNew}
           onPurge={onPurge}
           onImport={onImport}
+          onStats={onStats}
           onNewChat={onNewChat}
           grouped={grouped}
           onGroup={setGrouped}

@@ -37,6 +37,10 @@ The agent advertises `loadSession: false`, no authentication methods, and prompt
 text, links and images. It does not call the editor's file or terminal methods, so bytes an editor
 holds reach the agent only as a prompt or an attachment.
 
+The first prompt of a launch that is reporting crashes is preceded by one message of the session
+saying so, as [CRASH-12](crash-reports.md#CRASH-12) has it. It is a notification like any other
+text, so it is subject to [ACP-6](#ACP-6), and the program writes nothing about it outside one.
+
 ## Clauses
 
 <a id="ACP-1"></a>

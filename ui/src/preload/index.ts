@@ -19,6 +19,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { BridgeEvent, BridgeFailure } from '../shared/protocol'
 import type { StoredLayout } from '../shared/layout'
+import type { PanelName } from '../shared/state'
 import type { StoredView } from '../shared/view'
 import type { CommandId, ContextCommandId, ContextRef, WindowState } from '../shared/commands'
 import type { ExportOutcome, ExportRequest } from '../shared/export'
@@ -172,6 +173,16 @@ const api = {
   /** Remember where the columns were. Best-effort; the caller does not wait or check. */
   writeLayout(layout: StoredLayout): void {
     void ipcRenderer.invoke('bravebot:layout:write', layout)
+  },
+
+  /** The context-column panels turned off last launch, in column order. Empty means every panel on. */
+  readHiddenPanels(): Promise<PanelName[]> {
+    return ipcRenderer.invoke('bravebot:panels:read') as Promise<PanelName[]>
+  },
+
+  /** Remember which context-column panels are turned off. Best-effort, as `writeLayout` is. */
+  writeHiddenPanels(hidden: PanelName[]): void {
+    void ipcRenderer.invoke('bravebot:panels:write', hidden)
   },
 
   /**
@@ -515,6 +526,8 @@ const api = {
       context: ContextRef | null,
     ) => listener(id, context)
     ipcRenderer.on('bravebot:command', handler)
+    // A command chosen with no window builds one, and the main process holds it until this runs.
+    ipcRenderer.send('bravebot:commands:ready')
     return () => ipcRenderer.off('bravebot:command', handler)
   },
 

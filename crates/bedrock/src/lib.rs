@@ -61,6 +61,10 @@ pub enum BedrockError {
     Frame(eventstream::FrameError),
     /// A well-formed response carrying no usable content.
     NoContent,
+    /// A well-formed response in which the model only thought: it ended its turn with reasoning
+    /// and no answer or call. Told apart from [`BedrockError::NoContent`] so a person reading why a
+    /// call failed can see which happened; both are an empty reply to ask for again.
+    ThoughtOnly,
     /// The stream stopped without the service saying the reply was over.
     Incomplete,
     /// The reply began and then stopped arriving, on a request that let the service hold a tool's
@@ -112,6 +116,9 @@ impl fmt::Display for BedrockError {
             Self::Egress(e) => write!(f, "{e}"),
             Self::Frame(e) => write!(f, "{e}"),
             Self::NoContent => f.write_str("the response contained no message content"),
+            Self::ThoughtOnly => {
+                f.write_str("the model thought and then ended its turn without writing an answer")
+            }
             Self::Incomplete => {
                 f.write_str("the reply stopped before the service said it was finished")
             }
@@ -740,7 +747,12 @@ impl<'a> BedrockClient<'a> {
             return self.what_was_written(content, label, model, usage, cut_off);
         }
         if content.is_empty() && calls.is_empty() {
-            return Err(BedrockError::NoContent);
+            return Err(
+                match blocks.iter().any(protocol::ReplyBlock::is_reasoning) {
+                    true => BedrockError::ThoughtOnly,
+                    false => BedrockError::NoContent,
+                },
+            );
         }
 
         Ok(Completion {
@@ -944,7 +956,10 @@ impl<'a> BedrockClient<'a> {
 
         let calls = reply.calls();
         if reply.text.is_empty() && calls.is_empty() {
-            return Err(BedrockError::NoContent);
+            return Err(match reply.thought {
+                true => BedrockError::ThoughtOnly,
+                false => BedrockError::NoContent,
+            });
         }
 
         Ok(Completion {
@@ -1576,6 +1591,87 @@ mod tests {
         assert!(refusals(model).caching);
     }
 
+    /// Requests that began together count once through the client that makes them, which is where
+    /// the number a refusal is recorded under is chosen. A request is held after the server has read
+    /// it, so its call has begun; a second request begins, is refused and is answered, which holds
+    /// the doubt; and the held one is then refused and answered, which is the same event and so
+    /// records nothing. A request that begins after both is the second one.
+    ///
+    /// The regressions it rejects are a client that numbers a refusal when it is recorded rather
+    /// than when its call began, which counts a burst as many, and one that never numbers it, which
+    /// never records a model at all.
+    #[test]
+    fn requests_begun_together_are_one_refusal_when_made_through_the_client() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        use std::io::Write;
+        let model = "a-model-refused-by-a-burst-of-clients";
+        let config = config_for(model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+        let refused_then_answered = || vec![refused_with(REFUSED_CACHING_STATUS), whole_reply()];
+
+        // A server that holds its first response until released, once it has read the request.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (arrived, began) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            for (number, response) in refused_then_answered().into_iter().enumerate() {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_request(&mut stream);
+                if number == 0 {
+                    let _ = arrived.send(());
+                    // A test that stopped before releasing drops the sender, which ends the wait.
+                    let _ = released.recv_timeout(Duration::from_secs(30));
+                }
+                stream.write_all(&response).unwrap();
+            }
+        });
+        let held = Request::post(format!("http://{address}/converse"), b"{}".to_vec());
+        let first = std::thread::spawn(move || {
+            let config = config_for(model);
+            let request = ChatRequest::new(model, vec![Message::user("hello")]);
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(held);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            client.complete(&mut policy, &request).is_ok()
+        });
+        began
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the first request reached its server");
+
+        let (result, _) = complete_against(&config, &request, refused_then_answered());
+        result.expect("the request without the breakpoints answers");
+        assert!(!refusals(model).caching, "one answered probe was recorded");
+
+        release.send(()).unwrap();
+        assert!(first.join().unwrap(), "the held request answered");
+        assert!(
+            !refusals(model).caching,
+            "two requests that began together were recorded as two refusals"
+        );
+
+        let (result, _) = complete_against(&config, &request, refused_then_answered());
+        result.expect("the request without the breakpoints answers");
+        assert!(
+            refusals(model).caching,
+            "a request that began after the doubt did not complete the pair"
+        );
+    }
+
     /// A record of a refusal lapses, so a model that was refused for another reason is tried
     /// again, and a record is not kept past the time it is worth. The regression it rejects is a
     /// record that lasts as long as the process.
@@ -1589,13 +1685,16 @@ mod tests {
         remember(model, found, next_call());
         remember(model, found, next_call());
         let now = Instant::now();
+        // Thirty minutes as the spec states them, not the constant that is meant to hold them: a
+        // test written in terms of the constant passes for whatever the constant is changed to.
+        let thirty_minutes = Duration::from_secs(30 * 60);
         assert!(refusals_at(model, now).caching);
         assert!(
-            !refusals_at(model, now + REFUSAL_LASTS + Duration::from_secs(1)).caching,
+            !refusals_at(model, now + thirty_minutes + Duration::from_secs(1)).caching,
             "the record outlived its time"
         );
         assert!(
-            refusals_at(model, now + REFUSAL_LASTS - Duration::from_secs(1)).caching,
+            refusals_at(model, now + thirty_minutes - Duration::from_secs(1)).caching,
             "the record lapsed early"
         );
     }
@@ -2049,6 +2148,10 @@ mod tests {
         );
         assert!(result.is_err(), "the third request was sent");
         assert_eq!(sent.len(), 2);
+        assert!(
+            marked(&sent[0]) && !marked(&sent[1]),
+            "the first request carried the breakpoints and the one asked again carried none: {sent:?}"
+        );
         assert_eq!(refusals(model), Refusals::default(), "the probe failed too");
     }
 
@@ -4580,6 +4683,81 @@ mod tests {
             );
         }
     }
+    /// A reply that ends its turn with reasoning and no answer is told apart from an empty one, in
+    /// a whole reply and in a streamed one, so a person reading why a call failed can see that the
+    /// model only thought. Rejects an implementation that reports both the same way.
+    #[test]
+    fn a_reply_that_only_thought_is_told_apart_from_an_empty_one() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        for streaming in [false, true] {
+            let body = if streaming {
+                let mut body = Vec::new();
+                for payload in [
+                    br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"Let me look"}}}"#
+                        .as_slice(),
+                    br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"c2ln"}}}"#,
+                ] {
+                    body.extend(eventstream::tests::frame("contentBlockDelta", payload));
+                }
+                body.extend(eventstream::tests::frame(
+                    "messageStop",
+                    br#"{"stopReason":"end_turn"}"#,
+                ));
+                body.extend(eventstream::tests::frame(
+                    "metadata",
+                    br#"{"usage":{"inputTokens":5,"outputTokens":7,"totalTokens":12}}"#,
+                ));
+                body
+            } else {
+                serde_json::json!({
+                    "output": {"message": {"content": [
+                        {"reasoningContent": {"reasoningText": {"text": "Let me look", "signature": "c2ln"}}}
+                    ]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 5, "outputTokens": 7, "totalTokens": 12},
+                })
+                .to_string()
+                .into_bytes()
+            };
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend(body);
+            let (http, _received) = scripted_responses(vec![response]);
+            let config = config();
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let request = ChatRequest::new("opus-arn", vec![]);
+            let error = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .unwrap_err();
+            assert!(
+                matches!(error, BedrockError::ThoughtOnly),
+                "streaming {streaming}: {error:?}"
+            );
+        }
+    }
+
     /// Usage is decoded even when assistant content cannot be decoded, and never guessed.
     #[test]
     fn malformed_replies_keep_only_valid_reported_usage() {

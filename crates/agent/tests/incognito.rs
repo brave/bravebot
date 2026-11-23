@@ -26,6 +26,9 @@ mod repository;
 #[path = "../test-support/turns.rs"]
 mod turns;
 
+#[path = "../test-support/mock_model.rs"]
+mod mock_model;
+
 use bravebot_agent::remembered::Store;
 use bravebot_core::command::{Plan, Step, Steps};
 use bravebot_core::remembered::RememberedLine;
@@ -577,6 +580,79 @@ fn an_untrusted_write_to_a_memory_in_an_incognito_session_is_recorded() {
     );
 }
 
+/// INCOG-8: `write_file` and `edit_file` go on editing the project in a private session. A model
+/// that asks for one file to be created and another to be changed gets both, and nothing is added
+/// beside them in the state directory.
+///
+/// The regression it rejects: a build that treats the mode as a reason to refuse or skip workspace
+/// edits, which would leave a private session that answers and changes nothing. The two files are
+/// checked by their bytes on disk, since a refusal is also a tool result the turn goes on from.
+#[test]
+fn a_private_session_goes_on_creating_and_editing_files_in_the_project() {
+    let scratch = Scratch::new("edits-the-workspace");
+    assert!(
+        bravebot_core::incognito::engaged(),
+        "the fixture is meant to run as an incognito session"
+    );
+    let work = scratch.home.join("work");
+    std::fs::create_dir_all(&work).expect("create the working directory");
+    std::fs::write(work.join("existing.txt"), "keep\nold\ntail\n").expect("seed a file");
+    let workspace = bravebot_agent::Workspace::new(&work).expect("workspace");
+    let (endpoint, _received) = mock_model::serve_sequence(vec![
+        mock_model::tool_request(
+            "write_file",
+            r#"{"path":"created.txt","contents":"written body"}"#,
+        ),
+        mock_model::tool_request(
+            "edit_file",
+            r#"{"path":"existing.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        mock_model::reply_with("done"),
+    ]);
+    let config = mock_model::config_for(&endpoint);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &bravebot_agent::turn::Task::new("create created.txt and change existing.txt")
+            .with_home(Some(scratch.home.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut bravebot_core::event::RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(work.join("created.txt"))
+            .ok()
+            .as_deref(),
+        Some("written body"),
+        "a private session did not create the file it was asked to write"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("existing.txt"))
+            .ok()
+            .as_deref(),
+        Some("keep\nnew\ntail\n"),
+        "a private session did not make the edit it was asked for"
+    );
+    let beside: Vec<String> = std::fs::read_dir(&scratch.home)
+        .expect("the state directory")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        beside,
+        ["work"],
+        "the edits left something in the state directory"
+    );
+}
+
 /// One reply as the SSE stream the turn loop reads: `content`, or a call to `spawn_agent`.
 fn sse(content: Option<&str>, spawn: Option<&str>) -> String {
     let mut frames = vec![serde_json::json!({"choices": [{"delta": {"role": "assistant"}}]})];
@@ -854,4 +930,109 @@ fn a_private_session_refuses_to_write_the_bots_and_says_why() {
     );
     assert!(refused.to_string().contains("incognito"), "{refused}");
     assert!(!scratch.home.join("bots.json").exists());
+}
+
+/// A state directory holding the plugin `demo`, whose one hook is on `turn-started` and appends a
+/// line to the marker beside it.
+#[cfg(unix)]
+fn a_home_with_a_plugin_hook(scratch: &Scratch) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let marker = scratch.home.join("marker");
+    let source = scratch.home.join("plugin-source");
+    std::fs::create_dir_all(&source).expect("source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        source.join("hooks.json"),
+        r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+    )
+    .expect("hooks");
+    let script = source.join("hook.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    )
+    .expect("script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let state = scratch.home.join("state");
+    bravebot_agent::plugins::install(&source, &state).expect("install");
+    (state, marker)
+}
+
+/// One `turn-started` moment in `session`, through the gate a turn uses, and how many of the
+/// plugin's hooks it let through.
+#[cfg(unix)]
+fn the_hooks_a_moment_lets_through(
+    state: &Path,
+    session: &bravebot_agent::plugin_hooks::Answers,
+    confirmer: &mut bravebot_agent::confirm::AnswersHooks,
+) -> usize {
+    use bravebot_config::hooks::{Hooks, Moment};
+    bravebot_agent::plugin_hooks::PluginHooks::read(Some(state))
+        .joined_with(
+            &Hooks::default(),
+            Moment::TurnStarted,
+            None,
+            session,
+            confirmer,
+        )
+        .firing(Moment::TurnStarted, None)
+        .count()
+}
+
+/// INCOG-3, PLUGIN-7: the question about a plugin's hook is put in a private session, says that a
+/// yes is not written, and a yes fires the hook for the session without creating `hooks-approved`.
+/// The next session asks again, since nothing was kept.
+///
+/// The regression it rejects: writing the yes whatever the session says, which would leave a line
+/// a private session was to leave behind and would let the next session fire the hook unasked.
+#[cfg(unix)]
+#[test]
+fn a_yes_to_a_plugin_hook_in_a_private_session_is_not_written_down() {
+    use bravebot_agent::confirm::{AnswersHooks, Decision};
+    use bravebot_agent::plugin_hooks::Answers;
+    let scratch = Scratch::new("plugin-hook-yes");
+    let (state, marker) = a_home_with_a_plugin_hook(&scratch);
+    assert!(
+        bravebot_core::incognito::engaged(),
+        "the fixture engages it"
+    );
+    assert!(!state.join("hooks-approved").exists());
+
+    let session = Answers::default();
+    let mut person = AnswersHooks::new(Decision::Approve);
+    assert_eq!(
+        the_hooks_a_moment_lets_through(&state, &session, &mut person),
+        1
+    );
+    assert_eq!(person.asked.len(), 1, "{:?}", person.asked);
+    assert!(
+        !person.asked[0].records,
+        "the question did not say that a yes is not written"
+    );
+    assert!(
+        !state.join("hooks-approved").exists(),
+        "a private session wrote the yes"
+    );
+    // The yes holds for the rest of the session: the same session is not asked again.
+    assert_eq!(
+        the_hooks_a_moment_lets_through(&state, &session, &mut person),
+        1
+    );
+    assert_eq!(person.asked.len(), 1, "the session asked again after a yes");
+
+    let mut later = AnswersHooks::new(Decision::Approve);
+    assert_eq!(
+        the_hooks_a_moment_lets_through(&state, &Answers::default(), &mut later),
+        1
+    );
+    assert_eq!(later.asked.len(), 1, "the next session was not asked");
+    assert!(!state.join("hooks-approved").exists());
+    assert!(
+        !marker.exists(),
+        "nothing ran the hook: only the gate was exercised"
+    );
 }

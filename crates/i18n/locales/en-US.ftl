@@ -48,7 +48,7 @@ cli-usage-completion = Print a shell completion script
 cli-usage-acp = Speak the Agent Client Protocol on stdin and stdout, for an editor
 cli-usage-shell-init = Print the shell hook that gives @bravebot the commands you ran
 cli-usage-permissions = Report which permission rule decides a tool call
-permissions-check-usage = permissions check takes a family and what to ask about: Read <path>, Edit <path>, Bash <program> [arguments], WebFetch <host or URL>, or Mcp <server:tool>
+permissions-check-usage = permissions check takes a family and what to ask about: Read <path>, Edit <path>, Bash <program> [arguments], WebFetch <host or URL>, WebSearch, or Mcp <server:tool>
 permissions-check-decision = decision
 permissions-check-deny = deny
 permissions-check-ask = ask
@@ -494,6 +494,10 @@ cli-resume-heading = Resume this session with:
 # When /cd moved the session, the shell this is printed into is not where the record is, and
 # --resume looks an id up under the directory it runs in.
 cli-resume-moved = This session moved to { $directory }. Resume it from there with:
+# After the line, one for each --sandbox-* entry the line does not carry. A relative entry is read from
+# the directory the session started in, and where a name of that directory has a * or ? in it, the same
+# path written out in full reads that character as a wildcard, which no spelling can prevent.
+cli-resume-entry-not-carried = Not carried: { $flag } { $value }, because the directory this session started in has a * or ? in its name, and no spelling of the entry names the same place from another directory.
 
 
 ## Reporting configuration and confinement
@@ -522,6 +526,18 @@ doctor-premium = premium
 doctor-premium-absent = not configured
 doctor-premium-keyed = { $url }, with a premium key
 doctor-premium-unkeyed = { $url }, without a premium key, so requests go to the endpoint above
+# Where the web search key would come from: a variable webSearch.env names, or the file
+# webSearch.keyFile names. A variable is said by its place in the list and never by its name, since a
+# name is a string the person wrote and one pasted into the wrong field is the key itself. The line
+# never shows the key, and no text of the variable or the file is read into it.
+doctor-web-search = web search
+doctor-web-search-absent = not configured: neither webSearch.env nor webSearch.keyFile is set, so the web_search tool is not offered
+doctor-web-search-missing = webSearch.keyFile names { $path }, which is not a file, so the web_search tool is not offered
+doctor-web-search-keyed = a key file is configured in webSearch.keyFile ({ $path }); the key is read from it when a search is made and is sent only to api.search.brave.com
+doctor-web-search-variable = the key comes from entry { $entry } of webSearch.env, a variable that holds text; it is read when a search is made, is sent only to api.search.brave.com, and a variable that holds text is used before the key file
+doctor-web-search-keyed-no-variable = a key file is configured in webSearch.keyFile ({ $path }) and no variable webSearch.env names holds text, so the key is read from the file when a search is made and is sent only to api.search.brave.com
+doctor-web-search-missing-and-variables = no variable webSearch.env names holds text and webSearch.keyFile names { $path }, which is not a file, so the web_search tool is not offered
+doctor-web-search-variables-empty = no variable webSearch.env names holds text and webSearch.keyFile is not set, so the web_search tool is not offered
 doctor-key-id = key id
 doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
@@ -550,8 +566,10 @@ doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
 doctor-ends-premium-key =
     the premium key: issued by Brave's premium service, which is also the only surface that revokes it; `bravebot auth logout brave` ends this machine's custody and leaves the key live there
+doctor-ends-search-key =
+    the Brave Search key: read from the first variable the setting `webSearch.env` names that holds text, or else from the file the setting `webSearch.keyFile` names, and sent only to api.search.brave.com in one request header; issued by the Brave Search API dashboard, which is also the only surface that revokes it; unsetting the variable, removing the setting or removing the file ends this machine's custody, and the key keeps working at Brave until it is revoked in the Brave Search API dashboard
 doctor-ends-gateway-token =
-    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
+    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, removing the file the setting `options.keyFile` names, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-chatgpt-account =
     a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
 doctor-ends-xai-account =
@@ -633,6 +651,12 @@ doctor-dropped-premium-key-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the premium service issues one key and nothing here asks it for a narrower one
 doctor-dropped-premium-key-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever `bravebot auth login brave` stored, and it is held for the whole run
+doctor-dropped-search-key-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents the key itself in a request header and nothing is asked to authorise the request
+doctor-dropped-search-key-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the Brave Search API dashboard issues one key and nothing here asks it for a narrower one
+doctor-dropped-search-key-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever the variable named by `webSearch.env` or the file named by `webSearch.keyFile` holds, and it is read again for every search
 doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
@@ -672,6 +696,24 @@ doctor-gateway-token-stored = stored by bravebot auth login gateway (never print
 doctor-gateway-token-absent =
     none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+# The file the block's `options.keyFile` names, which holds the token. The path is not said and the
+# file is not quoted: the setting is a string the person wrote, and one pasted into the wrong field
+# is the key itself, which a report people paste would then carry.
+doctor-gateway-token-key-file = found in the file options.keyFile names (never printed)
+doctor-gateway-token-key-file-unusable =
+    none usable: the file options.keyFile names { $reason } (set a variable its `env` names, fix that file, or run bravebot auth login gateway)
+# Why the file a block's `options.keyFile` names gives no key, completing "the file ... names". One
+# sentence per fault, said the same way by a refused request, `doctor`, `auth status` and the window.
+# None holds the path or any text of the file.
+gateway-key-file-not-absolute = is not an absolute path
+gateway-key-file-unreadable = is missing, is not a regular file, or cannot be read as text
+gateway-key-file-too-large = holds more than 4,096 bytes
+gateway-key-file-empty = holds nothing but whitespace
+gateway-key-file-not-a-key = holds whitespace, a control character or a character outside ASCII inside the key
+# The refusal of a request whose block names a key file that gives no key, with no variable and no
+# stored key before it. `options.apiKey` is not sent in the file's place.
+backend-no-gateway-key-file =
+    no credential for the { $provider } gateway: the file its `options.keyFile` names { $reason }, so nothing was sent; fix the path, or put the key alone in that file
 # A header a gateway block named and this build does not send, with the name the file wrote and the
 # reason. The name only: a header a gateway routes on is often a second credential.
 doctor-header-reserved = { $name } in the provider block is not sent: this program sets that header itself
@@ -816,6 +858,10 @@ doctor-settings-start-in-auto-ignored =
 # checkout's list is not read and the names in it withhold nothing.
 doctor-settings-scrub-env-ignored =
     run.scrubEnv in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, and none of its names is withheld
+doctor-settings-web-search-key-file-ignored =
+    webSearch.keyFile in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, so no file named there is read as a web search key
+doctor-settings-web-search-env-ignored =
+    webSearch.env in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only, so no variable named there is read as a web search key, and none of its names is withheld
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -899,6 +945,11 @@ doctor-sandbox-filesystem = sandbox filesystem
 doctor-sandbox-filesystem-entry = { $key } { $path } ({ $source })
 doctor-sandbox-filesystem-refused = { $key } { $path } is not in force: { $reason } ({ $source })
 doctor-sandbox-filesystem-source-flag = a command-line flag
+doctor-sandbox-hosts = sandbox network
+# The entry is as written, with control characters made visible, and the source is the file that
+# wrote it or the command line. The sentence a model reads for this refusal names no entry.
+doctor-sandbox-hosts-denied-not-a-host =
+    sandbox.network.deniedHosts { $entry } ({ $source }) is not a host name, so a stage with network access is refused until it is removed
 doctor-settings-sandbox-filesystem-ignored =
     sandbox.filesystem.{ $key } in { $path } is not obeyed: a checkout can refuse reach and never add it, so it is read from ~/.bravebot/settings.json, the file --settings names and the managed file only
 doctor-settings-sandbox-misshapen =
@@ -928,6 +979,10 @@ sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern 
 sandbox-rule-names-a-variable = it starts with a variable, and no variable is expanded in a path, so it would be read as a relative path under the session's directory; write the path out, or start it with ~/
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
 sandbox-rule-cannot-subtract = this platform cannot hold back a path inside a directory every stage is granted, so a stage is refused instead of started with the path reachable
+# Said to the planner, as the driver's own words, where a refused denyRead or denyWrite entry came from
+# a checkout's settings file. The spelling is not repeated, since a checkout wrote it. $reason is one
+# of the sandbox-rule-* messages above and $file the settings file that holds the entry.
+run-not-confined-checkout-entry = sandbox.filesystem.{ $list } holds an entry in { $file } that cannot be applied ({ $reason }), and a stage started without it would reach the path it holds back; the entry is not repeated here because a checkout's file wrote it
 # An allow rule a layer that may not grant one wrote. Named one at a time and with its file, for
 # the reason the vetting line gives: a rule that looks like configuration and does nothing is the
 # one worth saying out loud.
@@ -1085,7 +1140,7 @@ permission-rule-unreadable-in = '{ $rule }' in { $path } { $problem }
 permission-rule-not-a-line = is not a rule; a rule is written as a line of text
 permission-rule-empty = is empty
 permission-rule-unclosed-bracket = is missing its closing bracket
-permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit, Bash, WebFetch or Mcp
+permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit, Bash, WebFetch, WebSearch or Mcp
 permission-rule-empty-brackets = has empty brackets; drop them to mean every use
 permission-rule-empty-quoted-name = has double quotes around nothing, and no file has an empty name; drop the brackets to mean every use, or put the file's name between the quotes
 permission-rule-whitespace-at-an-end = has whitespace at the start or end of its path, which would be part of a file's name; remove it, or put the whole path in double quotes to mean the name as written
@@ -1097,6 +1152,8 @@ permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:exam
 permission-rule-no-domain-named = names no domain after 'domain:'
 permission-rule-not-a-host = has a port, scheme, path or other text that is not a host after 'domain:'; write a host name or an address alone, as WebFetch(domain:example.com) or WebFetch(domain:[::1])
 permission-rule-not-a-tool-rule = needs a server, or a server and one of its tools, written Mcp(weather) or Mcp(weather:get_forecast)
+# A WebSearch rule written with something in brackets. A search has no host a person chooses and its query is the planner's own words, so the family is all a rule can name.
+permission-rule-not-a-search-rule = takes no specifier; write WebSearch alone, which covers every web search
 # A permissions block, or its deny, ask or allow list, written as something other than a list.
 # The rules another settings file wrote still apply, which is what "removes none" says.
 permission-rule-not-a-list = sets no rules and removes none; rules go in a list, such as "deny": ["Read(./.env)"]
@@ -1413,6 +1470,10 @@ auth-status-brave-nowhere = this machine has nowhere to keep a key, so none is s
 auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name brave, bedrock, gateway, chatgpt or xai
 # Said of a gateway when no key is stored for any service and no provider block names a gateway.
 auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
+# The file the block's `options.keyFile` names gives no key. A stored key is read before the file, so
+# storing one makes the gateway usable. The path is not said.
+auth-status-gateway-key-file-unusable =
+    the file options.keyFile names { $reason }; fix it, or run bravebot auth login gateway { $id }, since a stored key is read before the file
 # The id is a service bravebot knows that no provider block names, so no session sends a key to it.
 auth-status-gateway-none-stored = no key is stored for { $id }; run bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
@@ -1666,6 +1727,8 @@ mcp-image-unpinned = { $image } could not be pinned: { $reason }. Give the image
 mcp-image-not-a-reference = it is not an image reference
 mcp-image-refused = its registry answered { $status }, which is so of a private image or one that does not exist
 mcp-choice-needs-a-pair = --choice needs a tool and an argument, written <TOOL>:<ARGUMENT>
+mcp-apply-needs-a-kind = --apply needs a tool, an argument and a kind, written <TOOL>:<ARGUMENT>=<entry|entries|new|row>, several kinds joined by commas
+mcp-plan-covers-needs-a-tool = --plan-covers needs the tool whose calls may run on a plan's approval
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -1706,6 +1769,10 @@ mcp-problem-choice =
 mcp-problem-choice-without-asking = choice_arguments needs ask_every_call to be true
 mcp-problem-backend = backend is not openshell
 mcp-problem-backend-image = image must be one container image reference, given with backend openshell
+mcp-problem-apply =
+    apply_arguments must be an object of tool names, each with an object of argument names and one or more of entry, entries, new or row joined by commas
+mcp-problem-apply-while-asking = apply_arguments needs ask_every_call to be false
+mcp-problem-plan-covers = covered_tools must list tools that have apply_arguments
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1751,6 +1818,8 @@ mcp-declaration-exclude-tools = exclude tools: { $names }
 mcp-declaration-asks-every-call = every call is asked about, and no answer to one is remembered
 # The arguments a declaration says a choice may fill, each as tool:argument.
 mcp-declaration-choice-arguments = arguments that take a choice: { $pairs }
+mcp-declaration-apply-arguments = arguments a plan's apply step may fill: { $named }
+mcp-declaration-covered-tools = tools an apply step runs on a plan's approval, unasked: { $named }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
@@ -1801,6 +1870,10 @@ mcp-list-declared-in = declared in { $path }
 mcp-approved = approved
 mcp-unapproved = unapproved
 mcp-unapproved-run-approve = unapproved: run bravebot mcp approve { $alias }
+# `get` for a server an installed plugin carries. bravebot mcp approve reads mcp.json only, so it
+# is not named: a yes at the question a session at a terminal puts at the server's first use is the
+# only approval.
+mcp-unapproved-plugin = unapproved: a session at a terminal asks before starting it
 # The heading `get` puts over the policy a session would start a local server under, which the lines
 # beneath it spell out with the labels /status uses.
 mcp-get-policy = a session here would confine it to:
@@ -1817,6 +1890,27 @@ mcp-list-unusable =
 # Under the heading of `bravebot mcp list`: the directory whose session the lines under each server
 # answer for.
 mcp-list-here = for a session started in { $path }
+# Over the second block of `bravebot mcp list` and `doctor`: the servers installed plugins carry,
+# which mcp.json does not declare. Each is named <plugin>_<alias>.
+mcp-list-plugins = carried by installed plugins
+# A plugin that is turned off is named once and its servers are not read.
+mcp-plugin-turned-off = the plugin { $plugin } is turned off, so none of its servers is started
+# Said as the problem of a plugin's server whose joined alias, <plugin>_<alias>, is a valid alias
+# in every way but its length.
+mcp-plugin-too-long =
+    the alias is too long once the plugin's name and a _ are put before the name the plugin gave
+    the server
+# Under each plugin server in the list: whether a session starts it unasked, asks first, or does
+# not start it. Only a person's yes to that server approves a server a plugin carries, and the
+# plugin's files and the settings of a checkout add no approval.
+mcp-plugin-starts = a session starts it unasked
+mcp-plugin-asks = a session at a terminal asks before starting it
+mcp-plugin-withheld = no session starts it: { $reason }
+mcp-list-plugin-unusable =
+    { $count ->
+        [one] one server an installed plugin carries cannot be used
+       *[other] { $count } servers installed plugins carry cannot be used
+    }
 # Under each server in `bravebot mcp list` and `doctor`: which checkout requested it, and whether a
 # session started here holds the grant to call it.
 mcp-not-requested-here = not requested here, so no session here holds a grant to call it
@@ -1867,6 +1961,22 @@ servers-nobody-at-a-terminal =
     { $alias } was not started: there is no terminal to ask at, so run bravebot mcp approve
     { $alias } at one
 servers-declined = { $alias } is not used in this session
+servers-carried-by = carried by the plugin { $plugin }
+servers-plugin-nobody =
+    { $alias } was not started: it is a server of the plugin { $plugin }, and a run that cannot ask
+    a person approves no server a plugin carries
+servers-plugin-disabled = { $alias } was not started: the plugin { $plugin } is turned off
+servers-plugin-changed =
+    { $alias } was not started: the files of the plugin { $plugin } no longer match what was
+    installed. Run /plugin update { $plugin } to use its servers again if its source holds the files
+    you want, or remove the plugin and add it again
+servers-plugin-shadowed =
+    { $alias } is declared in mcp.json, so the server the plugin { $plugin } carries under that
+    name is not used
+servers-plugin-stopped-changed =
+    A server of the plugin { $plugin } was stopped: the plugin's files no longer match what was
+    installed. Run /plugin update { $plugin } to use its servers again if its source holds the files
+    you want, or remove the plugin and add it again.
 servers-program-relative = { $program } is a relative path, which names a different program in each directory
 servers-program-without-path =
     { $program } is found through PATH, which the declaration does not name: declare it with
@@ -1957,7 +2067,8 @@ mcp-tools-offered =
 mcp-tools-none = { $alias } lists no tool it can offer
 mcp-tools-explained =
     The model will read each tool's name, its arguments and what the server says about it, as
-    shown here. Every call is still put to you. Say no if a description gives instructions.
+    shown here. Every call is still put to you, or shown on a plan you approve. Say no if a
+    description gives instructions.
 mcp-tools-not-listed =
     { $count ->
         [one] one more tool is not listed: its name or its arguments cannot be offered
@@ -2044,9 +2155,12 @@ mcp-command-nothing-to-reconnect = Every requested MCP server is running or turn
 mcp-command-reconnected = { $alias } is running. Its tools are put to you before the next turn plans.
 mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
 mcp-command-already-off = { $alias } is already turned off
-command-plugin = Install, list, remove, enable or disable a plugin
-plugin-command-usage = /plugin takes add <path>, list, remove <name>, enable <name> or disable <name>
-plugin-command-needs-an-argument = /plugin { $command } needs a path or a name
+# `/mcp list` names an installed plugin that /plugin disable turned off, once and without its servers:
+# none of its files was read, so none of its servers is requested here.
+mcp-command-plugin-off = The plugin { $plugin } is turned off, so none of its servers is requested. /plugin enable { $plugin } turns it on
+command-plugin = Install, list, update, remove, enable or disable a plugin
+plugin-command-usage = /plugin takes add <path or git url[#ref]>, list, update <name>, remove <name>, enable <name> or disable <name>
+plugin-command-needs-an-argument = /plugin { $command } needs a path, a git url or a name
 plugin-command-no-home = There is no state directory, so no plugin can be read or written
 plugin-added = Installed { $name } from { $path }
 plugin-add-refused = Nothing was installed from { $path }: { $why }
@@ -2056,12 +2170,31 @@ plugin-refused-manifest-key = plugin.toml was refused at the key { $key }
 plugin-refused-part-missing = the path given for { $key } does not exist in the plugin
 plugin-refused-unreadable = the directory could not be read or copied
 plugin-refused-already-installed = a plugin named { $name } is already installed
-plugin-refused-update-not-built = { $name } is already installed from this path, and updating is not built
+plugin-refused-same-source = { $name } is already installed from this source. /plugin update { $name } fetches it again
+plugin-update-done = Updated { $name }
+plugin-update-unchanged = { $name } is up to date: the source holds the files that are installed, and nothing was changed
+plugin-update-unchanged-newer-commit = { $name } is unchanged: the source resolves to a newer commit that holds the same files, so nothing was changed
+plugin-update-refused = Nothing was updated for { $name }: { $why }
+plugin-update-declined = Nothing was updated for { $name }: the update was declined
+plugin-update-nobody-to-ask = Nothing was updated for { $name }: nobody can be asked here, so nothing is updated
+plugin-refused-record-unreadable = its record cannot be read, so there is no recorded source to fetch again. Remove it and add it again
+plugin-refused-nothing-to-update-to = it was installed at one commit, which cannot move, so there is nothing to update to
+plugin-refused-update-renamed = the source now holds a plugin named { $found }, which is not this one
+plugin-refused-archive = an archive is not a source. Name a git url or a directory
+plugin-refused-npm-package = an npm package is not a source. Name a git url or a directory
+plugin-refused-plain-url = a web address that is not a git url is not a source. A git url is https ending in .git, or ssh
+plugin-refused-file-url = a file:// url is not a source. Type the directory as a path
+plugin-refused-unsupported-scheme = only https and ssh git urls and local paths are sources
+plugin-refused-bad-url = the git url could not be used: it needs a host and a path, no password and no space or control character
+plugin-refused-bad-ref = the ref after # could not be used: it is empty, starts with - or holds a space or control character
+plugin-refused-git-not-installed = git is not installed where bravebot may start it, so nothing was fetched
+plugin-refused-clone-failed = git could not fetch the source at that ref, so nothing was installed
 plugin-refused-name-offered = { $new } offers { $offered }, which { $existing } already offers
 plugin-refused-nobody-to-ask = nobody can be asked here, so nothing is installed
 plugin-refused-declined = the install was declined
 plugin-list-none = No plugin is installed
 plugin-list-row = { $name } { $version } from { $source } digest { $digest } ({ $state })
+plugin-list-row-git = { $name } { $version } from { $source } commit { $commit } digest { $digest } ({ $state })
 plugin-list-enabled = enabled
 plugin-list-disabled = disabled
 plugin-removed = Removed { $name }
@@ -2074,11 +2207,43 @@ plugin-install-title = Install plugin
 plugin-install-name = Name
 plugin-install-version = Version
 plugin-install-source = Source (a local path)
+plugin-install-source-git = Source (a git repository)
+plugin-install-requested-ref = Requested ref
+plugin-install-no-ref = none given, so the repository's default branch
+plugin-install-commit = Commit it resolved to
 plugin-install-skills = Skills ({ $count })
 plugin-install-no-skills = This plugin offers no skill
 plugin-install-definitions = Definitions ({ $count })
 plugin-install-no-definitions = This plugin offers no definition
 plugin-install-kind = kind: { $kind }
+plugin-install-hooks = Hooks ({ $count })
+plugin-install-no-hooks = This plugin offers no hook
+plugin-install-hook-at = Runs at { $moment }
+plugin-install-hook-tool = Only for the tool
+plugin-install-hook-path = Watches the file
+plugin-install-hook-timeout = Bound: { $seconds } seconds
+plugin-install-argv = Program and arguments
+plugin-install-hooks-unkept = The hooks file holds more than is listed here: { $dropped } entries the hook reader cannot use and { $keys } keys it does not read. Only what is listed here can run.
+plugin-install-servers = Servers ({ $count })
+plugin-install-no-servers = This plugin offers no server
+plugin-install-server = Server
+plugin-install-server-unusable = This entry states no declaration that can be used, so it is never started
+plugin-install-server-unreachable = The plugin name and this alias are too long together, so it is never started
+plugin-install-server-transport = Transport
+plugin-install-server-url = Address
+plugin-install-server-variable = Variable it names
+plugin-install-server-stored = Variable given a value, as written
+plugin-install-reach-command = Would start the program
+plugin-install-reach-host = Would reach the host
+plugin-install-reach-file = May read the file
+plugin-install-reach-directory = Runs in the directory
+plugin-install-fault-unreadable = The file this part names could not be read, so nothing of it is listed
+plugin-install-fault-not-file = The path this part names is not a regular file, so nothing of it is listed
+plugin-install-fault-too-large = The file this part names is too large to read, so nothing of it is listed
+plugin-install-fault-not-text = The file this part names is not text, so nothing of it is listed
+plugin-install-fault-not-hooks = The file this part names is not a hooks file, so nothing of it is listed
+plugin-install-fault-not-servers = The file this part names is not a servers file, so nothing of it is listed
+plugin-install-fault-path = The directory this plugin installs to is not text, so nothing of this part is listed
 plugin-install-shadowed = Shadowed by { $by }. The one named here is not the one a session gets
 plugin-install-expand = (e to show the rest)
 plugin-install-collapse = (e to cut long text)
@@ -2086,6 +2251,41 @@ plugin-install-not-done = A yes copies this plugin and records it. It does not m
 plugin-install-question = Install this plugin?
 plugin-install-yes = Yes, install it
 plugin-install-no = No, install nothing
+plugin-update-title = Update plugin
+plugin-update-version-change = { $old } to { $new }
+plugin-update-commit-installed = Commit installed now
+plugin-update-commit-new = Commit it resolves to now
+plugin-update-installed-unreadable = The installed copy of this plugin could not be read, so what it offers now is not known and every part below shows as added.
+plugin-update-installed-fault = The installed copy's file for this part could not be read, so what it held is not known and every row below shows as added:
+plugin-update-what-skills = Skills
+plugin-update-what-definitions = Definitions
+plugin-update-what-hooks = Hooks
+plugin-update-what-servers = Servers
+plugin-update-section = { $what }: { $added } added, { $removed } removed, { $changed } changed
+plugin-update-added = Added
+plugin-update-removed = Removed
+plugin-update-changed = Changed
+plugin-update-was = Was
+plugin-update-now = Now
+plugin-update-files = Files that differ ({ $count })
+plugin-update-files-unread = The two trees could not be compared file by file, so no file is listed
+plugin-update-file-added = added { $path }
+plugin-update-file-removed = removed { $path }
+plugin-update-file-changed = changed { $path }
+plugin-update-effect = A yes replaces the installed copy with this one. Every answer you gave to this plugin's hooks and servers is withdrawn, so each asks its own question again the first time it is used. A no changes nothing.
+plugin-update-question = Update this plugin?
+plugin-update-yes = Yes, update it
+plugin-update-no = No, keep the installed copy
+plugin-hook-title = run this plugin's hook?
+plugin-hook-plugin = Plugin
+plugin-hook-moment = Moment
+plugin-hook-argv = Starts, one word to a row
+plugin-hook-explained = This hook starts a program the plugin carries, with your own access, each time that moment comes in a session. It has not been answered about yet.
+plugin-hook-recorded = A yes is written to { $file }, so it is not asked again for this exact hook and plugin files. A no is not written, and the question comes again in a later session.
+plugin-hook-session-only = A yes is not written anywhere and lasts until this session ends.
+plugin-hook-yes = Yes, run it
+plugin-hook-no = No, do not run it
+plugin-hook-stopped-changed = A hook of the plugin { $plugin } did not run: the plugin's files no longer match what was installed. Run /plugin update { $plugin } to use its hooks again if its source holds the files you want, or remove the plugin and add it again.
 mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-command-not-an-alias = { $alias } is not the name of an MCP server
 mcp-command-no-match = No MCP server is named by { $pattern }. Nothing was changed
@@ -2294,8 +2494,11 @@ picker-current = current
 
 # Choosing how hard to think. The level names are the words sent and stored, so they are not
 # translated; only what each one is for is.
-effort-picker-title = effort
-effort-picker-keys = ↑↓ choose  ·  Enter select  ·  Esc keep current
+effort-picker-heading-every-session = effort · every session
+effort-picker-heading-this-session = effort · this session only
+effort-picker-scope-every-session = Enter: every session  ·  Tab: this session only
+effort-picker-scope-this-session = Enter: this session only  ·  Tab: every session
+effort-picker-keys = ↑↓ choose  ·  Esc keep current
 effort-unset = default
 effort-hint-unset = left to whichever service answers
 effort-hint-low = least thinking, for simple work
@@ -2586,6 +2789,8 @@ run-unconfined-not-remembered =
     a line the planner asked to run with no sandbox is asked about every time, so neither the line nor the request is remembered
 run-scopes-not-remembered =
     a line the planner asked to carry a credential scope, toolchain list or loopback is asked every time, so it cannot be remembered
+run-kept-scope-not-remembered =
+    a line lent { $scopes }, which was kept at an earlier prompt, is asked about every time, so it cannot be remembered
 # Said only where the plan asked for a credential scope and a record of reach can be written. The
 # lines under it are the programs, each with its operation word, as `/reach` lists them.
 run-keep-reach-explained = m: also remember the requested reach for these commands, so the next plan for them carries it
@@ -2790,12 +2995,38 @@ plan-explained =
     the whole program, decided before anything was read. nothing it reads can add a step,
     drop one, or send anything anywhere this plan does not already name.
 plan-not-its-writes =
-    approving the plan is not approving its writes or its calls to a server's tools. each
-    one is still put to you as it comes up.
+    approving the plan answers the calls to a server's tools it shows, and is not approving its
+    writes. each write is still put to you as it comes up, as is a call something else asks
+    about, such as a rule or a server's declaration.
 plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it
 plan-no = don't
+
+## Approving the calls a plan's apply step resolved to, as one list
+
+apply-title = make these calls to { $server }?
+apply-verb = Make
+apply-calls = { $count ->
+    [one] { $count } call to { $server }
+   *[other] { $count } calls to { $server }
+    }
+apply-after = after call { $call }
+apply-hidden = { $count ->
+    [one] (and one character that draws as nothing)
+   *[other] (and { $count } characters that draw as nothing)
+    }
+apply-dropped = { $count ->
+    [one] one proposed row was dropped: it { $why }
+   *[other] { $count } proposed rows were dropped: they { $why }
+    }
+apply-explained =
+    an isolated processor proposed these calls from what was read. every value behind the bar
+    came from that list or that processor, and is sent exactly as shown. nothing else is called.
+apply-nothing-yet =
+    none of them has been made, so declining leaves everything as it is.
+apply-yes = make them all
+apply-no = don't
 # Where a question is a line on a terminal rather than a panel: what a yes looks like, and the one
 # answer that approves. Any other line, and the end of the input, refuses. Shared by every question
 # put in lines, so one affirmative covers them all.
@@ -2899,11 +3130,15 @@ status-agent-every-turn = every turn is addressed to it, named with --agent
 status-agent-by-setting = every turn is addressed to it, chosen by the agent setting
 status-effort = Effort
 status-effort-chosen = chosen with /effort
+status-effort-chosen-this-session = chosen with /effort session, for this session only
 status-effort-default = whatever the service does on its own
 status-effort-not-read = chosen with /effort, but this model reads none
 # The level shown is the one a ChatGPT session began with, which that account is sent for the whole
 # session. The level chosen since is a level word or the word for the default.
 status-effort-kept-for-account = the level this ChatGPT session began with; { $chosen } was chosen with /effort and applies from the next session
+# The same where the level chosen was chosen with /effort session, which nothing records and which /clear
+# carries into the next ChatGPT session.
+status-effort-kept-for-account-this-session = the level this ChatGPT session began with; { $chosen } was chosen with /effort session, is not recorded and applies from /clear
 status-theme = Theme
 status-theme-chosen = chosen with /theme
 status-served = Answered by
@@ -3498,8 +3733,8 @@ panel-more-references = +{ $count } more
 # Left in the transcript when a click on the session's name in the info panel finds the line in
 # use, so /rename was not put in it.
 panel-rename-line-in-use = The line is in use, so the session's name was not put in it. Clear the line and click the name again, or type /rename.
-# Under the model in the info panel where it was picked with /model session, so the next session
-# does not open on it.
+# Under the model in the info panel where it was picked with /model session, and under the effort
+# level where it was chosen with /effort session, so the next session does not open on it.
 panel-model-this-session = this session only
 # The reasoning effort and the session's token total in the info panel, one to a row.
 panel-effort = effort { $level }
@@ -3719,6 +3954,7 @@ session-mode-resumed = this session was in the { $skill } mode, which is in forc
 input-skill-mode = mode: { $skill }
 command-config = Choose how the input box edits text
 command-language = Choose the interface language for the next start, or drop the choice
+command-crash-reports = Say whether crash reports are on and why, or switch them for the next start
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
 command-sandbox = Show the sandbox mode, or change it
@@ -4099,12 +4335,33 @@ session-effort-not-read = this model reads no effort level, so requests carry no
 # Said where the level chosen is not the one a session on a ChatGPT model began with, because that
 # account is sent one level for a whole session. Both are level words or the word for the default.
 session-effort-kept-for-account = a ChatGPT session keeps the effort level it began with, { $began }, so { $chosen } applies from the next session, which /clear begins
+# Said instead of the message above where the level chosen was chosen with /effort session, which
+# /clear carries into the next ChatGPT session and which nothing records.
+session-effort-kept-for-account-this-session = a ChatGPT session keeps the effort level it began with, { $began }, so { $chosen } applies from /clear, which begins the next ChatGPT session, and is not recorded
 session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
 session-language-saved = saved choice: { $language }
 session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first
 session-language-auto = the interface will follow the settings file and the environment from the next start
 session-language-not-saved = this session cannot keep a choice, so the language is unchanged
 session-no-such-language = no catalog for { $language }; the catalogs are { $available }
+# Said by /crash-reports. The command, its two words and the crashReports key are not a translator's
+# to reword. $variable is the name of the variable that turned reports off, and $word is the word
+# typed after the command.
+session-crash-reports-on = crash reports are on: if bravebot crashes, a report is sent to Brave on the next launch; /crash-reports off turns them off from the next start
+session-crash-reports-off-by-person = crash reports are off, turned off in your settings file; /crash-reports on turns them on from the next start
+session-crash-reports-off-by-environment = crash reports are off, held off by { $variable } in the environment, which answers before your settings file
+session-crash-reports-off-by-admin = crash reports are off, held off by your administrator's managed settings, which answer before your settings file
+session-crash-reports-incognito = crash reports are off: this session has no state directory (incognito) to keep a report in
+session-crash-reports-refused-environment = nothing was saved: { $variable } in the environment holds crash reports off, and it answers before your settings file
+session-crash-reports-refused-admin = nothing was saved: your administrator's managed settings hold crash reports off, and they answer before your settings file
+session-crash-reports-refused-incognito = nothing was saved: this session has no state directory (incognito) to keep a choice in
+session-crash-reports-saved-on = saved: crash reports are on from the next start
+session-crash-reports-saved-off = saved: crash reports are off from the next start; this session can still write a report until it exits
+session-crash-reports-unsaved = nothing was kept: your settings file is not a settings document, so crashReports was not written
+session-crash-reports-no-directory = nothing was kept: there is no directory to keep your settings file in
+session-crash-reports-usage = /crash-reports takes on or off, or nothing to say whether reports are on; { $word } changes nothing
+session-crash-reports-sending = this session sends crash reports
+session-crash-reports-not-sending = this session sends no crash reports: this build has no address to send them to, or they were off when it started
 session-variant-set = requests to this model carry the { $variant } variant from the next turn
 session-variant-dropped = no variant; requests carry the model's own options alone
 session-variant-in-force = the { $variant } variant is in force; this model offers { $names }
@@ -4196,13 +4453,14 @@ update-not-installed-by-us =
     there is no update command for this copy: it was not installed by the npm package, the install
     script, Homebrew, WinGet, apt or dnf. A build from source is updated by pulling and building
     again.
-# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The key
-# and the variable are the two ways of turning it off, and are not a translator's to reword.
+# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The
+# command, the key and the variable are the ways of turning it off, and are not a translator's to
+# reword.
 crash-reports-notice =
     if bravebot crashes, a report is sent to Brave on the next launch. It holds the version, your
     operating system and the line of bravebot's source that failed, and never your prompts, files
-    or keys. To turn this off, set crashReports to false in your settings file, or set
-    BRAVEBOT_CRASH_REPORTS=0.
+    or keys. To turn this off, run /crash-reports off, set crashReports to false in your settings
+    file, or set BRAVEBOT_CRASH_REPORTS=0.
 # Said once, before the first usage ping is sent: on the startup screen, or on standard error for a
 # run without one. The command, the key and the variable are the ways of turning it off, and are not a
 # translator's to reword.
@@ -4430,6 +4688,7 @@ desktop-accounts-bedrock-timed-out = The AWS CLI did not answer in time, so refr
 desktop-accounts-gateway-none-configured = This computer's managed settings allow no gateway.
 desktop-accounts-gateway-unrecorded = A key is stored for this service, but no settings name it, so no session sends it.
 desktop-accounts-gateway-absent = No key is set for this gateway.
+desktop-accounts-gateway-key-file-unusable = The file this gateway's key file setting names { $reason }. A key stored here is used before the file.
 desktop-accounts-keys-unreadable = The file of gateway keys could not be read, so it was left as it is.
 desktop-accounts-not-checked = Not checked.
 desktop-accounts-not-removed = The sign-in could not be removed from this computer.
@@ -4905,6 +5164,7 @@ manifest-needs-a-task = /manifest takes the task to plan, as in /manifest summar
 manifest-began = planning the whole task first; the session waits here until the run ends
 manifest-ended-unexpectedly = the run ended unexpectedly
 manifest-failed = the run stopped: { $problem }
+manifest-run-result = the run's result
 manifest-recorded = recorded as { $id }; read it again with bravebot --resume { $id }
 
 # What /init says when the project already has the file it would write.
@@ -5030,6 +5290,7 @@ verb-run = Run
 verb-read-output = Read output
 verb-vet-content = Vet
 verb-fetch-url = Fetch
+verb-web-search = Search
 verb-download-url = Download
 verb-job-output = Job
 verb-spawn-agent = Delegate
@@ -5948,10 +6209,18 @@ ui-settings-usage-ping-locked-admin = Turned off by your administrator.
 ui-settings-usage-ping-locked-incognito = Off in an incognito session, which records nothing.
 ui-settings-usage-ping-unread = Couldn't read the usage ping setting.
 ui-settings-usage-ping-unsaved = Couldn't save the usage ping setting. Try again.
+ui-settings-crash-reports = Send crash reports to Brave
+ui-settings-crash-reports-explained = If BraveBot crashes, a report with the version, your operating system and the line of source that failed is sent the next time it starts. Nothing is sent while this is off.
+ui-settings-crash-reports-locked-environment = Turned off by { $variable } in the environment.
+ui-settings-crash-reports-locked-admin = Turned off by your administrator.
+ui-settings-crash-reports-locked-incognito = Off in an incognito session, which keeps no reports.
+ui-settings-crash-reports-unread = Couldn't read the crash reports setting.
+ui-settings-crash-reports-unsaved = Couldn't save the crash reports setting. Try again.
 ui-accounts-heading = Accounts
 ui-accounts-signed-in = Signed in
 ui-accounts-key-stored = Key stored
 ui-accounts-key-from-environment = Key from the environment
+ui-accounts-key-from-file = Key from a file
 ui-accounts-no-key-needed = No key needed
 ui-accounts-not-signed-in = Not signed in
 ui-accounts-unusable = Can't be used
@@ -6045,11 +6314,26 @@ ui-usage-ping-notice-more = More…
 ui-usage-ping-notice-less = Less
 ui-usage-ping-notice-settings = Open settings
 ui-usage-ping-notice-dismiss = Dismiss usage ping notice
+# Shown once, docked like the usage ping notice, by a launch that is sending crash reports (CRASH-9).
+# The variable and the setting are the ways of turning it off, and are not a translator's to
+# reword.
+ui-crash-reports-notice = If BraveBot crashes, it sends Brave a report the next time it starts. The report holds the version, your operating system and the line of BraveBot's source that failed. It never holds your prompts, files or keys. You can turn this off in Settings, under General, or by setting BRAVEBOT_CRASH_REPORTS=0 in the environment.
+ui-crash-reports-notice-short = If BraveBot crashes, it sends Brave a report the next time it starts. It never holds your prompts, files or keys.
+ui-crash-reports-notice-more = More…
+ui-crash-reports-notice-less = Less
+ui-crash-reports-notice-settings = Open settings
+ui-crash-reports-notice-dismiss = Dismiss crash reports notice
 # The Folders section of the Files tab, and the More menu item that adds one: folders open beside the
 # project in one chat, as /add-dir opens them in the terminal. $name is a folder's own name.
 ui-folders-heading = Folders
 ui-folders-about = Folders open beside the project in this chat. The agent can read and change files in them until you close them.
 ui-folders-empty = Only the project is open.
+# The context column's Overview tab when every section in it is turned off (PANEL-20).
+ui-context-all-off = Every section is turned off. Use Choose sections to show one.
+# The button at the end of the context column's head that opens the checklist of its sections (PANEL-20).
+ui-context-sections = Choose sections
+# The heading row at the top of that checklist.
+ui-context-sections-heading = Sections
 ui-folders-add = Add folder…
 ui-folders-close = Close { $name }
 ui-folders-close-explained = Close { $name } · The agent can no longer reach it

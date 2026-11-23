@@ -1453,6 +1453,8 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::app::a_failed_turn_measures_context_if_requests_were_sent`
 `verified-by: bravebot_tui::app::a_failed_turn_with_no_requests_sent_remains_unmeasured`
 `verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_what_its_last_request_came_to`
+`verified-by: bravebot_tui::app::a_resumed_session_reads_the_context_from_the_request_its_record_measured`
+`verified-by: bravebot_tui::app::a_finished_compaction_reads_what_it_won_back_and_an_unfinished_one_keeps_the_measured_reading`
 `verified-by: bravebot_agent::conversation::compacting_forgets_a_measurement_of_the_conversation_it_replaced`
 `verified-by: bravebot_config::lib::a_default_budget_is_marked_as_guessed`
 `verified-by: bravebot_config::lib::an_advertised_budget_is_not_marked_as_guessed`
@@ -2551,6 +2553,18 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::the_terminal_is_asked_for_sgr_with_the_tracking_modes_and_given_all_of_it_back_in_order`
 `verified-by: bravebot_tui::app::what_every_way_out_of_the_interface_writes_includes_every_mode_asked_for`
 `verified-by: bravebot_tui::app::the_modes_are_given_back_before_raw_mode_is_left_and_it_is_left_whatever_they_do`
+`verified-by: bravebot_tui::app::disambiguated_keys_are_asked_for_only_where_the_terminal_says_it_understands_them`
+`verified-by: bravebot_tui::app::raw_mode_is_entered_before_anything_is_written_and_the_takeover_ends_where_it_cannot_be`
+`verified-by: bravebot_tui::app::tests::hangup::a_session_that_ends_by_failing_has_handed_the_terminal_back_and_says_how_it_failed`
+`verified-by: bravebot_tui::app::tests::hangup::a_session_that_is_left_has_handed_the_terminal_back_and_returns_what_it_ended_with`
+`verified-by: bravebot_tui::app::tests::hangup::where_the_session_failed_and_the_terminal_cannot_be_handed_back_that_failure_is_returned`
+`verified-by: bravebot_tui::app::tests::handover::the_terminal_is_given_back_before_the_program_runs_and_taken_again_after_it`
+`verified-by: bravebot_tui::app::tests::handover::the_terminal_is_taken_again_when_the_program_failed`
+`verified-by: bravebot_tui::app::tests::handover::nothing_runs_after_a_terminal_that_could_not_be_given_back`
+`verified-by: bravebot_tui::app::tests::handover::a_terminal_that_could_not_be_taken_again_is_returned_as_a_failure`
+`verified-by: bravebot_tui::app::tests::handover::every_handover_goes_through_the_one_that_gives_back_and_takes_again`
+`verified-by: bravebot_cli::terminal_modes::the_editor_a_prompt_is_written_in_is_started_on_a_terminal_that_is_out_of_raw_mode`
+`verified-by: bravebot_cli::terminal_modes::a_session_in_lines_takes_none_of_what_the_interface_that_draws_takes`
 
 <a id="INPUT-34"></a>
 ### INPUT-34: what arrived together is not two presses
@@ -2615,11 +2629,13 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
 `verified-by: bravebot_tui::input::a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival`
 `verified-by: bravebot_tui::input::keys_with_reports_of_the_mouse_among_them_are_still_a_run`
+`verified-by: bravebot_tui::app::what_the_reader_says_arrived_together_reaches_the_rung_that_leaves`
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
 `verified-by: bravebot_tui::app::every_refused_return_is_said_and_not_just_the_first`
+`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_is_not_queued_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
 `verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`

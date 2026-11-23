@@ -76,9 +76,9 @@ therefore holds in every mode, including the mode that asks about nothing.
 <a id="PERM-1"></a>
 ### PERM-1: a rule names a family of tools, and matches on routing only
 
-A rule is `Tool` or `Tool(specifier)`. Five families exist: `Read` covers every tool that reads or
+A rule is `Tool` or `Tool(specifier)`. Six families exist: `Read` covers every tool that reads or
 enumerates a file, `Edit` covers every tool that changes one, `Bash` covers running a program,
-`WebFetch` covers fetching a URL, and `Mcp` covers calling a tool of a server a person declared
+`WebFetch` covers fetching a URL, `WebSearch` covers `web_search`, and `Mcp` covers calling a tool of a server a person declared
 ([mcp-servers.md](mcp-servers.md)). They are categories rather than tool names, and `Bash` names no
 shell: there is none, and a specifier is matched against one stage's program and arguments.
 
@@ -106,6 +106,12 @@ name as written after ASCII lowercasing, and the name with each label outside AS
 such as a no-break space, `。` (U+3002), `：` (U+FF1A) or a zero-width space, makes the domain
 unreadable ([PERM-11](#PERM-11)) as a port or a path does. What a matching
 rule decides for a fetch, and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
+
+`WebSearch` takes no specifier. A search has no routing a rule could name, since its host is fixed in
+source and its query is the planner's own words, so `WebSearch` alone covers every search and
+`WebSearch(weather)` is unreadable ([PERM-11](#PERM-11)). A `WebFetch` rule does not cover a search and
+a `WebSearch` rule does not cover a fetch. What a rule decides for a search is
+[web-search.md](tools/web-search.md#WEBSEARCH-2).
 
 `Mcp(weather)` and `Mcp(weather:*)` cover every tool of the server declared as `weather`, and
 `Mcp(weather:get_forecast)` covers one of them. Both names are matched whole, so `Mcp(weather)` does
@@ -403,17 +409,25 @@ one of its files succeeds shows the person a protection that is not there.
 `verified-by: bravebot_config::settings::an_object_entrys_rule_is_anchored_where_a_line_is`
 
 <a id="PERM-4"></a>
-### PERM-4: a one-segment relative pattern floats where it restricts, not where it grants
+### PERM-4: a relative pattern that starts at a plain directory name floats where it restricts, not where it grants
 
 `Edit(src/**)` in `deny` or `ask` covers a `src` directory at any depth, including a nested copy
-under `vendor`. The same pattern in `allow` covers only the `src` at the top. A pattern written
-from `./` does not float in any list, so `Edit(./src/**)` covers only the `src` at the top.
+under `vendor`. The same pattern in `allow` covers only the `src` at the top. Any pattern with a
+directory part floats this way, however many segments it has: `Edit(src/lib/**)` and `Edit(a/b.md)`
+float the same way, to the `src/lib` or the `a/b.md` under any directory. A pattern whose first
+segment holds a `*` or is `**` does not float, and neither does one written from `./`, so
+`Edit(./src/**)` covers only the `src` at the top in every list.
+
+A bare name is a different case. A pattern with no directory part, such as `Read(.env)`, matches at
+any depth in every list, `allow` included.
 
 **Why.** A rule that restricts should cover the copy somebody forgot about; a rule that grants
 should cover what it says and no more. Anchoring the pattern, as `Edit(./src/**)` or
 `Edit(/src/**)`, pins it to one place in every list.
 
 `verified-by: bravebot_core::permissions::a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_relative_pattern_of_several_plain_segments_floats_when_it_restricts_and_not_when_it_grants`
+`verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_allow_as_well_as_in_deny_and_ask`
 `verified-by: bravebot_core::permissions::a_dotted_pattern_of_several_segments_stays_at_the_top_in_every_list`
 
 <a id="PERM-5"></a>
@@ -564,6 +578,12 @@ including a path it names: the reference-not-path rule is about the name the cal
 the person's own text. A `reason` any other layer wrote is in no refusal the planner is given,
 because the planner is given nothing a checkout wrote.
 
+A reference to a file nobody vouched for stores the name it was issued under and opens the file when
+a processor, a write, a check or a program's input needs the bytes. The rules are asked then, about
+the stored name and about the file it lands on at that moment, as they are for a `path_ref`, so a file
+replaced by a link to a denied file after the reference was issued is refused when it is opened, the
+slot stays unread, and the refusal names the reference.
+
 The file a name lands on is judged as well as the name. A call is checked against the rules under
 the name it gave and again under the name it reaches once every symbolic link on the way is followed
 and the volume has given the stored spelling, so a link to a denied file is refused, a case variant
@@ -591,7 +611,14 @@ the rules cannot be matched against a spelling that is not the file's. A `run` r
 target, read or written, is held to the same refusal as a file tool's path, and the refusal is made
 again immediately before the run opens it, under the file the name lands on then and under each other
 name that file has, so a link or hard link an earlier part of the line left at the name is refused as
-the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A short name is
+the file named directly is ([CMDLINE-5](tools/command-line.md#CMDLINE-5)). A write by a file tool
+is checked again immediately before its bytes are released. What the destination lands on and the
+other names that file has are compared with what they were when the person was asked, and the write
+is refused when either differs, whichever rule would have covered the file it leads to now, since
+the answer given covered the file shown and not another. The deny rules are asked about the file
+the destination leads to then, under each other name that file has, as they are before the
+question. The refusal names the destination as the person was shown it and nothing is written; the
+person is not asked again. A short name is
 accepted only in the spelling of the open directory the target lands in, which names that one
 directory; in a target that reaches no open directory through an ancestor of its own it is refused
 wherever it appears.
@@ -681,6 +708,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::tools::tests::confinement::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
 `verified-by: bravebot_agent::permissions::a_full_path_rule_covers_a_project_file_whichever_unicode_form_the_workspace_is_spelled_in`
 `verified-by: bravebot_agent::permissions::a_root_is_read_as_the_root_a_refusal_names_in_either_unicode_form`
+`verified-by: bravebot_agent::permissions::a_full_path_rule_inside_the_workspace_covers_its_relative_names_on_windows`
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name`
 `verified-by: bravebot_core::permissions::a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end`
 `verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
@@ -705,6 +733,12 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_and_its_contents_do_not_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_even_where_writes_are_approved`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_by_a_processor_either`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_given_to_a_processor`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_written_to_another_file`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_fed_to_a_program`
+`verified-by: bravebot_agent::turn::a_reference_whose_file_became_a_link_to_a_denied_file_is_not_sent_to_be_vetted`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_of_a_file_that_became_a_link_to_a_denied_file_is_refused_and_left_unread`
+`verified-by: bravebot_agent::tools::tests::editing::a_deferred_read_of_a_file_that_became_a_hard_link_to_a_denied_file_is_refused`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_written_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_edited_through_a_link_to_it`
 `verified-by: bravebot_agent::turn::a_denied_file_is_not_read_through_a_link_to_it`
@@ -779,6 +813,16 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::tools::tests::confinement::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
 `verified-by: bravebot_agent::tools::tests::confinement::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
 `verified-by: bravebot_agent::turn::a_reason_a_checkout_wrote_is_not_in_the_refusal_the_planner_is_given`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_file_an_ask_rule_covers`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_a_protected_file`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_to_an_allowed_file`
+`verified-by: bravebot_agent::turn::a_write_lands_when_nothing_was_put_in_place_while_the_question_was_open`
+`verified-by: bravebot_agent::turn::a_write_is_refused_when_a_hard_link_put_in_place_while_the_question_was_open_leads_to_another_file`
+`verified-by: bravebot_agent::turn::a_picture_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::an_edit_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::turn::a_download_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
+`verified-by: bravebot_agent::manifest::a_planned_write_is_refused_when_a_link_put_in_place_while_the_question_was_open_leads_elsewhere`
 
 <a id="PERM-8"></a>
 ### PERM-8: an allow rule answers a prompt and grants nothing else
@@ -808,14 +852,17 @@ A run that would put the user's private data into a program asks whatever the ru
 whose destination is known only through a reference asks whatever the rules say. A run carrying an
 environment assignment written in front of one of its programs asks whatever the rules say. A call
 that would put the user's private data into a server's tool asks whatever the rules say, and
-whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)). A write whose destination
-is a protected path asks whatever the rules say, an `Edit` allow rule and the trust map included, and
-whatever the mode says short of bypassing ([MODE-2](permission-modes.md#MODE-2)). The paths are any
-`.git`, `.bravebot` or `.husky` component and the files `.gitmodules`, `.gitconfig` and
-`.pre-commit-config.yaml`, compared as a volume that folds case and normalizes opens them (`.GIT`,
-`.huſky`) and with a trailing dot or space dropped. The destination is read as named, as it lands after links are followed, and under each other
-name of a file with a hard link (PERM-7). A file with several links whose other names could not all
-be found is protected, since one of them may be a protected path.
+whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)); for the calls of an `apply`
+step whose tools are all marked plan-covered, the person's approval of the plan, whose line names
+where the lists came from and where they go, is that answer
+([manifest.md](manifest.md#MANIFEST-17)). A write whose destination is a protected path asks
+whatever the rules say, an `Edit` allow rule and the trust map included, and whatever the mode says
+short of bypassing ([MODE-2](permission-modes.md#MODE-2)). The paths are any `.git`, `.bravebot` or
+`.husky` component and the files `.gitmodules`, `.gitconfig` and `.pre-commit-config.yaml`, compared
+as a volume that folds case and normalizes opens them (`.GIT`, `.huſky`) and with a trailing dot or
+space dropped. The destination is read as named, as it lands after links are followed, and under
+each other name of a file with a hard link (PERM-7). A file with several links whose other names
+could not all be found is protected, since one of them may be a protected path.
 
 The file `--settings` named is a protected path as well, wherever it sits and whatever it is called,
 because the next launch that names it reads its `allow` rules, `sandbox.mode` and `run.network` as
@@ -902,6 +949,7 @@ and the next launch with the same flag would then run unasked and unconfined.
 `verified-by: bravebot_agent::workspace::a_rewind_still_puts_back_through_a_link_to_a_name_that_is_not_protected`
 `verified-by: bravebot_agent::turn::a_refused_line_puts_a_destination_that_lands_on_a_protected_name_to_the_confirmer`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 The planner's arguments to a server's tool are private once private content was let out of
 quarantine for it, by `vet_content`, `read_output` or a delegate's report, and they stay private
@@ -1131,6 +1179,7 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_agent::permissions::an_allow_entry_a_checkout_wrote_is_proposed_only_where_it_is_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_checkouts_unreadable_allow_entry_rather_than_offering_it`
 `verified-by: bravebot_cli::running::a_session_in_lines_names_an_allow_rule_a_checkout_wrote`
+`verified-by: bravebot_tui::app::the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files`
 
 <a id="PERM-15"></a>
 ### PERM-15: a checkout proposes an allow rule, and a question naming every one grants them
@@ -1369,6 +1418,8 @@ exactly the machine somebody else may have a legitimate say in.
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
+`verified-by: bravebot_tui::app::a_session_opens_asking_unless_the_line_or_the_persons_setting_says_auto`
+`verified-by: bravebot_tui::mode_trail_tests::bypass_made_unreachable_after_the_flag_is_an_opening_and_then_a_change`
 
 <a id="PERM-18"></a>
 ### PERM-18: every layer may write either, and the strictest value any layer named holds
@@ -1524,6 +1575,15 @@ against them whole. A wrapper added to the table is a decision about both questi
   that runs. A `deny` or `ask` rule then matches more than the program does, which is the safe
   direction, and an `allow` rule does not look through a wrapper at all, so no rule is weaker for
   it.
+- **A mapped IPv6 spelling of a `WebFetch` host is read as text, and what a connection to it reaches
+  is verified on macOS only.** A rule's domain and the fetched host are put in one form by
+  [PERM-1](#PERM-1), so `[::ffff:93.184.216.34]` is the IPv4 address on both sides whatever the
+  operating system does with the spelling. On macOS an IPv6 socket with `IPV6_V6ONLY` off reaches an
+  IPv4 listener through `::ffff:127.0.0.1`. Where an IPv6 socket is IPv6-only by default, as on
+  Windows, the spelling may reach nothing, so a rule can refuse or ask about an address the
+  connection would not have reached. That is the safe direction. Linux and Windows are not verified,
+  so this does not say that no platform connects a mapped spelling to an address other than the IPv4
+  one it names ([#4041](https://github.com/brave/bravebot/issues/4041), row 32).
 - **How many questions a session opens with is the file's to choose.** Every name in
   `additionalDirectories` is one box, so a file naming thirty directories is thirty of them before
   the first prompt can be typed, and the way out of a list somebody does not want to answer is
@@ -1566,8 +1626,8 @@ against them whole. A wrapper added to the table is a decision about both questi
   window's tests rather than by the terminal's.
 - **A manifest run reads no rule but the ones about a server's tool.** The runner builds its policy
   without the rules the session holds, so a `deny` rule does not refuse a step of a plan and an
-  `ask` rule puts no question about one. The `Mcp` rules are kept, since a plan's call to a
-  server's tool is decided as a turn's is ([MANIFEST-15](manifest.md#MANIFEST-15)). What stands in a run is the plan question and the write question
+  `ask` rule puts no question about one. The `Mcp` rules are kept, since they decide a plan's call
+  to a server's tool before the plan's approval does ([MANIFEST-15](manifest.md#MANIFEST-15)). What stands in a run is the plan question and the write question
   ([manifest.md](manifest.md#MANIFEST-10)). The desktop application says so on the plan it puts
   to the person, where the session holds a `deny` or an `ask` rule.
 - **Declining to trust the workspace still leads to the question.** The two are separate claims, so

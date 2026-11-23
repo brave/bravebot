@@ -43,12 +43,19 @@ every checked start removes is in crates/sandbox/src/programs.rs. This script fa
    or a folder to the system, so a name added to the Rust list and not there is passed on by the
    application. Three differences are written down: `HOME`, `XDG_RUNTIME_DIR` and
    `DBUS_SESSION_BUS_ADDRESS` are in the Rust list and are not in the others. The application and
-   the agent it starts read them, and Electron reaches the session bus through the last two, so the
-   application leaves them set. Without `HOME`, `gio` also reads the account's passwd home (the
-   comment at the top of external-open.ts and SANDBOX-30 give the reasons). The eleven Windows names
-   of the rundll32 start are written down the same way. `APPLICATION_EXCEPTIONS` holds them.
+   the agent it starts read `HOME`, so the application leaves it set; without `HOME`, `gio` also
+   reads the account's passwd home (the comment at the top of external-open.ts and SANDBOX-30 give
+   the reasons). Electron reaches the session bus through the other two and the agent puts its
+   proxy socket under `XDG_RUNTIME_DIR`, so the application does not delete them whatever they
+   hold. It asks the agent which of them lead to a socket a stage may write (`opener.judge`) and
+   deletes those. The eleven Windows names of the rundll32 start are written down the same
+   way. `APPLICATION_EXCEPTIONS` holds them.
    `FILE_NAME_PREFIXES` in the same two files (the names removed only when their value holds a
    `/`) must be the same list in both.
+11. A difference between `NAMES` in crates/ui-bridge/src/opener_names.rs, the two names the agent
+   judges for the desktop application, and `SESSION_BUS_NAMES` in ui/src/main/external-open.ts,
+   the two names the application asks about. A name in one and not the other is either never
+   judged or never asked about.
 
 It cannot tell that a list is complete, or that a `Kept` call is right. A variable the program
 reads that is not listed is found by reading the program, which PATH-008 in
@@ -66,6 +73,8 @@ CRATES = ROOT / "crates"
 OPENER = "crates/tui/src/opener.rs"
 APPLICATION = "ui/src/main/external-open.ts"
 APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
+# The names the agent judges for the application, and the application's copy of them.
+OPENER_NAMES = "crates/ui-bridge/src/opener_names.rs"
 
 # Names in the opener's list that the desktop application's lists leave out, and why. The
 # application and the agent it starts read `HOME`, so deleting it from the application's
@@ -73,7 +82,9 @@ APPLICATION_TEST = "ui/scripts/external-open-electron.test.mjs"
 # deleting it protects nothing when the real home is the place a stage may write (SANDBOX-30).
 # The opener removes it from its own start instead. Electron finds the session bus from
 # `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` for its own file manager, portal and
-# notification calls, so deleting them would break those. The eleven Windows
+# notification calls, and the agent puts its proxy socket under `XDG_RUNTIME_DIR`, so deleting
+# them whatever they hold would break those. The application asks the agent which of the two lead
+# to a socket a stage may write and deletes those (`opener.judge`). The eleven Windows
 # names (brave/bravebot#3860) are also left out of the application's list and removed by the
 # opener from its own start. Electron's own Windows start is not covered by that removal: it is
 # given those names as the application's process holds them.
@@ -86,8 +97,14 @@ APPLICATION_EXCEPTIONS = {
         "without HOME, gio reads the account's passwd home, and the desktop application and the "
         "agent it starts read HOME, so it is left set there (SANDBOX-30)"
     ),
-    "XDG_RUNTIME_DIR": "Electron and the agent it starts find the session bus and their runtime files here",
-    "DBUS_SESSION_BUS_ADDRESS": "Electron connects to the session bus it names, so it is not deleted there",
+    "XDG_RUNTIME_DIR": (
+        "Electron and the agent it starts find the session bus and their runtime files here, so it "
+        "is deleted only where the agent judges it leads to a socket a stage may write"
+    ),
+    "DBUS_SESSION_BUS_ADDRESS": (
+        "Electron connects to the session bus it names, so it is deleted only where the agent "
+        "judges it leads to a socket a stage may write"
+    ),
     "PATHEXT": WINDOWS_REASON,
     "COMSPEC": WINDOWS_REASON,
     "SystemRoot": WINDOWS_REASON,
@@ -192,6 +209,40 @@ OPENER_PREFIXES = re.compile(r"\bconst\s+FILE_NAME_PREFIXES\b[^=]*=\s*\[(.*?)\]\
 APPLICATION_PREFIXES = re.compile(
     r"export\s+const\s+FILE_NAME_PREFIXES\b[^=]*=\s*\[(.*?)\]", re.DOTALL
 )
+
+
+JUDGED_NAMES = re.compile(r"\bpub\s+const\s+NAMES\b[^=]*=\s*\[(.*?)\]\s*;", re.DOTALL)
+APPLICATION_JUDGED = re.compile(
+    r"export\s+const\s+SESSION_BUS_NAMES\b[^=]*=\s*\[(.*?)\]", re.DOTALL
+)
+
+
+def judged_complaints(names_text, application_text):
+    """Every way `NAMES` in opener_names.rs and `SESSION_BUS_NAMES` in the application differ.
+
+    The agent judges the names in the first and the application asks about the names in the
+    second, so they must be the same list. A list this script cannot find or reads as empty is
+    reported.
+    """
+    found = JUDGED_NAMES.search(names_text)
+    rust = [a or b for a, b in ENTRY.findall(found.group(1))] if found else None
+    if not rust:
+        return [
+            f"NAMES is not readable in {OPENER_NAMES}. If its shape changed, teach "
+            "check-code-selectors.py."
+        ]
+    application = quoted_names(APPLICATION_JUDGED, application_text)
+    if not application:
+        return [
+            f"SESSION_BUS_NAMES is not readable in {APPLICATION}. If its shape changed, teach "
+            "check-code-selectors.py."
+        ]
+    if sorted(rust) == sorted(application):
+        return []
+    return [
+        f"SESSION_BUS_NAMES in {APPLICATION} is {application} and NAMES in {OPENER_NAMES} is "
+        f"{rust}. The application asks the agent about one list and the agent judges the other."
+    ]
 
 
 def quoted_names(pattern, text):
@@ -803,8 +854,8 @@ OPENER_LIST = """\
 const CODE_SELECTORS: [(&str, Names); 17] = [
     selectors::BROWSER,
     ("HOME", Names::Directory),
-    ("XDG_RUNTIME_DIR", Names::Directory),
-    ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),
+    selectors::XDG_RUNTIME_DIR,
+    selectors::DBUS_SESSION_BUS_ADDRESS,
     ("GIO_LAUNCH_DESKTOP", Names::File),
     ("XDG_DATA_HOME", Names::Directory),
     ("PATHEXT", Names::Options),
@@ -828,6 +879,18 @@ export const OPENER_SELECTORS = [
 ] as const
 """
 MJS_LIST = "const NAMES = ['BROWSER', 'GIO_LAUNCH_DESKTOP', 'XDG_DATA_HOME']\n"
+JUDGED_RUST = """\
+pub const NAMES: [(&str, Names); 2] = [
+    selectors::XDG_RUNTIME_DIR,
+    selectors::DBUS_SESSION_BUS_ADDRESS,
+];
+"""
+JUDGED_TS = (
+    "export const SESSION_BUS_NAMES = ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] as const\n"
+)
+JUDGED_TS_REVERSED = (
+    "export const SESSION_BUS_NAMES = ['DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'] as const\n"
+)
 OPENER_PREFIX_LIST = (
     'const FILE_NAME_PREFIXES: [&str; 2] = ["XDG_CURRENT_DESKTOP", "XDG_MENU_PREFIX"];\n'
 )
@@ -1309,7 +1372,7 @@ def selftest():
         ),
         (
             "DBUS_SESSION_BUS_ADDRESS missing from the opener's list fails the exception",
-            OPENER_LIST.replace('    ("DBUS_SESSION_BUS_ADDRESS", Names::BusAddress),\n', ""),
+            OPENER_LIST.replace("    selectors::DBUS_SESSION_BUS_ADDRESS,\n", ""),
             TS_LIST,
             MJS_LIST,
             1,
@@ -1372,6 +1435,36 @@ def selftest():
     got = prefix_complaints(OPENER_LIST, TS_LIST)
     case("prefixes: lists of selectors are not read as prefixes", len(got) == 2, got)
 
+    judged_cases = [
+        ("the judged lists agree", JUDGED_RUST, JUDGED_TS, 0),
+        ("the order does not matter", JUDGED_RUST, JUDGED_TS_REVERSED, 0),
+        (
+            "a name only the agent judges fails",
+            JUDGED_RUST.replace(
+                "selectors::DBUS_SESSION_BUS_ADDRESS,", "selectors::DBUS_SESSION_BUS_ADDRESS,\n    selectors::NEW,"
+            ),
+            JUDGED_TS,
+            1,
+        ),
+        (
+            "a name only the application asks about fails",
+            JUDGED_RUST,
+            JUDGED_TS.replace("'DBUS_SESSION_BUS_ADDRESS'", "'DBUS_SESSION_BUS_ADDRESS', 'NEW'"),
+            1,
+        ),
+        ("a Rust list that is not found fails", "fn main() {}\n", JUDGED_TS, 1),
+        ("an application list that is not found fails", JUDGED_RUST, "", 1),
+        (
+            "an empty application list fails",
+            JUDGED_RUST,
+            "export const SESSION_BUS_NAMES = [] as const\n",
+            1,
+        ),
+    ]
+    for claim, rust_text, ts_text, expected in judged_cases:
+        got = judged_complaints(rust_text, ts_text)
+        case(f"judged names: {claim}", len(got) == expected, got)
+
     broke = [(claim, got) for claim, held, got in checks if not held]
     for claim, got in broke:
         print(f"selftest: {claim}, got {got!r}", file=sys.stderr)
@@ -1403,6 +1496,7 @@ def main():
             application_texts.append("")
     complaints += application_complaints(files.get(OPENER, ""), *application_texts)
     complaints += prefix_complaints(files.get(OPENER, ""), application_texts[0])
+    complaints += judged_complaints(files.get(OPENER_NAMES, ""), application_texts[0])
     for complaint in complaints:
         print(complaint, file=sys.stderr)
     if complaints:
@@ -1412,7 +1506,7 @@ def main():
     calls = sum(len(CALL.findall(text)) for label, text in files.items() if label != PROGRAMS)
     print(
         f"check-code-selectors: {calls} start calls classified, {names} names in {len(lists)} "
-        "lists, each with the tests it needs; the application's lists match the opener's"
+        "lists, each with the tests it needs; the application's lists match the opener's and the agent's"
     )
     return 0
 

@@ -65,6 +65,12 @@ export interface ViewUpdate {
   rows: Row[]
   /** How many rows, from the first, the runtime no longer keeps. Absent from an older runtime. */
   omitted?: number
+  /**
+   * The name the person gave the host's client that sent the last send, answer, trust answer or
+   * cancel that took effect. Null before any client has acted and after a question was refused because the clients
+   * that could answer it left. Absent from a runtime that is not a host.
+   */
+  actor?: string | null
 }
 
 /** A `session.view.snapshot`: the whole view at one sequence, with its most recent rows. */
@@ -165,6 +171,9 @@ export function decodeUpdate(value: unknown): ViewUpdate {
     throw new ProtocolError('a view update needs numeric sequence and turn, and a numeric target if it has one')
   }
   if (value.omitted !== undefined && !isCount(value.omitted)) throw new ProtocolError('a view update needs a numeric omitted count if it has one')
+  if (value.actor !== undefined && value.actor !== null && typeof value.actor !== 'string') {
+    throw new ProtocolError('a view update needs a string or null actor if it has one')
+  }
   if (!Array.isArray(value.rows)) throw new ProtocolError('a view update needs rows')
   return {
     sequence: value.sequence,
@@ -174,6 +183,7 @@ export function decodeUpdate(value: unknown): ViewUpdate {
     pending: decodePending(value.pending),
     rows: value.rows.map(decodeRow),
     ...(value.omitted === undefined ? {} : { omitted: value.omitted }),
+    ...(value.actor === undefined ? {} : { actor: value.actor }),
   }
 }
 

@@ -231,6 +231,45 @@ const CHOICES: &[(&str, &str, &str)] = &[
     ("input", "select_option", "element_number"),
 ];
 
+/// The arguments of a group's tools a row of a plan's `apply` step may fill, with their kind, which
+/// `install` declares with `--apply`: a bookmark's `url` copied from a list a read returned, a
+/// folder's `title` the processor writes for the folder the call creates, and the `folder` a
+/// bookmark moves to, taken from the row that made it or from a folder the list holds. A
+/// bookmark's new title and a reading list entry's title are values the call sets, not names it
+/// looks up, so they may be new text; every URL a call acts on is copied from a list
+/// (`docs/design/manifest-apply.md`).
+const APPLIES: &[(&str, &str, &str, &str)] = &[
+    ("bookmarks-write", "create_bookmark_folder", "title", "new"),
+    ("bookmarks-write", "move_bookmark", "url", "entry"),
+    ("bookmarks-write", "move_bookmark", "folder", "row,entry"),
+    ("bookmarks-write", "rename_bookmark", "url", "entry"),
+    ("bookmarks-write", "rename_bookmark", "title", "new"),
+    ("bookmarks-write", "add_reading_list_entry", "url", "entry"),
+    (
+        "bookmarks-write",
+        "add_reading_list_entry",
+        "title",
+        "entry,new",
+    ),
+    ("tabs-manage", "pin_tab", "url", "entry"),
+    ("tabs-manage", "group_tabs", "urls", "entries"),
+    ("tabs-manage", "group_tabs", "title", "new"),
+];
+
+/// The tools of [`APPLIES`] whose calls `install` suggests a plan's approval may cover, with
+/// `--plan-covers`: each acts only in this browser, deletes nothing, overwrites nothing its reply
+/// does not record, and adds no address. `move_bookmark` says the folder a bookmark left and
+/// `rename_bookmark` the title it replaced, so each can be undone by hand. `add_reading_list_entry`
+/// adds an address, and `group_tabs` can empty a group, which the browser then removes, so neither
+/// is suggested (`docs/design/manifest-apply.md`). The suggestion is a second line beside the
+/// declaration, so no call runs on a plan's approval alone until the person declares it so.
+const COVERED: &[(&str, &str)] = &[
+    ("bookmarks-write", "create_bookmark_folder"),
+    ("bookmarks-write", "move_bookmark"),
+    ("bookmarks-write", "rename_bookmark"),
+    ("tabs-manage", "pin_tab"),
+];
+
 impl Installed {
     /// The command that declares a server for `group` of the tools, or for every tool where there
     /// is none, to be pasted into a POSIX shell. A group's server has the alias `brave-<group>` and
@@ -239,13 +278,43 @@ impl Installed {
     /// that of a group that [`tools::Group::asks_in_browser`] is set for also has `--tool-timeout`
     /// with the bound of [`relay::IN_BROWSER_TOOL_TIMEOUT`], which is above the wait of its server.
     /// The declaration of a group with tools in [`CHOICES`] also has a `--choice <tool>:<argument>`
-    /// for each, after those. The directory and the program are quoted as [`quoted`] says, and the
-    /// line is bytes, since either may be a name that is not UTF-8.
+    /// for each, after those, and one with tools in [`APPLIES`] an `--apply
+    /// <tool>:<argument>=<kind>` for each. The directory and the program are quoted as [`quoted`]
+    /// says, and the line is bytes, since either may be a name that is not UTF-8.
     pub fn declaration(&self, group: Option<&str>) -> OsString {
+        self.line(group, false)
+    }
+
+    /// The tools of `group` in [`COVERED`], and the declaration [`Installed::declaration`] gives
+    /// with a `--plan-covers <tool>` for each after its `--apply`s, or nothing where the group has
+    /// none of them. The server for every tool has no `--apply`, so it is suggested none.
+    pub fn covering(&self, group: &str) -> Option<(Vec<&'static str>, OsString)> {
+        let tools: Vec<&'static str> = COVERED
+            .iter()
+            .filter(|(id, _)| *id == group)
+            .map(|(_, tool)| *tool)
+            .collect();
+        (!tools.is_empty()).then(|| (tools, self.line(Some(group), true)))
+    }
+
+    /// The declaration of `group`, with its `--plan-covers` marks where `covered` says so.
+    fn line(&self, group: Option<&str>, covered: bool) -> OsString {
         let choices: String = CHOICES
             .iter()
             .filter(|(id, ..)| Some(*id) == group)
             .map(|(_, tool, argument)| format!(" --choice {tool}:{argument}"))
+            .chain(
+                APPLIES
+                    .iter()
+                    .filter(|(id, ..)| Some(*id) == group)
+                    .map(|(_, tool, argument, kind)| format!(" --apply {tool}:{argument}={kind}")),
+            )
+            .chain(
+                COVERED
+                    .iter()
+                    .filter(|(id, _)| covered && Some(*id) == group)
+                    .map(|(_, tool)| format!(" --plan-covers {tool}")),
+            )
             .collect();
         let (alias, asked, bound, group) = match group {
             Some(group) => (
@@ -640,6 +709,109 @@ mod tests {
                 .to_string_lossy()
                 .contains("--choice")
         );
+    }
+
+    /// SERVERS-26. No declaration `install` prints says a plan's approval covers a tool: that is
+    /// suggested apart, as the same declaration with a `--plan-covers` for each tool of the group in
+    /// [`COVERED`] after its `--apply`s, and only for a group that has such a tool. The regressions
+    /// it rejects are a printed declaration that covers a tool nobody chose to cover, a suggestion
+    /// that differs from the declaration in more than its marks, and one for a tool that adds an
+    /// address or can remove a group.
+    #[test]
+    fn what_a_plans_approval_may_cover_is_suggested_apart_from_the_declaration() {
+        let installed = Installed {
+            manifest: PathBuf::from("/m/com.brave.bravebot.json"),
+            directory: PathBuf::from("/d"),
+            program: PathBuf::from("/p/bravebot-browser"),
+        };
+        for group in tools::ids() {
+            let declared = installed.declaration(Some(group));
+            assert!(
+                !declared.to_string_lossy().contains("--plan-covers"),
+                "{group}"
+            );
+            let Some((tools, line)) = installed.covering(group) else {
+                assert!(
+                    !["bookmarks-write", "tabs-manage"].contains(&group),
+                    "{group}"
+                );
+                continue;
+            };
+            let marks: String = tools
+                .iter()
+                .map(|tool| format!(" --plan-covers {tool}"))
+                .collect();
+            let declared = declared.to_string_lossy();
+            let (before, after) = declared.split_once(" --dir ").expect("a --dir");
+            assert_eq!(
+                line.to_string_lossy(),
+                format!("{before}{marks} --dir {after}")
+            );
+        }
+        assert_eq!(
+            installed
+                .covering("bookmarks-write")
+                .map(|(tools, _)| tools),
+            Some(vec![
+                "create_bookmark_folder",
+                "move_bookmark",
+                "rename_bookmark"
+            ])
+        );
+        assert_eq!(
+            installed.covering("tabs-manage").map(|(tools, _)| tools),
+            Some(vec!["pin_tab"])
+        );
+    }
+
+    /// The `bookmarks-write` declaration lets a row of an apply step fill a folder's title as new
+    /// text, a bookmark's URL from a list and the folder it moves to from the row that made it, and
+    /// no other declaration names any. Each named argument is one its tool's schema takes, and the
+    /// group does not ask every call, which a server whose rows are approved as one list must not.
+    #[test]
+    fn the_declaration_of_bookmarks_write_names_the_arguments_a_row_may_fill() {
+        let installed = Installed {
+            manifest: PathBuf::from("/m/com.brave.bravebot.json"),
+            directory: PathBuf::from("/d"),
+            program: PathBuf::from("/p/bravebot-browser"),
+        };
+        assert_eq!(
+            installed.declaration(Some("bookmarks-write")),
+            "bravebot mcp add brave-bookmarks-write -s user \
+             --apply create_bookmark_folder:title=new --apply move_bookmark:url=entry \
+             --apply move_bookmark:folder=row,entry --apply rename_bookmark:url=entry \
+             --apply rename_bookmark:title=new --apply add_reading_list_entry:url=entry \
+             --apply add_reading_list_entry:title=entry,new --dir /d -- \
+             /p/bravebot-browser mcp --group \
+             bookmarks-write"
+        );
+        assert_eq!(
+            installed.declaration(Some("tabs-manage")),
+            "bravebot mcp add brave-tabs-manage -s user --apply pin_tab:url=entry \
+             --apply group_tabs:urls=entries --apply group_tabs:title=new --dir /d -- \
+             /p/bravebot-browser mcp --group tabs-manage"
+        );
+        for other in tools::ids().filter(|id| !["bookmarks-write", "tabs-manage"].contains(id)) {
+            assert!(
+                !installed
+                    .declaration(Some(other))
+                    .to_string_lossy()
+                    .contains("--apply"),
+                "{other}"
+            );
+        }
+        for (group, tool, argument, _) in APPLIES {
+            assert!(!tools::asks_every_call(group), "{group}");
+            let listed = tools::TOOLS
+                .iter()
+                .find(|listed| listed.name == *tool && listed.group == *group)
+                .expect("a tool of the group")
+                .listed();
+            assert!(
+                listed["inputSchema"]["properties"].get(*argument).is_some(),
+                "{tool}:{argument}"
+            );
+        }
     }
 
     /// The pairs `install` declares are the arguments the relay's schemas call `element_number`,

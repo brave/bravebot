@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal } from './Modal'
-import type { FilesystemKey, KeptTrust, SettingsRules } from '../../shared/protocol'
-import { Alert, Button, Icon } from '../nala'
+import type { FilesystemKey, KeptTrust, RuleCheck as RuleChecked, RuleCheckFamily, SettingsRules } from '../../shared/protocol'
+import { Alert, Button, Dropdown, Icon, Input } from '../nala'
 import { IconButton } from './IconButton'
 import { ago } from './Sessions'
 import { middleTruncate } from '../truncate'
@@ -19,7 +19,8 @@ function GrantName({ name }: { name: string }): React.JSX.Element {
 interface Grants {
   /** `shownPath` is `path` spelled so a blank or whitespace-ended name is visible. */
   paths: { path: string; shownPath: string; integrity: string }[]
-  commands: { program: string; startedAs: string; args: string[]; display: string }[]
+  /** `directory` is the tree the command was vouched in, as held; null where it has no text spelling, which no revoke matches. `shownDirectory` is the same tree spelled for the screen (`.` for the workspace itself) and is only drawn. */
+  commands: { program: string; startedAs: string; args: string[]; directory: string | null; shownDirectory: string; display: string }[]
   /** The yes kept about this directory for later sessions (TRUST-23), read when this was asked. */
   remembered?: KeptTrust | null
   /** The rules this conversation opened under. Absent from an older bridge. */
@@ -53,10 +54,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
     <section className="grant-section">
       <h3>Remembered commands</h3>
       <p className="grant-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
-      {grants && grants.commands.length > 0 && <ul className="grant-list">{grants.commands.map((command) => <li className="grant-row" key={JSON.stringify(command)}>
-        <Icon name="window-console" /><GrantName name={command.display} />
-        <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, startedAs: command.startedAs, args: command.args } })}>Revoke</Button>
-      </li>)}</ul>}
+      {grants && grants.commands.length > 0 && <CommandPermissions commands={grants.commands} busy={busy} onRevoke={(command) => void request('permissions.revoke', { kind: 'command', command })} />}
       {grants?.commands.length === 0 && <p className="grant-empty"><Icon name="window-console" />No remembered command grants.</p>}
     </section>
     <section className="grant-section">
@@ -66,7 +64,116 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
       {grants && !grants.remembered && <p className="grant-empty"><Icon name="pin" />Nothing is kept for this directory.</p>}
     </section>
     <RulesInForce rules={grants?.settingsRules ?? null} />
+    <RuleCheck session={session} onProblem={setProblem} />
   </Modal>
+}
+
+/** The families `permissions.check` reads, each with what its field asks for. WebSearch takes no words. */
+export const RULE_CHECK_FAMILIES: [RuleCheckFamily, string][] = [
+  ['Read', 'path'],
+  ['Edit', 'path'],
+  ['Bash', 'program args'],
+  ['WebFetch', 'host or URL'],
+  ['WebSearch', 'No words for a web search'],
+  ['Mcp', 'server:tool'],
+]
+
+/** The words sent for what was typed: a command split on runs of whitespace, a web search none, and anything else the field as one word. */
+export function ruleCheckWords(family: RuleCheckFamily, text: string): string[] {
+  if (family === 'WebSearch') return []
+  if (family === 'Bash') return text.split(/\s+/).filter((word) => word !== '')
+  return [text]
+}
+
+/** Asks the bridge which of the session's rules decides the call. A refusal comes back as the bridge's own words. */
+export async function checkRule(session: string, family: RuleCheckFamily, text: string): Promise<{ answer: RuleChecked } | { problem: string }> {
+  try {
+    const answer = await window.bravebot.request<RuleChecked>('permissions.check', { session, family, words: ruleCheckWords(family, text) })
+    if (answer.error) return { problem: answer.error.message }
+    if (answer.ok) return { answer: answer.ok }
+    return { problem: 'The rule check got no answer. Try again.' }
+  } catch { return { problem: 'The rule could not be checked. Try again.' } }
+}
+
+/**
+ * Which rule from the conversation's settings decides a call, asked of the rules the
+ * conversation holds (CLI-30, PERM-12). It checks and changes nothing.
+ */
+export function RuleCheck({ session, onProblem }: { session: string; onProblem: (problem: string) => void }): React.JSX.Element {
+  const [family, setFamily] = useState<RuleCheckFamily>('Bash')
+  const [text, setText] = useState('')
+  const [answer, setAnswer] = useState<RuleChecked | null>(null)
+  const [busy, setBusy] = useState(false)
+  // A click on a Leo button reaches both its inner control and the host, so the second is ignored.
+  const checking = useRef(false)
+  const check = async () => {
+    if (checking.current) return
+    checking.current = true
+    setBusy(true); onProblem('')
+    const result = await checkRule(session, family, text)
+    if ('answer' in result) setAnswer(result.answer)
+    else { setAnswer(null); onProblem(result.problem) }
+    setBusy(false)
+    checking.current = false
+  }
+  return <RuleCheckForm family={family} text={text} busy={busy} answer={answer}
+    onFamily={(next) => { setFamily(next); setAnswer(null) }} onText={setText} onCheck={() => void check()} />
+}
+
+export function RuleCheckForm({ family, text, busy, answer, onFamily, onText, onCheck }: {
+  family: RuleCheckFamily; text: string; busy: boolean; answer: RuleChecked | null
+  onFamily: (family: RuleCheckFamily) => void; onText: (text: string) => void; onCheck: () => void
+}): React.JSX.Element {
+  const noWords = family === 'WebSearch'
+  const placeholder = RULE_CHECK_FAMILIES.find(([name]) => name === family)?.[1] ?? ''
+  return <section className="grant-section rule-check" data-test="rule-check">
+    <h3>Check a call</h3>
+    <p className="grant-note">Shows which rule from the settings files decides a call, using the rules this conversation opened under. Nothing is run or granted.</p>
+    <div className="rule-check-form">
+      <Dropdown value={family} size="small" disabled={busy} data-test="rule-check-family"
+        onChange={(detail) => { const next = RULE_CHECK_FAMILIES.find(([name]) => name === String(detail.value)); if (next) onFamily(next[0]) }}>
+        <span slot="label">Tool</span>
+        {RULE_CHECK_FAMILIES.map(([name]) => <leo-option key={name} value={name}>{name}</leo-option>)}
+      </Dropdown>
+      <Input value={noWords ? '' : text} size="small" placeholder={placeholder} disabled={busy || noWords} data-test="rule-check-words"
+        onInput={(event) => {
+          const detail = event as { value?: unknown; target?: EventTarget | null }
+          const value = typeof detail.value === 'string' ? detail.value
+            : detail.target && typeof detail.target === 'object' && 'value' in detail.target && typeof detail.target.value === 'string' ? detail.target.value
+              : null
+          if (value !== null) onText(value)
+        }}>Call</Input>
+      <Button size="small" kind="outline" onClick={onCheck} isDisabled={busy || (!noWords && !text.trim())} data-test="rule-check-submit">Check</Button>
+    </div>
+    {answer && <RuleCheckAnswer answer={answer} />}
+  </section>
+}
+
+const DECISIONS: Record<RuleChecked['decision'], string> = {
+  deny: 'Refused',
+  ask: 'Always asked',
+  allow: 'Not asked',
+  none: 'No rule matches, so the usual questions decide',
+  shortName: 'Refused: a command rule is in force, and an 8.3 short name cannot be matched against it',
+}
+
+/** The answer as rows: the decision, the rule as its file spelled it, the file or grant it came from, the person's reason, and a checkout rule that is not in force. */
+export function RuleCheckAnswer({ answer }: { answer: RuleChecked }): React.JSX.Element {
+  const rule = answer.shownRule ?? answer.rule
+  const file = answer.shownFile ?? answer.file
+  const away = answer.notInForce
+  return <div className="rule-check-answer" data-test="rule-check-answer" aria-live="polite">
+    <ul className="grant-list">
+      <li className="grant-row"><span className="rule-check-label">Decision</span><span className="rule-check-value" data-test="rule-check-decision" data-decision={answer.decision}>{DECISIONS[answer.decision] ?? answer.decision}</span></li>
+      {rule !== null && <li className="grant-row"><span className="rule-check-label">Rule</span><GrantName name={rule} /></li>}
+      {file !== null && <li className="grant-row" data-test="rule-check-file"><span className="rule-check-label">File</span>
+        {answer.granted ? <span className="rule-check-value">Granted for this workspace, written in <GrantName name={file} /></span> : <GrantName name={file} />}</li>}
+      {answer.reason !== null && <li className="grant-row"><span className="rule-check-label">Reason</span><span className="rule-check-value" data-test="rule-check-reason">{answer.reason}</span></li>}
+    </ul>
+    {away && <Alert type="warning" data-test="rule-check-not-in-force">
+      Not in force: <code>{away.shownRule ?? away.rule}</code> in <code>{away.shownFile ?? away.file}</code> would allow this once it is granted at the question.
+    </Alert>}
+  </div>
 }
 
 /**
@@ -88,6 +195,26 @@ export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>
 }
+
+/**
+ * The remembered commands, one row for each entry. An entry is keyed on the tree it was vouched in as well as the
+ * command, so two rows can read alike and differ in the tree drawn under them. Revoke names the tree, and the
+ * bridge withdraws only the entry held in it.
+ */
+export function CommandPermissions({ commands, busy, onRevoke }: { commands: Grants['commands']; busy: boolean; onRevoke: (command: { program: string; startedAs: string; args: string[]; directory: string | null }) => void }): React.JSX.Element {
+  return <ul className="grant-list">{commands.map((command) => <li className="grant-row" key={commandKey(command)}>
+    <Icon name="window-console" />
+    <div className="grant-text">
+      <GrantName name={command.display} />
+      <span className="grant-meta" data-test="command-tree">{`in ${command.shownDirectory}`}</span>
+      {command.directory === null && <span className="grant-meta" data-test="command-not-revocable">This tree is not text, so no revoke can name it.</span>}
+    </div>
+    <Button size="small" kind="plain-faint" isDisabled={busy || command.directory === null} onClick={() => onRevoke({ program: command.program, startedAs: command.startedAs, args: command.args, directory: command.directory })}>Revoke</Button>
+  </li>)}</ul>
+}
+
+/** All four fields of an entry's key, so two entries for one command in two trees are two rows. */
+export const commandKey = (command: Grants['commands'][number]): string => JSON.stringify([command.program, command.startedAs, command.args, command.directory])
 
 /** The root is the empty name, which a person is shown in words; any other rule is drawn as the agent spelled it. */
 const named = (grant: Grants['paths'][number]): string => grant.path === '' ? 'Project root' : grant.shownPath

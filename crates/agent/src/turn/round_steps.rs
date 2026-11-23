@@ -193,6 +193,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         task,
         cancel,
         hooks,
+        plugin_hooks,
         ..
     } = inputs;
     let read_output_is = || super::setup::read_output_is(task, plan.offers_read_output);
@@ -354,7 +355,9 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
                 reporter.inference_interval(interval);
                 state.spent.inference += interval.duration();
             }
-            state.account.add_check(released.usage, released.completed);
+            state
+                .account
+                .add_unbudgeted_call(released.usage, released.completed);
             if released.stopped.is_some() {
                 stopped = released.stopped;
             }
@@ -450,6 +453,8 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         match task.delegate {
             None => Some(AfterCompacting {
                 hooks,
+                plugin_hooks,
+                asker: &mut *confirmer,
                 workspace,
                 said: &mut *state.hook_notices,
             }),
@@ -939,8 +944,9 @@ pub(super) fn ask_about_open_tasks(
 /// say so to the person and to the planner. Whether it did.
 ///
 /// The delegate's own total, from the usage its backend reported for its rounds and the delegates
-/// it has collected, and not from the checks it made over content nobody vouched for, against a
-/// figure its spec fixed: no reply or tool result is read, and no check's reply is counted
+/// it has collected, and not from the checks it made over content nobody vouched for or the
+/// processors it called, against a figure its spec fixed: no reply or tool result is read, and no
+/// check's or processor's reply is counted
 /// (DELEGATE-29). Not `spend_limit::hold`, which asks a person, and a delegate has none. Called
 /// after a round and again once a delegate's spend has been collected, so a child's spend counts
 /// against its parent before the parent's next request.
@@ -1001,7 +1007,8 @@ pub(super) fn token_budget_notice(budget: u64, tokens: u64) -> String {
 /// Warn a delegate once that it is near its token budget, after at least one round of its own.
 ///
 /// Compares the delegate's token total, its context size and the figure its spec fixed; no reply
-/// or tool result is read and no check's reply is counted (DELEGATE-29). Nothing is sent to a run
+/// or tool result is read and no check's or processor's reply is counted (DELEGATE-29). Nothing is
+/// sent to a run
 /// that is not a delegate, that has no budget, or that has no tools left.
 pub(super) fn warn_near_token_budget(
     may_call_tools: bool,
@@ -1431,6 +1438,10 @@ pub(super) fn build_request<R: Reporter>(
 /// not the session's.
 pub(super) struct AfterCompacting<'a> {
     pub hooks: &'a bravebot_config::hooks::Hooks,
+    /// The hooks enabled plugins carry, asked about before one fires (PLUGIN-7).
+    pub plugin_hooks: &'a crate::plugin_hooks::PluginHooks,
+    /// Where the question about a plugin's hook is put.
+    pub asker: &'a mut dyn Confirmer,
     pub workspace: &'a Workspace,
     /// The sentences the hooks said went wrong, for the turn's account of itself (HOOK-7).
     pub said: &'a mut Vec<String>,
@@ -1704,6 +1715,33 @@ fn retrieve_if_due<S: Sink, R: Reporter>(
     }
 }
 
+/// Run the hooks declared for `compacted`, the person's own and the plugins' that were answered
+/// yes, and say which plugin's files no longer match the install (HOOK-2, HOOK-11).
+fn fire_compacted<R: Reporter>(
+    after: AfterCompacting<'_>,
+    session: &crate::chatgpt::AccountSession,
+    reporter: &mut R,
+) {
+    let joined = after.plugin_hooks.joined_with(
+        after.hooks,
+        bravebot_config::hooks::Moment::Compacted,
+        None,
+        session.plugin_hook_answers(),
+        after.asker,
+    );
+    after.said.extend(super::fire_hooks(
+        &joined,
+        bravebot_config::hooks::Moment::Compacted,
+        None,
+        after.workspace,
+        reporter,
+    ));
+    after.said.extend(super::say_stopped_plugins(
+        session.plugin_hook_answers(),
+        reporter,
+    ));
+}
+
 /// Shorten the conversation before a request when it is past the budget, or when the service
 /// refused the last one and there may be something to cut.
 ///
@@ -1814,13 +1852,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
                     (done.summarised, done.kept),
                 );
                 if let Some(after) = afterwards {
-                    after.said.extend(super::fire_hooks(
-                        after.hooks,
-                        bravebot_config::hooks::Moment::Compacted,
-                        None,
-                        after.workspace,
-                        reporter,
-                    ));
+                    fire_compacted(after, session, reporter);
                 }
             }
             // Nothing to shorten yet, which is the ordinary answer and not worth a word.
@@ -2122,6 +2154,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         task,
         cancel,
         hooks,
+        plugin_hooks,
         prompt_notices,
         ..
     } = inputs;
@@ -2159,10 +2192,20 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // The name is the one dispatch just matched on, which selects the entries that
     // fire and reaches no process: what a hook is told is the moment and nothing else.
     state.hook_notices.extend(fire_hooks(
-        hooks,
+        &plugin_hooks.joined_with(
+            hooks,
+            bravebot_config::hooks::Moment::ToolFinished,
+            Some(&call.function.name),
+            task.account_session().plugin_hook_answers(),
+            &mut confirming.turn(),
+        ),
         bravebot_config::hooks::Moment::ToolFinished,
         Some(&call.function.name),
         workspace,
+        reporter,
+    ));
+    state.hook_notices.extend(super::say_stopped_plugins(
+        task.account_session().plugin_hook_answers(),
         reporter,
     ));
     // What a hook on a question drawn during this call had to say, which is the person's to
@@ -2214,14 +2257,16 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         .saturating_sub(waited);
     // Everything a call spent on the model is the turn's total, so a turn that did most of its work
     // in a processor, an advisor or a delegate does not report having cost almost nothing.
-    // A check over content nobody vouched for is the turn's spend and no part of what a delegate's
-    // budget counts: which usage it is comes from the tool that made it, never from what it said
-    // (DELEGATE-29). A processor's, an advisor's and a delegate's usage is counted in both, and
-    // what a processor reads is the same open question as a check's (#4013).
+    // A check over content nobody vouched for and a processor are the turn's spend and no part of
+    // what a delegate's budget counts: which usage it is comes from the tool that made it, never
+    // from what it said (DELEGATE-29, PROC-16). An advisor's and a delegate's usage is counted in
+    // both, since neither reads content nobody vouched for.
     // A request only where the call waited on the model and was not stopped; a tool that did not
     // call a model has no usage.
-    match output.usage_is_a_check {
-        true => state.account.add_check(output.usage, output.requested()),
+    match output.usage_is_unbudgeted {
+        true => state
+            .account
+            .add_unbudgeted_call(output.usage, output.requested()),
         false => state.account.add_call(output.usage, output.requested()),
     }
     reporter.spent(crate::outcome::Spent {
@@ -2243,6 +2288,15 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // Kept in the order asked, so the last call for a kind is the one that stands.
     if let Some(set) = output.link.clone() {
         state.links.push(set);
+    }
+    // The link an item the planner's own command created gives the session, worked out from the
+    // commands and never from what they printed (PANEL-18). A call is read against what an earlier
+    // call created before its own creation is noted, so what a body names is not taken for it.
+    if let Some(set) = state.inferring.named(&output.references) {
+        state.links.push(set);
+    }
+    if let Some(kind) = output.created {
+        state.inferring.created(kind);
     }
     // What the call's arguments named, reported as they are found so the list is current while the
     // turn runs and a turn that then fails has handed it over (PANEL-16).

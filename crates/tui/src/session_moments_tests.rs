@@ -54,10 +54,16 @@ fn the_opening_screen_is_drawn_before_a_start_hook_holds_the_first_prompt_back()
     let mut moments = SessionMoments::read(Some(&state), &root);
     let mut hook_had_run_at_each_draw = Vec::new();
 
-    start_the_session(&mut session, &mut moments, |_| {
-        hook_had_run_at_each_draw.push(log.exists());
-        Ok(())
-    })
+    start_the_session(
+        &mut session,
+        &mut moments,
+        &mut (),
+        |(), _| {
+            hook_had_run_at_each_draw.push(log.exists());
+            Ok(())
+        },
+        |(), moments| moments.started(),
+    )
     .expect("the start");
 
     assert_eq!(
@@ -89,10 +95,16 @@ fn no_early_frame_is_drawn_where_no_start_hook_will_run() {
     let mut moments = SessionMoments::read(Some(&state), &root);
     let mut frames = 0;
 
-    start_the_session(&mut session, &mut moments, |_| {
-        frames += 1;
-        Ok(())
-    })
+    start_the_session(
+        &mut session,
+        &mut moments,
+        &mut (),
+        |(), _| {
+            frames += 1;
+            Ok(())
+        },
+        |(), moments| moments.started(),
+    )
     .expect("the start");
 
     assert_eq!(
@@ -122,9 +134,23 @@ fn a_start_hook_that_could_not_run_is_noted_once_however_many_conversations_open
     let mut moments = SessionMoments::read(Some(&state), &root);
 
     let mut first = Session::new("none");
-    start_the_session(&mut first, &mut moments, |_| Ok(())).expect("the start");
+    start_the_session(
+        &mut first,
+        &mut moments,
+        &mut (),
+        |(), _| Ok(()),
+        |(), moments| moments.started(),
+    )
+    .expect("the start");
     let mut resumed = Session::new("none");
-    start_the_session(&mut resumed, &mut moments, |_| Ok(())).expect("the second start");
+    start_the_session(
+        &mut resumed,
+        &mut moments,
+        &mut (),
+        |(), _| Ok(()),
+        |(), moments| moments.started(),
+    )
+    .expect("the second start");
 
     let said = said_in_the_transcript(&first);
     assert_eq!(said.len(), 1, "{said:?}");
@@ -138,4 +164,111 @@ fn a_start_hook_that_could_not_run_is_noted_once_however_many_conversations_open
         said_in_the_transcript(&resumed)
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// PLUGIN-7, S10, S11 in the full-screen interface at `session-started`: a plugin's hook on it is
+/// asked about, after the opening screen is drawn (so the question has a screen under it), and runs
+/// after the yes and not before. The question is put through the confirmer the interface hands the
+/// moment, here one that records the question and the screen state when it came. The regressions it
+/// rejects are a question put before any screen was drawn, a hook run before it was answered, and a
+/// start that never reaches the plugin's hook.
+#[cfg(unix)]
+#[test]
+fn a_plugin_hook_at_the_start_is_asked_after_the_screen_is_up_and_runs_after_the_yes() {
+    use bravebot_agent::confirm::{AnswersHooks, Decision};
+    use std::os::unix::fs::PermissionsExt;
+    let (root, state) = a_checkout("session-moments-plugin-start");
+    let marker = root.join("marker");
+    let source = root.join("source");
+    std::fs::create_dir_all(&source).expect("source");
+    std::fs::write(
+        source.join("plugin.toml"),
+        "name = \"demo\"\nversion = \"1.0.0\"\ndescription = \"A demo\"\nhooks = \"hooks.json\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        source.join("hooks.json"),
+        r#"{"hooks":[{"on":"session-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#,
+    )
+    .expect("hooks");
+    let script = source.join("hook.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    )
+    .expect("script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    bravebot_agent::plugins::install(&source, &state).expect("install");
+
+    let mut session = Session::new("none");
+    let mut moments = SessionMoments::read(Some(&state), &root);
+    moments.keep_answers(session.account_session().clone());
+    let mut person = AnswersHooks::new(Decision::Approve);
+    let mut drawn_before_the_question = None;
+    let mut ran_before_the_question = None;
+
+    start_the_session(
+        &mut session,
+        &mut moments,
+        &mut (
+            &mut person,
+            &mut drawn_before_the_question,
+            &mut ran_before_the_question,
+        ),
+        |(_, drawn, _), _| {
+            **drawn = Some(true);
+            Ok(())
+        },
+        |(person, drawn, ran), moments| {
+            **ran = Some(marker.exists());
+            let _ = drawn;
+            moments.started_asking(&mut **person)
+        },
+    )
+    .expect("the start");
+
+    assert_eq!(
+        drawn_before_the_question,
+        Some(true),
+        "no screen was drawn first"
+    );
+    assert_eq!(
+        ran_before_the_question,
+        Some(false),
+        "ran before it was answered"
+    );
+    assert_eq!(person.asked.len(), 1, "{:?}", person.asked);
+    assert_eq!(person.asked[0].moment, "session-started");
+    assert!(marker.exists(), "the hook did not run after the yes");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// PLUGIN-7 in the full-screen interface at `file-changed`: the loop puts a plugin's question only
+/// where the box holds no draft, so a key typed into a draft is never taken as the answer, and not
+/// over the Sessions screen. The loop needs a real terminal, so this is the condition it tests. The
+/// regressions it rejects are a question put over a draft in the box, one put over the Sessions
+/// screen, and one never put at all.
+#[test]
+fn a_plugin_question_is_put_only_with_an_empty_box_and_no_sessions_screen() {
+    let mut session = Session::new("none");
+    assert!(
+        may_put_a_plugin_question(&session),
+        "an empty box was not served"
+    );
+
+    session.paste("half a sentence");
+    assert!(
+        !may_put_a_plugin_question(&session),
+        "a question was put over a draft"
+    );
+
+    let mut over_the_sessions_screen = Session::new("none");
+    over_the_sessions_screen.open_sessions_screen(
+        crate::sessions_screen::fixtures::sessions_screen_of(Vec::new()),
+    );
+    assert!(over_the_sessions_screen.input().is_empty());
+    assert!(
+        !may_put_a_plugin_question(&over_the_sessions_screen),
+        "a question was put over the Sessions screen"
+    );
 }

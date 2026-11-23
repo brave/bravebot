@@ -40,7 +40,10 @@ that is merely carried.
 | [`propose_rule`](#propose_rule) | `scope` | `text`, `reason` | **yes, that is what it is for** |
 | [`set_link`](#set_link) | `kind`, `url` | none | no |
 
-Five more are offered only where they mean something.
+Six more are offered only where they mean something.
+[`web_search`](#web_search) goes to a session whose settings name a Brave Search API key, as a variable
+in `webSearch.env` that holds text or a file in `webSearch.keyFile`, so not
+to one without it and not to a delegate.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
@@ -146,7 +149,9 @@ The reason is that a screenshot carries whatever words are in it, so a picture r
 context only if you put it there (a picture you dropped on the terminal) or a check looked at it and
 you let it through. A path in model output is neither. What kind of file it is comes from the extension and never from the
 bytes, so a file cannot become a picture by holding something that looks like one, and a picture
-cannot become text by being called `.txt`.
+cannot become text by being called `.txt`. That is decided from a name the agent typed. A file
+named with `path_ref` is not sorted by the extension of its name, which the agent was not shown, so
+once you have vouched for it, it is read by what it holds like any other file.
 
 **A read the planner may not see does not open the file.** Where the content would be quarantined,
 you are offered the chance to vouch for that one file at the moment it matters, unless the path names
@@ -231,9 +236,10 @@ The glob is literal and the matcher does not backtrack. Matching is case-sensiti
 group such as `{r,R}eadme*` covers both cases. A call with a `pattern` whose result holds no file
 says so, and names a character class, an extended glob or a leading `!` as syntax the matcher does
 not have. A truncated listing says it was truncated. A listing given a `depth` takes at most 200
-files from any one directory and names a directory it cut with how many of its files it left out;
-where the names are quarantined, that count comes beside the directory's reference. Listing it with
-no depth shows the rest, up to the cap of 2,000 entries.
+files and at most 200 subdirectories from any one directory, and names a directory it cut with how
+many of its files and subdirectories it left out; where the names are quarantined, those counts come
+beside the directory's reference. Listing it with no depth shows the rest of its files and the
+files under its subdirectories, up to the cap of 2,000 entries, and names no subdirectory.
 
 ## `repo_map`
 
@@ -250,10 +256,11 @@ declaration by the line that opens it, so a signature split over lines is shown 
 Java, C and C++ it finds types and macros, not functions or methods. A name is ranked by how many
 other files mention it, so the ranking is a guide, not a call graph.
 
-Only files you vouched for are read. Files you did not are counted and never named, a file holding
-what looks like a credential contributes nothing, and a file a `deny` rule covers is not mapped. A map
-that shows fewer declarations than it found, or stopped at a cap, says so: map a subdirectory, or raise
-`budget`.
+Only files you vouched for are read. Files you did not are counted and never named, and they do not
+count toward the cap on files, so what a directory you did not vouch for holds does not decide which
+of your files the map reaches. A file holding what looks like a credential contributes nothing, and a
+file a `deny` rule covers is not mapped or counted toward the cap. A map that shows fewer
+declarations than it found, or stopped at a cap, says so: map a subdirectory, or raise `budget`.
 
 ## `search`
 
@@ -549,7 +556,9 @@ sentence names the routes that are open: the whole file with `write_file`, an ed
 your vouching for the path. It names `write_file` and `run` only when the session offers them.
 Where a `read_file` of the file would ask you to vouch for it, the sentence names that read and then
 `edit_file`. In bypass mode the read is vouched for without asking anybody, so the sentence names
-the read and does not send the agent to you.
+the read and does not send the agent to you. A file the agent names with `path_ref` is never sent to
+a `read_file` by this sentence, because whether that read would ask you depends on the name behind
+the reference, which the agent was not shown. It is told that vouching for the path is yours to do.
 
 ### Notebook cells
 
@@ -558,7 +567,9 @@ by a passage. `cell` is refused beside `old_text`, `edits` or `replace_all`, on 
 notebook, and for a number the notebook has no cell for. The notebook is written back in the layout
 Jupyter writes, with every other cell, its metadata and the format version kept, and you approve the
 diff. Replacing a code cell drops that cell's saved outputs and execution count, since they describe
-source that is gone, and the diff shows them going.
+source that is gone, and the diff shows them going. A notebook named with `path_ref` is refused in
+the same words as any other file nobody vouched for, whatever the name behind the reference ends in,
+and `cell` works on one you have vouched for.
 
 ## `apply_checkout`
 
@@ -873,6 +884,45 @@ Markdown is the only type ranked. A site holding no Markdown answers with whatev
 answered without the header, so a page that is only ever HTML arrives as it did before. Ranking HTML
 above the wildcard would cost more than sending no header at all, since an endpoint that serves both
 a compact form and a full page reads that as a request for the page.
+
+## `web_search`
+
+Searches the web through the [Brave Search API](https://api-dashboard.search.brave.com/documentation).
+It is offered only where a variable named in `webSearch.env` holds a key or `webSearch.keyFile` names a
+key file ([setting it up](../customize/configuration.md#websearchenv)). **You approve every search,
+unless a `WebSearch`
+rule allows it.**
+
+| Parameter | |
+|---|---|
+| `service` | `web`, `news`, `videos`, `images`, `llm_context` (page text prepared for a model), `suggest`, `spellcheck` or `places` |
+| `q` | the query, at most 600 characters and 75 words for `web` and `llm_context`, and 400 and 50 for the others. `places` may go without one |
+| the vendor's own | `country`, `search_lang`, `ui_lang`, `count`, `offset`, `safesearch`, `spellcheck`, `freshness`, `text_decorations`, `result_filter`, `units`, `extra_snippets`, `operators`, `operators_fallback`, `include_fetch_metadata`, `maximum_number_of_urls`, `maximum_number_of_tokens`, `context_threshold_mode`, `maximum_number_of_tokens_per_url`, and for `places` `latitude`, `longitude`, `location` and `radius`. Each service takes the ones the vendor documents for it, with the vendor's ranges |
+| `read` | `true` to ask for the results in the result of this call, which is given only where the session is offered `vet_content`, as for [`fetch_url`](#fetch_url) |
+
+A value outside the documented type, range or set is refused before you are asked and before anything
+is sent, and the refusal names the argument. Goggles, answers, rich results and local points of
+interest are not offered, and no argument takes a URL or a host.
+
+**What comes back is quarantined.** The results are a reference, untrusted and public, as a fetched
+page is: the planner may hand it to [`spawn_processor`](#spawn_processor) or write it to a file with
+[`write_file`](#write_file), and cannot read it or be told what it says.
+
+**You are shown the query.** The prompt draws the search URL, with the query in it, and the host it
+will reach, which is always `api.search.brave.com`. In the terminal it is drawn as a fetch is, under
+the words of a fetch. Your answer is for that one search and nothing is remembered. A `WebSearch` rule in
+`allow` answers the prompt, and `deny` refuses without asking. The rule takes no specifier, and a
+`WebFetch` rule does not cover a search. An `allow` rule stops answering once the planner has been
+shown content of yours that is private, since a query may carry some, and the search asks then.
+
+**The key goes in one header to one host.** It is read from the variable or the file when a search is
+made, a variable that holds text before the file, and sent as
+`X-Subscription-Token` to `api.search.brave.com`. A variable you name in `webSearch.env` is withheld
+from every program the [`run`](#run) tool starts, since a program it starts inherits the environment.
+A redirect to another host is refused without
+asking, and the key does not go there. A failure is reported in bravebot's own words, by its kind
+(a refused key, a plan that does not cover the request, a rejected request, a rate limit, no answer);
+nothing of what the service wrote is shown to the planner.
 
 ## `download_url`
 

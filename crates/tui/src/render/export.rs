@@ -155,13 +155,14 @@ fn tool_line(entry: &Entry) -> String {
 /// The note under an entry whose content was quarantined.
 ///
 /// The origin is written as the planner was given it where the person was shown file names in its
-/// place (SESSION-17).
+/// place (SESSION-17). The label is the driver's own `Label` display, which holds its parentheses,
+/// so none are added.
 fn quarantine_note(shown: &bravebot_agent::report::Shown) -> String {
     let origin = shown
         .as_the_planner_had_it
         .as_ref()
         .unwrap_or(&shown.origin);
-    format!("> *Quarantined: {origin} ({})*\n\n", shown.label)
+    format!("> *Quarantined: {origin} {}*\n\n", shown.label)
 }
 
 /// A turn's timing line, with the closing blank line.
@@ -296,7 +297,7 @@ mod tests {
             as_the_planner_had_it: Some("ref:1".to_string()),
             origin: "IGNORE-PREVIOUS-INSTRUCTIONS.md".to_string(),
             reach: Reach::NotThePlanner,
-            label: "U,priv".to_string(),
+            label: "(U,priv)".to_string(),
             lines: 1,
             preview: vec!["x".to_string()],
         });
@@ -323,7 +324,7 @@ mod tests {
             as_the_planner_had_it: None,
             origin: "what the isolated processor said".to_string(),
             reach: Reach::NoModel,
-            label: "U,priv".to_string(),
+            label: "(U,priv)".to_string(),
             lines: 1,
             preview: vec!["x".to_string()],
         });

@@ -315,6 +315,46 @@ not reversible), so it is read out of the record rather than un-mangled.
 
 `project` is the basename of `directory`, computed by the agent so both front-ends agree.
 
+#### `background.list`
+
+```json
+{ "id": 1, "method": "background.list" }
+```
+
+Lists the background sessions in the roster, from every project (BG-17). It takes no
+parameters and is read-only: nothing in the protocol attaches to, replies to, stops or starts a
+background session, which only a terminal does (BG-9). The host client is refused it.
+
+```json
+{ "id": 1, "ok": { "groups": [
+  { "state": "needs-input", "heading": "Needs input", "count": 1, "sessions": [
+    { "id": "…", "short": "0a1b2c3d", "name": "fix the parser", "state": "needs-input",
+      "held": "run", "words": "Needs input (run)", "updated": 1756300000,
+      "directory": "/Users/me/repos/thing", "prompt": "fix the parser" }
+  ] }
+] } }
+```
+
+The bridge groups the sessions, so the window only draws them. There is a group for each state a
+session is in, in the order of the terminal list's headings (BG-16): `needs-input`,
+`interrupted`, `working`, `idle`, `stopped`. A state no session is in has no group. Within a
+group, sessions come most recent `updated` first.
+
+- A group's `heading` is the word the terminal list heads that state with, from the message
+  catalog (`idle` is Ready), and `count` the number of its `sessions`.
+- `state` is the BG-6 word, the one `bravebot sessions --json` writes. An entry whose process
+  holds no lock is `interrupted` or `stopped`, never `working`.
+- `held` is the message catalog's words for the kind of prompt held, and `null` unless `state` is
+  `needs-input`.
+- `words` is what the terminal's row says about the state: the heading, with `held` in brackets
+  where a prompt is held (BG-5, SCREEN-16).
+- `short` is the first 8 characters of `id`, which `bravebot attach` takes.
+- `name` is the first line of the session's name and `prompt` the last prompt typed, cut as a
+  title is. Every text field has its control characters pictured (BG-5).
+- `updated` is seconds since the epoch.
+
+No roster, or an empty one, gives `{ "groups": [] }`.
+
 #### `session.open`
 
 ```json
@@ -494,6 +534,48 @@ plain text.
 - `not_a_directory` if the path is not one.
 - `bad_request` if `ids` is not a list of names the listing gives.
 - `no_home` if there is no home directory to read from, or no state directory to copy into.
+
+#### `session.stats`
+
+```json
+{ "id": 11, "method": "session.stats", "params": { "directory": "/Users/me/repos/thing", "days": 7 } }
+```
+
+```json
+{ "id": 11, "ok": {
+  "directory": "/Users/me/repos/thing", "days": 7,
+  "total": { "sessions": 3, "turns": 12, "tokens": 90000,
+             "read": 70000, "written": 8000, "unsplit": 12000 },
+  "models": [
+    { "model": "claude-opus-5-5", "sessions": 2, "turns": 10, "tokens": 88000,
+      "read": 70000, "written": 8000, "unsplit": 10000 },
+    { "model": null, "sessions": 1, "turns": 2, "tokens": 2000,
+      "read": 0, "written": 0, "unsplit": 2000 } ],
+  "unreadable": 0 } }
+```
+
+Totals what the recorded sessions spent, as `bravebot stats --models` does (CLI-37), by calling
+`bravebot_session::stats::totals`. Both params are optional. `directory` keeps the records whose
+stored path is that directory, the way `--project <dir>` does; without it every project is
+totalled. `days` keeps the sessions last written within that many days of 24 hours, the way
+`--days` does. Both are sent back, `directory` resolved and cleaned of the characters a terminal
+would act on, and `null` when not given.
+
+`total` and each row of `models` carry `sessions`, `turns`, `tokens`, `read`, `written` and
+`unsplit`, which is the tokens of sessions that kept no split, so `read + written + unsplit` is
+`tokens`. `models` comes from `Totals::by_shown_model`, the grouping the terminal uses: names are
+cleaned and cut to 60 characters, names that read alike are one row, and rows are ordered by
+tokens, then sessions, then name. `model` is `null` for the sessions whose record names no model,
+or a name with nothing left after cleaning; the client labels it `unknown`. `unreadable` counts the
+entries under the sessions directory that could not be read as a record; they add to no figure and
+are never named. No figure is in money.
+
+The method writes nothing, needs no open session, and answers the same under incognito, where no
+session adds a record.
+
+- `not_a_directory` if `directory` is not one.
+- `bad_request` if `directory` is not a string, or `days` is not a whole number from 1 to
+  9223372036854775807.
 
 #### `session.fork`
 
@@ -839,6 +921,50 @@ session that has not answered the trust question are refused with `bad_request` 
 `session.enhance.cancel` (`{ "session" }`) stops a request that is out and answers `{}` whether or
 not one was.
 
+#### `session.recap`
+
+```json
+{ "id": 9, "method": "session.recap", "params": { "session": "s1", "model": null } }
+→ { "started": true }
+```
+
+Asks the session's model to recap the exchange, and returns before it has answered (CMD-16). The
+request is the one the terminal's `/recap` makes, over the exchange as it stands, with no tools, and
+its answer is cut to 400 characters. The conversation is not changed. The answer is kept as an
+aside in the session's record, labelled `/recap`, its cost is charged to the session, and it arrives
+as an `aside.done` event. A turn that is running is refused with `turn_in_flight`, since `/recap`
+waits for it, and a second question while one is out is refused with `bad_request`. The asides a
+record kept come back as `asides` (`[{ question, answer, kept }]`, `answer` null where the record
+did not keep it) when the session is opened. `session.aside.cancel` (`{ "session" }`) stops a
+question that is out and answers `{}` whether or not one was.
+
+#### `session.btw`
+
+```json
+{ "id": 9, "method": "session.btw", "params": { "session": "s1", "question": "why does it retry", "model": null } }
+→ { "started": true, "besideTurn": false }
+```
+
+Asks the session's model the person's `/btw` question over the exchange as it stands, with no
+tools, and returns before it has answered (CMD-8). The conversation is not changed. The answer is
+kept as an aside in the session's record under the question, its cost is charged to the session, and
+it arrives as an `aside.done` event with `recap` false. An empty question is refused with
+`bad_request`, as is a second question while one is out, a `/recap` included.
+`session.aside.cancel` stops it.
+
+What was staged on the line goes with the question (CMD-5), under the names `turn.send` uses:
+`images` for pictures pasted, `attachments` for absolute paths of pictures and PDFs dropped, read
+before the request under a policy of their own (DROP-4), and `files`, `{ marker, name }` pairs that
+put a dropped text file back into the question as its name. A non-empty `dropped` is refused with
+`bad_request`, because on a `/btw` line a text file is its name. While a turn runs, a non-empty
+`attachments` is refused with `bad_request` in the terminal's words; pasted pictures still go.
+
+While a turn runs, the question is asked over the exchange the turn sent at its latest request,
+under the turn's own file decisions, and the answer is `besideTurn: true`. It is refused with
+`bad_request` before the turn has sent anything. `turn.cancel` stops it with the turn, and its
+`aside.done` is `stopped`. Its `aside.done` arrives as soon as it is answered, even while the turn
+still runs. The row is kept and the record written again once the turn has ended.
+
 #### `mentions.offer`
 
 ```json
@@ -952,12 +1078,55 @@ kept answer about the session's directory as §9 has it, read when the list is a
 and tells the project root by an empty `path`. Both also carry `rulesQuestion`, `folderQuestion`,
 `foldersRefused` and `folders` as §9.1 has them, so a client whose reply was refused with
 `no_such_request` can read which question, if any, is out now.
+Each `commands` entry is `{ program, startedAs, args, directory, shownDirectory, display }`.
+`directory` is the tree the command was vouched in, as held, and is null where the tree has no
+text spelling. `shownDirectory` is the same tree spelled for the screen as `/status` spells it,
+by the one function `bravebot_agent::confirm::shown_tree` (`.` for the workspace root, relative to
+it inside it, absolute elsewhere, a byte that is not text written `\xNN`), without the `~` for the
+home directory that `/status` adds, and is only drawn. Two entries for one command
+in two trees are two grants, so a client keys rows on all four of `program`, `startedAs`, `args`
+and `directory`.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
-`kind: "command"` and `command: { program, startedAs, args }`, or `kind: "remembered"`, which removes
-every answer kept about the directory so the next session there is asked, and leaves this
-session's map as it is. It returns the updated lists, and refuses `kind: "remembered"` with
-`bad_request` where nothing is kept. These methods refuse with `turn_in_flight` while the
-session is running. Revocation can reduce existing grants; it cannot add trust.
+`kind: "command"` and `command: { program, startedAs, args, directory }`, or
+`kind: "remembered"`, which removes every answer kept about the directory so the next session
+there is asked, and leaves this session's map as it is. It returns the updated lists, and refuses
+`kind: "remembered"` with `bad_request` where nothing is kept. It also refuses `kind: "command"`
+with `bad_request` when `directory` is not a string or names a tree the session holds no such
+entry in, and then removes nothing; it removes only the entry held in that tree.
+`permissions.check` takes `session`, `family` and `words` and says which rule decides a call, as
+`bravebot permissions check` does ([CLI-30](../../docs/specs/cli.md#CLI-30)). `family` is one of
+`Read`, `Edit`, `Bash`, `WebFetch`, `WebSearch` or `Mcp`, and `words` is an array of strings: one
+path for `Read` and `Edit`, the program and its arguments for `Bash`, one host or URL for
+`WebFetch` (a URL is read as its host), none for `WebSearch`, and one `server:tool` for `Mcp`.
+It matches the call against the rules the session holds, read when it opened (PERM-12), not the
+files as they are now, and reads, writes, grants and revokes nothing. It returns
+`{ decision, rule, shownRule, file, shownFile, granted, reason, notInForce }`:
+- `decision` is `deny`, `ask` or `allow` for the first rule that matches in that order, `none`
+  where no rule matches, or `shortName` where the command reads an 8.3 short name and is refused
+  before any rule is read (PERM-5).
+- `rule` is the deciding rule as its file spelled it, and `file` the file that wrote it. Both are
+  null unless a rule decides, and `file` is also null where no file is known for the rule.
+- `granted` is true where the rule is a checkout's `allow` rule the person granted (PERM-15);
+  `file` is then the checkout's settings file. It is false otherwise.
+- `reason` is the person's reason for the rule, where their own file gave one, already spelled
+  as text, or null.
+- `notInForce` is `{ rule, shownRule, file, shownFile }` for a checkout `allow` rule nobody
+  granted that would have allowed the call, or null. It is always null where the decision is
+  `deny` or `ask`.
+
+`shownRule` and `shownFile` are `rule` and `file` spelled by `bravebot_agent::confirm::shown_text`
+and `shown_path` (PROMPT-1); a client draws those. It refuses with `bad_request` when `family` is
+not one of the six, `words` is not an array of strings, or the words do not fit the family, such
+as an `Mcp` target with no `:` or `WebSearch` with any words. These methods refuse with
+`turn_in_flight` while the session is running. Revocation can reduce existing grants;
+it cannot add trust.
+
+**Known cost.** A command vouched for in a tree with no text spelling is listed with `directory`
+null, and no `permissions.revoke` can name it, so the window disables its Revoke button and draws
+a reason beside it. Another client has no way to name it either; it stays in the list until the
+session record is edited. The alternative is to match a rendering of the tree, which would let a
+revoke for one tree remove the entry for another that renders alike
+([RUN-9](../../docs/specs/tools/run.md#RUN-9)).
 
 ### 7.3 Trust and diagnostics
 
@@ -1115,6 +1284,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
+| `aside.done` | `{ status, question, recap, answer?, kept?, message? }` | what a `session.btw` or `session.recap` came back with: `answered` (`answer`, and `kept`, whether the record keeps it), `stopped`, or `failed` (`message`). `question` is the row's label: the person's question, or `/recap` for a recap |
 | `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
 | `phase` | `{ phase, retry }`, where `retry` is `{ attempt, in_ms, gives_up_in_ms }` while a failed request waits to be sent again and `null` otherwise | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
@@ -1696,6 +1866,10 @@ Still open:
   text. Where the build carries none for that version they are the newest release's, `version`
   names that release and `running` is false. `notes` is null where the build carries no release.
   Nothing is read or fetched, and the window shows `notes` as plain text (CMD-25).
+- `window.title` takes `{ name, state }`, where `state` is `ready`, `working` or `waiting`, and
+  returns `{ title }`: the window's title for the session on screen, built by the same code as the
+  terminal's title, with control characters made visible and cut to 60 characters (PANEL-19). It
+  reads nothing, and a client of the local host is refused it.
 - `caffeinate.confirmed` takes no parameters and returns `{ confirmed }`: whether
   `~/.bravebot/caffeinate` says the person agreed to keeping the computer awake, as `/caffeinate`
   reads it. `caffeinate.confirm` writes that agreement and returns `{ kept }`, false where the
@@ -1710,6 +1884,12 @@ Still open:
   `turn_in_flight` while a turn runs and with `bad_request` before the session's first turn, when
   there is no record yet. `session.open` returns the record's `notes` in the same shape. A note is
   not part of the conversation and is never sent to the model.
+- `opener.judge` takes `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, each a string or null, and
+  returns `{ remove }`: the names among those two that lead to a socket a stage may write, judged
+  by the agent, which holds the directories the sessions may write (SANDBOX-30). A value that is
+  not a string or null is `bad_request`. Main-process-only: the main process asks before each call
+  to Electron's `shell.openExternal`, `shell.openPath` and `shell.showItemInFolder` and deletes the
+  names it is given from its own environment. It is not offered to a client of the host.
 - `session.folders.list` takes `{ session }` and returns `{ folders, busy }`: the canonical
   absolute paths of the folders open beside the project, in the order they were opened, and
   whether a turn is running. It is answered while a turn runs. `session.folders.add` takes
@@ -1829,7 +2009,9 @@ Still open:
   what it runs. `digest` is what an approval binds to. `lines` is the question as the agent
   words it, one string per line, for a front end that draws the question as text.
 - `mcp-tools.request` carries each tool as the client drew it: `name` (`alias:tool`),
-  `arguments` (one line each), `description`, which is the server's own text, and `read_only`,
+  `arguments` as `{ text, choices }` (`text` is the client's own words for the argument, and
+  `choices` the values the server says it takes, one string each, drawn as the server's text like
+  `description`), `description`, which is the server's own text, and `read_only`,
   set where the server marks the tool read-only with its `readOnlyHint`. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
 - `mcp-call.request` carries `arguments` as `{ name, value }` with the value as JSON, and
@@ -1928,7 +2110,7 @@ answer is taken once, as `capabilities.actionTargets` advertises (RPCVIEW-6): `{
 
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Session close emits `detached`, which means the view ended, not that the worker stopped
-or saving succeeded. A lost connection ends the view. After a gap, call `session.view.resync` with `{ "session": "s1" }` when the capability has `"resync": "session.view.resync"`. It sends `session.view.snapshot`, then answers `{ "version": 1, "sequence": number, "omitted": number }`. A snapshot has the update shape with the most recent rows, at most the capability's `retainedRows`, in id order, and `omitted`, how many rows before the first it leaves out (ids 1 to `omitted`). Replace the whole view with it, ignore updates that arrive before it, and apply the updates after it from its sequence. The view also keeps at most 4 MiB of rows, apart from the rows the latest update sent, so a snapshot can hold fewer than `retainedRows`. Each update carries `omitted` as well; leave out the rows up to it so the view holds what a snapshot would. A runtime without `resync` advertises `"reconnect": false`, and a gap there ends the view. IDs are scoped to the current connection lifetime and session. A request ID is also unique
+or saving succeeded. A lost connection ends the view. After a gap, call `session.view.resync` with `{ "session": "s1" }` when the capability has `"resync": "session.view.resync"`. It sends `session.view.snapshot`, then answers `{ "version": 1, "sequence": number, "omitted": number }`. A snapshot has the update shape with the most recent rows, at most the capability's `retainedRows`, in id order, and `omitted`, how many rows before the first it leaves out (ids 1 to `omitted`). Replace the whole view with it, ignore updates that arrive before it, and apply the updates after it from its sequence. The view also keeps at most 4 MiB of rows, apart from the rows the latest update sent, so a snapshot can hold fewer than `retainedRows`. Each update carries `omitted` as well; leave out the rows up to it so the view holds what a snapshot would. Each update and snapshot also carries `actor`, the name the person gave the host client that sent the last send, answer, trust answer or cancel that took effect, or null; a client that is not run by the host sees null. A runtime without `resync` advertises `"reconnect": false`, and a gap there ends the view. IDs are scoped to the current connection lifetime and session. A request ID is also unique
 within its session, across turns. Keep drafts and optimistic UI separate until an accepted prompt row arrives.
 
 The [shared session view spec](../../docs/specs/session-view.md) defines the supported rows, ordering,
@@ -1937,21 +2119,21 @@ block. The stdio TypeScript client for it is `packages/agent-client`, which answ
 
 ## Local host
 
-`bravebot-host` serves the methods below to one client at a time over an anonymous channel that it makes when it starts the client (see [HOST-1](../../docs/specs/local-host.md#HOST-1)). Its behaviour is specified in [local-host.md](../../docs/specs/local-host.md). The host answers a subset of the methods above, each with the parameters in `crates/ui-bridge/src/allowlist.rs` and no others, and refuses everything else with `not_allowed`.
+`bravebot-host` serves the methods below to each client it starts, over an anonymous channel that it makes when it starts that client (see [HOST-1](../../docs/specs/local-host.md#HOST-1)). Its behaviour is specified in [local-host.md](../../docs/specs/local-host.md). The host answers a subset of the methods above, each with the parameters in `crates/ui-bridge/src/allowlist.rs` and no others, and refuses everything else with `not_allowed`.
 
 | Method | Parameters | Result |
 |---|---|---|
-| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "controlled": boolean }], "answers": [kind] }` |
+| `instance.info` | none | `{ "instance": string, "inspection": "refused" \| "not_offered", "sessions": [{ "session": handle, "state": "open" \| "closing" \| "closed", "working": boolean, "attached": boolean }], "answers": [kind] }` |
 | `agent.info` | as above | the usual result without `home`, and with `instance` and `inspection` |
 | `session.close` | `session` | `{ "state": "closing" }` |
 | `session.attach` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
 | `session.view.resync` | `session` | `{ "version": 1, "sequence": number, "omitted": number }` |
 
-`instance` names the run of the host and changes when the host restarts. `answers` lists the kinds of answer the person allowed this connection to give on the host's command line, some of `confirm`, `run`, `fetch`, `ask` and `trust`, and grants nothing. `session.closed` is sent to the connection that closed the session, which is the one that controls it unless a later connection closed an abandoned one, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
+`instance` names the run of the host and changes when the host restarts. `answers` lists the kinds of answer the person allowed this connection to give on the host's command line, some of `confirm`, `run`, `fetch`, `ask` and `trust`, and grants nothing. `session.closed` is sent to the connection that closed the session and to each connection attached to it, after the closer's answer, with `{ "saved": "unknown" }`, once every thread that worked for the session has returned. It says the work has ended and nothing about whether the last save succeeded. `session.new` opens a session only in a directory the host was started with.
 
-A session has one controller, the connection that opened it or took it over, and `controlled` says whether that connection is the one being served. Another connection is refused with `not_allowed`, except that once the controller's connection has ended any later connection may close the session or take it over with `session.attach`. A connection that controls a session is refused `session.attach` for it with `bad_request`, as is a session that started no view; a closing, closed or unknown session is `no_such_session`.
+A session has a set of attached connections: the one that opened it and each that joined it with `session.attach`. `attached` says whether the asking connection is one of them. Each attached connection may act on the session, and each is sent its events. A connection that is not attached is refused with `not_allowed`, except that it may join with `session.attach` and may close a session nobody is attached to. An attached connection is refused `session.attach` for it with `bad_request`, as is a session that started no view; a closing, closed or unknown session is `no_such_session`.
 
-A client can answer questions only after it has the view of the session: after `session.view.start` for a session it opened, or `session.attach` for one it took over. Until then, and after its connection ends, a question the session's turn asks is refused when it is asked and is not sent. So is a question of a kind the host does not offer a reply for, whoever controls the session. The turn goes on. When the controller's connection ends, the question waiting is refused and its view row is resolved.
+A session can be asked the kinds of question its attached connections were given, counted once its view has started. Any other question the session's turn asks is refused when it is asked and is not sent, as is a question of a kind the host does not offer a reply for. The turn goes on. A question is shown to every attached connection, and only one given its kind may answer it; the first answer counts. When a connection leaves, the question waiting is refused and its view row resolved only if no connection that stays can answer its kind.
 
-`session.attach` sends the connection `session.view.snapshot`, then the answer. The event is the snapshot `session.view.resync` sends, with the rows produced while no client was connected among the most recent. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
+`session.attach` sends the joining connection alone `session.view.snapshot`, then the answer. The event is the snapshot `session.view.resync` sends, with the rows produced while no client was connected among the most recent. Updates that follow have the next sequences. A session whose startup question is unanswered sends `trust.request` again after the snapshot, with `awaiting_trust` as its status.
 

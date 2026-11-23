@@ -79,7 +79,7 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
         { path: '', shownPath: '""', integrity: 'trusted' },
         { path: 'private', shownPath: 'private', integrity: 'untrusted' },
       ],
-      commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }],
+      commands: [{ program: '/usr/bin/git', startedAs: '/usr/bin/git', args: ['status'], directory: '/work', shownDirectory: '.', display: 'git status' }],
     },
     // One sign-in of each standing, as `accounts.list` reports them. No row carries a key or a token.
     accounts: [
@@ -132,6 +132,7 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
     if (method === 'doctor') {
       return { ok: { found: true, text: 'Backend not configured. Install a configured build or rebuild with the approved environment.' } }
     }
+    if (method === 'window.title') return { ok: { title: p.name ? `Bravebot · ${p.name}` : 'Bravebot' } }
     if (method === 'changelog.read') return { ok: { version: '0.19.0', running: true, notes: ' - Added a thing. (#1)' } }
     if (method === 'session.note') return { ok: { noted: 'kept', notes: [{ turn: 1, text: String(p.text).trim() }] } }
     if (method === 'session.list') return { ok: { sessions: rows } }
@@ -201,7 +202,11 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
     if (method === 'permissions.list') return { ok: ux.grants }
     if (method === 'permissions.revoke') {
       if (p.kind === 'path') ux.grants.paths = ux.grants.paths.filter((g) => g.path !== p.path)
-      else ux.grants.commands = []
+      else {
+        // As the bridge does: only the entry held in the tree named, and nothing when none is.
+        const named = p.command?.directory
+        ux.grants.commands = ux.grants.commands.filter((c) => c.directory !== named)
+      }
       return { ok: ux.grants }
     }
     if (method === 'accounts.list') return { ok: { accounts: ux.accounts } }

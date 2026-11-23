@@ -20,9 +20,10 @@
 //! decision taken against a question nobody matched is worse than no decision at all.
 
 use bravebot_agent::confirm::{
-    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HostRequest, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision, RunRequest,
-    ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, HookRequest, HostRequest,
+    ManifestRequest, McpCallRequest, MoveRequest, OutputRequest, PathRequest, RunDecision,
+    RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest, WriteDecision,
+    WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -72,6 +73,8 @@ pub enum ToMain {
     ToolList(ToolListRequest),
     /// A call to an MCP server's tool. The main thread must reply.
     McpCall(McpCallRequest),
+    /// The calls a plan's apply step resolved to, as one list. The main thread must reply.
+    Apply(bravebot_agent::confirm::ApplyRequest),
     /// A remote MCP server's reply pointed somewhere it is not declared. The main thread must
     /// reply.
     Move(MoveRequest),
@@ -80,6 +83,9 @@ pub enum ToMain {
     /// Programs a line started asked for hosts the allowed-hosts list does not cover. The main
     /// thread must reply.
     Host(HostRequest),
+    /// A plugin's hook is about to fire for the first time in this session. The main thread must
+    /// reply (PLUGIN-7).
+    Hook(HookRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -163,9 +169,11 @@ pub enum Reply {
     Manifest(Decision),
     ToolList(Decision),
     McpCall(CallDecision),
+    Apply(bravebot_agent::confirm::ApplyDecision),
     Move(Decision),
     Path(Decision),
     Host(Decision),
+    Hook(Decision),
     Ask(Vec<Answer>),
 }
 
@@ -291,6 +299,21 @@ impl Confirmer for RemoteConfirmer {
         }
     }
 
+    fn confirm_apply(
+        &mut self,
+        request: &bravebot_agent::confirm::ApplyRequest,
+    ) -> bravebot_agent::confirm::ApplyDecision {
+        match self.exchange(ToMain::Apply(request.clone())) {
+            Some(Reply::Apply(decision)) => decision,
+            _ => bravebot_agent::confirm::ApplyDecision::reject(),
+        }
+    }
+
+    /// The terminal draws an apply step's list and takes the person's ticks.
+    fn can_put_apply_lists(&mut self) -> bool {
+        true
+    }
+
     fn confirm_path(&mut self, request: &PathRequest) -> Decision {
         match self.exchange(ToMain::Path(request.clone())) {
             Some(Reply::Path(decision)) => decision,
@@ -301,6 +324,20 @@ impl Confirmer for RemoteConfirmer {
     fn confirm_host(&mut self, request: &HostRequest) -> Decision {
         match self.exchange(ToMain::Host(request.clone())) {
             Some(Reply::Host(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    /// A worker in a terminal session has a main thread that draws the question.
+    fn can_ask_about_a_hook(&self) -> bool {
+        true
+    }
+
+    /// A reply to any other question is not an answer to this one. A yes to a write is not consent
+    /// to start a program the plugin carries.
+    fn confirm_hook(&mut self, request: &HookRequest) -> Decision {
+        match self.exchange(ToMain::Hook(request.clone())) {
+            Some(Reply::Hook(decision)) => decision,
             _ => Decision::Reject,
         }
     }
@@ -793,6 +830,23 @@ mod tests {
         responder.join().expect("responder finished");
     }
 
+    /// MANIFEST-16. The terminal puts an apply step's list, and still says so through the wrappers
+    /// a manifest run puts around it, so a plan's step that needs the list is not refused here.
+    /// Where nobody can be asked it cannot. Rejects a wrapper that falls back to the default.
+    #[test]
+    fn the_terminal_puts_an_apply_list_through_the_wrappers_a_run_adds() {
+        let (outbound, _inbound) = channel::<ToMain>();
+        let (_answers, answer_rx) = channel();
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        let mut confining = bravebot_agent::Confining::new(
+            &mut confirmer,
+            bravebot_agent::PermissionMode::Ask,
+            false,
+        );
+        assert!(bravebot_agent::confirm::Timed::new(&mut confining).can_put_apply_lists());
+        assert!(!bravebot_agent::Unattended.can_put_apply_lists());
+    }
+
     /// A yes to a server's list is not a yes to a call of one of its tools, nor the other way round:
     /// one promotes the server's words and the other sends the planner's to it.
     #[test]
@@ -1206,9 +1260,11 @@ mod tests {
                     ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::ToolList(_) => seen.push("tool list"),
                     ToMain::McpCall(_) => seen.push("mcp call"),
+                    ToMain::Apply(_) => seen.push("apply"),
                     ToMain::Move(_) => seen.push("move"),
                     ToMain::Path(_) => seen.push("path"),
                     ToMain::Host(_) => seen.push("host"),
+                    ToMain::Hook(_) => seen.push("hook"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::References(_) => seen.push("references"),
                     ToMain::Spent(_) => seen.push("spent"),

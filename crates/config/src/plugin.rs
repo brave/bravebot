@@ -5,6 +5,12 @@
 //! path, and gives back the names and paths as text to be carried to the person's prompt and to
 //! the copy. What a part path reaches on disk is checked by the installer, not here.
 //!
+//! [`read_hooks`] and [`read_servers`] are the two places a part file is opened. Each opens the one
+//! file the manifest named, without following a link, and parses it as data with the reader the
+//! person's own `hooks.json` and `mcp.json` use. They decide nothing from what they read: what
+//! they could not use is reported so a listing can say so, and `${PLUGIN_ROOT}` is replaced in
+//! the words of an argv and nowhere else ([`expand_root`]).
+//!
 //! The format is the small subset of TOML a manifest needs: `key = "value"` lines, blank lines and
 //! `#` comments. Anything else is refused with the line it is on, so a manifest means the same here
 //! as in any TOML reader or is not read.
@@ -14,6 +20,8 @@
 //! [`classify`], which is where a key that must refuse the manifest whole is told from one that is
 //! only reported.
 
+use crate::hooks::{Hooks, Unkept};
+use crate::mcp::{Declarations, Entry as ServerEntry};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -56,11 +64,6 @@ impl Part {
 
     /// Whether the path names a directory (`skills`, `agents`) or one file (`hooks`, `servers`).
     pub const fn is_directory(self) -> bool {
-        matches!(self, Self::Skills | Self::Agents)
-    }
-
-    /// Whether this build installs the part. A part it does not install is read and reported.
-    pub const fn is_installed(self) -> bool {
         matches!(self, Self::Skills | Self::Agents)
     }
 }
@@ -356,13 +359,28 @@ impl Manifest {
             .collect()
     }
 
-    /// The parts the manifest named that this build reads and does not install.
-    pub fn not_installed(&self) -> Vec<Part> {
-        self.named_parts()
-            .into_iter()
-            .map(|(part, _)| part)
-            .filter(|part| !part.is_installed())
-            .collect()
+    /// The hooks the manifest names, read from `tree` and with `${PLUGIN_ROOT}` replaced by
+    /// `install_dir` ([`read_hooks`]). `None` where the manifest names no hooks file.
+    pub fn hooks_list(
+        &self,
+        tree: &Path,
+        install_dir: &Path,
+    ) -> Option<Result<HookList, FileFault>> {
+        self.hooks
+            .as_ref()
+            .map(|path| read_hooks(tree, path, install_dir))
+    }
+
+    /// The servers the manifest names, read from `tree` and with `${PLUGIN_ROOT}` replaced by
+    /// `install_dir` ([`read_servers`]). `None` where the manifest names no servers file.
+    pub fn servers_list(
+        &self,
+        tree: &Path,
+        install_dir: &Path,
+    ) -> Option<Result<ServerList, FileFault>> {
+        self.servers
+            .as_ref()
+            .map(|path| read_servers(tree, path, install_dir))
     }
 }
 
@@ -696,6 +714,129 @@ pub fn read(root: &Path) -> Result<Manifest, Refusal> {
     parse(&text)
 }
 
+/// The text a hook's argv word or a server's command word may hold that names the plugin's own
+/// directory (PLUGIN-13).
+pub const ROOT_VARIABLE: &str = "${PLUGIN_ROOT}";
+
+/// The most bytes a hooks file or a servers file may hold, the size each is held to in the state
+/// directory. A longer one is a fault, not read.
+pub const PART_FILE_LARGEST: u64 = 64 * 1024;
+
+/// `word` with every [`ROOT_VARIABLE`] in it replaced by `install_dir`, the absolute path of
+/// `<state>/plugins/<name>` as text (PLUGIN-13).
+///
+/// One pass over the word: the replacement is not searched again, nothing else is replaced, and no
+/// environment is read. A word is expanded only by a caller that holds an argv word of a hook or a
+/// local server; every other string of a part is left as written.
+pub fn expand_root(word: &str, install_dir: &str) -> String {
+    word.replace(ROOT_VARIABLE, install_dir)
+}
+
+/// Why a hooks file or a servers file could not be read for a listing. The file's own words are
+/// never carried here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileFault {
+    /// The path names something that is not there, or could not be looked at.
+    Unreadable,
+    /// The path names a link, a directory or another kind of entry, not a regular file.
+    NotARegularFile,
+    /// The file is longer than [`PART_FILE_LARGEST`].
+    TooLarge,
+    /// The file is not UTF-8 text.
+    NotText,
+    /// The text is not an object with a `hooks` array.
+    NotHooks,
+    /// The text is not an object whose only key is `servers`, itself an object.
+    NotServers,
+    /// The installed directory's path is not text, so `${PLUGIN_ROOT}` has nothing to become.
+    PathNotText,
+}
+
+/// The one file of a part, opened without following a link and read whole as text.
+///
+/// The manifest reader and the staging link check already refuse a link on the way to the file, and
+/// an installed tree holds none, so this looks only at the file itself.
+fn read_part_file(tree: &Path, path: &PartPath) -> Result<String, FileFault> {
+    let file = path.under(tree);
+    let metadata = std::fs::symlink_metadata(&file).map_err(|_| FileFault::Unreadable)?;
+    if !metadata.is_file() {
+        return Err(FileFault::NotARegularFile);
+    }
+    if metadata.len() > PART_FILE_LARGEST {
+        return Err(FileFault::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&file)
+        .and_then(|handle| handle.take(PART_FILE_LARGEST + 1).read_to_end(&mut bytes))
+        .map_err(|_| FileFault::Unreadable)?;
+    if bytes.len() as u64 > PART_FILE_LARGEST {
+        return Err(FileFault::TooLarge);
+    }
+    String::from_utf8(bytes).map_err(|_| FileFault::NotText)
+}
+
+/// A plugin's hooks as a turn or a listing sees them: every word of each argv with
+/// [`ROOT_VARIABLE`] already replaced, and a count of what the file said that was not kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookList {
+    /// The hooks the reader kept, argv expanded.
+    pub hooks: Hooks,
+    /// What the file held that the reader passed over (HOOK-7), so a listing says so.
+    pub unkept: Unkept,
+}
+
+/// A plugin's servers: each entry by alias, with a local server's command and arguments already
+/// expanded, or what is wrong with the entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerList {
+    pub entries: Vec<ServerEntry>,
+}
+
+/// Read the hooks file `path` names below `tree`, as `hooks.json` is read, and expand
+/// [`ROOT_VARIABLE`] in each argv word to `install_dir`.
+///
+/// `tree` is where the file is now (a staged copy or the installed directory) and `install_dir` is
+/// where the plugin is or will be, `<state>/plugins/<name>`, so a listing of a staged plugin shows
+/// the path the hook will have. The file is parsed as data and nothing is run or decided from it.
+/// The digest of a hook's argv is to be taken from the result, never from the file's own words
+/// (PLUGIN-13).
+pub fn read_hooks(tree: &Path, path: &PartPath, install_dir: &Path) -> Result<HookList, FileFault> {
+    let root = install_dir.to_str().ok_or(FileFault::PathNotText)?;
+    let text = read_part_file(tree, path)?;
+    let (hooks, unkept) = Hooks::parse_accounting(&text).ok_or(FileFault::NotHooks)?;
+    Ok(HookList {
+        hooks: hooks.mapping_run(|word| expand_root(word, root)),
+        unkept,
+    })
+}
+
+/// Read the servers file `path` names below `tree`, as `mcp.json` is read, and expand
+/// [`ROOT_VARIABLE`] in each local server's command and arguments to `install_dir`.
+///
+/// Only the program and arguments are expanded: an environment value, the directory, the files it
+/// may read, a url and every other field stay as written. The digest of a declaration is to be
+/// taken from the result (PLUGIN-13).
+pub fn read_servers(
+    tree: &Path,
+    path: &PartPath,
+    install_dir: &Path,
+) -> Result<ServerList, FileFault> {
+    let root = install_dir.to_str().ok_or(FileFault::PathNotText)?;
+    let text = read_part_file(tree, path)?;
+    let declarations = Declarations::parse(&text).map_err(|_| FileFault::NotServers)?;
+    let entries = declarations
+        .entries()
+        .into_iter()
+        .map(|entry| ServerEntry {
+            alias: entry.alias,
+            declaration: entry
+                .declaration
+                .map(|declaration| declaration.mapping_argv(|word| expand_root(word, root))),
+        })
+        .collect();
+    Ok(ServerList { entries })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,9 +882,16 @@ mod tests {
     }
 
     #[test]
-    fn hooks_and_servers_are_read_and_not_installed() {
+    fn hooks_and_servers_are_named_parts_like_the_others() {
         let manifest = parse(&with("skills = \"s\"\nhooks = \"h\"\nservers = \"v\"")).unwrap();
-        assert_eq!(manifest.not_installed(), vec![Part::Hooks, Part::Servers]);
+        assert_eq!(
+            manifest
+                .named_parts()
+                .into_iter()
+                .map(|(part, _)| part)
+                .collect::<Vec<_>>(),
+            vec![Part::Skills, Part::Hooks, Part::Servers]
+        );
     }
 
     #[test]
@@ -1193,6 +1341,251 @@ mod tests {
             assert_eq!(
                 check(&root, "skills = \"absent\"\nagents = \"agents\""),
                 Err(Refusal::LinkLeavesRoot(Part::Agents))
+            );
+        }
+    }
+
+    /// PLUGIN-13, S6 to S9: `${PLUGIN_ROOT}` in the part files, read from a tree that is not
+    /// where the plugin will live, as the staged tree is.
+    mod parts {
+        use super::*;
+
+        const INSTALL: &str = "/state/plugins/demo";
+
+        fn tree_with(name: &str, file: &str, text: &str) -> (PathBuf, PartPath) {
+            let root = fresh(name);
+            std::fs::write(root.join(file), text).unwrap();
+            (root, check_part_path(Part::Hooks, file).unwrap())
+        }
+
+        #[test]
+        fn every_occurrence_in_a_word_is_replaced_once_and_nothing_else_is() {
+            assert_eq!(
+                expand_root("${PLUGIN_ROOT}/a", INSTALL),
+                "/state/plugins/demo/a"
+            );
+            assert_eq!(
+                expand_root("--x=${PLUGIN_ROOT}:${PLUGIN_ROOT}", INSTALL),
+                "--x=/state/plugins/demo:/state/plugins/demo"
+            );
+            for left in [
+                "$PLUGIN_ROOT",
+                "${PLUGIN_ROOT",
+                "${plugin_root}",
+                "${HOME}",
+                "${PLUGIN_ROOT_X}",
+            ] {
+                assert_eq!(expand_root(left, INSTALL), left);
+            }
+            // The replacement is not searched again.
+            assert_eq!(
+                expand_root("${PLUGIN_ROOT}", "/a/${PLUGIN_ROOT}"),
+                "/a/${PLUGIN_ROOT}"
+            );
+        }
+
+        /// The listing for a staged tree shows the installed path, not the staging path.
+        #[test]
+        fn a_hook_argv_names_the_directory_the_plugin_will_have_not_the_one_it_was_read_from() {
+            let (tree, path) = tree_with(
+                "plugin-hook-root",
+                "hooks.json",
+                r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh","--root","${PLUGIN_ROOT}"],"timeout":5}]}"#,
+            );
+            let read = read_hooks(&tree, &path, Path::new(INSTALL)).unwrap();
+            let hook = &read.hooks.declared()[0];
+            assert_eq!(
+                hook.run(),
+                [
+                    "/state/plugins/demo/hook.sh",
+                    "--root",
+                    "/state/plugins/demo"
+                ]
+            );
+            assert!(
+                !hook
+                    .run()
+                    .iter()
+                    .any(|word| word.contains(tree.to_str().unwrap()))
+            );
+            assert_eq!(hook.timeout(), Some(std::time::Duration::from_secs(5)));
+            assert!(read.unkept.is_none());
+        }
+
+        /// The digest input: expanded argv from the one reader, equal to an argv written out by
+        /// hand, and different for a plugin installed under another name.
+        #[test]
+        fn the_argv_a_digest_is_taken_over_is_the_expanded_one_and_follows_the_install_directory() {
+            let text = r#"{"hooks":[{"on":"turn-started","run":["${PLUGIN_ROOT}/hook.sh"]}]}"#;
+            let (tree, path) = tree_with("plugin-hook-digest", "hooks.json", text);
+            let by_name = |dir: &str| {
+                read_hooks(&tree, &path, Path::new(dir))
+                    .unwrap()
+                    .hooks
+                    .declared()[0]
+                    .run()
+                    .to_vec()
+            };
+            assert_eq!(
+                by_name("/state/plugins/demo"),
+                ["/state/plugins/demo/hook.sh"]
+            );
+            assert_eq!(
+                by_name("/state/plugins/other"),
+                ["/state/plugins/other/hook.sh"]
+            );
+            let written = Hooks::parse(
+                r#"{"hooks":[{"on":"turn-started","run":["/state/plugins/demo/hook.sh"]}]}"#,
+            );
+            assert_eq!(by_name("/state/plugins/demo"), written.declared()[0].run());
+
+            let servers =
+                r#"{"servers":{"demo":{"transport":"stdio","argv":["${PLUGIN_ROOT}/server.py"]}}}"#;
+            let (tree, path) = tree_with("plugin-server-digest", "servers.json", servers);
+            let digest = |dir: &str| {
+                let list = read_servers(&tree, &path, Path::new(dir)).unwrap();
+                list.entries[0].declaration.as_ref().unwrap().digest()
+            };
+            let by_hand = Declarations::parse(
+                r#"{"servers":{"x":{"transport":"stdio","argv":["/state/plugins/demo/server.py"]}}}"#,
+            )
+            .unwrap()
+            .entries()[0]
+                .declaration
+                .as_ref()
+                .unwrap()
+                .digest();
+            assert_eq!(digest("/state/plugins/demo"), by_hand);
+            assert_ne!(digest("/state/plugins/other"), by_hand);
+        }
+
+        /// S9: an environment value, a directory, a read, a url and a hook's watched path keep the
+        /// text as written, and nothing is looked up in the environment.
+        #[test]
+        fn the_variable_is_left_as_written_anywhere_but_an_argv_word() {
+            let servers = r#"{"servers":{"demo":{"transport":"stdio",
+                "argv":["${PLUGIN_ROOT}/s","${HOME}"],
+                "env":{"TOKEN":"${PLUGIN_ROOT}/t"},
+                "reads":["/etc/${PLUGIN_ROOT}"],"directory":"/w/${PLUGIN_ROOT}"},
+                "web":{"transport":"http","url":"https://h.example/${PLUGIN_ROOT}"}}}"#;
+            let (tree, path) = tree_with("plugin-server-env", "servers.json", servers);
+            let list = read_servers(&tree, &path, Path::new(INSTALL)).unwrap();
+            let demo = list.entries[0].declaration.as_ref().unwrap();
+            assert_eq!(demo.argv(), ["/state/plugins/demo/s", "${HOME}"]);
+            let stored: Vec<_> = demo.stored_values().collect();
+            assert_eq!(stored, [("TOKEN", "${PLUGIN_ROOT}/t")]);
+            assert_eq!(demo.reads(), ["/etc/${PLUGIN_ROOT}"]);
+            assert_eq!(demo.directory(), Some("/w/${PLUGIN_ROOT}"));
+            let web = list.entries[1].declaration.as_ref().unwrap();
+            assert_eq!(web.url(), Some("https://h.example/${PLUGIN_ROOT}"));
+
+            let hooks = r#"{"hooks":[{"on":"file-changed","path":"${PLUGIN_ROOT}/f","tool":"${PLUGIN_ROOT}","run":["x"]}]}"#;
+            let (tree, path) = tree_with("plugin-hook-path", "hooks.json", hooks);
+            let read = read_hooks(&tree, &path, Path::new(INSTALL)).unwrap();
+            assert_eq!(read.hooks.declared()[0].path(), Some("${PLUGIN_ROOT}/f"));
+            assert_eq!(read.hooks.declared()[0].tool(), Some("${PLUGIN_ROOT}"));
+        }
+
+        /// S29: the hook reader drops what it cannot use, and the read says how much, so a listing
+        /// is not shorter than the file without saying so.
+        #[test]
+        fn what_the_hook_reader_passes_over_is_counted() {
+            let text = r#"{"extra":1,"hooks":[
+                {"on":"turn-started","run":["ok"],"color":"red"},
+                {"on":"no-such-moment","run":["x"]},
+                {"on":"turn-started","run":[]},
+                {"on":"turn-started","run":["a",3]},
+                {"on":"turn-started","run":["t"],"timeout":0}]}"#;
+            let (tree, path) = tree_with("plugin-hook-unkept", "hooks.json", text);
+            let read = read_hooks(&tree, &path, Path::new(INSTALL)).unwrap();
+            assert_eq!(read.hooks.declared().len(), 1);
+            assert_eq!(
+                read.unkept,
+                Unkept {
+                    dropped: 4,
+                    root_keys: 1,
+                    entry_keys: 1
+                }
+            );
+            assert!(!read.unkept.is_none());
+        }
+
+        #[test]
+        fn a_file_that_cannot_be_used_is_a_fault_naming_why() {
+            let (tree, path) = tree_with("plugin-part-faults", "hooks.json", "not json");
+            assert_eq!(
+                read_hooks(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::NotHooks)
+            );
+            std::fs::write(tree.join("hooks.json"), r#"{"servers":{}}"#).unwrap();
+            assert_eq!(
+                read_hooks(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::NotHooks)
+            );
+            assert_eq!(
+                read_servers(&tree, &path, Path::new(INSTALL)).map(|_| ()),
+                Ok(())
+            );
+            std::fs::write(tree.join("hooks.json"), r#"{"hooks":[]}"#).unwrap();
+            assert_eq!(
+                read_servers(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::NotServers)
+            );
+            std::fs::write(
+                tree.join("hooks.json"),
+                vec![b' '; PART_FILE_LARGEST as usize + 1],
+            )
+            .unwrap();
+            assert_eq!(
+                read_hooks(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::TooLarge)
+            );
+            std::fs::write(tree.join("hooks.json"), [0xff, 0xfe]).unwrap();
+            assert_eq!(
+                read_hooks(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::NotText)
+            );
+            std::fs::remove_file(tree.join("hooks.json")).unwrap();
+            assert_eq!(
+                read_hooks(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::Unreadable)
+            );
+            std::fs::create_dir(tree.join("hooks.json")).unwrap();
+            assert_eq!(
+                read_hooks(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::NotARegularFile)
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_part_file_that_is_a_link_is_not_followed() {
+            let (tree, _) = tree_with("plugin-part-link", "real.json", r#"{"hooks":[]}"#);
+            let path = check_part_path(Part::Hooks, "hooks.json").unwrap();
+            std::os::unix::fs::symlink(tree.join("real.json"), tree.join("hooks.json")).unwrap();
+            assert_eq!(
+                read_hooks(&tree, &path, Path::new(INSTALL)),
+                Err(FileFault::NotARegularFile)
+            );
+        }
+
+        /// An entry of the servers file that cannot be used is carried as the problem, not
+        /// dropped, so a listing can show the alias.
+        #[test]
+        fn a_server_entry_that_cannot_be_used_is_listed_with_its_problem() {
+            let text = r#"{"servers":{"bad":{"transport":"stdio"},"ok":{"transport":"stdio","argv":["p"]}}}"#;
+            let (tree, path) = tree_with("plugin-server-bad", "servers.json", text);
+            let list = read_servers(&tree, &path, Path::new(INSTALL)).unwrap();
+            assert_eq!(list.entries.len(), 2);
+            assert!(
+                list.entries
+                    .iter()
+                    .any(|e| e.alias == "bad" && e.declaration.is_err())
+            );
+            assert!(
+                list.entries
+                    .iter()
+                    .any(|e| e.alias == "ok" && e.declaration.is_ok())
             );
         }
     }

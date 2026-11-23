@@ -61,6 +61,7 @@ fn session_running(target: u64) -> Session {
             target,
             finished: Arc::clone(&finished),
             interjections: None,
+            actors: Default::default(),
         }),
         watches: Arc::clone(&watches),
         ..Open::opened(

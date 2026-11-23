@@ -214,7 +214,7 @@ configuration works here unedited.
 
 ### A local Ollama, or another gateway that wants no key
 
-Ollama wants no API key, so its block names none. Leaving out both `env` and `options.apiKey` is how
+Ollama wants no API key, so its block names none. Leaving out `env`, `options.apiKey` and `options.keyFile` is how
 you say none is needed, and the request then carries no `authorization` header:
 
 ```json

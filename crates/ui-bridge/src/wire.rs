@@ -948,7 +948,7 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
         "variables": variables,
         "reads": declaration.reads(),
         "directory": directory,
-        "digest": declaration.digest().short(),
+        "digest": question.digest().short(),
         "requestedBy": question.file,
         "changed": question.changed,
         // Every line the terminal draws above the answers, worded once in the agent.
@@ -963,18 +963,25 @@ pub fn mcp_server_request(id: u64, question: &Question<'_>) -> Value {
 /// The tools an MCP server lists, put to the person before any of them is offered to the model
 /// (SERVERS-8).
 ///
-/// Each tool as the client drew it: its name under the alias, each argument as one line, and the
-/// server's own sentence about it. That sentence is the server's text, and a front end draws it
-/// as text and nowhere a reader would take it for the application's own words. `refused` counts
-/// the tools the client would not draw.
+/// Each tool as the client drew it: its name under the alias, each argument as `{ text, choices }`
+/// and the server's own sentence about it. `text` is the client's own words for the argument.
+/// `choices` holds the values the server says the argument takes, one string each, which are the
+/// server's text like the sentence. A front end draws both as text behind a marker and nowhere a
+/// reader would take them for the application's own words. `refused` counts the tools the client
+/// would not draw.
 pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
     let tools: Vec<Value> = request
         .tools
         .iter()
         .map(|tool| {
+            let arguments: Vec<Value> = tool
+                .arguments
+                .iter()
+                .map(|argument| json!({ "text": argument.text, "choices": argument.choices }))
+                .collect();
             json!({
                 "name": tool.name,
-                "arguments": tool.arguments,
+                "arguments": arguments,
                 "description": tool.description,
                 "read_only": tool.read_only,
             })

@@ -18,39 +18,152 @@ crates/core/src/command.rs::every_step_is_its_entry: r => ensures r == (forall|i
 crates/core/src/command.rs::every_step_is_its_entry/loop: invariant at <= steps.len(), forall|i: int| 0 <= i < at ==> crate::spec::step_is_its_entry(#[trigger] steps@[i]), decreases steps.len() - at,
 crates/core/src/command.rs::can_be_remembered: r => ensures r == crate::spec::plan_is_its_entries(*self),
 crates/core/src/command.rs::can_be_remembered_as: r => ensures r == crate::spec::request_is_its_entries(*self, asked),
+crates/core/src/compare.rs::same_path_buf: r => ensures r == crate::spec::same_path_buf(*held, *seen),
+crates/core/src/compare.rs::same_text: r => ensures r == (a@ == b@),
+crates/core/src/compare.rs::same_texts: r => ensures r == crate::spec::same_texts(a@, b@),
+crates/core/src/compare.rs::same_texts/loop: invariant a.len() == b.len(), at <= a.len(), forall|i: int| 0 <= i < at ==> (#[trigger] a@[i])@ == b@[i]@, decreases a.len() - at,
+crates/core/src/compare.rs::is_number: r => ensures r == crate::spec::is_number(text@),
+crates/core/src/compare.rs::same_environment: r => ensures r == crate::spec::same_environment(a@, b@),
+crates/core/src/compare.rs::same_environment/loop: invariant a.len() == b.len(), at <= a.len(), forall|i: int| 0 <= i < at ==> (#[trigger] a@[i]).0@ == b@[i].0@ && a@[i].1@ == b@[i].1@, decreases a.len() - at,
+crates/core/src/compare.rs::same_route: r => ensures r == crate::spec::same_route(*a, *b),
+crates/core/src/compare.rs::same_routes: r => ensures r == crate::spec::same_routes(a@, b@),
+crates/core/src/compare.rs::same_routes/loop: invariant a.len() == b.len(), at <= a.len(), forall|i: int| 0 <= i < at ==> crate::spec::same_route(#[trigger] a@[i], b@[i]), decreases a.len() - at,
 crates/core/src/label.rs::meet: r => ensures r == crate::spec::meet(self, other),
 crates/core/src/label.rs::join: r => ensures r == crate::spec::join(self, other),
+crates/core/src/label.rs::new: r => ensures r.integrity == integrity, r.confidentiality == confidentiality,
 crates/core/src/label.rs::degrades_to: r => ensures r == crate::spec::degrades(self, other),
 crates/core/src/label.rs::is_trusted: r => ensures r == (self.integrity == Integrity::Trusted),
 crates/core/src/label.rs::is_public: r => ensures r == (self.confidentiality == Confidentiality::Public),
+crates/core/src/permissions.rs::ruling_of: r => ensures r == crate::spec::ruling_of(denied, asked, allowed),
+crates/core/src/permissions.rs::pipeline_decision: r => ensures r == crate::spec::pipeline_decision(each@),
+crates/core/src/permissions.rs::pipeline_decision/loop: invariant at <= each.len(), denied == crate::spec::some_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Deny), ), asked == crate::spec::some_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Ask), ), all_allowed == crate::spec::every_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Allow), ), decreases each.len() - at,
+crates/core/src/policy.rs::issue: ensures final(self).pending@ == old(self).pending@.push(grant),
+crates/core/src/policy.rs::spend: spent => ensures spent == granted(old(self).pending@, tool@, field@, value@), spent ==> exists|i: int| 0 <= i < old(self).pending@.len() && grant_is_for( #[trigger] old(self).pending@[i], tool@, field@, value@, ) && final(self).pending@ == old(self).pending@.remove(i), !spent ==> final(self).pending@ == old(self).pending@,
+crates/core/src/policy.rs::spend/loop: invariant at <= self.pending.len(), self.pending@ == old(self).pending@, forall|j: int| 0 <= j < at ==> !grant_is_for( #[trigger] self.pending@[j], tool@, field@, value@, ), decreases self.pending.len() - at,
+crates/core/src/policy.rs::fresh: r => ensures r.integrity == Integrity::Trusted, r.confidentiality == Confidentiality::Public,
+crates/core/src/policy.rs::integrity: r => ensures r == self.integrity,
+crates/core/src/policy.rs::confidentiality: r => ensures r == self.confidentiality,
+crates/core/src/policy.rs::label: r => ensures r.integrity == self.integrity, r.confidentiality == self.confidentiality,
+crates/core/src/policy.rs::absorb: lowered => ensures final(self).integrity == crate::spec::meet(old(self).integrity, observed), final(self).confidentiality == old(self).confidentiality, lowered == (final(self).integrity != old(self).integrity),
+crates/core/src/policy.rs::hold: raised => ensures final(self).confidentiality == crate::spec::join(old(self).confidentiality, shown), final(self).integrity == old(self).integrity, raised == (final(self).confidentiality != old(self).confidentiality),
+crates/core/src/policy.rs::shown_to_the_planner: r => ensures r == crate::spec::shown_to_the_planner(label, picture),
+crates/core/src/policy.rs::asks: r => ensures r == crate::spec::fetch_reason_asks(self),
+crates/core/src/policy.rs::fetch_reason: r => ensures crate::spec::fetch_reason_is_sound(rule, r),
+crates/core/src/policy.rs::asks: r => ensures r == crate::spec::mcp_reason_asks(self),
+crates/core/src/policy.rs::mcp_reason: r => ensures crate::spec::mcp_reason_is_sound(standing, public_arguments, rule, r),
+crates/core/src/policy.rs::asks: r => ensures r == crate::spec::search_reason_asks(self),
+crates/core/src/policy.rs::search_reason: r => ensures crate::spec::search_reason_is_sound(public_context, rule, r),
+crates/core/src/policy.rs::asks: r => ensures r == crate::spec::write_reason_asks(self),
+crates/core/src/policy.rs::write_reason: r => ensures crate::spec::write_reason_is_sound(facts, r),
 crates/core/src/policy.rs::asks: r => ensures r == crate::spec::reason_asks(self),
 crates/core/src/policy.rs::run_reason: r => ensures crate::spec::run_reason_is_sound(facts, r),
 crates/core/src/policy.rs::output_label: r => requires opaque.integrity == Integrity::Untrusted, ensures crate::spec::output_label_is_sound(facts, opaque, r.0),
+crates/core/src/policy.rs::precommitted: r => ensures r == spec_precommitted(*self, *slot),
+crates/core/src/policy.rs::precommitted_into: r => ensures r == spec_precommitted_into(*self, *slot, destination@),
+crates/core/src/policy.rs::promote_a_server_move: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_move"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::promote_a_tool_list: r => ensures r is Ok <==> spec_granted(*old(self), "mcp_tools"@, "alias"@, alias@), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::context_integrity: r => ensures r == spec_context(*self),
+crates/core/src/policy.rs::absorb: ensures spec_context(*final(self)) == crate::spec::meet(spec_context(*old(self)), observed),
+crates/core/src/policy.rs::record_answers: r => ensures r is Ok <==> crate::value::spec_label_of(series).integrity == Integrity::Trusted, r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::value::spec_label_of( series, ),
+crates/core/src/policy.rs::adopt_edited_body: r => ensures r is Ok <==> crate::value::spec_label_of(proposed) == crate::spec::trusted_public(), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(), r is Ok ==> crate::value::spec_value_of(&r->Ok_0) == saved,
+crates/core/src/policy.rs::label_user_command_output: r => ensures crate::value::spec_label_of(&r) == (Label { integrity: Integrity::Trusted, confidentiality: Confidentiality::Private, }),
+crates/core/src/policy.rs::label_user_configuration: r => ensures crate::value::spec_label_of(&r) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::label_kept_fact: r => ensures crate::value::spec_label_of(&r) == (Label { integrity: Integrity::Trusted, confidentiality, }),
 crates/core/src/policy.rs::refuse_untrusted: r => ensures r is Ok <==> label.integrity == Integrity::Trusted,
 crates/core/src/policy.rs::read_trusted_content: r => ensures r is Ok <==> crate::value::spec_label_of(value).integrity == Integrity::Trusted,
+crates/core/src/policy.rs::declassify_into_workspace: r => ensures crate::value::spec_label_of(&r) == crate::spec::released( crate::value::spec_label_of(&value), ),
+crates/core/src/policy.rs::endorsed_for_reading: r => ensures r is Ok <==> (right_kind && spec_granted( *old(self), tool@, "ref"@, spec_slot_name(*slot), )),
+crates/core/src/policy.rs::declassify_into_place: r => ensures r is Ok <==> spec_precommitted_into(*old(self), *slot, destination@),
+crates/core/src/policy.rs::declassify_written_into_workspace: r => ensures crate::value::spec_label_of(&r) == crate::spec::released( crate::value::spec_label_of(&value), ),
+crates/core/src/policy.rs::declassify_checkout_into_workspace: r => ensures crate::value::spec_label_of(&r) == crate::spec::released( crate::value::spec_label_of(&value), ),
+crates/core/src/policy.rs::declassify: r => ensures r is Ok <==> spec_precommitted(*old(self), *slot),
+crates/core/src/policy.rs::read_planner_argument: r => ensures r is Ok <==> crate::spec::the_planner_may_decide( crate::value::spec_label_of(value), spec_context(*old(self)), ),
+crates/core/src/policy.rs::promote_confined_read: r => ensures r is Ok <==> crate::spec::the_planner_may_decide( crate::value::spec_label_of(proposed), spec_context(*old(self)), ), r is Ok ==> crate::value::spec_label_of(&r->Ok_0) == crate::spec::trusted_public(),
+crates/core/src/policy.rs::consume_grant: r => ensures r is Ok <==> spec_granted(*old(self), tool@, field@, concrete@), r is Ok ==> exists|i: int| 0 <= i < spec_grants(*old(self)).len() && grant_is_for( #[trigger] spec_grants(*old(self))[i], tool@, field@, concrete@, ) && spec_grants(*final(self)) == spec_grants(*old(self)).remove(i), r is Err ==> spec_grants(*final(self)) == spec_grants(*old(self)),
 crates/core/src/policy.rs::weakest_name: r => ensures r == Integrity::Trusted <==> (answers@.len() > 0 && forall|i: int| 0 <= i < answers@.len() ==> #[trigger] answers@[i] == Some(Integrity::Trusted)),
 crates/core/src/policy.rs::weakest_name/loop: invariant at <= answers.len(), forall|i: int| 0 <= i < at ==> #[trigger] answers@[i] == Some(Integrity::Trusted), decreases answers.len() - at,
+crates/core/src/programs.rs::is_entry_for: r => ensures r == crate::spec::command_is(*self, *program, *started_as, args@, routes@, *directory),
+crates/core/src/programs.rs::some_entry_is: r => ensures r == crate::spec::some_entry_is(listed@, *step, *directory),
+crates/core/src/programs.rs::some_entry_is/loop: invariant at <= listed.len(), forall|i: int| 0 <= i < at ==> !crate::spec::entry_is_step( #[trigger] listed@[i], *step, *directory, ), decreases listed.len() - at,
+crates/core/src/programs.rs::steps_vouched: r => ensures r == crate::spec::steps_vouched(listed@, *steps, *directory), decreases *steps, 0nat,
+crates/core/src/programs.rs::pipeline_vouched: r => ensures r == (forall|i: int| 0 <= i < list@.len() ==> crate::spec::step_vouched(listed@, #[trigger] list@[i], *directory)), decreases *list, 0nat,
+crates/core/src/programs.rs::pipeline_vouched/loop: invariant at <= list.len(), forall|i: int| 0 <= i < at ==> crate::spec::step_vouched(listed@, #[trigger] list@[i], *directory), decreases list.len() - at,
+crates/core/src/programs.rs::step_vouched: r => ensures r == crate::spec::step_vouched(listed@, *step, *directory), decreases *step, 0nat,
+crates/core/src/programs.rs::step_vouched/loop: invariant at <= step.expansions.len(), forall|i: int| 0 <= i < at ==> crate::spec::expansion_vouched( listed@, #[trigger] step.expansions@[i], *directory, ), decreases step.expansions.len() - at,
+crates/core/src/programs.rs::expansion_vouched: r => ensures r == crate::spec::expansion_vouched(listed@, *expansion, *directory), decreases *expansion, 0nat,
+crates/core/src/programs.rs::expansion_vouched/loop: invariant at <= expansion.parts.len(), forall|i: int| 0 <= i < at ==> crate::spec::part_vouched( listed@, #[trigger] expansion.parts@[i], *directory, ), decreases expansion.parts.len() - at,
+crates/core/src/programs.rs::part_vouched: r => ensures r == crate::spec::part_vouched(listed@, *part, *directory), decreases *part, 0nat,
+crates/core/src/programs.rs::covers_every_step: r => ensures r == crate::spec::steps_vouched(spec_commands(*self), plan.steps, plan.directory),
+crates/core/src/programs.rs::listed: r => ensures r@ == spec_commands(*self),
+crates/core/src/remembered.rs::admits: r => ensures r == crate::spec::arg_admits(*self, seen@),
+crates/core/src/remembered.rs::matches: r => ensures r == crate::spec::remembered_step_matches(*self, *step),
+crates/core/src/remembered.rs::every_arg_admits: r => ensures r == crate::spec::args_admit(held@, seen@),
+crates/core/src/remembered.rs::every_arg_admits/loop: invariant held.len() == seen.len(), at <= held.len(), forall|i: int| 0 <= i < at ==> crate::spec::arg_admits(#[trigger] held@[i], seen@[i]@), decreases held.len() - at,
+crates/core/src/remembered.rs::every_step_matches: r => ensures r == crate::spec::steps_match(held@, seen@),
+crates/core/src/remembered.rs::every_step_matches/loop: invariant held.len() == seen.len(), at <= held.len(), forall|i: int| 0 <= i < at ==> crate::spec::remembered_step_matches(#[trigger] held@[i], seen@[i]), decreases held.len() - at,
+crates/core/src/remembered.rs::matches: r => ensures r == crate::spec::shape_matches(*self, *steps), decreases self,
+crates/core/src/remembered.rs::covers: r => ensures r == crate::spec::shape_matches(self.steps, plan.steps),
+crates/core/src/remembered.rs::some_line_covers: r => ensures r == crate::spec::some_line_covers(lines@, *plan),
+crates/core/src/remembered.rs::some_line_covers/loop: invariant at <= lines.len(), forall|i: int| 0 <= i < at ==> !crate::spec::shape_matches(#[trigger] lines@[i].steps, plan.steps), decreases lines.len() - at,
+crates/core/src/remembered.rs::some_entry_covers: r => ensures r == (exists|i: int| 0 <= i < entries@.len() && crate::spec::shape_matches(#[trigger] entries@[i].line.steps, plan.steps)),
+crates/core/src/remembered.rs::some_entry_covers/loop: invariant at <= entries.len(), forall|i: int| 0 <= i < at ==> !crate::spec::shape_matches( #[trigger] entries@[i].line.steps, plan.steps, ), decreases entries.len() - at,
+crates/core/src/remembered.rs::some_scope_covers: r => ensures r == (exists|i: int| 0 <= i < scopes@.len() && crate::spec::some_line_covers(#[trigger] scopes@[i].scope.lines@, *plan)),
+crates/core/src/remembered.rs::some_scope_covers/loop: invariant at <= scopes.len(), forall|i: int| 0 <= i < at ==> !crate::spec::some_line_covers( #[trigger] scopes@[i].scope.lines@, *plan, ), decreases scopes.len() - at,
+crates/core/src/remembered.rs::covers: r => ensures r == crate::spec::some_line_covers(self.lines@, *plan),
+crates/core/src/remembered.rs::covers: r => ensures r == crate::spec::remembered_covers(*self, *plan),
+crates/core/src/slot.rs::as_str: r => ensures r@ == crate::policy::spec_slot_name(*self),
 crates/core/src/trust.rs::weakest_decision: r => ensures r is None <==> matching@.len() == 0, r is Some ==> exists|i: int| 0 <= i < matching@.len() && #[trigger] matching@[i] == r->Some_0, r is Some ==> forall|i: int| 0 <= i < matching@.len() ==> crate::spec::grants_no_more(r->Some_0, #[trigger] matching@[i]),
 crates/core/src/trust.rs::weakest_decision/loop: invariant 1 <= at <= matching.len(), exists|i: int| 0 <= i < at && #[trigger] matching@[i] == weakest, forall|i: int| 0 <= i < at ==> crate::spec::grants_no_more(weakest, #[trigger] matching@[i]), decreases matching.len() - at,
 crates/core/src/trust.rs::strength: r => ensures r == crate::spec::strength(decision),
 crates/core/src/trust.rs::meet_of_rules: r => ensures r == crate::spec::meet_of_rules(start, bearing@),
 crates/core/src/trust.rs::meet_of_rules/loop: invariant at <= bearing.len(), answer == crate::spec::meet_of_rules(start, bearing@.take(at as int)), decreases bearing.len() - at,
 crates/core/src/trust.rs::weaker: r => ensures r == a || r == b, crate::spec::grants_no_more(r, a), crate::spec::grants_no_more(r, b),
+crates/core/src/value.rs::new: r => ensures spec_value_of(&r) == value, spec_label_of(&r) == label,
+crates/core/src/value.rs::trusted: r => ensures spec_value_of(&r) == value, spec_label_of(&r) == crate::spec::trusted_public(),
 crates/core/src/value.rs::label: r => ensures r == spec_label_of(&self),
 crates/core/src/value.rs::declassify: r => ensures r == spec_value_of(&self),
 crates/core/src/value.rs::into_trusted: r => ensures r is Ok <==> spec_label_of(&self) == crate::spec::trusted_public(), r is Ok ==> r->Ok_0 == spec_value_of(&self), r is Err ==> r->Err_0 == self,
 crates/core/src/value.rs::relabel: r => ensures r is Some <==> crate::spec::degrades(spec_label_of(&self), to), r is Some ==> spec_value_of(&r->Some_0) == spec_value_of(&self), r is Some ==> spec_label_of(&r->Some_0) == to,
 
 # What Verus accepts without proof.
+crates/core/src/ask.rs::Series: assumes external_body
+crates/core/src/ask.rs::clone: assumes external
+crates/core/src/ask.rs::Answer: assumes external_body
+crates/core/src/ask.rs::clone: assumes external
 crates/core/src/command.rs::discards: assumes external_body
 crates/core/src/command.rs::clone: assumes external
+crates/core/src/compare.rs::same_path_buf: assumes external_body
+crates/core/src/compare.rs::is_number: assumes external_body
 crates/core/src/policy.rs::Declassification: assumes external_body
 crates/core/src/policy.rs::authorise: assumes external_body
 crates/core/src/policy.rs::ExSink: assumes external_trait_specification
 crates/core/src/policy.rs::ExDenial: assumes external_type_specification
 crates/core/src/policy.rs::ExDenial: assumes external_body
+crates/core/src/policy.rs::describe_the_answers: assumes external_body
 crates/core/src/policy.rs::Policy: assumes external_body
+crates/core/src/policy.rs::precommitted: assumes external_body
+crates/core/src/policy.rs::precommitted_into: assumes external_body
 crates/core/src/policy.rs::deny: assumes external_body
 crates/core/src/policy.rs::allow: assumes external_body
+crates/core/src/policy.rs::context_integrity: assumes external_body
+crates/core/src/policy.rs::absorb: assumes external_body
+crates/core/src/policy.rs::refuse_wrong_kind: assumes external_body
+crates/core/src/policy.rs::allow_a_tool_list: assumes external_body
+crates/core/src/policy.rs::refuse_unplanned_release: assumes external_body
+crates/core/src/policy.rs::record_release: assumes external_body
+crates/core/src/policy.rs::record_into_place: assumes external_body
+crates/core/src/policy.rs::allow_written_into_workspace: assumes external_body
+crates/core/src/policy.rs::allow_checkout_into_workspace: assumes external_body
+crates/core/src/policy.rs::record_into_workspace: assumes external_body
+crates/core/src/policy.rs::consume_grant: assumes external_body
+crates/core/src/programs.rs::TrustedPrograms: assumes external_body
+crates/core/src/programs.rs::clone: assumes external
+crates/core/src/programs.rs::default: assumes external
+crates/core/src/programs.rs::listed: assumes external_body
+crates/core/src/remembered.rs::clone: assumes external
+crates/core/src/slot.rs::SlotId: assumes external_body
+crates/core/src/slot.rs::clone: assumes external
+crates/core/src/slot.rs::as_str: assumes external_body
 crates/core/src/spec.rs::ExPathBuf: assumes external_type_specification
 crates/core/src/spec.rs::ExPathBuf: assumes external_body
+crates/core/src/vetting.rs::Endorsed: assumes external_body

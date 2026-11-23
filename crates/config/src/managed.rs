@@ -741,12 +741,14 @@ impl Managed {
     }
 }
 
-/// The gateways as this layer may state them, which is without a token written into the file.
+/// The gateways as this layer may state them, which is without a token written into the file and
+/// without a file to read one from.
 ///
-/// A gateway entry has a field for a credential and this file does not get to use it. Everyone on
-/// the machine can read the managed layer, by design, so a token in it is a token handed to every
-/// account rather than one held by its owner. Naming a variable still works and is the form the
-/// gateway block recommends anyway.
+/// A gateway entry has a field for a credential and one for the file holding it, and this file gets
+/// to use neither. Everyone on the machine can read the managed layer, by design, so a token in it
+/// is a token handed to every account rather than one held by its owner. The layer also names the
+/// host a token goes to, so a file it named would let it choose which file's content is sent there.
+/// Naming a variable still works and is the form the gateway block recommends anyway.
 ///
 /// Dropped rather than refused, because an entry that names a host is worth honouring: what a
 /// stripped token costs is a gateway that has to be given its credential another way, and the
@@ -756,6 +758,7 @@ fn approved(gateways: &[Provider]) -> Vec<Provider> {
         .iter()
         .map(|gateway| Provider {
             api_key: None,
+            key_file: None,
             ..gateway.clone()
         })
         .collect()
@@ -1356,6 +1359,43 @@ mod tests {
         assert_eq!(gateways.len(), 1);
         assert!(gateways[0].api_key.is_none());
         assert_eq!(gateways[0].base_url, "https://gateway.example/v1");
+    }
+
+    /// Everyone on the machine can read this file, so a file it names is one the layer would choose
+    /// for every account, and the layer names the host the token goes to. The file is dropped where
+    /// `apiKey` is, and the host, models and variable names stay. A block naming only a file then
+    /// names no credential, as one naming only an `apiKey` does. The regression it rejects is reading
+    /// the setting from this layer, which would let it choose which file's content a host is sent.
+    #[test]
+    fn a_key_file_written_into_the_file_is_not_read() {
+        let managed = scratch(
+            "managed-gateway-key-file",
+            r#"{"provider": {"approved": {"env": ["AN_ENV_NAME"], "options": {
+                "baseURL": "https://gateway.example/v1",
+                "keyFile": "/etc/a-file-everyone-can-name",
+                "apiKey": "a-token"
+            }}}}"#,
+        );
+        let gateways = managed.gateways().expect("a block");
+        assert_eq!(gateways.len(), 1);
+        assert!(gateways[0].key_file.is_none());
+        assert!(gateways[0].api_key.is_none());
+        assert_eq!(gateways[0].env, ["AN_ENV_NAME"]);
+        assert_eq!(gateways[0].base_url, "https://gateway.example/v1");
+
+        let only_a_file = scratch(
+            "managed-gateway-key-file-only",
+            r#"{"provider": {"approved": {"options": {
+                "baseURL": "https://gateway.example/v1",
+                "keyFile": "/etc/a-file-everyone-can-name"
+            }}}}"#,
+        );
+        let gateways = only_a_file.gateways().expect("a block");
+        assert!(gateways[0].key_file.is_none());
+        assert!(matches!(
+            gateways[0].credential(|_| None),
+            crate::provider::Credential::NotNeeded
+        ));
     }
 
     /// A blank is how a line is commented out everywhere else in this configuration, so it cannot

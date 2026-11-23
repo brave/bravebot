@@ -57,8 +57,12 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   // A level is the only thing a pick records, so no other field reaches the bridge.
   if (method === 'effort.set') return { level: held.level }
   if (method === 'usage_ping.set') return { enabled: held.enabled }
+  // The choice is the only thing the switch records, so no other field reaches the bridge.
+  if (method === 'crash_reports.set') return { enabled: held.enabled }
   if (method === 'accounts.list') return { session: held.session }
   if (method === 'accounts.signOut') return { session: held.session, way: held.way, id: held.id }
+  // A spend report reads a folder and a number of days (CLI-37), and no other field crosses.
+  if (method === 'session.stats') return { directory: held.directory, days: held.days }
   if (method === 'session.list') {
     const { directory: _directory, ...rest } = held
     return rest
@@ -80,6 +84,27 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
       ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
       : undefined
     return { session: held.session, target: held.target, prompt: held.prompt, files, pictures: held.pictures }
+  }
+  // A `/schedule` line is carried out by the driver, which has no request for a file to travel
+  // in. What is forwarded is the argument and the names and markers the bridge puts into words
+  // (DROP-4): a name is only text, never a path it opens, and no drop or paste grant crosses.
+  if (method === 'schedule.command') {
+    const files = Array.isArray(held.files)
+      ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
+      : undefined
+    return { session: held.session, argument: held.argument, files, pictures: held.pictures }
+  }
+  // A `/btw` question carries what was staged on its line (CMD-5) the way a turn does: pictures
+  // pasted and pictures or PDFs dropped, named by the ids this process minted and composed here,
+  // after whatever the window sent as `images`, `attachments` or `dropped` is gone. A text file on
+  // the line is its name (DROP-4), so `files` is only marker and name pairs the bridge puts back
+  // into the question as words.
+  if (method === 'session.btw') {
+    const files = Array.isArray(held.files)
+      ? held.files.map((file: { marker?: unknown; name?: unknown }) => ({ marker: file?.marker, name: file?.name }))
+      : undefined
+    const session = typeof held.session === 'string' ? held.session : ''
+    return withPastes(session, held.pastes, withDrops(session, held.drops, { session: held.session, question: held.question, model: held.model, files }))
   }
   if (method !== 'turn.send') return held
   // `recall` and `definition` join the lists for a smaller reason than theirs. `recall` decides

@@ -181,6 +181,7 @@ export function ChatScreen({
               onSend={() => void controller.send()}
               onCancel={() => void controller.cancel()}
               error={state.error}
+              trustAskedHere={trust !== null}
             />
           </ConversationCard>
         </KeyboardAvoidingView>

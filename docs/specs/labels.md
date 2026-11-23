@@ -24,7 +24,7 @@ guards:
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 19
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 44
+      - crates/agent/tests/workspace.rs: 45
       - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 5
@@ -33,7 +33,7 @@ guards:
       - crates/aichat/src/ollama_chat.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 154
+      - crates/core/src/policy.rs: 158
       - crates/core/src/slot.rs: 14
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -64,11 +64,11 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 71
+      - crates/agent/tests/workspace.rs: 72
       - crates/aichat/tests/client.rs: 14
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 71
+      - crates/core/src/policy.rs: 78
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 6
       - crates/mcp/tests/openshell.rs: 1
@@ -84,12 +84,12 @@ guards:
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/manifest.rs: 13
       - crates/agent/src/preamble.rs: 1
-      - crates/agent/src/server_calls.rs: 1
+      - crates/agent/src/server_calls.rs: 2
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 16
       - crates/agent/src/tools/tests/activity.rs: 3
-      - crates/agent/src/tools/tests/editing.rs: 6
+      - crates/agent/src/tools/tests/editing.rs: 9
       - crates/agent/src/tools/tests/todos.rs: 1
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 1
       - crates/agent/src/turn.rs: 10
@@ -97,7 +97,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 293
+      - crates/agent/tests/workspace.rs: 308
       - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -108,7 +108,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 67
+      - crates/core/src/policy.rs: 73
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -143,7 +143,7 @@ guards:
       - crates/core/src/policy.rs: 1
   - symbol: Policy::promote_reference_for_read
     sites:
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/core/src/policy.rs: 7
   - symbol: Policy::destination_from_reference
     sites:
@@ -174,6 +174,7 @@ guards:
       - crates/agent/src/skills.rs: 2
       - crates/agent/src/tools.rs: 42
       - crates/agent/src/tools/recall.rs: 4
+      - crates/agent/src/tools/web_search.rs: 1
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -240,6 +241,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 18
       - crates/agent/src/tools/link.rs: 1
+      - crates/agent/src/tools/web_search.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::promote_confined_read
@@ -283,7 +285,7 @@ guards:
       - crates/agent/src/manifest.rs: 1
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/tools.rs: 1
-      - crates/choice/src/lib.rs: 1
+      - crates/choice/src/lib.rs: 2
       - crates/core/src/policy.rs: 28
   - symbol: Policy::before_chooser
     sites:
@@ -297,7 +299,7 @@ guards:
   - symbol: ProcessorSpec::instruction
     sites:
       - crates/agent/src/permission_mode.rs: 4
-      - crates/agent/src/processor.rs: 2
+      - crates/agent/src/processor.rs: 3
       - crates/agent/src/turn/setup.rs: 1
       - crates/core/src/policy.rs: 1
       - crates/core/src/processor.rs: 1
@@ -320,6 +322,30 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/core/src/policy.rs: 6
+  - symbol: Policy::number_a_list
+    sites:
+      - crates/choice/src/lib.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::resolve_proposal
+    sites:
+      - crates/choice/src/lib.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::proposal_for_display
+    sites:
+      - crates/agent/src/server_calls.rs: 2
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::proposes_nothing
+    sites:
+      - crates/agent/src/server_calls.rs: 1
+      - crates/core/src/policy.rs: 1
+  - symbol: Policy::keep_applied
+    sites:
+      - crates/agent/src/server_calls.rs: 1
+      - crates/core/src/policy.rs: 2
+  - symbol: Policy::carry_applied_call
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/core/src/policy.rs: 5
   - symbol: Carried::into_wire
     sites:
       - crates/core/src/policy.rs: 4
@@ -557,6 +583,11 @@ An argument naming something the driver minted is held the same way, since the p
 who picks which of those names a call is about. [routing.md](routing.md) is where that case is
 settled.
 
+One exception is named, and it is narrow: within a manifest plan a person approved, the calls of an
+`apply` step whose tools the person marked plan-covered are selected by a processor that read
+untrusted content, among calls of the plan's tools, arguments and lists, each acceptable on its own,
+within the caps the plan states ([manifest.md](manifest.md#MANIFEST-17)).
+
 `verified-by: bravebot_core::policy::requesting_untrusted_content_is_refused`
 `verified-by: bravebot_core::policy::an_argument_cannot_be_read_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_core::policy::a_reference_cannot_be_named_once_the_context_has_met_something_untrusted`
@@ -573,6 +604,7 @@ settled.
 `verified-by: bravebot_agent::tools::tests::arguments::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::tools::tests::references::a_context_that_has_met_something_untrusted_collects_nothing_from_the_planners_arguments`
 `verified-by: bravebot_agent::tools::tests::references::a_command_the_planner_wrote_names_the_items_it_works_on_even_where_the_call_then_fails`
+`verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect
@@ -694,7 +726,7 @@ and the content has no say in it.
 | what a capability observed | the capability's own, one per capability, and an effect has none to give | `verified-by: bravebot_core::policy::observation_labels_come_from_the_capability` |
 | a file read from the workspace | private, and trusted only where somebody vouched for the path | `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted` |
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
-| the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
+| the file names a language server reported, and the file the question was asked at for the operations that start from one | private, and trusted only where every path it names is and, for `goToDefinition`, `findReferences`, `goToImplementation`, `incomingCalls`, `outgoingCalls` and `documentSymbol`, the file the planner asked at is too, so one nobody vouched for quarantines the answer even where it names only vouched files or none; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` `verified-by: bravebot_agent::lsp::a_location_answer_asked_in_a_distrusted_file_is_untrusted` `verified-by: bravebot_agent::lsp::a_position_asked_in_an_unvouched_file_is_not_in_the_planners_context` |
 | the severities and line numbers a language server reported for a file it was asked about | trusted and private, from the capability's own label and not from the queried file's entry, because a severity is a fixed enumeration and a line is an integer and the sentence carries no word the server wrote; the numbers are still computed from bytes nobody may have vouched for, which is the fifth entry of [Known costs](#known-costs) | `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages` |
 | the lines of a file a person clicked a path to see | untrusted and private whatever the trust map says of the path, from the label a write's review reads the file it replaces under, because the lines go to a screen as a quarantined block and a click has not asked for the file to be read by anything that acts on it ([MOUSE-42](mouse.md#MOUSE-42)) | `verified-by: bravebot_agent::file_preview::a_path_the_map_vouches_for_is_still_shown_as_untrusted` |
 | what a connector's authority says about a call besides its payload and detail: the outcome, the standing, reason codes, counts withheld and a link | none, because none of it reaches a model: each field has a fixed form, an outcome or standing from a closed list, a count, a reason in lower-case kebab and one `https://` URL, and a value out of form is replaced or dropped rather than shown. The payload and the detail are the capability's, the first row | `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form` `verified-by: bravebot_agent::manifest::an_accepted_acts_link_is_shown_only_when_it_is_well_formed` `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service` |
@@ -705,7 +737,7 @@ and the content has no say in it.
 | what a line whose every step is accounted for printed | trusted and private, because the steps were vouched for and the output is a function of what went in | `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted` |
 | a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
 | input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for. The body of a delivery to `bravebot trigger serve` is this row: it is written to the standard input of the run it starts and takes no label of its own ([TRIGGER-7](triggers.md#TRIGGER-7)) | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` `verified-by: bravebot_cli::running::a_signed_delivery_starts_the_prompt_and_the_planner_never_sees_the_body` |
-| the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
+| the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant. A checkout's settings file is not the person's own: its text is not carried into a sentence the planner gets, which names only the list key, a closed reason and the file ([SANDBOX-25](sandboxing.md#SANDBOX-25)) | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
 | a fact kept by `remember` or the person | trusted, with the confidentiality its `label` field states, private when missing, because a kept fact is in the user's own memory and is written only by the person or by a save they were shown; a private one makes what the planner writes private once it is read | `verified-by: bravebot_core::policy::a_kept_fact_is_trusted_with_the_confidentiality_it_states` `verified-by: bravebot_core::policy::labelling_a_kept_fact_is_recorded_in_the_audit_trail` `verified-by: bravebot_core::policy::reading_a_private_fact_makes_the_context_private` `verified-by: bravebot_core::policy::reading_a_public_fact_leaves_the_context_as_it_was` |
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
@@ -836,7 +868,8 @@ arrives at all.
   sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
   read, which are in `bravebot-agent` too, the eighth is the choice of which parts of a tool
   result are taken, which is in `bravebot-mcp`, the ninth is the read of a processor's answer
-  for one number, which is in `bravebot-choice`, and the tenth is the trigger listener's reading
+  for one number or for an `apply` step's rows, and the numbering of the list those rows point
+  into, which are in `bravebot-choice`, and the tenth is the trigger listener's reading
   of a request's framing and path, which is in `bravebot-cli`. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
@@ -967,8 +1000,8 @@ arrives at all.
   ([VET-4](tools/vet-content.md#VET-4)) is a path away from it instead. The number of tokens a
   check wrote is not on it either: a delegate's token budget does not count a check's tokens, so
   steering the length of a reply moves no figure a delegate is told and no point at which it loses
-  its tools ([DELEGATE-29](delegation.md#DELEGATE-29)). The size of what a processor wrote still
-  counts there, which is [#4013](https://github.com/brave/bravebot/issues/4013).
+  its tools ([DELEGATE-29](delegation.md#DELEGATE-29)). The same holds for the number of tokens a
+  processor wrote, which a delegate's token budget does not count either.
 
 - **The fourth is the search comparing its pattern against files nobody vouched for.** The search
   tool walks the files its directory and `include` select and tests each line against the pattern,
@@ -1143,9 +1176,11 @@ arrives at all.
   - **Choose which of two driver-worded results the planner is shown for the file.** A reference
     with a size, or the refusal above. That is one bit, and the planner was already free to read a
     different path.
-  - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or bytes that are not
-    valid UTF-8 anywhere, makes a later fill of the slot fail with a refusal in the driver's own
-    words, as does a byte order mark. A slot is filled from text that is UTF-8 as it stands.
+  - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or invalid UTF-8 past
+    the 30 percent replacement limit, is what makes a fill of the slot fail with a refusal in the
+    driver's own words. A byte order mark, or invalid UTF-8 within that limit, fills the slot as a
+    decoding instead, so a processor still reads it; the slot is refused only where something
+    writes it back or hands it to a program.
   - **Choose how the bytes are split into lines** for a page of the file that is read through a
     manifest step. A mark makes the units two or four bytes, and an invalid byte makes one
     character. The line and byte counts the planner is told for a quarantined page are already the
@@ -1188,8 +1223,18 @@ arrives at all.
   ([MCP-13](mcp.md#MCP-13)). The driver tells the planner in its own words that the call failed. In
   a plan run ([MANIFEST-15](manifest.md#MANIFEST-15)) it reads one distinction in these, which is
   whether a reply arrived. Every reply is on the same side of it, whatever it holds, so the steps
-  after one run. A call that got no reply, because its connection closed or its bound passed, ends
+  after one run, except that an `apply` step skips its calls that depend on a call the server
+  reported failed ([MANIFEST-16](manifest.md#MANIFEST-16)). A call that got no reply, because its connection closed or its bound passed, ends
   the run. [MCP-5](mcp.md#MCP-5) says which failures are replies.
+
+  The sentence is one of two the driver wrote, chosen by which kind of failure it was: a JSON-RPC
+  error, or a reply that cannot be used. It holds the name of the tool the planner called and
+  nothing the server chose. The error code a server picked, the HTTP status it answered with and the
+  byte count of a reply are numbers the server chooses, so they are not in the sentence and are
+  not a cost ([MCP-8](mcp.md#MCP-8)).
+
+  `verified-by: bravebot_agent::mcp::a_code_or_a_status_a_server_chose_never_reaches_the_planner_over_http`
+  `verified-by: bravebot_agent::mcp::a_code_a_server_chose_never_reaches_the_planner_over_stdio`
 
   Suppose a server, or a page that steers a tool the server relays, is hostile. Everything that buys
   it is on this list:
@@ -1215,6 +1260,9 @@ arrives at all.
     connection or stays silent past its bound ends the run at that call, so the approved steps after
     it do not run. Nothing it sends changes which steps run, and it cannot make a step run that the
     plan did not hold. A server that is not there ends a run the same way.
+  - **Skip an `apply` step's calls that depend on a call, by reporting that call failed.** The
+    step's line counts them as skipped, and the person sees what became of each. The server could
+    leave the calls undone as well by not acting on them.
 
   That is a few counts, a choice among four words and whether a plan run goes on, for each call, in
   the driver's sentences. A server could already set each by choosing what to return and whether to
@@ -1262,6 +1310,21 @@ arrives at all.
   screen, and `Policy::carry_a_choice`, which returns an opaque `Carried`. Only
   `bravebot_mcp::protocol::with_choice` opens that, with `Carried::into_wire`, to write the number
   into the call. The uses of all three are pinned in `guards`.
+
+  An `apply` step's rows ([manifest.md](manifest.md#MANIFEST-16)) are read the same way, through two
+  more gates. `Policy::number_a_list` hands a read's reply to the crate, which decides which entries
+  hold the fields the plan's arguments take and numbers them; the numbered text is quarantined for
+  the processor at the list's label, so text inside an entry cannot shift the count.
+  `Policy::resolve_proposal` hands the processor's answer to the crate, which reads its rows,
+  resolves each against the plan's shape and the numbered entries, gives each value the type the
+  server's list declares for its argument, drops a row that does not fit, holds a value that is not
+  that type or repeats an earlier row, and counts each drop by a reason of a closed set. What comes
+  back is the resolved list, labelled with everything it derives from, which the driver carries to
+  the server and reads only through `Policy::proposal_for_display`, to draw it for the person. Which
+  calls are kept from the person's ticks, which a failure skips, and whether the list holds any call
+  are worked out in the policy layer too, by `Policy::keep_applied` and `Policy::proposes_nothing`,
+  so the driver makes the calls it is handed by their places in the list. A hostile entry or answer
+  can choose which of the calls the plan allows are proposed, within its caps, and nothing else.
 
   Suppose the page a processor read is hostile and talks the processor round. Everything that buys
   it is on this list:
@@ -1320,32 +1383,122 @@ arrives at all.
   by nothing here. A header, a path suffix or a byte of the body that selects a trigger, an event, a
   flag, a directory or a limit is a violation, and not one of these four.
 
-- **A bounded listing's count of the files left out of each directory it cut is not one of the
-  ten.** A listing with a depth takes at most 200 files from any one directory
-  ([LIST-5](tools/list-files.md#LIST-5)). The walk sorts a directory's files by name, drops each
-  file the include pattern does not match or a permission rule covers, and keeps the first 200 of
-  the rest, so which 200 are kept is decided by the name order that already decides what the cap
-  over the whole walk keeps. The count of files left out is taken after the include pattern and the
-  rules, which the walk applies to every file it reports whether or not a cap applies. A cut
-  directory is recorded under the name its caller passes to `walk_filtered`: `Workspace::list`
-  passes the walk root's name once, `.` when the resolved directory argument is the workspace root
-  and its relative name otherwise, and each recursive call passes the relative name it built for the
-  subdirectory, so no name read from a directory entry is tested to tell the root from a
-  subdirectory. Each cut directory counts as one entry against the cap over the whole walk, in
+- **A bounded listing's counts of the files and the subdirectories left out of each directory it
+  cut are not one of the ten.** A listing with a depth takes at most 200 files and at most 200
+  subdirectories from any one directory ([LIST-5](tools/list-files.md#LIST-5)). The walk sorts a
+  directory's files by name, drops each file the include pattern does not match or a permission
+  rule covers, and keeps the first 200 of the rest, so which 200 are kept is decided by the name
+  order that already decides what the cap over the whole walk keeps. It sorts the directory's
+  subdirectories by name in the same way, and keeps the first 200 of those the walk's existing
+  filters leave (ignored directory names, links, the stores and the permission rules), whether it
+  goes into them or stops at them, from a budget the files do not spend. The count of files left
+  out is taken after the include pattern and the rules, which the walk applies to every file it
+  reports whether or not a cap applies. The count of subdirectories left out is taken after the
+  rules, so a subdirectory a rule covers is not counted, and the include pattern does not apply to
+  directories. A cut directory is recorded under the name its caller passes to `walk_filtered`:
+  `Workspace::list` passes the walk root's name once, `.` when the resolved directory argument is
+  the workspace root and its relative name otherwise, and each recursive call passes the relative
+  name it built for the subdirectory, so no name read from a directory entry is tested to tell the
+  root from a subdirectory. A directory has one record in `partly_listed` however it was cut. The
+  pass over its files adds the record when files were left out, and the pass over its
+  subdirectories adds it when none exists and otherwise adds to the subdirectory count of the one
+  that does. Each cut directory counts as one entry against the cap over the whole walk, in
   `Collected::len` during the walk and in `at_the_cap` after it. `Workspace::list` sets
   `at_the_cap` when the files, the directories stopped at and the cut directories together pass
   that cap, and sets `truncated` to `at_the_cap || !partly_listed.is_empty()`. It sorts the cut
   directories by name and truncates them to what the cap leaves after the files and the directories
-  stopped at, the same sort by name and truncation it applies to those two lists. Each count and
-  `at_the_cap` are released inside the existing release in `list_files`, and each count reaches
-  the planner as a number beside the directory's reference, with no name. The driver branches on
-  the comparison of the files taken from a directory with 200 and on whether its count is above
-  zero, in the walk; on whether any directory was cut and on `at_the_cap`, which together choose
-  the sentences in `list_files` and in `listing_capped_note` (`cut.is_empty() || at_the_cap`); and
-  on each count's value, which `tally` compares with 1 to write "file" or "files". Apart from the
-  include pattern, the rules, the resolved directory argument and the name order above, no name is
-  in any of these conditions. A name in that sentence, or a choice of which directory to cut or how
-  to word the sentence made from a name, is a violation and not covered here.
+  stopped at, the same sort by name and truncation it applies to those two lists. Each pair of
+  counts and `at_the_cap` are released inside the existing release in `list_files`, as a pair of
+  numbers for each directory, and each pair reaches the planner as numbers beside the directory's
+  reference, with no name. The driver branches on the comparison of the files taken from a
+  directory with 200, the comparison of the subdirectories taken from it with 200
+  (`taken_directories >= most` in `walk_filtered`, a count of directory entries kept by the filters
+  above, no name read), whether the count of files left out is above zero, and whether a directory
+  already has a record, in the walk; on whether any directory was cut, whether any cut left files
+  out, whether any left subdirectories out and
+  `at_the_cap`, which together choose the sentences in `list_files` and in `listing_capped_note`
+  (`cut.is_empty() || at_the_cap`); and on each count's value, which `left_out_clause` compares
+  with zero to decide whether to say it and `tally` compares with 1 to write "file" or "files" and
+  "subdirectory" or "subdirectories". Apart from the include pattern, the rules, the fixed list of
+  ignored directory names, the resolved directory argument and the name order above, no name is in
+  any of these conditions. A name in that sentence, or a choice of which directory to cut or how to
+  word the sentence made from a name, is a violation and not covered here.
+
+- **The reason a checkout's refused filesystem entry is named is chosen from the entry's spelling,
+  and is not one of the ten.** A `run` is not started while an entry of `sandbox.filesystem.denyRead`
+  or `denyWrite` cannot be applied ([SANDBOX-25](sandboxing.md#SANDBOX-25)). Where the project or
+  local settings file of a checkout wrote that entry, the sentence the planner reads names the list,
+  one reason and the file, and not the spelling. The reason is one of five sentences the driver
+  wrote (`sandbox-rule-*` in the catalog): the entry starts with a variable, starts with `~` in a
+  session with no home directory, climbs out of the directory it is read from, holds a wildcard in a
+  write list, or holds a wildcard that looks at more of the disk than a pattern may. `resolve` in
+  `bravebot-sandbox` picks it by reading the entry's text, and for the last one by counting the
+  paths the wildcard visits on the disk. The same function, reading the same text, already decided
+  whether the entry is refused, and so whether the stage started and whether the planner was told it
+  did not. What is new is which of five sentences that refusal carries.
+
+  What the planner can learn is which of those five the first refused entry hit: one of five, about
+  2.3 bits, and for the last one that the wildcard's directory held more entries than a pattern may
+  visit. This is a branch on bytes a checkout wrote whose result reaches the planner, and it is
+  recorded here for that reason. It is not counted among the ten because the same function, reading
+  the same text, already decided that the entry is refused and the stage not started, which the
+  planner was already told, and because the sentence chosen carries no byte of the entry. The file
+  that holds the entry is a checkout's file the person did not trust, and its author wrote the entry
+  and already knows which reason it hits. The choice names no tool, argument, destination or label
+  and changes no effect: the stage is refused whichever of the five is named, a checkout can add a
+  refusal and never an allowance ([SANDBOX-25](sandboxing.md#SANDBOX-25)), and which entry is
+  reported is the first refused one in list order. A sentence that put any part of the spelling in
+  it, a reason outside the closed set, or a different sentence chosen from the entry for any other
+  purpose is a violation and not covered here.
+
+- **Whether a `run` line is refused for standing for too many names, or for reading too many
+  directories, is not one of the ten, and is one bit per call about a directory nobody vouched
+  for.** [CMDLINE-4](tools/command-line.md#CMDLINE-4) bounds a word at 100 arguments and a walk at
+  4,096 directories. The compile compares the number of names the patterns matched with the first,
+  and the number of directories it read with the second, and a line past either is refused. The
+  refusal states the cap, which is a constant, and states no count taken from the directory's
+  entries, so no number out of the directory is spelled into a sentence the driver writes. The
+  brace bound is counted from the planner's own word before anything is read and its count is
+  still spelled. What remains is that a line is accepted or refused according to whether the count
+  passes the bound. A planner that pads a pattern with `k` literal alternatives, as in
+  `dir/{p*,{1..k}}`, learns from one call whether the names starting with `p` number more than
+  `100 - k`, and finds a count by about seven calls. The comparison reads no name and no byte of a
+  file: it reads how many entries a directory listing held, and the planner learns one bit per call
+  from the answer, as it learns whether a path exists from whether a read of it succeeds. The
+  bit is bounded by the calls the planner makes, each of which a person may be asked about when
+  it is not covered by a rule, and no name is revealed by it. The same kind of bit is in the
+  reason a checkout's refused filesystem entry is named, when the wildcard visits more paths
+  than a pattern may, which is the entry above this one. The refusal carries no name, no
+  count and no fact about which pattern matched. A change that spells the count, or a name, or
+  chooses the sentence from either, is a violation of shape 1 or 3 and is not covered here.
+
+- **Whether a checkout is refused for an entry under a path nobody vouched for is one bit per call
+  about that path.** [CHECKOUT-4](checkouts.md#CHECKOUT-4) refuses a checkout with one fixed
+  sentence where the cause is an entry at or under a distrusted path, so the sentence names no
+  check, no name, no count and no size. The refusal itself is decided by comparing the names, the
+  file and directory counts and the sizes under that path with the checkout's rules and bounds, and
+  a spawn that is refused differs from one that is made. A planner that can place entries in a
+  repository learns from one spawn whether any of them failed a check, as it learns whether a path
+  exists from whether a read of it succeeds. Whether the sentence is the fixed one is chosen from
+  the map's answer for the entry's path and from nothing the entry holds. For a tree that holds
+  trusted and distrusted entries, a bound both pass together is the fixed sentence once a
+  distrusted entry has been counted, so which sentence a mixed tree gets depends on the order the
+  walk meets its entries. The bit is bounded by the spawns the planner makes, each of which a person
+  may be asked about, and no name or number is revealed. A change that names the check, the entry
+  or a count in the fixed sentence, or that chooses the sentence from the entry's name or size, is a
+  violation of shape 1 or 3 and is not covered here.
+
+- **Whether a `cell` edit of a file named by `path_ref` is refused as not a notebook is chosen from
+  the extension of the name behind the reference, and only after a person vouched for the file.**
+  [EDIT-8](tools/edit-file.md#EDIT-8) refuses a `cell` edit of a file nobody vouched for with the
+  refusal [EDIT-2](tools/edit-file.md#EDIT-2) gives, whatever the name ends in. For a file a person
+  vouched for, `edit_file` tests whether the name ends in `.ipynb`, and `output_of` on `read_file`
+  does the same, so the planner learns from the answer whether the name behind a reference it holds
+  is a notebook. The name came out of a directory, and the test is not made until the person has
+  vouched for that file, which they did knowing its name, so what the planner learns is a fact the
+  person already accepted. It is one bit about one vouched file per call, from a closed test of the
+  extension against one suffix. A change that makes the test before the vouch, or that tests any
+  other part of the name, is a violation of shape 1 and is not covered here.
 
 - **A model that searches the web is kept out by a list of ids, and a model nobody listed is not.**
   Whether a model adds retrieved pages to its context is not something a request or a reply states,
@@ -1354,3 +1507,27 @@ arrives at all.
   that a gateway routes to a search backend are requested and labelled from the context this program
   built, which is the label the pages did not earn. The list is compared with the name a request
   carries and with nothing a reply says, so no byte from outside decides it.
+
+- **The line count and the byte count a reference states for a line's output depend on whether, and
+  on how many names, a pattern in a position the program does not read as a file matched.**
+  `basename incoming/a*` is asked about and its output is untrusted whether or not a name begins
+  with `a` ([CMDLINE-4](tools/command-line.md#CMDLINE-4)), so neither the question nor the label
+  depends on the names in `incoming/`. The reference states the number of lines and the number of
+  bytes of what the program printed. Where no name matched, the program prints the pattern, so
+  the reference states one line and the pattern's length. Where names matched, the program prints
+  its result for each of them, so the reference states a line for each name printed and the total
+  of their lengths. A planner that knows the pattern's length can tell from a different line count
+  or byte count that some name matched, and from the line count how many were printed. The two
+  numbers are the ones the planner is shown for any untrusted output ([LABEL-3](#LABEL-3)). The
+  driver carries them and does not branch on them, and no name is spelled to the planner, only the
+  lengths. Quoting the pattern passes it to the program unmatched.
+
+- **The refusal of a word that stands for more than 100 arguments states how many names a pattern
+  matched.** Where an unquoted pattern matches more names than a person can be shown at one
+  prompt, the compile is refused and the sentence the planner is told carries the count of names
+  the walk found ([CMDLINE-4](tools/command-line.md#CMDLINE-4)). The sentence names the word as
+  the planner wrote it and no name. In a directory nobody vouched for, the names are chosen by
+  whoever wrote it, so the planner can learn from the refusal, and from the count in it, how many
+  names match a pattern it chose. The count is a number and the bound is fixed, so the comparison
+  with 100 is the only decision the driver takes from it. Quoting the pattern passes it to the
+  program unmatched and is not refused.

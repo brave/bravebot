@@ -261,6 +261,12 @@ row so the cost is known before sending.
 `verified-by: bravebot_session::excerpt::one_turn_longer_than_the_bound_is_cut_rather_than_dropped`
 `verified-by: bravebot_session::excerpt::a_session_that_used_tools_says_their_results_are_not_included`
 `verified-by: bravebot_session::excerpt::a_record_that_is_not_the_planners_to_repeat_is_refused`
+`verified-by: bravebot_session::excerpt::a_record_holding_imported_words_is_refused_as_not_ours`
+`verified-by: bravebot_session::excerpt::a_front_end_this_build_knows_is_quoted_and_an_unknown_one_is_not`
+`verified-by: bravebot_session::excerpt::a_record_with_no_front_end_word_is_quoted`
+`verified-by: bravebot_session::excerpt::a_holds_word_that_is_missing_or_not_public_is_refused_as_private`
+`verified-by: bravebot_session::excerpt::a_well_formed_id_with_no_record_is_not_found`
+`verified-by: bravebot_session::excerpt::each_refusal_says_its_own_reason_and_names_the_session`
 `verified-by: bravebot_session::excerpt::an_id_that_is_not_a_session_name_is_not_looked_up`
 `verified-by: bravebot_mentions::lib::a_session_reference_is_not_a_file_and_is_read_back_by_its_id`
 `verified-by: bravebot_mentions::lib::a_session_row_completes_to_its_reference_and_enter_sends_it_finished`
@@ -271,6 +277,10 @@ row so the cost is known before sending.
 `verified-by: bravebot_tui::render::a_session_row_carries_its_title_and_a_file_row_does_not`
 `verified-by: bravebot_tui::app::naming_a_past_session_adds_its_words_only_from_a_line_the_person_wrote`
 `verified-by: bravebot_tui::app::the_sessions_an_at_offers_leave_out_the_open_one`
+`verified-by: bravebot_tui::app::the_note_for_a_named_session_says_how_many_characters_it_added`
+`verified-by: bravebot_tui::app::a_session_that_cannot_be_quoted_is_left_out_with_the_reason_it_was`
+`verified-by: bravebot_ui_bridge::mentions::the_window_is_offered_no_past_session`
+`verified-by: bravebot_ui_bridge::mentions::the_window_sends_a_session_mention_as_typed_with_nothing_of_the_session`
 `verified-by: bravebot_agent::turn::a_named_session_is_added_to_the_message_and_the_trail_holds_only_its_size`
 `verified-by: bravebot_cli::main::a_session_ref_flag_names_a_session_once`
 `verified-by: bravebot_cli::running::a_session_ref_brings_an_earlier_session_into_a_new_run`

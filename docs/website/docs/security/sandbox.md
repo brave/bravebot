@@ -23,8 +23,9 @@ what a confined program cannot reach are under [Confinement](security.md#confine
 Variables to withhold from a program the agent runs, on top of bravebot's own credentials, which are
 withheld with no configuration at all. Those credentials are the signing key, its key id and the crash report submission URL, and every
 variable a [provider block](../customize/providers/openai-compatible.md) names in its `env` as the place a gateway's token is read from,
+and every variable [`webSearch.env`](../customize/configuration.md#websearchenv) names as the place the Brave Search key is read from,
 so a gateway token held in `OPENROUTER_API_KEY` or in a name of your own is withheld without being
-listed here. A variable no provider block names is yours and stays. A block you add mid-session
+listed here. A variable no provider block and no setting names is yours and stays. A block you add mid-session
 withholds its variable from the next program started. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
 
 A hook and a language server are withheld these names too. A line you typed yourself at the `!`
@@ -105,7 +106,10 @@ settings file chosen there, does not change it.
 Holds the programs the agent runs to a list of hosts while the network stays open for everything
 else. `allowedHosts` names the hosts a program may reach, with GitHub added for a `git` or `gh`
 command that talks to a remote and a toolchain's own registry added for `cargo`, `npm`, `pip` and
-`go`. `deniedHosts` refuses hosts whatever else allows them. `onUnlisted` is `refuse` or `ask`: a host
+`go`. `deniedHosts` refuses hosts whatever else allows them. A `deniedHosts` entry that is not a host
+name refuses every program that has network access, since leaving it out would let the host through.
+The message the model reads says only that an entry is not a host name; the entry is shown to you in
+the session and by `bravebot doctor`, which also names the file that wrote it. `onUnlisted` is `refuse` or `ask`: a host
 no list names is refused, or put to you. With `ask`, the program is refused at once and the hosts it
 was refused are put to you after that run has stopped, up to eight at a time, one per row. A yes adds
 them to the allowed set until the session ends and writes nothing to disk, so you run the line again;
@@ -190,7 +194,11 @@ tree built elsewhere cannot be moved into place at `~/.config/systemd`. Files ma
 the refused path are not affected.
 
 An entry that cannot be applied is not in force. A refused `denyRead` or `denyWrite` stops the
-commands it would have held back, with a message naming it, rather than letting them through. On
+commands it would have held back, with a message naming the list, the reason and, for an entry a
+project or local settings file wrote, that file, rather than letting them through. The message does
+not repeat the entry when a project or local file wrote it, because that text arrives with a clone. A
+file you name with `--settings` is your own wherever it sits, so its entries are repeated, unless the
+file is withheld from the session, which is read as a checkout's. `bravebot doctor` and the window show the entry. On
 Linux a directory holding a path you refused writes to cannot have new entries made directly in it,
 and on Windows a command the refusal would reach is not started, since neither can narrow a write
 grant.

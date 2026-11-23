@@ -924,6 +924,7 @@ mod tests {
             "xai-account.lock",
             "mcp.json",
             "mcp-approved",
+            "hooks-approved",
             "mcp-projects",
             "mcp-tools",
             "settings.json",

@@ -220,6 +220,14 @@ about whatever is vouched for ([RUN-3](#RUN-3)).
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_the_same_plan_fed_something_else`
 `verified-by: bravebot_core::command::a_plan_fed_a_reference_encodes_apart_from_the_same_plan_fed_nothing`
 
+A line a stage of which is lent a credential scope a person kept at an earlier prompt
+([SANDBOX-27](../sandboxing.md#SANDBOX-27)) is asked about whatever is vouched for, and what it prints
+has the first label, `(U,priv)`, as the output of a line that asked for the scope has
+([SANDBOX-26](../sandboxing.md#SANDBOX-26)). The scope is read from the person's own record of reach and
+the compiled plan, never from what a program printed.
+
+`verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
+
 A file-dependent output label must also account for overlapping effects. If shared file state
 changes between the run gate and output capture, apart from the command's own guarded effect
 entries, that output is untrusted. This includes background output when polled. This conservative
@@ -268,7 +276,8 @@ settings and the person's answer and never from what a stage wrote or printed:
   ([SANDBOX-14](../sandboxing.md#SANDBOX-14)), and no stage is `git`, whose profile lifts the hold-back
   (the auto mode's classifier is kept from a line with such a stage as well, on every platform,
   [AUTO-3](../auto-mode.md#AUTO-3));
-- nothing the earlier questions above put to a person: a credential scope, a toolchain list, `unconfined`
+- nothing the earlier questions above put to a person: a credential scope, a credential scope kept at
+  an earlier prompt that a stage is lent ([SANDBOX-27](../sandboxing.md#SANDBOX-27)), a toolchain list, `unconfined`
   ([SANDBOX-26](../sandboxing.md#SANDBOX-26), [SANDBOX-29](../sandboxing.md#SANDBOX-29)), private input or a
   `stdin_ref` ([RUN-6](#RUN-6)), a `>` redirection, a leading environment assignment, another tree ([RUN-8](#RUN-8)),
   or a rule that says ask ([permissions.md](../permissions.md));
@@ -347,6 +356,9 @@ into a trusted one is written unasked.
 A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
 remembered line hold the program, its arguments and a tree, and not what the line was lent.
+The same holds for a line a stage of which is lent a credential scope a person kept at an earlier
+prompt ([SANDBOX-27](../sandboxing.md#SANDBOX-27)): it is asked about whatever answers the same line
+without the scope, and no answer to it is kept.
 The same holds for a line whose call asks to run with no sandbox ([SANDBOX-29](../sandboxing.md#SANDBOX-29)).
 
 **Why.** An unprompted write is worse than an unwanted prompt, so nothing that could be wrong about
@@ -366,6 +378,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
+`verified-by: bravebot_core::policy::a_line_lent_a_kept_scope_is_asked_about_whatever_covers_the_line_without_it`
+`verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
 `verified-by: bravebot_core::policy::a_held_line_in_a_directory_whose_yes_said_so_does_not_ask`
 `verified-by: bravebot_core::policy::only_a_line_the_trust_of_the_directory_let_through_is_said_to_be_answered_by_it`
 `verified-by: bravebot_agent::confined_lines_open_network::a_line_let_through_by_directory_trust_runs_with_the_network_closed_and_an_approved_line_does_not`
@@ -433,10 +447,20 @@ next prompt for *this* line, and the only thing it could ever grant is the bare 
 read the program and the arguments the entry would hold, which is what makes this narrower than a
 source; what they did not read is the line that entry covers. The refusal is made twice, as above.
 
+**A stream sent to `/dev/null`, or `2>&1`, is not withheld, because the entry holds it.** Neither
+route opens a file, so the line has an empty write set and is offered `a`
+([CMDLINE-5](command-line.md#CMDLINE-5)). The entry records the route as well as the program and the
+arguments ([RUN-8](#RUN-8)), so an entry made at `sh check.sh > /dev/null` covers that line, which
+the person read, and does not cover `sh check.sh`, whose output the planner would read as trusted.
+The prompt draws the entry with its route. A line whose route opens a file is withheld as above,
+since an entry would then record a destination that a later line can name differently.
+
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_vouched_line`
 `verified-by: bravebot_agent::cmdline::an_input_redirection_is_private_input`
 `verified-by: bravebot_agent::turn::a_line_that_reads_a_file_is_not_remembered_however_it_is_answered`
 `verified-by: bravebot_agent::turn::a_line_that_writes_is_not_remembered_however_it_is_answered`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_does_not_cover_the_bare_line`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_covers_that_line_again`
 `verified-by: bravebot_agent::turn::always_at_a_prompt_for_a_fed_page_does_not_cover_the_next_page`
 `verified-by: bravebot_core::policy::no_standing_answer_is_offered_for_a_line_fed_a_reference`
 `verified-by: bravebot_tui::confirm::run::a_run_fed_a_reference_offers_no_standing_permission`
@@ -511,6 +535,18 @@ behave as two programs ([RUN-2](#RUN-2)), for example a venv's `python` and the 
 to, or a multi-call binary that reads the name it was started by. An entry holds both paths, so an
 answer about `venv/bin/python` covers the interpreter only when it is started by that link. A record
 with no start path reads back as the file started by its own path.
+
+**Where the streams go is keyed with the program.** An entry holds the routes of the step it was made
+at, in the order the line wrote them, and a line is covered only where its routes are the same. The
+routes an entry can hold are the ones that open no file, which are a stream sent to `/dev/null` and
+`2>&1` ([RUN-6](#RUN-6)): `sh check.sh > /dev/null` and `sh check.sh 2>&1` are each an entry of their
+own, and neither covers `sh check.sh`. An entry with no routes covers a line with none and not a line
+that discards or merges a stream. A line whose route opens a file is not offered the key, so no entry
+holds one. A record from before entries held routes reads back as entries with none, which is the
+line they were made for. Before this key held routes, an entry made at a line that discarded its
+output covered the same program and arguments with the stream left alone, and a vouched entry made
+at a line that merged its streams covered the same program with them apart. Both are now different
+lines and are asked about.
 
 **The path itself, and never a rendering of it.** A path is bytes, and not every sequence of bytes is
 text. `to_string_lossy` maps every byte it cannot read onto one replacement character, so two files
@@ -615,6 +651,10 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::programs::two_spellings_of_one_binary_are_two_entries`
 `verified-by: bravebot_core::programs::a_command_started_through_a_link_reads_back_as_the_link_and_the_file`
 `verified-by: bravebot_core::programs::arguments_that_spell_a_link_draw_apart_from_the_link`
+`verified-by: bravebot_core::command::an_entry_made_at_a_line_with_routes_does_not_cover_the_line_without_them`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_does_not_cover_the_bare_line`
+`verified-by: bravebot_agent::turn::a_vouch_made_at_a_line_that_discards_its_output_covers_that_line_again`
+`verified-by: bravebot_session::sessions::the_routes_of_a_command_come_back_with_it`
 `verified-by: bravebot_core::policy::vouching_does_not_follow_a_binary_onto_another_path_it_is_started_by`
 `verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
 `verified-by: bravebot_session::sessions::the_path_a_command_was_started_by_comes_back_with_it`
@@ -632,8 +672,23 @@ Empty at the start of every session, written into the session record, restored b
 never inherited by a fresh session in the same directory. `/status` lists every entry it holds
 rather than a count of them, and names the tree each one covers ([RUN-8](#RUN-8)): two entries for
 one command in two directories are two grants, and a report drawing them as one line twice says
-nothing about which of the two is held. A line somebody asked to be remembered past the session is a
-separate record holding less, which [RUN-19](#RUN-19) governs, and it puts no entry in this list.
+nothing about which of the two is held. The desktop's permissions list reads each entry back the
+same way: each entry is sent and drawn with the tree it covers, and revoking one names that tree
+and removes the entry for it alone, never the first entry of the same command in another tree. A
+revoke that names no tree, or one this session does not hold, changes nothing. A tree with no text
+spelling is listed with the directory null, since no string names it, and no revoke matches it:
+the window disables its Revoke button and says why, which is a Known cost
+([Known costs](#known-costs)). A line
+somebody asked to be remembered past the session is a separate record holding less, which
+[RUN-19](#RUN-19) governs, and it puts no entry in this list.
+
+The tree is spelled by one function, `bravebot_agent::confirm::shown_tree`, which `/status` and the
+desktop's list both call: `.` for the workspace root, the path relative to it inside it, and the
+whole path outside it, each spelled as a path is in a prompt ([PROMPT-1](../prompting.md#PROMPT-1)),
+so a byte that is not text is written `\xNN` in both. The one difference is the home directory:
+`/status` writes a tree outside the root from `~`, as it does every other path it draws, and the
+window passes no home directory and writes it in full. The spelling is only drawn and a revoke
+never compares it.
 
 A tree inside the project is written into the record relative to it and comes back under the
 directory the resumed session works in, as a rewind's paths and the trust map's rules are
@@ -658,6 +713,13 @@ does not appear, so it has to be readable back.
 `verified-by: bravebot_core::policy::a_line_remembered_past_the_session_vouches_for_nothing`
 `verified-by: bravebot_tui::status::every_vouched_command_is_listed_however_many_there_are`
 `verified-by: bravebot_tui::status::the_report_names_the_tree_each_vouched_command_runs_unasked_in`
+`verified-by: bravebot_tui::status::the_report_spells_a_tree_that_is_not_text_with_its_byte`
+`verified-by: bravebot_agent::confirm::a_tree_is_spelled_relative_to_the_root_and_whole_outside_it`
+`verified-by: bravebot_agent::confirm::a_tree_that_is_not_text_is_spelled_with_its_bytes_in_every_position`
+`verified-by: bravebot_ui_bridge::bridge::a_command_vouched_in_two_trees_is_listed_with_each_tree_and_revoked_by_it`
+`verified-by: bravebot_ui_bridge::bridge::revoking_a_command_without_its_tree_or_in_a_tree_not_held_changes_nothing`
+`verified-by: bravebot_ui_bridge::bridge::a_tree_that_is_not_text_is_not_revoked_by_the_tree_that_renders_like_it`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the remembered command list is pinned instead by ui/scripts/remembered-command-list.test.mjs, which renders the real list row through react-dom and asserts that it draws the tree the bridge spelled, that two rows for one command in two trees are keyed apart, that Revoke sends the tree of the row it is on, and that a row whose tree has no text spelling has a disabled Revoke button and a reason beside it; make check-ui runs it)`
 `verified-by: bravebot_session::sessions::an_entry_recorded_without_a_tree_comes_back_scoped_to_the_root`
 `verified-by: bravebot_session::sessions::a_tree_inside_the_project_is_written_down_relative`
 `verified-by: bravebot_session::sessions::a_tree_written_down_relative_comes_back_under_the_resumed_root`
@@ -794,11 +856,14 @@ one of them back: the removal is applied again after the line's own assignments,
 the planner's and not the person's own.
 
 Those credentials are the signing key, its key id and the crash report submission URL
-(`BACKTRACE_SUBMIT_URL`, whose path holds the project's submission token), and every variable the `env` of a gateway in
-force names as a place its bearer token may live. The gateways in force are the managed layer's where
+(`BACKTRACE_SUBMIT_URL`, whose path holds the project's submission token), every variable the `env` of a gateway in
+force names as a place its bearer token may live, and every variable `webSearch.env` names as a place
+the Brave Search key may live. The gateways in force are the managed layer's where
 it states any, otherwise the person's own provider blocks and the Vertex AI service the environment
-names, so the set follows the configuration with no second list to keep in step. A variable no block
-names is the person's own and stays. The same set is taken off a background job, a hook
+names, so the set follows the configuration with no second list to keep in step. `webSearch.env` is
+read from the person's own settings and the file `--settings` names only, and its names are removed
+through the same set the gateways' are. A variable no block and no setting names is the person's own
+and stays. The same set is taken off a background job, a hook
 ([HOOK-4](../hooks.md#HOOK-4)), a language server ([lsp.md](lsp.md)) and the `aws` CLI the
 Bedrock backend starts. Reading the token for a request is unaffected: only the programs this agent
 starts lose the variable. `run.scrubEnv` remains the person's own list and adds to this set. It is
@@ -810,8 +875,8 @@ read ([BACKEND-24](../backends.md#BACKEND-24)).
 **The planner is told what is removed.** The description of `run`, on a turn that offers it, names
 the credentials this agent holds, the signing key, its key id and the crash report submission URL,
 and says that the variables the
-person's settings name as a gateway's token or to be withheld are removed as well, without listing
-them. It says that a program reporting one of them unset, or failing for want of one, says nothing
+person's settings name as a gateway's token, as a search key or to be withheld are removed as well,
+without listing them. It says that a program reporting one of them unset, or failing for want of one, says nothing
 about whether the person has set it. Nothing is said where the filtering is switched off. The build
 script that bakes the configuration into a binary says the same in its failure. Of the variables it
 finds missing it names those `run` removes, as removed if `run` started the build, and none that
@@ -864,6 +929,8 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_agent::exec::the_users_own_environment_still_reaches_a_program`
 `verified-by: bravebot_agent::exec::the_plumbing_a_program_needs_is_still_inherited`
 `verified-by: bravebot_agent::exec::the_filtering_can_be_switched_off_by_its_documented_spelling_only`
+`verified-by: bravebot_agent::exec::a_line_a_person_typed_keeps_the_credentials_a_program_the_planner_chose_loses`
+`verified-by: bravebot_agent::exec::a_line_a_person_typed_keeps_a_gateways_environment_token_the_planner_loses`
 `verified-by: bravebot_config::scrub::this_agents_credentials_are_withheld_without_being_configured`
 `verified-by: bravebot_config::scrub::the_crash_report_address_is_withheld_without_being_configured`
 `verified-by: bravebot_config::scrub::nothing_of_the_users_own_is_withheld_by_guesswork`
@@ -882,6 +949,10 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_lsp::server::a_server_is_not_handed_the_names_it_is_told_to_withhold`
 `verified-by: bravebot_agent::exec::a_background_job_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::exec::a_variable_no_provider_block_names_still_reaches_a_program`
+`verified-by: bravebot_agent::exec::a_variable_web_search_env_names_does_not_reach_a_program_it_runs`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_of_a_search_key_variable_does_not_reach_that_step`
+`verified-by: bravebot_config::lib::the_variables_the_search_key_is_read_from_are_withheld_like_a_gateways`
+`verified-by: bravebot_config::settings::the_variables_web_search_env_names_are_withheld_from_a_program`
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
 `verified-by: bravebot_agent::hooks::a_hook_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::lsp::a_language_server_is_not_handed_a_gateways_environment_token`
@@ -1207,9 +1278,12 @@ the job names the driver minted.
 `verified-by: bravebot_agent::tools::jobs_that_ignore_the_request_to_end_share_one_grace_at_the_turns_end`
 `verified-by: bravebot_agent::exec::a_background_pipeline_with_missing_resolutions_does_not_start`
 `verified-by: bravebot_agent::turn::a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session`
+`verified-by: bravebot_agent::turn::a_delegate_handed_the_sessions_jobs_ends_what_it_starts_with_its_own_turn`
 `verified-by: bravebot_tui::state::a_kept_job_is_still_running_and_listed_in_the_next_turn`
 `verified-by: bravebot_tui::state::a_kept_jobs_session_lists_only_what_is_still_running_in_the_next_turn`
 `verified-by: bravebot_tui::state::clearing_the_session_empties_the_job_list_and_goes_on_keeping_jobs`
+`verified-by: bravebot_tui::kept_jobs_tests::clearing_the_session_ends_the_program_a_kept_job_was_running`
+`verified-by: bravebot_tui::app::an_incognito_session_keeps_no_jobs_between_turns`
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
 `verified-by: bravebot_agent::turn::a_background_line_is_refused_for_any_redirection_it_carries`
@@ -1559,10 +1633,12 @@ cover the same program with them apart. Setting a variable makes a different lin
 reason. An assignment decides what a program loads and reads before its own arguments are looked at,
 which is why the hand-audited table refuses to prove a line carrying one
 ([command-line.md](command-line.md)), so a record that left it out would cover the line the person
-read with anything at all put in front of it. This is still a narrower key than a vouch has. A vouch
-is keyed on the program's two paths and the exact arguments and nothing else ([RUN-8](#RUN-8)), so a
-vouched entry covers the same program with its two streams merged; the session it was given in is
-what bounds that, and a record that outlives the session has no such bound.
+read with anything at all put in front of it. A vouch is keyed the same way, on the program's two
+paths, the exact arguments, where its streams go and the tree ([RUN-8](#RUN-8)), so a vouched entry
+made at a line that merged its streams does not cover the same program with them apart, and an entry
+made at a line that discarded its output does not cover the line that prints it. The key of an entry
+once left the routes out, and a vouched entry then covered the same program with its two streams
+merged.
 
 **The assignment is in the key and still cannot be recorded, and that is not a contradiction.** A
 line carrying one is asked about before this record is reached ([RUN-8](#RUN-8)), so an entry holding
@@ -1743,6 +1819,7 @@ differ every time is not helped at all, which
 `verified-by: bravebot_core::remembered::an_answer_does_not_follow_a_binary_onto_another_path_it_is_started_by`
 `verified-by: bravebot_core::remembered::an_environment_assignment_makes_a_different_line`
 `verified-by: bravebot_core::remembered::sending_the_streams_somewhere_else_makes_a_different_line`
+`verified-by: bravebot_core::remembered::discarding_the_output_makes_a_different_line`
 `verified-by: bravebot_core::remembered::a_pipeline_is_covered_only_where_every_stage_is`
 `verified-by: bravebot_core::remembered::how_the_steps_are_joined_is_part_of_the_line`
 `verified-by: bravebot_core::remembered::an_empty_record_covers_nothing`
@@ -2633,6 +2710,7 @@ went out of date without saying so.
 `verified-by: bravebot_config::settings::a_scrub_name_is_read_without_the_whitespace_at_its_ends`
 `verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
 `verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
+`verified-by: bravebot_cli::running::doctor_names_what_a_pattern_in_the_scrub_list_reached`
 `verified-by: bravebot_config::settings::a_checkouts_run_block_keeps_the_rest_when_its_list_is_dropped`
 
 <a id="RUN-29"></a>
@@ -2718,6 +2796,14 @@ show that a model follows them.
 
 ## Known costs
 
+- **A command vouched for in a tree with no text spelling cannot be revoked from the desktop
+  window.** A tree whose path is not UTF-8 is listed with `directory` null ([RUN-9](#RUN-9)), since
+  a revoke compares the text the list sent and no text names that tree. The window draws such a row
+  with its Revoke button disabled and a reason beside it. No client revokes one entry of that kind
+  by name today. It stays in the list until the session record is edited. Matching a rendering
+  instead would let a revoke for one tree remove the entry for another that renders alike
+  ([PATH-003](../../best-practices/paths.md#PATH-003)). The list is pinned by
+  `bravebot_ui_bridge::bridge::a_tree_that_is_not_text_is_not_revoked_by_the_tree_that_renders_like_it`.
 - **A stage cannot use the terminal, and a stop by a signal is found by asking the leader.** Every
   stage starts in a session with no controlling terminal ([RUN-11](#RUN-11)), so a program that
   prompts on `/dev/tty` fails where it would have prompted. A stage is found stopped only when its
