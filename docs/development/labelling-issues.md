@@ -225,6 +225,97 @@ gh label create flaky-test --repo brave/bravebot --color 5ff714 \
   --description "A test whose outcome changes between runs of the same build"
 ```
 
+## Tests only
+
+`tests-only` says the work changes test code and nothing else: test files, inline test modules, test
+helpers, fixtures and the selftests of a script, and the `verified-by:` lines that name those tests.
+It marks what the change touches and is not a kind, so it goes on with the kind label the issue would
+get anyway, and `is:open label:tests-only` lists the work that needs no production change and no
+review of behaviour. The same label goes on a pull request whose changed files are all test code, so
+one query lists the issues and the pull requests. It replaces `pr/tests-only`, which no longer exists.
+
+Apply it when every file the fix has to change is test code. Do not apply it when:
+
+- the fix changes shipped code or behaviour, including a `bug` that a test exposed but whose cause
+  is in the code the test runs. A failing test whose cause is in the test itself, such as a shared
+  temporary directory, a clock boundary or a missing lock, is `tests-only`.
+- the change is to a CI workflow, the `Makefile`, a check or another script that is not itself a test,
+  or to docs and specs beyond `verified-by:` lines.
+- the ask is an observation on a platform, a measurement or a decision, since those leave no test
+  change to describe.
+
+A `spec-coverage` issue is usually `tests-only`, since its fix is a test that pins the clause. It
+carries both labels. A `spec-coverage` issue whose fix also needs a code change to make the behaviour
+testable does not carry `tests-only`.
+
+The [issue-poster](../../agents/agents/issue-poster.md) definition applies `tests-only` to an issue
+it files when the draft asks for test changes only, in addition to the kind and the `area`. The
+[triage-issues skill](../../agents/skills/triage-issues/SKILL.md) applies it to an open issue that
+qualifies and removes it from one the verdict made wrong. The poster refuses to post while
+`tests-only` does not exist, because a person creates labels:
+
+```bash
+gh label create tests-only --repo brave/bravebot --color bceb63 \
+  --description "The work changes test code only"
+```
+
+## Skills only
+
+`skills-only` says the work changes the skills under `agents/skills` and nothing else: each skill's
+`SKILL.md`, its scripts, its selftests and the reference files in its directory. Like `tests-only`
+it marks what the change touches and is not a kind, so it goes on with the kind label the issue
+would get anyway, and `is:open label:skills-only` lists the work that needs no change to the
+product. The same label goes on a pull request whose changed files are all under `agents/skills`,
+so one query lists the issues and the pull requests.
+
+Apply it when every file the fix has to change is under `agents/skills`. Do not apply it when:
+
+- the fix also changes a file outside `agents/skills`, such as an agent definition under
+  `agents/agents`, `agents/AGENTS.md`, `Makefile`, `contrib`, a spec or the shipped code.
+- the ask is an observation, a measurement or a decision, since those leave no change to describe.
+
+A change that touches only a skill's selftest carries both `skills-only` and `tests-only`.
+
+The [issue-poster](../../agents/agents/issue-poster.md) definition applies `skills-only` to an issue
+it files when the draft asks for changes under `agents/skills` only. The
+[triage-issues skill](../../agents/skills/triage-issues/SKILL.md) applies it to an open issue that
+qualifies and removes it from one the verdict made wrong. The poster refuses to post while
+`skills-only` does not exist, because a person creates labels:
+
+```bash
+gh label create skills-only --repo brave/bravebot --color da0685 \
+  --description "The work changes the skills under agents/skills only"
+```
+
+## Docs only
+
+`docs-only` says the work changes documentation and nothing else: Markdown files such as
+`README.md`, `CHANGELOG.md` and the pages under `docs/`. It marks what the change touches and is not
+a kind, so it goes on with the kind label the issue would get anyway, and `is:open label:docs-only`
+lists the work that needs no code and no review of behaviour. The same label goes on a pull request
+whose changed files are all documentation, so one query lists the issues and the pull requests. It
+replaces `pr/docs-only`, which no longer exists.
+
+Apply it when every file the fix has to change is documentation. Do not apply it when:
+
+- the fix changes a file that states or steers behaviour: a spec under `docs/specs`, `AGENTS.md`,
+  anything under `agents/` or `.claude/`, `docs/best_practices.md` or
+  `docs/development/reviewing-for-the-rule.md`. A spec states behaviour, the agent instruction files
+  steer what an agent does, and the last two are what a pull request is reviewed against.
+- the fix also changes code, a test, a script or a workflow.
+- the ask is an observation, a measurement or a decision, since those leave no change to describe.
+
+The [issue-poster](../../agents/agents/issue-poster.md) definition applies `docs-only` to an issue
+it files when the draft asks for documentation changes only. The
+[triage-issues skill](../../agents/skills/triage-issues/SKILL.md) applies it to an open issue that
+qualifies and removes it from one the verdict made wrong. The poster refuses to post while
+`docs-only` does not exist, because a person creates labels:
+
+```bash
+gh label create docs-only --repo brave/bravebot --color aa3b71 \
+  --description "The work changes documentation only"
+```
+
 ## Security
 
 `security` says the issue is about the guarantee this repository exists for, and it goes on with a
