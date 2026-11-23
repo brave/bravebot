@@ -42,6 +42,8 @@ export interface CommandActions {
   about: () => void
   /** Turn keeping the computer awake during turns on or off. */
   caffeinate: () => void
+  /** Unfold the context column if it is folded and open its Choose sections checklist (PANEL-20). */
+  sections: () => void
   /** Show the release notes the agent carries. */
   changelog: () => void
   /** Ask for a note to keep on the open chat's record. */
@@ -191,6 +193,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.about()
         case 'app.caffeinate':
           return act.caffeinate()
+        case 'app.sections':
+          return act.sections()
         case 'help.changelog':
           return act.changelog()
         case 'help.doctor':

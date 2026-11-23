@@ -17,10 +17,11 @@ import { Bridge, BridgeError } from './bridge'
 import type { BridgeEvent } from '../shared/protocol'
 import { parseLayout } from '../shared/layout'
 import { parseView } from '../shared/view'
+import { parseHidden } from '../shared/panels'
 import { parseContextRef, parseWindowState } from '../shared/commands'
 import { commandsReady, installMenu, popupContext, rebuildMenu, refreshMenu, useWindowOpener, windowClosed as menuWindowClosed } from './menu'
 import { noteProject, recents } from './recents'
-import { putLayout, putTheme, putView, readState } from './state'
+import { putHidden, putLayout, putTheme, putView, readState } from './state'
 import { Caffeinate, trackTurns } from './caffeinate'
 import { botsProblem, firstBotsRead, noteBotsFailure, useBotsBridge } from './bot-store'
 import { eventQueue } from './event-queue'
@@ -998,6 +999,10 @@ if (primary) app.whenReady().then(() => {
     if (!layout) return
     putLayout(layout)
   })
+
+  ipcMain.handle('bravebot:panels:read', () => readState().hidden)
+
+  ipcMain.handle('bravebot:panels:write', (_event, value: unknown) => putHidden(parseHidden(value)))
 
   ipcMain.handle('bravebot:view:read', () => readState().view)
 

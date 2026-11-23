@@ -174,6 +174,9 @@ const ALLOWED_IDS = [
   // A setting, not an action: it keeps the computer awake while a turn runs. It reaches no agent
   // method, and the first time it is turned on a dialog says what it does.
   'app.caffeinate',
+  // Unfolds the context column and opens its section checklist. It only changes what the column
+  // draws, and reaches no agent method.
+  'app.sections',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(

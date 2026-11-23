@@ -21,6 +21,7 @@ import { parseRecents } from './recents'
 import { parseForks, type Fork } from './forks'
 import { parseSummons, type Summon } from './summons'
 import { parseAppearance } from './theme'
+import { parseHidden } from './panels'
 
 /** The panels in the context column, in the order they appear there. */
 export const PANEL_NAMES = ['plan', 'read', 'writes', 'confined', 'notes', 'asides', 'files'] as const
@@ -40,6 +41,8 @@ export interface StoredState {
   summons: Summon[]
   /** Which appearance the window follows: `system`, `light`, or `dark`. */
   theme: string
+  /** The context-column panels turned off, in column order. Empty means every panel on. */
+  hidden: PanelName[]
 }
 
 /**
@@ -64,5 +67,7 @@ export function parseState(value: unknown): StoredState {
     // the same arrangement the four above have, where the validator sits with the shape it
     // understands. The key stays `theme` so existing `bravebot-ui.json` files keep working.
     theme: parseAppearance(held.theme),
+    // Judged by `parseHidden`, which keeps the list of panels a person may turn off.
+    hidden: parseHidden(held.hidden),
   }
 }

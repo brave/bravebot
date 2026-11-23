@@ -6328,6 +6328,12 @@ ui-crash-reports-notice-dismiss = Dismiss crash reports notice
 ui-folders-heading = Folders
 ui-folders-about = Folders open beside the project in this chat. The agent can read and change files in them until you close them.
 ui-folders-empty = Only the project is open.
+# The context column's Overview tab when every section in it is turned off (PANEL-20).
+ui-context-all-off = Every section is turned off. Use Choose sections to show one.
+# The button at the end of the context column's head that opens the checklist of its sections (PANEL-20).
+ui-context-sections = Choose sections
+# The heading row at the top of that checklist.
+ui-context-sections-heading = Sections
 ui-folders-add = Add folder…
 ui-folders-close = Close { $name }
 ui-folders-close-explained = Close { $name } · The agent can no longer reach it

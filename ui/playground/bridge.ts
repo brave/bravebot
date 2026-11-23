@@ -10,6 +10,7 @@ import type { BravebotApi, ThemeState } from '../src/preload/index'
 import type { Experience } from '../src/shared/experience'
 import { EMPTY_CONVERSATION, parseExperience } from '../src/shared/experience'
 import type { Appearance } from '../src/shared/theme'
+import { parseHidden } from '../src/shared/panels'
 import type { Bot } from '../src/shared/bots'
 import type { EffortLevel } from '../src/shared/protocol'
 import type {
@@ -470,6 +471,8 @@ const bridge: BravebotApi = {
   request: request as BravebotApi['request'],
   readLayout: async () => { try { return JSON.parse(localStorage.getItem('playground:layout') ?? 'null') } catch { return null } },
   writeLayout: (layout) => localStorage.setItem('playground:layout', JSON.stringify(layout)),
+  readHiddenPanels: async () => { try { return parseHidden(JSON.parse(localStorage.getItem('playground:hidden') ?? '[]')) } catch { return [] } },
+  writeHiddenPanels: (hidden) => localStorage.setItem('playground:hidden', JSON.stringify(hidden)),
   readView: async () => { try { return JSON.parse(localStorage.getItem('playground:view') ?? 'null') ?? { grouped: true, collapsed: [], tab: 'sessions' } } catch { return { grouped: true, collapsed: [], tab: 'sessions' } } },
   writeView: (view) => localStorage.setItem('playground:view', JSON.stringify(view)),
   readTheme: async () => ({ chosen: appearance }),

@@ -1,11 +1,13 @@
-import { memo, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
+import { HIDEABLE, toggleHidden } from '../../shared/panels'
 import { isConfined, type Activity, type SessionNote, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
 import { Alert, Button, Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
+import { IconMenu } from './IconMenu'
 import { LabelChip } from './LabelChip'
 import { middleTruncate } from '../truncate'
 import { folderName } from '../folders'
@@ -43,6 +45,18 @@ interface Live {
  * all talking about the same five things.
  */
 
+/** Every panel on: one shared value, so the memoised column is not redrawn for a fresh `[]`. */
+const NONE_HIDDEN: readonly PanelName[] = []
+
+/** The leading icon of each row in the Choose sections menu: the one the panel's empty line uses. */
+const PANEL_ICONS: Record<(typeof HIDEABLE)[number], IconName> = {
+  plan: 'list-checks',
+  read: 'folder',
+  writes: 'edit-box',
+  confined: 'shield-done',
+  notes: 'note',
+  asides: 'message-bubble',
+}
 
 /**
  * The right-hand column: what this session has touched, and the folder it is touching it in.
@@ -53,8 +67,20 @@ interface Live {
  * in there, and what does this file look like in a real editor — is not one the transcript can be
  * asked.
  */
-export const Context = memo(function Context({ live, audit, details, onAddNote, onAddFolder, onCloseFolder }: {
+export const Context = memo(function Context({ live, audit, details, hidden = NONE_HIDDEN, onHidden, sectionsAsked = 0, onAddNote, onAddFolder, onCloseFolder }: {
   live: Live | null
+  /**
+   * The Overview panels a person has turned off, as kept in `bravebot-ui.json` (PANEL-20). Each
+   * takes the same `.off` path the Files tab does, so it keeps its fold.
+   */
+  hidden?: readonly PanelName[]
+  /** Called with the whole new list, in column order, when a person ticks or unticks a section. */
+  onHidden?: (hidden: PanelName[]) => void
+  /**
+   * Raised by one each time the View menu's Choose Sections is picked: the column moves to the
+   * Overview tab and opens the checklist, as `/sidebar` opens the terminal's.
+   */
+  sectionsAsked?: number
   /** Open the dialog that adds a note to this session's record. */
   onAddNote?: () => void
   /** Ask for a folder to open beside the project, through the main process's picker. */
@@ -66,7 +92,16 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
   details?: React.ReactNode
 }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
-  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined', 'notes', 'asides'])
+  // Cleared when the checklist closes, so the menu does not open again by itself when a person
+  // later goes to the Files tab and back, which remounts it.
+  const [openRequest, setOpenRequest] = useState(0)
+  useEffect(() => {
+    if (!sectionsAsked) return
+    setTab('overview')
+    setOpenRequest(sectionsAsked)
+  }, [sectionsAsked])
+  const off = new Set<PanelName>(tab === 'overview' ? ['files', ...hidden] : HIDEABLE)
+  const allOff = tab === 'overview' && HIDEABLE.every((name) => off.has(name))
   const reveal = (path: string) => {
     const entry = [...(live?.entries ?? [])].reverse().find((entry) =>
       entry.kind === 'tool' ? fileTarget(entry.activity.target) === path : entry.kind === 'confirm' ? entry.request.path === path : false)
@@ -117,13 +152,41 @@ export const Context = memo(function Context({ live, audit, details, onAddNote, 
       {/* Wrapped, because `.context > *` hands every direct child of this column the width the
           column will come back at when it unfolds — which a full-width row of buttons plus its
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
-      <div className="context-head">
+      <div className="context-head context-head-tabs">
         <Tabs className="inspector-tabs" size="small" value={tab} data-test="inspector-tabs"
           onChange={({ value }) => { if (value === 'overview' || value === 'files') setTab(value) }}>
           <TabItem value="overview">Overview</TabItem>
           <TabItem value="files">Files</TabItem>
         </Tabs>
+        {/* Each choice is drawn and saved at once and leaves the menu open (`data-is-interactive`);
+            Escape only closes it (PANEL-20). */}
+        {tab === 'overview' && onHidden && (
+          <IconMenu icon="list-settings" label={t.uiContextSections()} className="context-sections" data-test="context-sections"
+            openRequest={openRequest} onOpen={(open) => { if (!open) setOpenRequest(0) }}>
+            {/* Says what the rows are when none is ticked. Not an item, so the arrow keys pass over
+                it, and hidden from a screen reader, which hears the button's name instead. */}
+            <div className="menu-heading" aria-hidden="true">{t.uiContextSectionsHeading()}</div>
+            {HIDEABLE.map((name) => {
+              const shown = !hidden.includes(name)
+              return (
+                <leo-menu-item key={name} data-role="menuitemcheckbox" data-is-interactive="true" data-panel={name}
+                  aria-checked={shown ? 'true' : 'false'}
+                  onClick={() => onHidden(toggleHidden(hidden, name))}>
+                  <span className="menu-icon-row">
+                    <Icon name={PANEL_ICONS[name]} />
+                    {labels[name]}
+                    <span className="menu-check" aria-hidden="true">{shown && <Icon name="check-normal" />}</span>
+                  </span>
+                </leo-menu-item>
+              )
+            })}
+          </IconMenu>
+        )}
       </div>
+
+      {/* The column stays drawn with its head when every section is off: turning sections off
+          never folds it (PANEL-20). */}
+      {allOff && <div className="panel-inner context-all-off" id="context-all-off"><Empty icon="eye-off">{t.uiContextAllOff()}</Empty></div>}
 
       <Section id="plan" title="Plan"count={live.todos.length} off={off.has('plan')}
         about="The steps the agent has set itself, and which it has done.">
