@@ -11,7 +11,7 @@ guards:
       - crates/agent/src/tools.rs: 259
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
-      - crates/agent/src/tools/recall.rs: 25
+      - crates/agent/src/tools/recall.rs: 29
       - crates/agent/src/tools/web_search.rs: 8
       - crates/agent/src/tools/tests/reading_together.rs: 1
   - symbol: Produced::refused_with_a_note

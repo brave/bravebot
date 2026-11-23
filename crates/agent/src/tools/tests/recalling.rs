@@ -5,7 +5,7 @@ use crate::recall::project::project_id;
 use crate::recall::store::Store;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::RecordingSink;
-use bravebot_core::label::Confidentiality;
+use bravebot_core::label::{Confidentiality, Integrity};
 use bravebot_core::policy::{ReleasePlan, Routing};
 
 const NO_MATCH: &str = "Probably nothing is stored about this. Say so rather than assume.";
@@ -421,4 +421,61 @@ fn a_delegate_reaching_the_recall_handlers_anyway_is_refused() {
         recall(&mut policy, tools, &json!({"key": "k"}))
     });
     assert!(read.failed);
+}
+
+/// `query` and `key` are routing (TOOL-1): once the context has met something untrusted,
+/// LABEL-5 refuses to decide which kept fact is handed to the planner from them, the same
+/// as `load_skill`'s `name`. Without this, a fallen context would still choose which of the
+/// person's facts, public or private, enters the planner's context next.
+#[test]
+fn recall_is_refused_once_the_context_has_met_something_untrusted() {
+    let place = Place::new("recall-fallen");
+    place.keep(
+        Scope::Everywhere,
+        "release/forge-poll",
+        "The forge is polled every minute.",
+        |_| {},
+    );
+
+    {
+        let mut sink = RecordingSink::new();
+        let mut key_policy = policy(&mut sink).resuming(Integrity::Untrusted);
+        let produced = with_tools(&place.workspace, |tools| {
+            tools.home = Some(place.held);
+            recall(
+                &mut key_policy,
+                tools,
+                &json!({"key": "release/forge-poll"}),
+            )
+        });
+        let said = told(&mut key_policy, &produced.text);
+        assert!(said.starts_with("refused:"), "{said}");
+        assert!(
+            said.contains("recall.key") && said.contains("must not decide anything"),
+            "the refusal does not say which argument or why: {said}"
+        );
+        assert!(
+            !said.contains("The forge is polled every minute."),
+            "{said}"
+        );
+    }
+
+    {
+        let mut sink = RecordingSink::new();
+        let mut query_policy = policy(&mut sink).resuming(Integrity::Untrusted);
+        let produced = with_tools(&place.workspace, |tools| {
+            tools.home = Some(place.held);
+            recall(&mut query_policy, tools, &json!({"query": "forge polled"}))
+        });
+        let said = told(&mut query_policy, &produced.text);
+        assert!(said.starts_with("refused:"), "{said}");
+        assert!(
+            said.contains("recall.query") && said.contains("must not decide anything"),
+            "the refusal does not say which argument or why: {said}"
+        );
+        assert!(
+            !said.contains("The forge is polled every minute."),
+            "{said}"
+        );
+    }
 }

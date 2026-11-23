@@ -248,6 +248,7 @@ guards:
     sites:
       - crates/agent/src/lsp.rs: 1
       - crates/agent/src/tools.rs: 20
+      - crates/agent/src/tools/recall.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 6
   - symbol: Policy::accept_reference
