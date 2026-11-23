@@ -3933,7 +3933,7 @@ impl Bridge {
             if path.is_empty() || path.chars().any(char::is_control) {
                 return Err(Failure::bad_request("Choose a project file."));
             }
-            if !watches.live().iter().any(|w| w.path() == path) {
+            if watches.watching(&path).is_none() {
                 let workspace = Workspace::new(open.project.clone())
                     .map_err(|_| Failure::bad_request("Project unavailable."))?;
                 watches.arm(path.clone(), workspace.root().to_path_buf(), bravebot_agent::watch::BY_THE_PERSON, workspace.look(&path, workspace.root()), std::time::Instant::now())

@@ -492,6 +492,7 @@ watch on a path the person typed is one they named, which answers the cost below
 channel opened on a path nobody named.
 
 `verified-by: bravebot_agent::watch::a_watch_armed_by_the_person_says_so`
+`verified-by: bravebot_agent::watch::watching_names_the_live_watch_on_a_path`
 `verified-by: bravebot_tui::watch_command::a_path_arms_a_watch_on_it`
 `verified-by: bravebot_tui::watch_command::anything_else_is_answered_by_saying_what_the_command_takes`
 `verified-by: bravebot_tui::app::the_watch_command_lists_and_stops_and_hands_a_path_to_the_loop`

@@ -253,20 +253,15 @@ impl Session {
     /// path out of reach arrives here as [`watch::Looked::OutOfReach`] and is refused. Refused
     /// under a loop or a goal, because those are the person's own and a watch they arm does not
     /// end them without saying so; the note says how to clear the one in the way. A path already
-    /// watched arms nothing new, as the desktop's `watches.add` does.
+    /// watched arms nothing new, by the registry's own [`watch::Watches::watching`], which the
+    /// desktop's `watches.add` asks as well.
     pub fn arm_watch_by_person(
         &mut self,
         path: &str,
         under: impl Into<std::path::PathBuf>,
         first: watch::Looked,
     ) {
-        let already = self
-            .watches
-            .live()
-            .iter()
-            .find(|watch| watch.path() == path)
-            .map(|watch| watch.number());
-        if let Some(number) = already {
+        if let Some(number) = self.watches.watching(path) {
             self.note(t!(watch_already, number = number, path = path));
             return;
         }

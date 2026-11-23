@@ -306,6 +306,17 @@ impl Watches {
         self.live.is_empty()
     }
 
+    /// The number of the live watch on `path`, if one is on it.
+    ///
+    /// A person arming a path already watched arms nothing new, in every client, so the comparison
+    /// is made here once rather than by each client that arms one.
+    pub fn watching(&self, path: &str) -> Option<usize> {
+        self.live
+            .iter()
+            .find(|watch| watch.path == path)
+            .map(|watch| watch.number)
+    }
+
     /// Arm a watch on a path, and give back the number it got.
     ///
     /// `first` is the look taken now, which is what makes a change a change since somebody asked
@@ -946,6 +957,19 @@ mod tests {
         assert_eq!(watches.live().len(), MAX_LIVE);
     }
 
+    /// A path already watched is named by the watch on it, and a path nobody watches by none.
+    #[test]
+    fn watching_names_the_live_watch_on_a_path() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        armed(&mut watches, "a.txt", now);
+        armed(&mut watches, "b.txt", now);
+        assert_eq!(watches.watching("b.txt"), Some(2));
+        assert_eq!(watches.watching("c.txt"), None);
+        assert!(watches.stop(2));
+        assert_eq!(watches.watching("b.txt"), None);
+    }
+
     /// A path the session does not reach has no look to record, absent or otherwise.
     #[test]
     fn a_path_out_of_reach_is_refused_rather_than_armed() {
@@ -1052,7 +1076,13 @@ mod tests {
         let mut watches = Watches::new();
         let now = Instant::now();
         watches
-            .arm("a.txt".to_string(), here(), BY_THE_PERSON, saw("first"), now)
+            .arm(
+                "a.txt".to_string(),
+                here(),
+                BY_THE_PERSON,
+                saw("first"),
+                now,
+            )
             .expect("a watch");
         watches
             .arm("b.txt".to_string(), here(), 3, saw("first"), now)
